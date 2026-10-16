@@ -2,8 +2,8 @@ import type { RiskClass } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
 
 /**
- * How Grunt treats each Claude Code built-in tool. Claude Code executes these
- * itself; Grunt only decides whether each call may run (PermissionBroker,
+ * How OtherBench treats each Claude Code built-in tool. Claude Code executes these
+ * itself; OtherBench only decides whether each call may run (PermissionBroker,
  * `source: 'agent'`). Anything unrecognised is `other`/`mutate` so a new
  * Claude Code tool fails closed into an approval card.
  */
@@ -15,11 +15,11 @@ const SHELL = ['Bash', 'BashOutput', 'KillShell', 'PowerShell', 'Monitor'];
 const MCP_RESOURCE = ['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool'];
 const WEB = ['WebFetch', 'WebSearch'];
 // No side effects of their own; a Task/Agent subagent's own tool calls are gated
-// individually. AskUserQuestion is answered through Grunt's question card (the
+// individually. AskUserQuestion is answered through OtherBench's question card (the
 // engine's gate, spec 2026-10-12-thread-cards-design section 6).
 const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ToolSearch', 'Skill', 'AskUserQuestion'];
 // Claude Code's own plan mode writes its plan outside the workspace and switches
-// the session's permission mode, which Grunt doesn't track; Grunt's Plan mode
+// the session's permission mode, which OtherBench doesn't track; OtherBench's Plan mode
 // (propose_plan) replaces it. Out of INTERNAL too, so a call that somehow
 // arrives is `other` and gets a card.
 const ALWAYS_DISALLOWED = ['EnterPlanMode', 'ExitPlanMode'];
@@ -87,7 +87,7 @@ export function agentPolicyDenial(name: string, policy: ToolPolicy): string | nu
       return policy.fs === 'readwrite' ? null : `"${name}" changes files, but policy only permits ${policy.fs === 'off' ? 'no' : 'read'} file access.`;
     case 'shell':
       if (!policy.shell) return 'Shell (Bash) is disabled by policy.';
-      return policy.shellRuns === 'sandbox' ? "This profile runs shell commands in Grunt's sandbox: use the run_command tool instead." : null;
+      return policy.shellRuns === 'sandbox' ? "This profile runs shell commands in OtherBench's sandbox: use the run_command tool instead." : null;
     case 'web':
       return policy.agentWeb === false ? 'Web tools are disabled by policy.' : null;
     case 'mcp':
@@ -109,7 +109,7 @@ export function agentDisallowedTools(policy: ToolPolicy): string[] {
   const out = [...ALWAYS_DISALLOWED];
   if (policy.fs !== 'readwrite') out.push(...FILE_WRITE);
   if (policy.fs === 'off') out.push(...FILE_READ);
-  // Under the sandbox, Grunt's sandboxed run_command (relayed) is the shell.
+  // Under the sandbox, OtherBench's sandboxed run_command (relayed) is the shell.
   if (!policy.shell || policy.shellRuns === 'sandbox') out.push(...SHELL);
   if (policy.agentWeb === false) out.push(...WEB);
   if (policy.agentMcp === false) out.push(...MCP_RESOURCE);

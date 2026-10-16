@@ -1,6 +1,6 @@
-import type { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { Chat, ChatRepo, NewChat, Store } from '@grunt/core/ports/store.js';
-import type { AppEvent, ComputerSessionSummary, PendingApprovalSummary, RunningTurnSummary } from '@grunt/core/types/events.js';
+import type { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { Chat, ChatRepo, NewChat, Store } from '@otherbench/core/ports/store.js';
+import type { AppEvent, ComputerSessionSummary, PendingApprovalSummary, RunningTurnSummary } from '@otherbench/core/types/events.js';
 
 /**
  * The app-wide event bus behind `GET /api/events` (v2 plan, Task 34). Chat
@@ -47,7 +47,7 @@ export class AppEventBus {
       try {
         fn(e);
       } catch (err) {
-        console.error('[grunt-server] app event listener failed:', err);
+        console.error('[otherbench-server] app event listener failed:', err);
       }
     }
   }

@@ -1,8 +1,8 @@
 import { useEffect, useState, type JSX } from 'react';
-import { DEFAULT_SANDBOX_HOSTS, type FsMode, type ModelParams, type Profile, type ShellRuns } from '@grunt/core/types/config.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { DEFAULT_SANDBOX_HOSTS, type FsMode, type ModelParams, type Profile, type ShellRuns } from '@otherbench/core/types/config.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody, type ToolPolicyBody } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
 import { useComputerUseAvailable } from '../../lib/computerUse.js';
 
@@ -54,15 +54,15 @@ interface ProfileFormProps {
  * via an effect.
  *
  * The model select stores `ModelInfo.modelId` (the provider's own model
- * string, e.g. "llama3.2"), NOT `ModelInfo.id` (Grunt's row id) --
+ * string, e.g. "llama3.2"), NOT `ModelInfo.id` (OtherBench's row id) --
  * `Profile.modelId` is matched against `ModelInfo.modelId` at request time
  * (see `resolveProfile`, packages/server/src/profile-resolution.ts), so
  * storing the row id here would silently fail to resolve a model at all.
  */
 function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
-  const connections = useGruntStore((s) => s.connections);
-  const models = useGruntStore((s) => s.models);
-  const chats = useGruntStore((s) => s.chats);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const models = useOtherBenchStore((s) => s.models);
+  const chats = useOtherBenchStore((s) => s.chats);
 
   const [name, setName] = useState(profile?.name ?? '');
   const [description, setDescription] = useState(profile?.description ?? '');
@@ -220,7 +220,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       const saved = profile ? await api.profiles.patch(profile.id, body) : await api.profiles.create(body);
       onSaved(saved);
     } catch (err) {
-      console.error('[grunt-web] failed to save profile:', err);
+      console.error('[otherbench-web] failed to save profile:', err);
       setError(errorMessage(err, 'Save failed -- please try again.'));
     } finally {
       setSaving(false);
@@ -240,7 +240,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         : '';
     // With paired machines the deletion syncs, and their copies of those chats go too (v2 spec §4).
     const everywhere =
-      dependentChatCount > 0 && (useGruntStore.getState().machines?.peers.length ?? 0) > 0
+      dependentChatCount > 0 && (useOtherBenchStore.getState().machines?.peers.length ?? 0) > 0
         ? ' Paired machines delete them too when they next sync. Archive the profile instead to keep them.'
         : '';
     const ok = window.confirm(`Delete profile "${profile.name}"?${consequence}${everywhere} This cannot be undone.`);
@@ -251,7 +251,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       await api.profiles.delete(profile.id);
       onDeleted(profile.id);
     } catch (err) {
-      console.error(`[grunt-web] failed to delete profile ${profile.id}:`, err);
+      console.error(`[otherbench-web] failed to delete profile ${profile.id}:`, err);
       setError(errorMessage(err, 'Delete failed -- please try again.'));
     } finally {
       setDeleting(false);
@@ -562,9 +562,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         )}
       </div>
 
-      {/* Claude Code profiles too: Grunt relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
+      {/* Claude Code profiles too: OtherBench relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
       <div>
-        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">{isClaudeCode ? 'MCP servers (from Grunt)' : 'MCP servers this profile may use'}</span>
+        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">{isClaudeCode ? 'MCP servers (from OtherBench)' : 'MCP servers this profile may use'}</span>
         <p className="mb-1.5 text-xs text-[var(--text-muted)]">
           This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
           having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
@@ -596,7 +596,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           Use global memory
         </label>
         <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-          About you, what Grunt has learned about you, and the list of your projects (Settings &gt; Memory). Turn off for a clean-room profile, or a
+          About you, what OtherBench has learned about you, and the list of your projects (Settings &gt; Memory). Turn off for a clean-room profile, or a
           model you don&rsquo;t want to send that to.
         </p>
       </div>
@@ -690,10 +690,10 @@ function ProfileRow({
  * `ProfileForm`'s allowlist checklist with names + enabled state.
  */
 export function ProfilesPanel(): JSX.Element {
-  const connections = useGruntStore((s) => s.connections);
-  const profiles = useGruntStore((s) => s.profiles);
-  const upsertProfile = useGruntStore((s) => s.upsertProfile);
-  const removeProfile = useGruntStore((s) => s.removeProfile);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const upsertProfile = useOtherBenchStore((s) => s.upsertProfile);
+  const removeProfile = useOtherBenchStore((s) => s.removeProfile);
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerHealth[]>([]);
@@ -716,7 +716,7 @@ export function ProfilesPanel(): JSX.Element {
         }
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load MCP servers for the profile allowlist:', err);
+        console.error('[otherbench-web] failed to load MCP servers for the profile allowlist:', err);
         if (!cancelled) setMcpServersFailed(true);
       });
     return () => {
@@ -727,7 +727,7 @@ export function ProfilesPanel(): JSX.Element {
   const selected = editingId && editingId !== 'new' ? (profiles.find((p) => p.id === editingId) ?? null) : null;
   const showForm = editingId === 'new' || selected !== null;
   const connectionName = (id: string): string => connections.find((c) => c.id === id)?.name ?? 'Unknown connection';
-  const machines = useGruntStore((s) => s.machines);
+  const machines = useOtherBenchStore((s) => s.machines);
   /** A profile whose connection works only on another machine can only run chats there. */
   const onlyOn = (connectionId: string): string | null => {
     const availability = connections.find((c) => c.id === connectionId)?.availability ?? 'anywhere';

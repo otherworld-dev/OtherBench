@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { buildLiveArgs, liveCallHash } from '@grunt/core/domain/live-artifacts.js';
-import type { Artifact, ArtifactVersion, Chat, LiveSpec } from '@grunt/core/ports/store.js';
-import type { LiveCallStatus, LiveStatusRequest } from '@grunt/core/ports/tool-provider.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import { buildLiveArgs, liveCallHash } from '@otherbench/core/domain/live-artifacts.js';
+import type { Artifact, ArtifactVersion, Chat, LiveSpec } from '@otherbench/core/ports/store.js';
+import type { LiveCallStatus, LiveStatusRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
 import { artifactOrThrow, requireJson } from './artifacts.js';
 

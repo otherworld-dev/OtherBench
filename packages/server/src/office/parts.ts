@@ -43,7 +43,7 @@ export class OfficeParts {
 
   /** What was skipped, for the end of the text: each note once, the first few in full and a count of the rest. */
   get notes(): string[] {
-    return this.extraNotes > 0 ? [...this.kept, `[Grunt skipped ${this.extraNotes} more part${this.extraNotes === 1 ? '' : 's'} as well.]`] : [...this.kept];
+    return this.extraNotes > 0 ? [...this.kept, `[OtherBench skipped ${this.extraNotes} more part${this.extraNotes === 1 ? '' : 's'} as well.]`] : [...this.kept];
   }
 
   private note(text: string): void {
@@ -67,13 +67,13 @@ export class OfficeParts {
     // An over-cap part was never read, so asking again costs nothing.
     if (cached === null) return null;
     if (entry.size > this.limits.maxPartBytes) {
-      this.note(`[Grunt skipped ${entry.name}: it's over the ${mb(this.limits.maxPartBytes)} Grunt reads from one part.]`);
+      this.note(`[OtherBench skipped ${entry.name}: it's over the ${mb(this.limits.maxPartBytes)} OtherBench reads from one part.]`);
       this.read.set(key, null);
       return null;
     }
     if (this.total + entry.size > this.limits.maxTotalBytes) {
       this.stopped = true;
-      this.note(`[Grunt stopped reading here: this file's parts come to over ${mb(this.limits.maxTotalBytes)}.]`);
+      this.note(`[OtherBench stopped reading here: this file's parts come to over ${mb(this.limits.maxTotalBytes)}.]`);
       return null;
     }
     // Every call is charged, a cached part too, so what a reader scans over and over is still bounded by the total cap; only the inflating is saved.

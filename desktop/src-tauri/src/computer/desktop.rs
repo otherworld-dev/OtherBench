@@ -1,6 +1,6 @@
 //! The real driver (Windows only): win.rs for the machine, Tauri for the
 //! shell's own pieces (the stop hotkey, the indicator bar, the tray). Built
-//! only when the shell was started with GRUNT_COMPUTER_USE=1 (computer.rs
+//! only when the shell was started with OTHERBENCH_COMPUTER_USE=1 (computer.rs
 //! `shell`); no test builds one.
 //!
 //! Every call that needs the main thread (the event loop) is time-bounded,
@@ -101,7 +101,7 @@ pub fn percent_encode(s: &str) -> String {
 
 impl Desktop for WinDesktop {
     fn consent(&self, text: &str, dialog: &Dialog) -> Consent {
-        win::consent(text, "Grunt", dialog)
+        win::consent(text, "OtherBench", dialog)
     }
 
     fn stop_hotkey(&self, on: bool) -> Result<(), String> {
@@ -137,7 +137,7 @@ impl Desktop for WinDesktop {
         let url = format!("index.html?view=indicator&title={}", percent_encode(title));
         let built = self.bounded(move |app, abandoned| {
             let window = WebviewWindowBuilder::new(app, INDICATOR, WebviewUrl::App(url.into()))
-                .title("Grunt is controlling this computer")
+                .title("OtherBench is controlling this computer")
                 .decorations(false)
                 .always_on_top(true)
                 .skip_taskbar(true)
@@ -170,7 +170,7 @@ impl Desktop for WinDesktop {
 
     fn channel_off(&self) {
         self.tooltip(Some(crate::tray::COMPUTER_OFF_TOOLTIP.to_string()));
-        let _ = crate::notify::show(&self.app, "Grunt", "Computer use is off until Grunt restarts.", None, None);
+        let _ = crate::notify::show(&self.app, "OtherBench", "Computer use is off until OtherBench restarts.", None, None);
     }
 
     fn indicator_action(&self, label: &str) {

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { AuditEntry, AuditRepo } from '@grunt/core/ports/store.js';
+import type { AuditEntry, AuditRepo } from '@otherbench/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromJson, toJson } from './util.js';
 import { selfIdOf } from './nodes.js';

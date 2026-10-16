@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { Hlc } from '@grunt/core/domain/hlc.js';
+import { Hlc } from '@otherbench/core/domain/hlc.js';
 import { selfIdOf } from './nodes.js';
 
 /**

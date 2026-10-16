@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { oauthRefs } from '@grunt/tools/mcp/oauth-store.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import { createSecretStore } from '@otherbench/store-sqlite/secret-store.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { oauthRefs } from '@otherbench/tools/mcp/oauth-store.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp, type AppOptions } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -18,7 +18,7 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 
 const PORT = 4747;
 const REDIRECT = `http://127.0.0.1:${PORT}/oauth/callback`;
-const PUBLIC_REDIRECT = 'https://grunt.test:4747/oauth/callback';
+const PUBLIC_REDIRECT = 'https://otherbench.test:4747/oauth/callback';
 
 let dir: string;
 let store: InMemoryStore;
@@ -28,7 +28,7 @@ let container: Container;
 let fixture: Awaited<ReturnType<typeof startOAuthEchoServer>>;
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-mcp-oauth-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-mcp-oauth-'));
   store = new InMemoryStore();
   secrets = createSecretStore(join(dir, 'secrets.json'), 'test-passphrase');
   const engine = new FakeChatEngine([]);
@@ -39,7 +39,7 @@ beforeEach(async () => {
     secrets,
     engine,
     registry: {} as never,
-    toolProvider: new GruntToolProvider(store, new PermissionBroker(store), mcpManager),
+    toolProvider: new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager),
     mcpManager,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
@@ -85,7 +85,7 @@ async function startSignIn(id: string): Promise<string> {
   return ((await res.json()) as { authorizationUrl: string }).authorizationUrl;
 }
 
-/** The address the browser ends on: Grunt's callback with the provider's query. */
+/** The address the browser ends on: OtherBench's callback with the provider's query. */
 async function endedOn(authorizationUrl: string): Promise<URL> {
   const res = await fetch(authorizationUrl, { redirect: 'manual' });
   return new URL(res.headers.get('location')!);
@@ -186,11 +186,11 @@ describe('MCP sign-in routes', { timeout: 20_000 }, () => {
     const complete = await app().request(`/api/mcp-servers/${id}/sign-in/complete`, json({ url: `${REDIRECT}?state=SECRETSTATE&code=SECRETCODE` }));
     for (const res of [start, complete]) {
       expect(res.status).toBe(502);
-      expect(await res.json()).toEqual({ error: "Couldn't sign in: something went wrong in Grunt. Start it again." });
+      expect(await res.json()).toEqual({ error: "Couldn't sign in: something went wrong in OtherBench. Start it again." });
     }
 
     const logged = [...errorSpy.mock.calls, ...logSpy.mock.calls, ...warnSpy.mock.calls].map((args) => args.map(String).join(' ')).join('\n');
-    expect(logged).toContain(`[grunt-server] MCP sign-in for ${id} failed: TypeError`);
+    expect(logged).toContain(`[otherbench-server] MCP sign-in for ${id} failed: TypeError`);
     expect(logged).not.toMatch(/SECRET|idp\.example|connect failed/);
   });
 });
@@ -205,7 +205,7 @@ describe('GET /oauth/callback', { timeout: 20_000 }, () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     const html = await res.text();
-    expect(html).toContain('Signed in to &lt;b&gt;Docs &amp; Co&lt;/b&gt;. You can close this tab and go back to Grunt.');
+    expect(html).toContain('Signed in to &lt;b&gt;Docs &amp; Co&lt;/b&gt;. You can close this tab and go back to OtherBench.');
     expect(html).not.toContain('<b>Docs');
     expect(html).not.toContain('<script');
     await waitFor(() => healthOf(id).status === 'ok');
@@ -219,7 +219,7 @@ describe('GET /oauth/callback', { timeout: 20_000 }, () => {
 
     const again = await app().request(path);
     expect(again.status).toBe(400);
-    expect(await again.text()).toContain('This sign-in has expired or was already used. Start it again from Grunt.');
+    expect(await again.text()).toContain('This sign-in has expired or was already used. Start it again from OtherBench.');
     expect(healthOf(id)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
   });
 
@@ -345,7 +345,7 @@ describe('sign-in mode (remote access)', { timeout: 20_000 }, () => {
   let fx: RemoteFixture;
   afterEach(() => fx?.cleanup());
 
-  const HOST = { Host: 'grunt.test:4747' };
+  const HOST = { Host: 'otherbench.test:4747' };
 
   async function makeRemote() {
     fx = await remoteFixture();
@@ -378,7 +378,7 @@ describe('sign-in mode (remote access)', { timeout: 20_000 }, () => {
 
     const started = await request(`/api/mcp-servers/${id}/sign-in`, { method: 'POST' });
     const ended = await endedOn(((await started.json()) as { authorizationUrl: string }).authorizationUrl);
-    expect(ended.origin).toBe('https://grunt.test:4747');
+    expect(ended.origin).toBe('https://otherbench.test:4747');
 
     // The system browser has no session cookie; it still reaches the callback, which passes the Host check.
     const foreign = await remoteApp.request(callbackPath(ended), { headers: { Host: 'evil.example:4747' } }, from('10.0.0.7'));
@@ -446,7 +446,7 @@ describe('editing and deleting a signed-in server', { timeout: 20_000 }, () => {
 
   it('switching to stdio forgets every OAuth secret and clears the summary', async () => {
     const id = await signedIn();
-    const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ transport: 'stdio', command: 'grunt-test-no-such-command', enabled: false }));
+    const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ transport: 'stdio', command: 'otherbench-test-no-such-command', enabled: false }));
     expect(res.status).toBe(200);
     expect(store.mcpServers.get(id)!.oauth).toBeNull();
     for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();

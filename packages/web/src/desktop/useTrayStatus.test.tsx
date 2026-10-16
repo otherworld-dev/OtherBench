@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./bridge.js', () => ({ setTrayStatus: vi.fn(async () => {}), isDesktop: () => false }));
 
 import type { PeersOverview, PeerView } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { setTrayStatus } from './bridge.js';
 import { trayMachineLines, useTrayStatus } from './useTrayStatus.js';
 
@@ -26,28 +26,28 @@ function overview(...peers: Partial<PeerView>[]): PeersOverview {
 }
 
 describe('useTrayStatus', () => {
-  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+  beforeEach(() => useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true));
   afterEach(() => mocked.mockClear());
 
   it('pushes the pending-approval count to the tray on mount and whenever it changes', () => {
     renderHook(() => useTrayStatus());
     expect(mocked).toHaveBeenLastCalledWith(0, []);
 
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm', requestId: 'r1', toolName: 'write_file' }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm', requestId: 'r1', toolName: 'write_file' }));
     expect(mocked).toHaveBeenLastCalledWith(1, []);
 
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'approval-resolved', chatId: 'c', requestId: 'r1' }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'approval-resolved', chatId: 'c', requestId: 'r1' }));
     expect(mocked).toHaveBeenLastCalledWith(0, []);
     expect(mocked).toHaveBeenCalledTimes(3);
   });
 
   it("pushes each paired machine's status line, and only again when one changes", () => {
     renderHook(() => useTrayStatus());
-    act(() => useGruntStore.getState().setMachines(overview({ status: 'unreachable', since: at1402 })));
+    act(() => useOtherBenchStore.getState().setMachines(overview({ status: 'unreachable', since: at1402 })));
     expect(mocked).toHaveBeenLastCalledWith(0, [`PC: unreachable since ${hm(at1402)}`]);
     const calls = mocked.mock.calls.length;
 
-    act(() => useGruntStore.getState().setMachines(overview({ status: 'unreachable', since: at1402 })));
+    act(() => useOtherBenchStore.getState().setMachines(overview({ status: 'unreachable', since: at1402 })));
     expect(mocked).toHaveBeenCalledTimes(calls);
   });
 });

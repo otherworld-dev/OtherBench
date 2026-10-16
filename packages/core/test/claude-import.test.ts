@@ -542,7 +542,7 @@ describe('planClaudeImport: published artifacts', () => {
     expect(parts[0]).toEqual({ type: 'text', text: 'Published artifact imported from claude.ai, with 3 versions.' });
   });
 
-  it('adds the version claude.ai showed last when it is not the newest, so it is the one Grunt shows', () => {
+  it('adds the version claude.ai showed last when it is not the newest, so it is the one OtherBench shows', () => {
     const chat = planClaudeImport(files({ artifacts: [frame([{ id: 'v1', title: 'Old', minute: 10 }, { id: 'v2', title: 'Newer', minute: 20 }], 'v1')] }), PROFILE).artifactChats[0]!;
     expect(chat.artifact!.versions.map((v) => v.id)).toEqual(['art1:v2', 'art1:v1']);
     expect(chat.title).toBe('Old');

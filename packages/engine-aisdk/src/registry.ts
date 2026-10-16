@@ -3,7 +3,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { Connection } from '@grunt/core/types/config.js';
+import type { Connection } from '@otherbench/core/types/config.js';
 
 /** The default base URL Ollama serves its OpenAI-compatible surface on. */
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1';

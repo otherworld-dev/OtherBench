@@ -1123,7 +1123,7 @@ describe('TurnRunner sends attached files to the model as text', () => {
     const notices = events.filter((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
     expect(notices).toHaveLength(1);
     expect(notices[0]!.text).toContain('photo.png');
-    expect(notices[0]!.text).toContain(`Grunt couldn't read "old.xlsx" as text, so no-vision-model didn't get it.`);
+    expect(notices[0]!.text).toContain(`OtherBench couldn't read "old.xlsx" as text, so no-vision-model didn't get it.`);
     const reply = store.messages.get(result.assistantMessageIds[0]!)!;
     expect(reply.parts.filter((p) => p.type === 'notice')).toHaveLength(1);
   });
@@ -1197,7 +1197,7 @@ describe('TurnRunner sends attached files to the model as text', () => {
     await runner.run({ chatId: 'chat-1', parentId: null, userParts: [file('a', 'application/octet-stream', 'a.pptx'), file('b', 'application/octet-stream', 'b.bin'), file('a', 'application/octet-stream', 'a.pptx')], profiles: [makeResolvedProfile({ modelId: 'm' })] });
     await flush();
     const notice = events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
-    expect(notice?.text).toBe(`Grunt couldn't read "a.pptx", "b.bin" as text, so m didn't get them.`);
+    expect(notice?.text).toBe(`OtherBench couldn't read "a.pptx", "b.bin" as text, so m didn't get them.`);
   });
 });
 
@@ -2249,7 +2249,7 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
     const store = new InMemoryStore('node-pc');
     store.chats.create({
       id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null,
-      workspace: { kind: 'machine', nodeId: 'node-pc', root: options.root ?? 'E:\\Git\\Grunt' },
+      workspace: { kind: 'machine', nodeId: 'node-pc', root: options.root ?? 'E:\\Git\\OtherBench' },
       folders: [{ workspace: { kind: 'machine', nodeId: 'node-pc', root: 'D:\\Refs' }, access: 'read' }],
     });
     const engine = new FakeChatEngine([finish]);
@@ -2280,7 +2280,7 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
   it("adds the workspace's and each folder's sandbox path when the profile's shell runs in the sandbox", async () => {
     const system = await systemPromptFor('sandbox');
     expect(system).toContain('# Sandbox');
-    expect(system).toContain('The workspace E:\\Git\\Grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(system).toContain('The workspace E:\\Git\\OtherBench is /mnt/e/Git/OtherBench in the sandbox');
     expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
   });
 
@@ -2289,9 +2289,9 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
   });
 
   it('names a folder typed in another case at its real path, which is where the sandbox mounts it', async () => {
-    const onDisk: Record<string, string> = { 'e:\\git\\grunt': 'E:\\Git\\Grunt', 'd:\\refs': 'D:\\Refs' };
-    const system = await systemPromptFor('sandbox', { root: 'e:\\git\\grunt', canonicalPath: (p) => onDisk[p.toLowerCase()] ?? p });
-    expect(system).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
+    const onDisk: Record<string, string> = { 'e:\\git\\otherbench': 'E:\\Git\\OtherBench', 'd:\\refs': 'D:\\Refs' };
+    const system = await systemPromptFor('sandbox', { root: 'e:\\git\\otherbench', canonicalPath: (p) => onDisk[p.toLowerCase()] ?? p });
+    expect(system).toContain('The workspace e:\\git\\otherbench is /mnt/e/Git/OtherBench in the sandbox');
     expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
   });
 });

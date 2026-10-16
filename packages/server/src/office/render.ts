@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker, type ResourceLimits } from 'node:worker_threads';
-import { checkOfficeContent, parsePresentation, parseSpreadsheet, type OfficeKind } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, parsePresentation, parseSpreadsheet, type OfficeKind } from '@otherbench/core/domain/office-spec.js';
 import { renderDocx } from './docx.js';
 import { OfficeRenderError } from './errors.js';
 import { renderPptx } from './pptx.js';
@@ -48,7 +48,7 @@ export async function renderOfficeFileInProcess(kind: OfficeKind, content: strin
       }
       default: {
         const never: never = kind;
-        throw new OfficeRenderError(`Grunt can't make a ${String(never)} file.`);
+        throw new OfficeRenderError(`OtherBench can't make a ${String(never)} file.`);
       }
     }
   } catch (err) {
@@ -74,7 +74,7 @@ export function workerCandidates(moduleUrl: string): URL[] {
 
 function workerFile(): URL {
   const found = workerCandidates(import.meta.url).find((url) => existsSync(fileURLToPath(url)));
-  if (!found) throw new OfficeRenderError("Grunt's server wasn't built: the Office file maker (render-worker.js) is missing.");
+  if (!found) throw new OfficeRenderError("OtherBench's server wasn't built: the Office file maker (render-worker.js) is missing.");
   return found;
 }
 
@@ -89,7 +89,7 @@ export function officeRenderWorkersRunning(): number {
 function workerFailure(kind: OfficeKind, err: unknown): OfficeRenderError {
   const code = (err as { code?: unknown } | null)?.code;
   if (code === 'ERR_WORKER_OUT_OF_MEMORY') {
-    return new OfficeRenderError(`The ${kind} is too large or too complex to make: it needs more memory than Grunt allows. Simplify it or split it into more than one artifact.`);
+    return new OfficeRenderError(`The ${kind} is too large or too complex to make: it needs more memory than OtherBench allows. Simplify it or split it into more than one artifact.`);
   }
   return new OfficeRenderError(err instanceof Error ? err.message : String(err));
 }
@@ -164,7 +164,7 @@ async function renderInWorker(kind: OfficeKind, content: string, title: string, 
         else resolve(Buffer.from(reply.bytes.buffer, reply.bytes.byteOffset, reply.bytes.byteLength));
       });
       worker.once('error', (err) => reject(workerFailure(kind, err)));
-      worker.once('exit', (code) => reject(new OfficeRenderError(`Grunt's Office file maker stopped (exit code ${code}) before the file was made.`)));
+      worker.once('exit', (code) => reject(new OfficeRenderError(`OtherBench's Office file maker stopped (exit code ${code}) before the file was made.`)));
     });
   } finally {
     clearTimeout(timer);

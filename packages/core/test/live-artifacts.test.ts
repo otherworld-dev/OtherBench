@@ -26,7 +26,7 @@ describe('parseLiveSpec', () => {
   });
 
   it("stores Claude Code's relay names as the MCP tool's own name", () => {
-    const r = parseLiveSpec({ calls: [call({ tool: 'mcp__grunt_0123456789abcdef__nextcloud__tasks_list' })] });
+    const r = parseLiveSpec({ calls: [call({ tool: 'mcp__otherbench_0123456789abcdef__nextcloud__tasks_list' })] });
     expect(r.ok && r.spec?.calls[0]!.tool).toBe('mcp__nextcloud__tasks_list');
   });
 
@@ -110,9 +110,9 @@ describe('parseLiveSpec', () => {
 
 describe('normaliseLiveToolName', () => {
   it('maps the Claude Code relay form back and leaves other names alone', () => {
-    expect(normaliseLiveToolName('mcp__grunt_0123456789abcdef__nextcloud__tasks_list')).toBe('mcp__nextcloud__tasks_list');
+    expect(normaliseLiveToolName('mcp__otherbench_0123456789abcdef__nextcloud__tasks_list')).toBe('mcp__nextcloud__tasks_list');
     expect(normaliseLiveToolName('mcp__nextcloud__tasks_list')).toBe('mcp__nextcloud__tasks_list');
-    expect(normaliseLiveToolName('mcp__grunt_xyz__a__b')).toBe('mcp__grunt_xyz__a__b');
+    expect(normaliseLiveToolName('mcp__otherbench_xyz__a__b')).toBe('mcp__otherbench_xyz__a__b');
   });
 });
 
@@ -187,7 +187,7 @@ describe('liveCallHash and canonicalJson', () => {
 describe('LIVE_ARTIFACTS_GUIDANCE', () => {
   it('tells the model how to declare calls, include the helper and treat tool data as data', () => {
     expect(LIVE_ARTIFACTS_GUIDANCE.startsWith('# Live artifacts')).toBe(true);
-    expect(LIVE_ARTIFACTS_GUIDANCE).toContain('<script src="grunt-live.js"></script>');
+    expect(LIVE_ARTIFACTS_GUIDANCE).toContain('<script src="otherbench-live.js"></script>');
     expect(LIVE_ARTIFACTS_GUIDANCE).toContain('textContent');
     expect(LIVE_ARTIFACTS_GUIDANCE).toContain('not_approved');
   });

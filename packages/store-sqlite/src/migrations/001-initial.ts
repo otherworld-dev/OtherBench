@@ -9,7 +9,7 @@
 //
 // Column set and types follow the design doc's "Data model" section
 // (docs/superpowers/specs/2026-08-12-grunt-multi-model-chat-workbench-design.md)
-// mapped onto the TypeScript entity types in @grunt/core
+// mapped onto the TypeScript entity types in @otherbench/core
 // (packages/core/src/ports/store.ts, packages/core/src/types/*.ts):
 //   - Table names are singular, matching the design doc exactly (`connection`,
 //     `model`, `profile`, `chat`, `message`, `attachment`, `usage`,

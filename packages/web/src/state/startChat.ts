@@ -1,8 +1,8 @@
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Part } from '@grunt/core/types/messages.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import { api } from './api.js';
 import { buildAssistantStub, buildUserStub } from './stubs.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 
 /**
  * The chat exists but its first message didn't send. The caller keeps `chat`
@@ -31,7 +31,7 @@ export async function startChat(opts: { projectId?: string; profileId?: string; 
       ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
       ...(opts.profileId !== undefined ? { profileId: opts.profileId } : {}),
     });
-    useGruntStore.getState().upsertChat(chat);
+    useOtherBenchStore.getState().upsertChat(chat);
   }
   const parts: Part[] = [{ type: 'text', text: opts.text }];
   let result: { userMessageId: string; assistantMessageIds: string[] };
@@ -42,13 +42,13 @@ export async function startChat(opts: { projectId?: string; profileId?: string; 
   }
   // The message has gone: a problem from here on mustn't read as a failed send, or a retry would send it twice.
   try {
-    const { registerMessage, profiles } = useGruntStore.getState();
+    const { registerMessage, profiles } = useOtherBenchStore.getState();
     registerMessage(buildUserStub(chat, result.userMessageId, null, parts));
     // Profiles are always loaded where a chat can be started. Without one the reply still arrives with the chat's sync.
     const profile = profiles.find((p) => p.id === chat.profileId);
     if (profile) for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
   } catch (err) {
-    console.error(`[grunt-web] sent the first message of chat ${chat.id} but couldn't show it yet; it arrives with the chat's sync:`, err);
+    console.error(`[otherbench-web] sent the first message of chat ${chat.id} but couldn't show it yet; it arrives with the chat's sync:`, err);
   }
   return chat;
 }

@@ -4,12 +4,13 @@ import { createServer as createHttpsServer, request as httpsRequest } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ComputerDriver } from '@grunt/core/ports/computer.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { DatabaseLockedError } from '../src/db-lock.js';
+import { LegacyDataError } from '../src/legacy-data.js';
 import { createApp as realCreateApp } from '../src/app.js';
 import {
   AnnounceWithoutTokenError,
@@ -73,6 +74,8 @@ function fakeDeps() {
       onListening?.({ port: opts.port === 0 ? EPHEMERAL_PORT : opts.port });
       return fakeServerHandle as never;
     }),
+    // Never the real one here: it would move this machine's own ~/.grunt.
+    adoptLegacyData: vi.fn((): string | null => null),
   };
 }
 
@@ -104,11 +107,11 @@ describe('isLoopbackHost', () => {
 
 describe('sameScriptPath', () => {
   it('matches the same path, and on Windows ignores a \\\\?\\ prefix and case', () => {
-    expect(sameScriptPath('/srv/grunt/cli.js', '/srv/grunt/cli.js')).toBe(true);
-    expect(sameScriptPath('/srv/grunt/cli.js', '/srv/other/cli.js')).toBe(false);
+    expect(sameScriptPath('/srv/otherbench/cli.js', '/srv/otherbench/cli.js')).toBe(true);
+    expect(sameScriptPath('/srv/otherbench/cli.js', '/srv/other/cli.js')).toBe(false);
     if (process.platform === 'win32') {
-      expect(sameScriptPath('C:\\Program Files\\Grunt\\server\\cli.js', '\\\\?\\C:\\Program Files\\Grunt\\server\\cli.js')).toBe(true);
-      expect(sameScriptPath('C:\\Grunt\\server\\cli.js', 'c:\\grunt\\SERVER\\cli.js')).toBe(true);
+      expect(sameScriptPath('C:\\Program Files\\OtherBench\\server\\cli.js', '\\\\?\\C:\\Program Files\\OtherBench\\server\\cli.js')).toBe(true);
+      expect(sameScriptPath('C:\\OtherBench\\server\\cli.js', 'c:\\otherbench\\SERVER\\cli.js')).toBe(true);
     }
   });
 });
@@ -159,16 +162,16 @@ describe('parseServeArgs', () => {
     expect(options.corsOrigins).toEqual(['http://tauri.localhost', 'tauri://localhost']);
   });
 
-  it('takes the token from GRUNT_TOKEN when --token is absent', () => {
-    expect(parseServeArgs([], { GRUNT_TOKEN: 'from-env' }).token).toBe('from-env');
+  it('takes the token from OTHERBENCH_TOKEN when --token is absent', () => {
+    expect(parseServeArgs([], { OTHERBENCH_TOKEN: 'from-env' }).token).toBe('from-env');
   });
 
-  it('prefers --token over GRUNT_TOKEN', () => {
-    expect(parseServeArgs(['--token', 'from-argv'], { GRUNT_TOKEN: 'from-env' }).token).toBe('from-argv');
+  it('prefers --token over OTHERBENCH_TOKEN', () => {
+    expect(parseServeArgs(['--token', 'from-argv'], { OTHERBENCH_TOKEN: 'from-env' }).token).toBe('from-argv');
   });
 
-  it('ignores an empty GRUNT_TOKEN', () => {
-    expect(parseServeArgs([], { GRUNT_TOKEN: '' }).token).toBeNull();
+  it('ignores an empty OTHERBENCH_TOKEN', () => {
+    expect(parseServeArgs([], { OTHERBENCH_TOKEN: '' }).token).toBeNull();
   });
 });
 
@@ -199,7 +202,7 @@ describe('runServe desktop mode', () => {
     const deps = fakeDeps();
     const io = fakeStdio();
 
-    const handle = await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const handle = await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT}}\n`]);
     expect(handle.port).toBe(EPHEMERAL_PORT);
@@ -208,7 +211,7 @@ describe('runServe desktop mode', () => {
   it('closes the server and the container, then exits 0, when stdin closes', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     io.stdin.end();
     await tick();
@@ -224,7 +227,7 @@ describe('runServe desktop mode', () => {
     const container = await deps.createContainer();
     let settle!: () => void;
     container.settled = () => new Promise<void>((resolve) => (settle = resolve));
-    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     io.stdin.end();
     await tick();
@@ -243,7 +246,7 @@ describe('runServe desktop mode', () => {
       const io = fakeStdio();
       const container = await deps.createContainer();
       container.settled = () => new Promise<void>(() => undefined);
-      await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+      await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
       io.stdin.end();
       await tick();
@@ -263,10 +266,10 @@ describe('runServe desktop mode', () => {
     expect(deps.createContainer).not.toHaveBeenCalled();
   });
 
-  it("deletes GRUNT_TOKEN from the environment once read, so nothing the server starts inherits it, and still signs in with it", async () => {
+  it("deletes OTHERBENCH_TOKEN from the environment once read, so nothing the server starts inherits it, and still signs in with it", async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    const env: NodeJS.ProcessEnv = { GRUNT_TOKEN: 'tok', grunt_token: 'tok', PATH: '/bin' };
+    const env: NodeJS.ProcessEnv = { OTHERBENCH_TOKEN: 'tok', otherbench_token: 'tok', PATH: '/bin' };
 
     await runServe(['--port', '0', '--announce'], { ...deps, ...io }, env);
 
@@ -283,7 +286,7 @@ describe('runServe desktop mode', () => {
     const deps = fakeDeps();
     const io = fakeStdio();
 
-    await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     const appOptions = deps.createApp.mock.calls[0]![1] as { token: string; corsOrigins: string[]; hostCheckPort?: () => number; oauthCallbackPort?: () => number };
     expect(appOptions.token).toBe('tok');
@@ -317,6 +320,48 @@ describe('runServe desktop mode', () => {
   });
 });
 
+describe("runServe moving Grunt's data", () => {
+  it('moves it before the default database opens, and says so on stderr', async () => {
+    const deps = fakeDeps();
+    deps.adoptLegacyData.mockReturnValueOnce("Moved Grunt's data.");
+    deps.createContainer.mockImplementationOnce(async () => {
+      expect(deps.adoptLegacyData).toHaveBeenCalledTimes(1);
+      return fakeContainer();
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runServe([], { ...deps, ...fakeStdio() }, {});
+
+    expect(deps.createContainer).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith("Moved Grunt's data.");
+    errorSpy.mockRestore();
+  });
+
+  it('leaves it alone for a database named with --db', async () => {
+    const deps = fakeDeps();
+
+    await runServe(['--db', ':memory:'], { ...deps, ...fakeStdio() }, {});
+
+    expect(deps.adoptLegacyData).not.toHaveBeenCalled();
+  });
+
+  it('exits non-zero with the reason when Grunt is still running', async () => {
+    const deps = fakeDeps();
+    deps.adoptLegacyData.mockImplementationOnce(() => {
+      throw new LegacyDataError('Grunt is still running (pid 1234).');
+    });
+    const io = fakeStdio();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main(['serve'], { ...deps, ...io, env: {} });
+
+    expect(io.exit).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith('Error: Grunt is still running (pid 1234).');
+    expect(deps.createContainer).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});
+
 describe('runServe with the desktop channel (--desktop-rpc)', () => {
   /** The driver `runServe` handed to `createContainer`, if any. Nothing here is a shell: stdin and stdout are in-memory. */
   const driverOf = (deps: ReturnType<typeof fakeDeps>): ComputerDriver | undefined =>
@@ -333,16 +378,16 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it("says hello to the shell after the announce line, which carries this launch's word, and hands the container a driver that is not available yet", async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     const word = rpcWordOf(io);
     expect(word).toMatch(/^[0-9a-f]{32}$/);
-    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT},"rpc":"${word}"}\n`, `GRUNT-RPC ${word} {"id":1,"method":"computer.hello","params":{}}\n`]);
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT},"rpc":"${word}"}\n`, `OTHERBENCH-RPC ${word} {"id":1,"method":"computer.hello","params":{}}\n`]);
     const computer = driverOf(deps)!;
     expect(computer.available()).toBe(false);
     expect(computer.reservedKeys()).toBeNull();
     // The shell's own lines carry no word.
-    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    io.stdin.write('OTHERBENCH-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
     await vi.waitFor(() => expect(computer.available()).toBe(true));
     expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']);
   });
@@ -351,7 +396,7 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
     const words = new Set<string>();
     for (let i = 0; i < 5; i += 1) {
       const io = fakeStdio();
-      await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+      await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { OTHERBENCH_TOKEN: 'tok' });
       words.add(rpcWordOf(io));
     }
     expect(words.size).toBe(5);
@@ -360,11 +405,11 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it('sends what the console would write to stdout to stderr, in --desktop-rpc mode only, before anything is written', async () => {
     const io = fakeStdio();
     io.consoleToStderr.mockImplementation(() => expect(io.writes).toEqual([]));
-    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { OTHERBENCH_TOKEN: 'tok' });
     expect(io.consoleToStderr).toHaveBeenCalledTimes(1);
     for (const argv of [['--port', '0', '--announce'], ['--port', '0']]) {
       const other = fakeStdio();
-      await runServe(argv, { ...fakeDeps(), ...other }, { GRUNT_TOKEN: 'tok' });
+      await runServe(argv, { ...fakeDeps(), ...other }, { OTHERBENCH_TOKEN: 'tok' });
       expect(other.consoleToStderr).not.toHaveBeenCalled();
     }
   });
@@ -390,9 +435,9 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it('a shell that says computer use is off, as it ships, leaves the driver unavailable, and it is sent nothing more', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
     const computer = driverOf(deps)!;
-    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":false,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    io.stdin.write('OTHERBENCH-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":false,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
     await vi.waitFor(() => expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']));
     expect(computer.available()).toBe(false);
     expect((await computer.ensureSession('c', 'Budget')).ok).toBe(false);
@@ -402,7 +447,7 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it('a shell that never answers the hello leaves the driver unavailable, and it is sent nothing more', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
     const computer = driverOf(deps)!;
     expect(computer.available()).toBe(false);
     expect(await computer.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: "Computer use isn't available in the desktop app right now." });
@@ -413,7 +458,7 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it('without --desktop-rpc there is no channel and no driver, and nothing more is written', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
     expect(driverOf(deps)).toBeUndefined();
     expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT}}\n`]);
   });
@@ -422,17 +467,17 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
     for (const argv of [
       ['--port', '0', '--desktop-rpc'],
       ['--port', '0', '--desktop-rpc', '--host', '0.0.0.0', '--token', 'secret'],
-      ['--port', '0', '--desktop-rpc', '--public-url', 'https://grunt.example.com', '--tls', 'auto'],
+      ['--port', '0', '--desktop-rpc', '--public-url', 'https://otherbench.example.com', '--tls', 'auto'],
     ]) {
       const deps = fakeDeps();
       const io = fakeStdio();
-      await expect(runServe(argv, { ...deps, ...io }, { GRUNT_TOKEN: 'tok' }), argv.join(' ')).rejects.toThrow(DesktopRpcWithoutAnnounceError);
+      await expect(runServe(argv, { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' }), argv.join(' ')).rejects.toThrow(DesktopRpcWithoutAnnounceError);
       expect(deps.createContainer).not.toHaveBeenCalled();
       expect(io.writes).toEqual([]);
       expect(io.consoleToStderr).not.toHaveBeenCalled();
     }
     // And a sign-in server can't have --announce, so it can't have the channel with it either.
-    expect(() => assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true, publicUrls: ['https://grunt.example.com'], tls: 'auto' })).toThrow(RemoteWithAnnounceError);
+    expect(() => assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true, publicUrls: ['https://otherbench.example.com'], tls: 'auto' })).toThrow(RemoteWithAnnounceError);
     expect(assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true })).toBe('token');
   });
 
@@ -448,9 +493,9 @@ describe('runServe with the desktop channel (--desktop-rpc)', () => {
   it('still closes and exits when stdin closes, and the driver is not available from then on', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
     const computer = driverOf(deps)!;
-    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":[],"sessions":0}}\n');
+    io.stdin.write('OTHERBENCH-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":[],"sessions":0}}\n');
     await vi.waitFor(() => expect(computer.available()).toBe(true));
 
     io.stdin.end();
@@ -526,7 +571,7 @@ describe('main() CLI entry', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await main(['serve', '--port', '0', '--announce'], { ...deps, ...io, env: { GRUNT_TOKEN: 'tok' } });
+    await main(['serve', '--port', '0', '--announce'], { ...deps, ...io, env: { OTHERBENCH_TOKEN: 'tok' } });
 
     expect(logSpy).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`127.0.0.1:${EPHEMERAL_PORT}`));
@@ -543,13 +588,13 @@ describe('main() CLI entry', () => {
     await main(['serve', '--announce'], { ...deps, ...io, env: {} });
 
     expect(io.exit).toHaveBeenCalledWith(1);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('GRUNT_TOKEN'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('OTHERBENCH_TOKEN'));
     errorSpy.mockRestore();
   });
 
   it('exits non-zero with a message when the database is already in use', async () => {
     const deps = fakeDeps();
-    deps.createContainer.mockRejectedValueOnce(new DatabaseLockedError('/x/grunt.db', 1234, 0));
+    deps.createContainer.mockRejectedValueOnce(new DatabaseLockedError('/x/otherbench.db', 1234, 0));
     const io = fakeStdio();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -579,12 +624,12 @@ describe('parseServeArgs: sign-in flags', () => {
 
   it('parses repeated --public-url and --trust-proxy, --tls auto, --tls-cert and --tls-key', () => {
     const o = parseServeArgs([
-      '--public-url', 'https://grunt.lan:4747', '--public-url', 'https://192.168.1.5:4747',
+      '--public-url', 'https://otherbench.lan:4747', '--public-url', 'https://192.168.1.5:4747',
       '--trust-proxy', '127.0.0.1', '--trust-proxy', '10.0.0.2',
       '--tls', 'auto', '--tls-cert', '/c.pem', '--tls-key', '/k.pem',
     ]);
     expect(o).toMatchObject({
-      publicUrls: ['https://grunt.lan:4747', 'https://192.168.1.5:4747'],
+      publicUrls: ['https://otherbench.lan:4747', 'https://192.168.1.5:4747'],
       trustProxies: ['127.0.0.1', '10.0.0.2'],
       tls: 'auto',
       tlsCert: '/c.pem',
@@ -599,7 +644,7 @@ describe('parseServeArgs: sign-in flags', () => {
 
 describe('assertServeSecurity: the whole matrix', () => {
   const base = { host: '127.0.0.1', token: null, publicUrls: [] as string[], tls: null, tlsCert: null, tlsKey: null, trustProxies: [] as string[] };
-  const signIn = { ...base, host: '0.0.0.0', publicUrls: ['https://grunt.lan:4747'] };
+  const signIn = { ...base, host: '0.0.0.0', publicUrls: ['https://otherbench.lan:4747'] };
 
   it('keeps open and token modes as they were', () => {
     expect(assertServeSecurity(base)).toBe('open');
@@ -616,8 +661,8 @@ describe('assertServeSecurity: the whole matrix', () => {
   });
 
   it('refuses each unsafe or contradictory combination by name', () => {
-    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['http://grunt.lan:4747'] })).toThrow(InsecurePublicUrlError);
-    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['https://grunt.lan/grunt'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['http://otherbench.lan:4747'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['https://otherbench.lan/otherbench'] })).toThrow(InsecurePublicUrlError);
     expect(() => assertServeSecurity(signIn)).toThrow(RemoteNeedsHttpsError);
     expect(() => assertServeSecurity({ ...signIn, tls: 'auto', token: 't', announce: true })).toThrow(RemoteWithAnnounceError);
     expect(() => assertServeSecurity({ ...base, tls: 'auto' })).toThrow(TlsWithoutPublicUrlError);
@@ -632,7 +677,7 @@ describe('assertServeSecurity: the whole matrix', () => {
 describe('runServe in sign-in mode', () => {
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'grunt-cli-signin-'));
+    dir = mkdtempSync(join(tmpdir(), 'otherbench-cli-signin-'));
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -642,7 +687,7 @@ describe('runServe in sign-in mode', () => {
   it('refuses without a password and never builds the container', async () => {
     const deps = fakeDeps();
 
-    await expect(runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {})).rejects.toThrow(NoPasswordError);
+    await expect(runServe(['--db', join(dir, 'otherbench.db'), '--public-url', 'https://otherbench.test', '--tls', 'auto'], deps, {})).rejects.toThrow(NoPasswordError);
     expect(deps.createContainer).not.toHaveBeenCalled();
   });
 
@@ -651,7 +696,7 @@ describe('runServe in sign-in mode', () => {
     // A directory where the file should be: reading it fails with EISDIR, not ENOENT.
     mkdirSync(join(dir, 'login.json'));
 
-    const run = runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+    const run = runServe(['--db', join(dir, 'otherbench.db'), '--public-url', 'https://otherbench.test', '--tls', 'auto'], deps, {});
 
     await expect(run).rejects.toThrow(LoginFileError);
     await expect(run).rejects.toThrow(/login\.json is not a usable password file \(couldn't read it: /);
@@ -662,7 +707,7 @@ describe('runServe in sign-in mode', () => {
     await setPassword();
     const deps = fakeDeps();
 
-    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+    const handle = await runServe(['--db', join(dir, 'otherbench.db'), '--port', '0', '--public-url', 'https://otherbench.test', '--tls', 'auto'], deps, {});
 
     const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown; serverOptions?: { key: string; cert: string; minVersion: string } };
     expect(serveOpts.createServer).toBe(createHttpsServer);
@@ -670,11 +715,11 @@ describe('runServe in sign-in mode', () => {
     expect(serveOpts.serverOptions?.key).toContain('PRIVATE KEY');
     expect(serveOpts.serverOptions?.cert).toBe(readFileSync(join(dir, 'https', 'server.crt'), 'utf8'));
     const appOptions = deps.createApp.mock.calls[0]![1] as { remote: { publicHosts: string[]; tls: { mode: string } } | null; hostCheckPort?: () => number };
-    expect(appOptions.remote?.publicHosts).toEqual(['grunt.test']);
+    expect(appOptions.remote?.publicHosts).toEqual(['otherbench.test']);
     expect(appOptions.remote?.tls.mode).toBe('auto');
     expect(appOptions.hostCheckPort?.()).toBe(EPHEMERAL_PORT);
     expect(handle.scheme).toBe('https');
-    expect(handle.publicUrls).toEqual(['https://grunt.test']);
+    expect(handle.publicUrls).toEqual(['https://otherbench.test']);
     expect(handle.notes.join('\n')).toMatch(/SHA-256 [0-9A-F]{2}(:[0-9A-F]{2}){31}/);
     expect(handle.notes.join('\n')).toMatch(/only listens on this machine/);
     handle.close();
@@ -684,7 +729,7 @@ describe('runServe in sign-in mode', () => {
     await setPassword();
     const deps = fakeDeps();
 
-    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://box.tail.ts.net', '--trust-proxy', '127.0.0.1'], deps, {});
+    const handle = await runServe(['--db', join(dir, 'otherbench.db'), '--public-url', 'https://box.tail.ts.net', '--trust-proxy', '127.0.0.1'], deps, {});
 
     const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown };
     expect(serveOpts.createServer).toBeUndefined();
@@ -697,7 +742,7 @@ describe('runServe in sign-in mode', () => {
     const deps = fakeDeps();
     const io = fakeStdio();
 
-    const handle = await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const handle = await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
     expect((deps.createApp.mock.calls[0]![1] as { remote: unknown }).remote).toBeNull();
     expect((deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown }).createServer).toBeUndefined();
@@ -706,11 +751,11 @@ describe('runServe in sign-in mode', () => {
 
   it('answers /api/health over real HTTPS, trusting only the CA it made', async () => {
     await setPassword();
-    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], { createContainer: async () => fakeContainer() }, {});
+    const handle = await runServe(['--db', join(dir, 'otherbench.db'), '--port', '0', '--public-url', 'https://otherbench.test', '--tls', 'auto'], { createContainer: async () => fakeContainer() }, {});
     try {
-      const ca = readFileSync(join(dir, 'https', 'grunt-ca.crt'), 'utf8');
+      const ca = readFileSync(join(dir, 'https', 'otherbench-ca.crt'), 'utf8');
       const answer = await new Promise<string>((resolve, reject) => {
-        const req = httpsRequest({ host: '127.0.0.1', port: handle.port, path: '/api/health', ca, servername: 'grunt.test', agent: false }, (res) => {
+        const req = httpsRequest({ host: '127.0.0.1', port: handle.port, path: '/api/health', ca, servername: 'otherbench.test', agent: false }, (res) => {
           let body = '';
           res.on('data', (d: Buffer) => (body += d.toString()));
           res.on('end', () => resolve(`${res.statusCode} ${body}`));
@@ -731,7 +776,7 @@ describe('main() with sign-in', () => {
     const exit = vi.fn();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await main(['serve', '--public-url', 'http://grunt.lan'], { ...deps, exit, env: {} });
+    await main(['serve', '--public-url', 'http://otherbench.lan'], { ...deps, exit, env: {} });
 
     expect(exit).toHaveBeenCalledWith(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^Error: Refusing to start: --public-url/));

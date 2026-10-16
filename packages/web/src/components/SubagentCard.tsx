@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react';
-import type { Part, SubagentStatus } from '@grunt/core/types/messages.js';
+import type { Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 
 type SubagentPart = Extract<Part, { type: 'subagent' }>;
 
@@ -11,7 +11,7 @@ const STATUS_TEXT: Record<SubagentStatus, string> = {
   cancelled: 'stopped',
 };
 
-/** A card still queued or running on a reply that is no longer streaming was stopped (or Grunt went away). */
+/** A card still queued or running on a reply that is no longer streaming was stopped (or OtherBench went away). */
 export function subagentDisplayStatus(status: SubagentStatus, replyStreaming: boolean): SubagentStatus {
   return !replyStreaming && (status === 'queued' || status === 'running') ? 'cancelled' : status;
 }

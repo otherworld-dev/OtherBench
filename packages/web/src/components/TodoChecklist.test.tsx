@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { TodoItem } from '@grunt/core/types/thread.js';
+import type { TodoItem } from '@otherbench/core/types/thread.js';
 import { TodoChecklist } from './TodoChecklist.js';
 
 const item = (content: string, status: TodoItem['status']): TodoItem => ({ content, status, activeForm: `${content}-ing` });

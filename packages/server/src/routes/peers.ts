@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { shortFingerprint } from '@grunt/core/domain/pairing.js';
+import { shortFingerprint } from '@otherbench/core/domain/pairing.js';
 import type { Container } from '../container.js';
 import { PeerError, type PeerService } from '../peer/service.js';
 import { requireNonEmptyString } from '../validation.js';

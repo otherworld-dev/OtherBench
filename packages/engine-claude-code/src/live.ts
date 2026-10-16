@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Gate } from './approval.js';
 import type { ApprovalTickets } from './tickets.js';
 
@@ -54,8 +54,8 @@ export interface TurnBinding {
   tickets?: ApprovalTickets;
 }
 
-/** Which of Grunt's own tools a process's server carries; fixed when it starts. */
-export interface GruntServerSwitches {
+/** Which of OtherBench's own tools a process's server carries; fixed when it starts. */
+export interface OtherBenchServerSwitches {
   artifacts: boolean;
   recall: boolean;
   /** propose_plan, for a reply in Plan mode. */
@@ -75,13 +75,13 @@ export class LiveProcess {
   busy = true;
   lastUsed = Date.now();
   binding: TurnBinding | null = null;
-  /** Claude Code's name for this process's artifact tool (Deck #896), or null when its Grunt server has none. */
+  /** Claude Code's name for this process's artifact tool (Deck #896), or null when its OtherBench server has none. */
   artifactTool: string | null = null;
-  /** Claude Code's name for this process's recall tool, or null when its Grunt server has none. */
+  /** Claude Code's name for this process's recall tool, or null when its OtherBench server has none. */
   recallTool: string | null = null;
   /** Claude Code's name for this process's plan tool, or null when its server has none. */
   planTool: string | null = null;
-  /** Claude Code's name for each relayed MCP tool on this process's Grunt server -> the API model's name for it. */
+  /** Claude Code's name for each relayed MCP tool on this process's OtherBench server -> the API model's name for it. */
   relayNames = new Map<string, string>();
   readonly stderr: string[] = [];
   readonly iterator: AsyncIterator<SDKMessage>;
@@ -122,7 +122,7 @@ export class LiveProcess {
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
-export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntServerSwitches): string {
+export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: OtherBenchServerSwitches): string {
   const { cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
     .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, plan: own.plan, relay: own.relay, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))

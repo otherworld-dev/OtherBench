@@ -1,6 +1,6 @@
-import { isSandboxError, sandboxFileAccess, type Sandbox } from '@grunt/core/ports/sandbox.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { sandboxHostsOf, type ToolPolicy } from '@grunt/core/types/config.js';
+import { isSandboxError, sandboxFileAccess, type Sandbox } from '@otherbench/core/ports/sandbox.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { sandboxHostsOf, type ToolPolicy } from '@otherbench/core/types/config.js';
 import { parseRunCommandArgs, RUN_COMMAND_PARAMETERS, toolError } from './shell-tool.js';
 
 export const SANDBOX_NETWORK_TOOL = 'sandbox_network';

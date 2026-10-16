@@ -7,14 +7,14 @@ import { BASE_URL } from '../playwright.config.js';
 
 /**
  * The viewer (spec 2026-10-07-viewer): a file a tool read opens formatted in
- * the panel; a workspace HTML page runs in the sandbox and can't reach Grunt;
+ * the panel; a workspace HTML page runs in the sandbox and can't reach OtherBench;
  * an image shows. Uses the keyless mock's `#tool <path>` (a real read_file).
  */
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 let ws: string;
 
 test.beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-viewer-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-e2e-viewer-'));
   writeFileSync(join(ws, 'notes.md'), '# Viewer heading\n\nSome *notes*.');
   writeFileSync(
     join(ws, 'page.html'),

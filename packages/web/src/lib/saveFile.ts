@@ -28,7 +28,7 @@ export async function saveFile(blob: Blob, filename: string): Promise<void> {
   try {
     if (!(await isMainWindowFocused())) await showNotification('Download complete', `${name} is in your Downloads folder. Click to show it.`, null, path);
   } catch (err) {
-    console.error('[grunt-web] download notification failed:', err);
+    console.error('[otherbench-web] download notification failed:', err);
   }
 }
 

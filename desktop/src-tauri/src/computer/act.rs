@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::facts::{is_dev_tools, shows_grunt_ui, Expect};
+use super::facts::{is_dev_tools, shows_otherbench_ui, Expect};
 use super::image::Shot;
 use super::keys::{self, Combo};
 use super::session::Live;
@@ -22,12 +22,12 @@ pub const SCROLL_MIN: u64 = 1;
 pub const SCROLL_MAX: u64 = 10;
 
 pub const MODIFIER_HELD: &str = "A modifier key is held; nothing was done.";
-pub const KEYBOARD_UNKNOWN: &str = "Grunt couldn't read the keyboard state (is the computer locked?); nothing was done.";
+pub const KEYBOARD_UNKNOWN: &str = "OtherBench couldn't read the keyboard state (is the computer locked?); nothing was done.";
 pub const WINDOW_CHANGED: &str =
     "The window there is not the one this action was approved for, so nothing more was done. Take a screenshot and try again.";
-pub const WINDOW_UNREADABLE: &str = "Grunt couldn't tell which window is there now, so nothing more was done.";
+pub const WINDOW_UNREADABLE: &str = "OtherBench couldn't tell which window is there now, so nothing more was done.";
 pub const STOPPED: &str = "Control of this computer ended, so nothing more was done.";
-pub const GRUNT_UI: &str = "That window is showing Grunt's own pages now, so nothing more was done. Grunt never controls itself.";
+pub const OTHERBENCH_UI: &str = "That window is showing OtherBench's own pages now, so nothing more was done. OtherBench never controls itself.";
 pub const DEV_TOOLS: &str = "That window is a browser's developer tools now, so nothing more was done.";
 pub const TOO_LONG: &str = "The action took too long and was stopped part way.";
 pub const SCREEN_CHANGED: &str = "The screen changed size since the last screenshot; take another. Nothing more was done.";
@@ -35,7 +35,7 @@ pub const NO_SCREENSHOT: &str = "Take a screenshot first; nothing was done.";
 pub const OUTSIDE: &str = "That point is not inside the last screenshot; nothing was done.";
 pub const INPUT_REFUSED: &str =
     "Windows didn't take all of the input (the app may be running as administrator, or the computer is locked); nothing more was done.";
-pub const STUCK: &str = "Grunt couldn't release a key or button it pressed; check the keyboard and mouse.";
+pub const STUCK: &str = "OtherBench couldn't release a key or button it pressed; check the keyboard and mouse.";
 pub const CURSOR_MOVED: &str = "The mouse pointer moved away from the point that was checked, so nothing more was done.";
 pub const NO_EXPECTATION: &str = "The action didn't say which window it was approved for, so nothing was done.";
 
@@ -280,10 +280,10 @@ impl Checks<'_> {
             Keyboard::Unknown => return Err(KEYBOARD_UNKNOWN.into()),
         }
         let now = self.desktop.identity(at).map_err(|_| WINDOW_UNREADABLE.to_string())?;
-        // A window that shows Grunt's own UI now (a browser that went to it) is
+        // A window that shows OtherBench's own UI now (a browser that went to it) is
         // never acted in, and never brought forward to be.
-        if shows_grunt_ui(&now.title) {
-            return Err(GRUNT_UI.into());
+        if shows_otherbench_ui(&now.title) {
+            return Err(OTHERBENCH_UI.into());
         }
         if is_dev_tools(&now.title) {
             return Err(DEV_TOOLS.into());

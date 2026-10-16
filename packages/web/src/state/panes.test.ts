@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { viewTabId } from '../viewer/items.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 import {
   closeTab,
   DEFAULT_PANE_STATE,
@@ -144,13 +144,13 @@ describe('pane state (#824)', () => {
   });
 
   it('closing a viewer tab in the store shows its chat again', () => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     const view = viewTabId('c1', { kind: 'file', path: 'doc.pdf' });
-    const store = useGruntStore.getState();
+    const store = useOtherBenchStore.getState();
     store.openTab('c1');
     store.openTab(view);
-    expect(useGruntStore.getState().activeChatId).toBe(view);
-    useGruntStore.getState().closeTab(view);
-    expect(useGruntStore.getState()).toMatchObject({ activeChatId: 'c1', paneState: { tabs: ['c1'], panes: ['c1'] } });
+    expect(useOtherBenchStore.getState().activeChatId).toBe(view);
+    useOtherBenchStore.getState().closeTab(view);
+    expect(useOtherBenchStore.getState()).toMatchObject({ activeChatId: 'c1', paneState: { tabs: ['c1'], panes: ['c1'] } });
   });
 });

@@ -16,7 +16,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
 });
 
 import { api, type LocationView } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { LOCATIONS_HELP, LocationsPanel } from './LocationsPanel.js';
 
 const nextcloud: LocationView = {
@@ -30,7 +30,7 @@ const nextcloud: LocationView = {
 const git: LocationView = { id: 'git', name: 'Git', paths: [{ locationId: 'git', nodeId: 'node-laptop-1234', path: 'C:\\Git' }] };
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   vi.mocked(api.health).mockReset().mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
   vi.mocked(api.node.get).mockReset().mockResolvedValue({ id: 'node-pc', name: 'PC' });
   vi.mocked(api.projects.list).mockReset().mockResolvedValue([]);
@@ -60,7 +60,7 @@ describe('LocationsPanel', () => {
     render(<LocationsPanel />);
     await screen.findByTestId('location-nc');
     expect(api.locations.list).toHaveBeenCalledTimes(1);
-    useGruntStore.setState({ syncRevision: 1 });
+    useOtherBenchStore.setState({ syncRevision: 1 });
     await waitFor(() => expect(api.locations.list).toHaveBeenCalledTimes(2));
   });
 

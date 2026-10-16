@@ -1,5 +1,5 @@
-// Grunt's sandbox agent (spec 2026-10-12-sandbox-design §2). It runs inside the
-// grunt-sandbox WSL distro as the grunt user, one process per chat, and runs
+// OtherBench's sandbox agent (spec 2026-10-12-sandbox-design §2). It runs inside the
+// otherbench-sandbox WSL distro as the otherbench user, one process per chat, and runs
 // every command through Anthropic's sandbox runtime: confined to the chat's
 // folders, its home and a temp folder of its own, with network only through
 // the runtime's proxy. JSON lines in (stdin) and out (stdout); the messages
@@ -10,7 +10,7 @@
 //
 // The host is trusted to speak the protocol, not to be well-formed: ids, paths
 // and timeouts are checked before they reach the file system or a timer. One
-// command runs at a time per agent (Grunt serialises them too); a second `run`
+// command runs at a time per agent (OtherBench serialises them too); a second `run`
 // while one is in flight is refused.
 //
 // Temp folders, and why they are laid out the way they are (found by running
@@ -30,14 +30,14 @@
 //    run's own folder are), or the run's folder would come out read-only.
 //
 // Private networks. A command may reach the public internet and nothing else,
-// by the same rule as Grunt's own browser (isPublicAddress in core's
+// by the same rule as OtherBench's own browser (isPublicAddress in core's
 // browser-hosts.ts). The runtime always refuses loopback, link-local, this
 // host's own addresses and cloud metadata at connect time, on the address it
 // actually dials (so a name that resolves to one is caught even when it changes
 // between the check and the connect). It refuses the rest only when told to,
 // which is DENIED_RESOLVED_ADDRESSES in the network config: everything
 // isPrivateAddress refuses, as ranges. On top of that ask() resolves a host
-// before bothering Grunt with a card, and answers no when the name can't be
+// before bothering OtherBench with a card, and answers no when the name can't be
 // resolved or any address is one the sandbox must not reach. For a name that is
 // an early refusal only: the runtime's check is the enforcement. For a host
 // given as a number it is the only check (the runtime doesn't judge those).
@@ -45,7 +45,7 @@
 // Protected files. Some files in a folder make something run when the folder is
 // next used ON WINDOWS: git's hooks and config (Git for Windows, and VS Code
 // runs git on its own), VS Code's tasks and settings, Claude Code's project
-// settings and hooks (Grunt's own Claude Code engine loads them), MCP server
+// settings and hooks (OtherBench's own Claude Code engine loads them), MCP server
 // lists. The runtime keeps a command off them, but only (a) in this process's
 // own working folder, so the agent moves there while it wraps a command, and
 // (b) by their exact spelling, while Windows folders in the VM are
@@ -62,8 +62,8 @@ export const KILL_GRACE_MS = 2000;
 export const MAX_TIMEOUT_MS = 600_000;
 /** The runtime's note on what it blocked is kept to this many bytes. */
 export const MAX_NOTE_BYTES = 4096;
-/** PATH for commands: Grunt's Node first (so node and npm work), then the system's. */
-export const COMMAND_PATH = '/opt/grunt-sandbox/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+/** PATH for commands: OtherBench's Node first (so node and npm work), then the system's. */
+export const COMMAND_PATH = '/opt/otherbench-sandbox/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 /** Unreadable unless a run allows a path below them: other chats' folders, homes and temp files. */
 export const DENY_READ = ['/mnt', '/home', '/tmp'];
 
@@ -170,7 +170,7 @@ const errorMessage = (err) => (err instanceof Error ? err.message : String(err))
 // Addresses the sandbox must not reach.
 //
 // The rule is core's isPublicAddress (packages/core/src/domain/browser-hosts.ts),
-// the one Grunt's browser and the sandbox's network card use: an address may be
+// the one OtherBench's browser and the sandbox's network card use: an address may be
 // reached only when it is on the public internet. This script runs in the VM
 // and can't import core, so the two tables and the reading of an address below
 // are its own copy of core's. sandbox/test/agent-addresses.test.ts holds the
@@ -440,7 +440,7 @@ export function createAgent(deps) {
   }
 
   /**
-   * The runtime's "may this host be reached?" callback: Grunt raises the card and
+   * The runtime's "may this host be reached?" callback: OtherBench raises the card and
    * answers. A host that doesn't resolve, or resolves anywhere private, is
    * refused here without a card, since the runtime would refuse the connection
    * anyway. @param {HostPattern} pattern
@@ -685,7 +685,7 @@ export function createAgent(deps) {
   /**
    * Puts back every protected path of these snapshots. Never throws: what it
    * couldn't put back is said in the note, with what it did ('' for nothing),
-   * and `unguarded` lists the folders where anything failed, for Grunt to stop
+   * and `unguarded` lists the folders where anything failed, for OtherBench to stop
    * using them until someone has looked. `cwdRoot` is named by relative paths,
    * the home as ~.
    * @returns {Promise<{ note: string, unguarded: string[] }>}
@@ -786,7 +786,7 @@ export function createAgent(deps) {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let sentBytes = 0;
-      // Set the moment anything is dropped: after that nothing more is sent, so what Grunt sees is a clean prefix.
+      // Set the moment anything is dropped: after that nothing more is sent, so what OtherBench sees is a clean prefix.
       let truncated = false;
       let timedOut = false;
       let settled = false;
@@ -882,8 +882,8 @@ export function createAgent(deps) {
     // A cancel (or close) while the command is still being wrapped, possibly waiting on a network ask, has no child to kill yet.
     controller.signal.addEventListener('abort', refuseAsks, { once: true });
     const tmp = `${chat.tmpRoot}/${id}`;
-    const commandId = `grunt-run-${id}`;
-    /** What Grunt is told once the protected files are back. @type {Record<string, unknown>} */
+    const commandId = `otherbench-run-${id}`;
+    /** What OtherBench is told once the protected files are back. @type {Record<string, unknown>} */
     let reply;
     try {
       // One agent per chat serves every variant of a compare turn, one command
@@ -903,7 +903,7 @@ export function createAgent(deps) {
       // Before anything runs: a copy of each writable folder's protected paths, put back below whatever happens.
       const snapshots = await snapshotAll(guarded);
       let restoring = null;
-      // Grunt gives a cancel or a close more time once it hears the restore has started.
+      // OtherBench gives a cancel or a close more time once it hears the restore has started.
       mine.restore = () => {
         if (!restoring) {
           send({ type: 'restoring', id });
@@ -938,10 +938,10 @@ export function createAgent(deps) {
       const { note: undone, unguarded } = mine.restore ? await mine.restore() : { note: '', unguarded: [] };
       if (undone && reply.type === 'done') reply.note = reply.note ? `${undone}\n${reply.note}` : undone;
       else if (undone) reply.message = `${reply.message}\n${undone}`;
-      // The folders whose protected files couldn't be confirmed put back: Grunt stops using them.
+      // The folders whose protected files couldn't be confirmed put back: OtherBench stops using them.
       reply.unguarded = unguarded;
       send(reply);
-      // Grunt sends the next run as soon as it sees done, and clearing a big
+      // OtherBench sends the next run as soon as it sees done, and clearing a big
       // $TMPDIR (pip and npm caches) can be slow: the agent is free before that.
       // The next run has another id, so this rm can't touch its folder.
       active = null;
@@ -985,7 +985,7 @@ export function createAgent(deps) {
   }
 
   return {
-    /** One line from Grunt. Never throws; a line that isn't a message is ignored. @param {string} line */
+    /** One line from OtherBench. Never throws; a line that isn't a message is ignored. @param {string} line */
     async receive(line) {
       let msg;
       try {

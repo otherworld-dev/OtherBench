@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-const scratch = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tmpdir(), 'grunt-probe-thread-'));
+const scratch = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tmpdir(), 'otherbench-probe-thread-'));
 {
   // The scratch dir must be outside any git repo.
   let probeDir = scratch;
@@ -27,7 +27,7 @@ const scratch = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tm
 }
 mkdirSync(scratch, { recursive: true });
 
-// Same scrubbing as Grunt's buildChildEnv for the Claude backend.
+// Same scrubbing as OtherBench's buildChildEnv for the Claude backend.
 const env = {};
 for (const [k, v] of Object.entries(process.env)) {
   if (v === undefined) continue;
@@ -127,7 +127,7 @@ async function run(name, { text, model, options = {}, hook, canUse }) {
 
 const answerBlueInHook = (i) =>
   i.tool_name === 'AskUserQuestion'
-    ? { permissionDecision: 'allow', permissionDecisionReason: 'Answered in Grunt', updatedInput: { ...i.tool_input, answers: blueAnswers(i.tool_input) } }
+    ? { permissionDecision: 'allow', permissionDecisionReason: 'Answered in OtherBench', updatedInput: { ...i.tool_input, answers: blueAnswers(i.tool_input) } }
     : { permissionDecision: 'allow', permissionDecisionReason: 'ok' };
 const answerBlueInCanUse = (toolName, toolInput) =>
   toolName === 'AskUserQuestion' ? { behavior: 'allow', updatedInput: { ...toolInput, answers: blueAnswers(toolInput) } } : { behavior: 'allow', updatedInput: toolInput };

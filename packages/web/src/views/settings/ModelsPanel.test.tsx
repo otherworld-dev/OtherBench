@@ -1,8 +1,8 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Connection, ModelInfo } from '@grunt/core/types/config.js';
-import { useGruntStore } from '../../state/store.js';
+import type { Connection, ModelInfo } from '@otherbench/core/types/config.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { ModelsPanel } from './ModelsPanel.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -55,7 +55,7 @@ function makeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
 }
 
 function reset(): void {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   mockedPatch.mockReset();
 }
 
@@ -64,8 +64,8 @@ describe('ModelsPanel', () => {
   afterEach(cleanup);
 
   it('capability toggles persist via api.models.patch', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedPatch.mockResolvedValue(makeModel({ supportsTools: true }));
     const user = userEvent.setup();
 
@@ -84,8 +84,8 @@ describe('ModelsPanel', () => {
   });
 
   it('a blank price saves as null (unknown), not zero', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel({ priceInPer1m: 3 })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel({ priceInPer1m: 3 })]);
     mockedPatch.mockResolvedValue(makeModel({ priceInPer1m: null }));
     const user = userEvent.setup();
 
@@ -99,8 +99,8 @@ describe('ModelsPanel', () => {
   });
 
   it('zero is sent as a real price (genuinely free), not treated as blank', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedPatch.mockResolvedValue(makeModel({ priceInPer1m: 0 }));
     const user = userEvent.setup();
 
@@ -113,8 +113,8 @@ describe('ModelsPanel', () => {
   });
 
   it('rejects a non-numeric context window without calling the API', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     const user = userEvent.setup();
 
     render(<ModelsPanel />);
@@ -126,8 +126,8 @@ describe('ModelsPanel', () => {
   });
 
   it('filters the model list by connection', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Ollama' }), makeConnection({ id: 'conn-2', name: 'OpenAI' })]);
-    useGruntStore
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Ollama' }), makeConnection({ id: 'conn-2', name: 'OpenAI' })]);
+    useOtherBenchStore
       .getState()
       .setModels([
         makeModel({ id: 'm1', connectionId: 'conn-1', modelId: 'llama3.2' }),
@@ -146,7 +146,7 @@ describe('ModelsPanel', () => {
   });
 
   it('shows an honest empty state when no models have been discovered yet', () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
     render(<ModelsPanel />);
     expect(screen.getByText(/no models yet/i)).toBeInTheDocument();
   });

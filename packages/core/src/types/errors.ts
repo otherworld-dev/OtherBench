@@ -3,10 +3,10 @@ import type { ErrorKind, SerializedError } from './messages.js';
 /**
  * Maps an arbitrary thrown value -- in practice, almost always an AI SDK
  * error (an `AISDKError` subclass from `@ai-sdk/provider`, or `RetryError`
- * from `ai`) or a raw network/runtime error -- onto Grunt's own
+ * from `ai`) or a raw network/runtime error -- onto OtherBench's own
  * `SerializedError` shape.
  *
- * `@grunt/core` has no *runtime* dependency on the AI SDK packages (it stays
+ * `@otherbench/core` has no *runtime* dependency on the AI SDK packages (it stays
  * dependency-free by design -- see package.json, where `@ai-sdk/provider`
  * and `ai` are devDependencies used only by errors.test.ts to construct
  * realistic error instances to classify). So this file deliberately does NOT
@@ -16,7 +16,7 @@ import type { ErrorKind, SerializedError } from './messages.js';
  * `"AI_APICallError"`, `LoadAPIKeyError` -> `"AI_LoadAPIKeyError"`) plus a
  * handful of structural fields (`statusCode`, `isRetryable`, `lastError`).
  * This keeps the classifier correct against the real SDK's error shapes
- * (per task 14 decision #1) without coupling `@grunt/core` to it.
+ * (per task 14 decision #1) without coupling `@otherbench/core` to it.
  *
  * Invariant: only `rate_limit` and `transient` are ever retryable -- every
  * branch below derives `retryable` directly from the `kind` it assigns

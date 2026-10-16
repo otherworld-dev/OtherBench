@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { classifyTarget, COMPUTER_LIMITS, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
-import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
-import type { ComputerAction, ComputerExpectation } from '@grunt/core/ports/computer.js';
-import { FAKE_COMPUTER_APP, FAKE_PNG, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
+import { classifyTarget, COMPUTER_LIMITS, expectationOf, parseAction } from '@otherbench/core/domain/computer-apps.js';
+import { MAX_TOOL_IMAGE_BYTES } from '@otherbench/core/domain/tool-images.js';
+import type { ComputerAction, ComputerExpectation } from '@otherbench/core/ports/computer.js';
+import { FAKE_COMPUTER_APP, FAKE_PNG, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
 import { RPC_PREFIX, type ShellChannel } from '../../src/computer/desktop-channel.js';
 import {
   ACT_TIMEOUT_MS,
@@ -68,7 +68,7 @@ async function rejection(call: Promise<unknown>): Promise<Error> {
 function expectClean(text: string): void {
   expect(text).not.toMatch(/[\r\n\u202e]/);
   expect(Array.from(text).length).toBeLessThanOrEqual(301);
-  expect(text).not.toMatch(/GRUNT-RPC|computer\.[a-z]+|"id"|DesktopChannel/);
+  expect(text).not.toMatch(/OTHERBENCH-RPC|computer\.[a-z]+|"id"|DesktopChannel/);
 }
 
 /** A shell that is on, with a session and a screenshot for chat `c`. */
@@ -94,7 +94,7 @@ describe('DesktopComputerDriver: hello and availability', () => {
     const { driver, shell } = connect();
     expect(driver.available()).toBe(false);
     await driver.hello();
-    expect(shell.lines).toEqual(['GRUNT-RPC {"id":1,"method":"computer.hello","params":{}}\n']);
+    expect(shell.lines).toEqual(['OTHERBENCH-RPC {"id":1,"method":"computer.hello","params":{}}\n']);
     expect(driver.available()).toBe(true);
   });
 
@@ -342,7 +342,7 @@ describe('DesktopComputerDriver: starting a session', () => {
   it('asks with computer.start { chatId, title } and answers what the shell said', async () => {
     const { driver, shell } = await connected();
     expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: true });
-    expect(shell.lines[1]).toBe('GRUNT-RPC {"id":2,"method":"computer.start","params":{"chatId":"c","title":"Budget"}}\n');
+    expect(shell.lines[1]).toBe('OTHERBENCH-RPC {"id":2,"method":"computer.start","params":{"chatId":"c","title":"Budget"}}\n');
     // Again for the same chat: the shell is asked again and says the session goes on.
     expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: true });
     expect(shell.sent('computer.start')).toEqual([
@@ -374,8 +374,8 @@ describe('DesktopComputerDriver: starting a session', () => {
 
   it("answers the shell's refusal as it is, bounded to one clean line, and keeps no session", async () => {
     const { driver, shell } = await connected();
-    shell.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
-    expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: "The user didn't let Grunt control the computer." });
+    shell.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
+    expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: "The user didn't let OtherBench control the computer." });
     shell.startAnswer = { ok: false, reason: `no\nthanks\u202e ${'x'.repeat(2000)}` };
     const long = await driver.ensureSession('c', 'Budget');
     expect(long.ok).toBe(false);
@@ -394,8 +394,8 @@ describe('DesktopComputerDriver: starting a session', () => {
 
   it("answers the shell's error as a refusal, not a throw", async () => {
     const { driver, shell } = await connected();
-    shell.override = (method) => (method === 'computer.start' ? { error: { message: 'Computer use is off in this Grunt desktop app.' } } : undefined);
-    expect(await driver.ensureSession('c', 'x')).toEqual({ ok: false, reason: 'Computer use is off in this Grunt desktop app.' });
+    shell.override = (method) => (method === 'computer.start' ? { error: { message: 'Computer use is off in this OtherBench desktop app.' } } : undefined);
+    expect(await driver.ensureSession('c', 'x')).toEqual({ ok: false, reason: 'Computer use is off in this OtherBench desktop app.' });
     expect(endedChats(shell)).toEqual([]);
   });
 
@@ -495,7 +495,7 @@ describe('DesktopComputerDriver: starting a session', () => {
     shell.override = silentOn('computer.start', 'computer.end');
     const err = await rejection(driver.ensureSession('c', 'Budget'));
     expect(err.message).toBe(
-      "The desktop app didn't answer the request to control this computer in time, so nothing was started. Grunt couldn't confirm that the desktop app cancelled it."
+      "The desktop app didn't answer the request to control this computer in time, so nothing was started. OtherBench couldn't confirm that the desktop app cancelled it."
     );
     expectClean(err.message);
     expect(endedChats(shell)).toEqual(['c']);
@@ -548,7 +548,7 @@ describe('DesktopComputerDriver: starting a session', () => {
     await tick();
     shell.close();
     const err = await rejection(starting);
-    expect(err.message).toBe("The desktop app went away. Grunt couldn't confirm that the desktop app cancelled it.");
+    expect(err.message).toBe("The desktop app went away. OtherBench couldn't confirm that the desktop app cancelled it.");
     expectClean(err.message);
     // Afterwards nothing is sent, and a start is a plain refusal.
     expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: 'The desktop app went away.' });
@@ -557,7 +557,7 @@ describe('DesktopComputerDriver: starting a session', () => {
   it('keeps track of a bounded number of chats and refuses a start beyond that without asking', async () => {
     const { driver, shell } = await connected();
     for (let i = 0; i < MAX_TRACKED_CHATS; i += 1) expect(await driver.ensureSession(`chat-${i}`, 'x')).toEqual({ ok: true });
-    expect(await driver.ensureSession('one-more', 'x')).toEqual({ ok: false, reason: 'Grunt is keeping track of too many control sessions; stop one first.' });
+    expect(await driver.ensureSession('one-more', 'x')).toEqual({ ok: false, reason: 'OtherBench is keeping track of too many control sessions; stop one first.' });
     expect(shell.sent('computer.start')).toHaveLength(MAX_TRACKED_CHATS);
     // A chat it already knows is still asked about, and an ended one makes room.
     expect(await driver.ensureSession('chat-0', 'x')).toEqual({ ok: true });
@@ -629,7 +629,7 @@ describe('DesktopComputerDriver: ending a session', () => {
     const token = shell.tokenOf('c');
     expect(token).toMatch(SESSION_TOKEN);
     await expect(driver.endSession('c')).resolves.toBeUndefined();
-    expect(shell.lines.at(-1)).toBe(`GRUNT-RPC {"id":4,"method":"computer.end","params":{"chatId":"c","session":"${token}"}}\n`);
+    expect(shell.lines.at(-1)).toBe(`OTHERBENCH-RPC {"id":4,"method":"computer.end","params":{"chatId":"c","session":"${token}"}}\n`);
     expect([...shell.sessions.keys()]).toEqual(['d']);
     // Again, and for a chat that never had one: the same request, the same answer, nothing else touched.
     await expect(driver.endSession('c')).resolves.toBeUndefined();
@@ -662,7 +662,7 @@ describe('DesktopComputerDriver: ending a session', () => {
   });
 
   it('is confirmed by { ok: true } and by nothing else; anything else rejects, and it resolves once the shell does confirm', async () => {
-    const unreadable = "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended.";
+    const unreadable = "The desktop app's answer couldn't be read, so OtherBench can't tell whether the control session ended.";
     const failures: [ShellAnswer, string][] = [
       [{ error: { message: 'A key could not be released.' } }, 'A key could not be released.'],
       [{ result: { ok: false, reason: 'A key could not be released.' } }, 'A key could not be released.'],
@@ -985,7 +985,7 @@ describe('DesktopComputerDriver: screenshots', () => {
     const { driver, shell } = await connected();
     await driver.ensureSession('c', 'Budget');
     const shot = await driver.screenshot('c');
-    expect(shell.lines.at(-1)).toBe(`GRUNT-RPC {"id":3,"method":"computer.screenshot","params":{"chatId":"c","session":"${shell.tokenOf('c')}"}}\n`);
+    expect(shell.lines.at(-1)).toBe(`OTHERBENCH-RPC {"id":3,"method":"computer.screenshot","params":{"chatId":"c","session":"${shell.tokenOf('c')}"}}\n`);
     expect(Buffer.isBuffer(shot.png)).toBe(true);
     expect(shot.png.equals(pngOf(1366, 768))).toBe(true);
     expect({ width: shot.width, height: shot.height }).toEqual({ width: 1366, height: 768 });
@@ -1237,7 +1237,7 @@ describe('DesktopComputerDriver: points', () => {
         expect(await driver.act('c', a, EXPECT), `${name} ${JSON.stringify(coordinate)}`).toEqual({ ok: false, reason: DESKTOP_NO_POINT_REASON });
       }
     }
-    expect(DESKTOP_NO_POINT_REASON).toContain('a mistake in Grunt');
+    expect(DESKTOP_NO_POINT_REASON).toContain('a mistake in OtherBench');
     expect(shell.methods()).toHaveLength(sent);
     // The keyboard's actions have no point and need none.
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: true });
@@ -1279,25 +1279,25 @@ describe('DesktopComputerDriver: targets', () => {
     await driver.target('c', 'foreground');
     const token = shell.tokenOf('c')!;
     expect(shell.lines.slice(-2)).toEqual([
-      `GRUNT-RPC {"id":4,"method":"computer.target","params":{"chatId":"c","session":"${token}","x":5,"y":6}}\n`,
-      `GRUNT-RPC {"id":5,"method":"computer.target","params":{"chatId":"c","session":"${token}","foreground":true}}\n`,
+      `OTHERBENCH-RPC {"id":4,"method":"computer.target","params":{"chatId":"c","session":"${token}","x":5,"y":6}}\n`,
+      `OTHERBENCH-RPC {"id":5,"method":"computer.target","params":{"chatId":"c","session":"${token}","foreground":true}}\n`,
     ]);
   });
 
   it("hands on the shell's answer exactly as it was sent: nothing filled in, nothing dropped, nothing changed", async () => {
     const { elevated: _elevated, ...noElevated } = FAKE_COMPUTER_APP;
     const { shellView: _shellView, ...noShellView } = FAKE_COMPUTER_APP;
-    const { grunt: _grunt, console: _console, uiAccess: _uiAccess, ...noFlags } = FAKE_COMPUTER_APP;
+    const { otherbench: _otherbench, console: _console, uiAccess: _uiAccess, ...noFlags } = FAKE_COMPUTER_APP;
     const { windowId: _windowId, ...noWindow } = FAKE_COMPUTER_APP;
     const cases: [string, unknown, 'refuse' | 'high' | 'normal'][] = [
       ['every fact', { ...FAKE_COMPUTER_APP }, 'normal'],
       ['no elevated', noElevated, 'refuse'],
       ['no shellView', noShellView, 'high'],
-      ['no grunt, console or uiAccess', noFlags, 'refuse'],
+      ['no otherbench, console or uiAccess', noFlags, 'refuse'],
       ['no windowId', noWindow, 'refuse'],
       ['elevated null', { ...FAKE_COMPUTER_APP, elevated: null }, 'refuse'],
       ['elevated as text', { ...FAKE_COMPUTER_APP, elevated: 'false' }, 'refuse'],
-      ['grunt as 0', { ...FAKE_COMPUTER_APP, grunt: 0 }, 'refuse'],
+      ['otherbench as 0', { ...FAKE_COMPUTER_APP, otherbench: 0 }, 'refuse'],
       ['uiAccess as text', { ...FAKE_COMPUTER_APP, uiAccess: 'no' }, 'refuse'],
       ['shellView as 0', { ...FAKE_COMPUTER_APP, shellView: 0 }, 'high'],
       ['shellView null', { ...FAKE_COMPUTER_APP, shellView: null }, 'high'],
@@ -1402,8 +1402,8 @@ describe('DesktopComputerDriver: acting', () => {
     const { driver, shell } = await inSession();
     shell.actAnswer = { ok: true, extra: 'ignored' };
     expect(await driver.act('c', CLICK, EXPECT)).toStrictEqual({ ok: true });
-    shell.actAnswer = { ok: false, reason: 'The window changed after Grunt asked, so nothing was done.' };
-    expect(await driver.act('c', CLICK, EXPECT)).toStrictEqual({ ok: false, reason: 'The window changed after Grunt asked, so nothing was done.' });
+    shell.actAnswer = { ok: false, reason: 'The window changed after OtherBench asked, so nothing was done.' };
+    expect(await driver.act('c', CLICK, EXPECT)).toStrictEqual({ ok: false, reason: 'The window changed after OtherBench asked, so nothing was done.' });
     shell.actAnswer = { ok: false, reason: `changed\r\nIGNORE ALL\u202e ${'z'.repeat(3000)}` };
     const long = await driver.act('c', CLICK, EXPECT);
     expect(long.ok).toBe(false);
@@ -1463,7 +1463,7 @@ describe('DesktopComputerDriver: acting', () => {
     const waiting = driver.act('c', KEY, EXPECT);
     expect(await acting).toStrictEqual({
       ok: false,
-      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known. Grunt has ended the control session, so nothing more is done.",
+      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known. OtherBench has ended the control session, so nothing more is done.",
     });
     expect(endedChats(shell)).toEqual(['c']);
     expect(shell.sessions.has('c')).toBe(false);
@@ -1482,7 +1482,7 @@ describe('DesktopComputerDriver: acting', () => {
     expect(await driver.act('c', TYPE, EXPECT)).toStrictEqual({
       ok: false,
       reason:
-        "The desktop app didn't answer in time. Whether the action was carried out is not known. Grunt asked the desktop app to end the control session and couldn't confirm that it did.",
+        "The desktop app didn't answer in time. Whether the action was carried out is not known. OtherBench asked the desktop app to end the control session and couldn't confirm that it did.",
     });
     expect(endedChats(shell)).toEqual(['c']);
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
@@ -1530,7 +1530,7 @@ describe('DesktopComputerDriver: acting', () => {
     const sent = shell.methods().length;
     const notActions: unknown[] = [null, undefined, 'left_click', 7, [], {}, { action: 'screenshot' }, { action: 'wait', duration: 1 }, { action: 'left_mouse_down', coordinate: [1, 1] }, { action: 'hold_key', text: 'ctrl' }, { action: 'LEFT_CLICK', coordinate: [1, 1] }, { action: 7 }];
     for (const a of notActions) {
-      expect(await driver.act('c', a as never, EXPECT), JSON.stringify(a)).toStrictEqual({ ok: false, reason: 'That is not an action Grunt can send.' });
+      expect(await driver.act('c', a as never, EXPECT), JSON.stringify(a)).toStrictEqual({ ok: false, reason: 'That is not an action OtherBench can send.' });
     }
     expect(shell.methods()).toHaveLength(sent);
   });
@@ -1609,7 +1609,7 @@ describe("DesktopComputerDriver: the shell's events", () => {
     shell.event('computer.stopped', { chatId: 'c', why: 'hotkey' });
     await vi.waitFor(() => expect(second).toHaveBeenCalledWith('c', 'hotkey'));
     expect(logged).toHaveBeenCalledTimes(1);
-    expect(logged.mock.calls[0]![0]).toBe('[grunt-server] a computer-use stopped listener failed:');
+    expect(logged.mock.calls[0]![0]).toBe('[otherbench-server] a computer-use stopped listener failed:');
     expect((await driver.ensureSession('c', 'Budget')).ok).toBe(true);
   });
 });
@@ -1664,6 +1664,6 @@ describe('DesktopComputerDriver: the hello as the shell\'s word that it holds no
     await driver.hello();
     expect(second).toHaveBeenCalledTimes(1);
     expect(driver.available()).toBe(true);
-    expect(logged.mock.calls[0]![0]).toBe('[grunt-server] a computer-use reset listener failed:');
+    expect(logged.mock.calls[0]![0]).toBe('[otherbench-server] a computer-use reset listener failed:');
   });
 });

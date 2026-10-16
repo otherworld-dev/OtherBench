@@ -121,7 +121,7 @@ export function readWord(parts: OfficeParts, out: TextOut): void {
     st.held -= t.chars;
     emit('');
     for (const line of markdownTable(t.rows)) if (!out.line(line)) return false;
-    if (t.over) out.line('[Grunt left out the rest of this table: it is over the text limit.]');
+    if (t.over) out.line('[OtherBench left out the rest of this table: it is over the text limit.]');
     if (t.over || st.over) {
       out.stop();
       return false;

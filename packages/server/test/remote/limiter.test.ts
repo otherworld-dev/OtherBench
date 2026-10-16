@@ -146,7 +146,7 @@ describe('LoginLimiter: global count', () => {
         [60, 2.5],
         [80, 5],
         [100, 10],
-      ].map(([n, s]) => `[grunt-server] SIGN-IN IS SLOWED DOWN FOR EVERYONE: ${n} wrong passwords in the last hour, so every attempt now waits ${s} s. Someone may be guessing.`)
+      ].map(([n, s]) => `[otherbench-server] SIGN-IN IS SLOWED DOWN FOR EVERYONE: ${n} wrong passwords in the last hour, so every attempt now waits ${s} s. Someone may be guessing.`)
     );
   });
 });
@@ -753,7 +753,7 @@ describe('LoginLimiter.note', () => {
     const { clock, log, limiter: l } = limiter();
     clock.now = 10 * GLOBAL_BUCKET_MS;
     l.note('wrong', '10.0.0.1');
-    expect(log).toHaveBeenLastCalledWith('[grunt-server] wrong password from 10.0.0.1');
+    expect(log).toHaveBeenLastCalledWith('[otherbench-server] wrong password from 10.0.0.1');
 
     for (let i = 0; i < 20; i++) l.fail(spread(i));
     log.mockClear();
@@ -762,7 +762,7 @@ describe('LoginLimiter.note', () => {
     expect(vi.getTimerCount()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(GLOBAL_BUCKET_MS);
-    expect(log.mock.calls).toEqual([['[grunt-server] sign-in in the last minute: 30 wrong passwords, from 3 addresses']]);
+    expect(log.mock.calls).toEqual([['[otherbench-server] sign-in in the last minute: 30 wrong passwords, from 3 addresses']]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -777,7 +777,7 @@ describe('LoginLimiter.note', () => {
     await vi.advanceTimersByTimeAsync(GLOBAL_BUCKET_MS);
     expect(log.mock.calls).toEqual([
       [
-        `[grunt-server] sign-in in the last minute: 10000 told to wait (budget spent), 10000 told to wait (too many waiting), 10000 refused while locked, 10000 left before their check, 10000 refused (no password file), from at least ${MAX_SUMMARY_ADDRESSES} addresses`,
+        `[otherbench-server] sign-in in the last minute: 10000 told to wait (budget spent), 10000 told to wait (too many waiting), 10000 refused while locked, 10000 left before their check, 10000 refused (no password file), from at least ${MAX_SUMMARY_ADDRESSES} addresses`,
       ],
     ]);
   });

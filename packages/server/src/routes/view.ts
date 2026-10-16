@@ -1,9 +1,9 @@
 import { basename, join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { versionFileName } from '@grunt/core/domain/artifacts.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import { sniffBinary } from '@grunt/tools/fs-tools.js';
+import { versionFileName } from '@otherbench/core/domain/artifacts.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import { sniffBinary } from '@otherbench/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import { kindByName, type ViewKind } from '../view/kinds.js';
 import type { ViewLinks } from '../view/links.js';

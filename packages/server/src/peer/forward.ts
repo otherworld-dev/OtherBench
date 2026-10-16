@@ -1,10 +1,10 @@
 import type { IncomingMessage } from 'node:http';
 import { Hono, type Context, type Next } from 'hono';
-import { encodeHlc } from '@grunt/core/domain/hlc.js';
-import type { ChangeRow, SyncRow } from '@grunt/core/domain/sync.js';
-import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
-import { interruptSubagents } from '@grunt/core/domain/reconcile.js';
-import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messages.js';
+import { encodeHlc } from '@otherbench/core/domain/hlc.js';
+import type { ChangeRow, SyncRow } from '@otherbench/core/domain/sync.js';
+import { appendDelta, applySubagentEvent, isSubagentEvent } from '@otherbench/core/domain/parts.js';
+import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
+import type { Part, ProducedBy, SerializedError } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
@@ -176,7 +176,7 @@ function keepCutOffReply(container: Container, runs: RemoteRuns, nodeId: string,
   try {
     sync.apply(rows);
   } catch (err) {
-    console.error(`[grunt-server] could not keep the reply ${messageId} cut off by ${peerName}:`, err);
+    console.error(`[otherbench-server] could not keep the reply ${messageId} cut off by ${peerName}:`, err);
   }
 }
 
@@ -476,7 +476,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   app.onError((err, c) => {
     const status = (err as { status?: number }).status;
     if (typeof status === 'number' && status >= 400 && status < 600) return c.json({ error: err.message }, status as 400);
-    console.error('[grunt-server] forwarded call failed:', err);
+    console.error('[otherbench-server] forwarded call failed:', err);
     return c.json({ error: 'Internal server error.' }, 500);
   });
 

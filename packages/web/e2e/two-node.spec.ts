@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test';
 const webDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Two Grunt servers on this machine standing in for the PC and the laptop
+ * Two OtherBench servers on this machine standing in for the PC and the laptop
  * (v2 plan, Task 54): pair through the UI, sync a chat with a folder in a
  * location, run it on the PC from the laptop, then stop the PC, run it on
  * the laptop instead, and see the new branch reach the PC once it's back.
@@ -21,7 +21,7 @@ const PC = { name: 'PC', port: 4761, peerPort: 4771 };
 const LAPTOP = { name: 'Laptop', port: 4762, peerPort: 4772 };
 const url = (m: { port: number }, path = ''): string => `http://127.0.0.1:${m.port}${path}`;
 
-const root = mkdtempSync(join(tmpdir(), 'grunt-two-node-'));
+const root = mkdtempSync(join(tmpdir(), 'otherbench-two-node-'));
 const servers = new Map<string, ChildProcess>();
 
 async function healthy(m: { port: number }): Promise<void> {
@@ -42,7 +42,7 @@ async function start(m: typeof PC): Promise<void> {
   mkdirSync(dir, { recursive: true });
   const child = spawn(
     process.execPath,
-    ['../server/dist/cli.js', 'serve', '--port', String(m.port), '--db', join(dir, 'grunt.db'), '--peer-port', String(m.peerPort), '--peer-host', '127.0.0.1'],
+    ['../server/dist/cli.js', 'serve', '--port', String(m.port), '--db', join(dir, 'otherbench.db'), '--peer-port', String(m.peerPort), '--peer-host', '127.0.0.1'],
     { cwd: webDir, stdio: 'ignore' }
   );
   servers.set(m.name, child);
@@ -123,7 +123,7 @@ test('pair through the UI, run a PC chat from the laptop, then run it on the lap
   await box.fill('hello from the laptop');
   await box.press('Enter');
   const thread = laptop.getByTestId('thread-scroll');
-  await expect(thread.getByText(/Here is a mock reply from Grunt/)).toBeVisible({ timeout: 20_000 });
+  await expect(thread.getByText(/Here is a mock reply from OtherBench/)).toBeVisible({ timeout: 20_000 });
   await expect(laptop.getByLabel('streaming')).toHaveCount(0);
   const onPc = await api<{ messages: { originNode?: string }[] }>(PC, 'GET', `/chats/${chat.id}/messages`);
   expect(onPc.messages.length).toBeGreaterThanOrEqual(2);
@@ -146,7 +146,7 @@ test('pair through the UI, run a PC chat from the laptop, then run it on the lap
   // Carrying on from the cut-off reply works here.
   await box.fill('carrying on while the PC is off');
   await box.press('Enter');
-  await expect(thread.getByText(/Here is a mock reply from Grunt/)).toHaveCount(2, { timeout: 20_000 });
+  await expect(thread.getByText(/Here is a mock reply from OtherBench/)).toHaveCount(2, { timeout: 20_000 });
   await expect(laptop.getByLabel('streaming')).toHaveCount(0);
   await expect(thread.getByText(/This reply trickles/)).toBeVisible();
 

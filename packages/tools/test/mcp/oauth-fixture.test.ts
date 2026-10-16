@@ -46,7 +46,7 @@ describe('oauth-echo-server fixture', () => {
     const reg = await fetch(`${fixture.origin}/register`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ client_name: 'Grunt', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' }),
+      body: JSON.stringify({ client_name: 'OtherBench', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' }),
     });
     expect(reg.status).toBe(201);
     const { client_id } = (await reg.json()) as { client_id: string };

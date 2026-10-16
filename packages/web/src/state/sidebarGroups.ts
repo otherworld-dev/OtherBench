@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 /** localStorage key: JSON array of collapsed sidebar group keys. Per device, by design (spec "Collapse state"). */
-export const COLLAPSED_GROUPS_STORAGE_KEY = 'grunt.collapsedGroups';
+export const COLLAPSED_GROUPS_STORAGE_KEY = 'otherbench.collapsedGroups';
 
 /** The group key of "No project". Project ids are UUIDs, so it can't collide. */
 export const NO_PROJECT_KEY = '__no_project__';

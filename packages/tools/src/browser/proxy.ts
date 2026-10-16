@@ -4,10 +4,10 @@ import { createServer, request as httpRequest, type ClientRequest, type Incoming
 import { connect as netConnect, isIP, type AddressInfo, type Socket } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import type { Duplex } from 'node:stream';
-import { browserUrlCheck, isOwnAddress, isPublicAddress, ownAddresses, type OwnAddresses } from '@grunt/core/domain/browser-hosts.js';
+import { browserUrlCheck, isOwnAddress, isPublicAddress, ownAddresses, type OwnAddresses } from '@otherbench/core/domain/browser-hosts.js';
 
 /**
- * Grunt's egress proxy for the model's browser (spec
+ * OtherBench's egress proxy for the model's browser (spec
  * 2026-10-12-model-browser-design §2). Every byte the browser sends goes
  * through it. It listens on 127.0.0.1 only, needs per-launch credentials,
  * checks each hostname, resolves it ITSELF and connects to the checked
@@ -62,7 +62,7 @@ export interface EgressProxyOptions {
   /** A lookup (counting any wait for a free slot) that takes longer than this is refused; default 5 s. */
   lookupTimeoutMs?: number;
   /**
-   * Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 may be reached
+   * Tests only (`OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 may be reached
    * on these ports. Core's own rules (local names, private and loopback
    * addresses) are applied by the proxy itself whatever `check` says; this is
    * the one way through them, and it is off unless set.
@@ -82,7 +82,7 @@ export interface EgressProxy {
   close(): Promise<void>;
 }
 
-const NEED_AUTH = 'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="grunt"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
+const NEED_AUTH = 'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="otherbench"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
 const FORBIDDEN = 'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
 const BAD_REQUEST = 'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
 const BAD_GATEWAY = 'HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
@@ -115,7 +115,7 @@ export function checkProxyTarget(
   // mis-wired `check` can't drop it; the loopback allowance only exists when
   // `opts` sets it.
   const parsed = browserUrlCheck(raw, {}, { allowLoopbackPorts: opts.allowLoopbackPorts });
-  if (parsed.site === null || parsed.port === null) return { site: null, port: null, denial: parsed.denial ?? "Grunt couldn't tell which website this is for." };
+  if (parsed.site === null || parsed.port === null) return { site: null, port: null, denial: parsed.denial ?? "OtherBench couldn't tell which website this is for." };
   return { site: parsed.site, port: parsed.port, denial: check(parsed.site, parsed.port) ?? parsed.denial };
 }
 
@@ -372,7 +372,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const user = userOf(req);
     if (user === null) {
-      res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="grunt"' }).end();
+      res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="otherbench"' }).end();
       return;
     }
     // The browser going away (or close()) ends the upstream request too, however far along it is.

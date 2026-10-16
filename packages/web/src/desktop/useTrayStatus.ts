@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { PeersOverview } from '../state/api.js';
 import { refreshMachines } from '../state/machines.js';
-import { selectPendingApprovalCount, useGruntStore } from '../state/store.js';
+import { selectPendingApprovalCount, useOtherBenchStore } from '../state/store.js';
 import { peerStatusText } from '../views/settings/MachinesPanel.js';
 import { isDesktop, setTrayStatus } from './bridge.js';
 
@@ -39,8 +39,8 @@ export function trayMachineLines(machines: PeersOverview | null, now: number): s
  * status. Nothing happens in a browser.
  */
 export function useTrayStatus(): void {
-  const pending = useGruntStore(selectPendingApprovalCount);
-  const machines = useGruntStore((s) => s.machines);
+  const pending = useOtherBenchStore(selectPendingApprovalCount);
+  const machines = useOtherBenchStore((s) => s.machines);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!isDesktop()) return;
@@ -55,7 +55,7 @@ export function useTrayStatus(): void {
   const lines = trayMachineLines(machines, now);
   const linesKey = lines.join('\n');
   useEffect(() => {
-    setTrayStatus(pending, lines).catch((err: unknown) => console.error('[grunt-web] failed to update the tray status:', err));
+    setTrayStatus(pending, lines).catch((err: unknown) => console.error('[otherbench-web] failed to update the tray status:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `lines` is compared by its text (linesKey), not its identity.
   }, [pending, linesKey]);
 }

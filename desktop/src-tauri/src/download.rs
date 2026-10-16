@@ -3,7 +3,7 @@
 //! In the desktop window WebView2 saved a download silently, and the page
 //! never learnt where it went. The web app now hands the bytes here instead
 //! (`save_download`), gets the full path back, and says so in a toast with
-//! "Show in folder". Only Grunt's own files come this way (chat exports and
+//! "Show in folder". Only OtherBench's own files come this way (chat exports and
 //! artifact downloads), but the name is still checked as if it weren't: no
 //! folders, no Windows device names, nothing Windows would run on a
 //! double-click. Windows' "came from the internet" mark (Mark of the Web) is
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// The largest download accepted.
 pub const MAX_BYTES: usize = 100 * 1024 * 1024;
 
-/// The extensions Grunt makes: chat exports (.md, .json) and artifact files, by kind and by code language
+/// The extensions OtherBench makes: chat exports (.md, .json) and artifact files, by kind and by code language
 /// (`KIND_EXT` and `LANGUAGE_EXT` in packages/core/src/domain/artifacts.ts, less `ps1`). Any other extension,
 /// or none, gets `.txt` added (`script.ps1.txt`, `report.pdf.exe.txt`), so whatever comes this way opens in a
 /// text editor rather than running. An allowlist rather than a list of what to refuse, since such a list is
@@ -40,7 +40,7 @@ const DEVICE_NAMES: &[&str] = &[
     "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// `name` as a file name to save under (with `.txt` added when its extension isn't one Grunt makes), or why it
+/// `name` as a file name to save under (with `.txt` added when its extension isn't one OtherBench makes), or why it
 /// can't be one.
 pub fn safe_name(name: &str) -> Result<String, String> {
     let name = name.trim();
@@ -110,7 +110,7 @@ pub fn save(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// The file name the web app sends in the `x-grunt-name` header, percent-encoded so any name survives a header.
+/// The file name the web app sends in the `x-otherbench-name` header, percent-encoded so any name survives a header.
 pub fn decode_name(encoded: &str) -> Result<String, String> {
     let bytes = encoded.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -133,7 +133,7 @@ mod tests {
     use super::*;
 
     fn temp() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("grunt-download-test-{}-{}", std::process::id(), rand_suffix()));
+        let dir = std::env::temp_dir().join(format!("otherbench-download-test-{}-{}", std::process::id(), rand_suffix()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn adds_txt_to_anything_grunt_does_not_make() {
+    fn adds_txt_to_anything_otherbench_does_not_make() {
         for (given, saved) in [
             ("setup.exe", "setup.exe.txt"),
             ("run.BAT", "run.BAT.txt"),
@@ -201,7 +201,7 @@ mod tests {
         let plain2 = save(&dir, "notes", b"y").unwrap();
         assert_eq!(plain.file_name().unwrap(), "notes.txt");
         assert_eq!(plain2.file_name().unwrap(), "notes (1).txt");
-        // A name Grunt doesn't make is saved as text, never as something Windows would run.
+        // A name OtherBench doesn't make is saved as text, never as something Windows would run.
         assert_eq!(save(&dir, "run.exe", b"x").unwrap().file_name().unwrap(), "run.exe.txt");
         assert_eq!(std::fs::read(&plain).unwrap(), b"x");
         std::fs::remove_dir_all(&dir).unwrap();

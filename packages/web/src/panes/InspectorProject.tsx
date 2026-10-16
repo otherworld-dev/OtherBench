@@ -1,8 +1,8 @@
 import type { JSX } from 'react';
-import { projectDisplayName, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import { projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { revealSidebarGroup, setGroupCollapsed } from '../state/sidebarGroups.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 /**
  * The Inspector's "Project" line (spec 2026-10-03-projects-design §4): the
@@ -12,9 +12,9 @@ import { useGruntStore } from '../state/store.js';
  * (deleted elsewhere) reads as No project, the same as the sidebar.
  */
 export function InspectorProject({ chat }: { chat: Chat }): JSX.Element {
-  const project = useGruntStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
-  const openProjectPage = useGruntStore((s) => s.openProjectPage);
-  const projects = useGruntStore((s) => s.projects);
+  const project = useOtherBenchStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
+  const openProjectPage = useOtherBenchStore((s) => s.openProjectPage);
+  const projects = useOtherBenchStore((s) => s.projects);
 
   if (!project) {
     return (

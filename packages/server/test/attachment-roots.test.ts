@@ -15,11 +15,11 @@ function sha256Hex(data: string): string {
  * Task 32 fix round 1, Critical #2: the pre-fix scheme derived ONE shared
  * attachments directory (`dirname(secretsPath)/attachments`) that every
  * database opened in the same place -- including the default `:memory:`
- * config, which resolves to `~/.grunt/secrets.json` same as the default
+ * config, which resolves to `~/.otherbench/secrets.json` same as the default
  * file database -- wrote to and swept. Reproduced live: (a) two file
  * databases in the same directory, one's startup/cascade sweep deleting
- * the other's still-referenced blobs; (b) `grunt serve --db :memory:`
- * deleting every attachment under the real default `~/.grunt/attachments`.
+ * the other's still-referenced blobs; (b) `otherbench serve --db :memory:`
+ * deleting every attachment under the real default `~/.otherbench/attachments`.
  * This file proves the fix: per-database write roots, a read-only legacy
  * fallback, and `:memory:` never touching the real home directory.
  */
@@ -54,7 +54,7 @@ async function seedProfile(container: Container, id: string): Promise<{ profileI
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-attachment-roots-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-attachment-roots-test-'));
 });
 
 afterEach(async () => {
@@ -141,7 +141,7 @@ describe('two databases in the same directory never share or clobber each other\
    * Task 32 fix round 2, Critical #1: an earlier version of
    * `resolveAttachmentsRoots` stripped the extension before appending
    * ".attachments", so two databases sharing a STEM -- `main.db`/
-   * `main.bak`, or `grunt`/`grunt.db` -- collided on the exact same
+   * `main.bak`, or `otherbench`/`otherbench.db` -- collided on the exact same
    * `<stem>.attachments/` root. Reproduced live (the reviewer's rr/c2.mjs,
    * adapted here): two such servers side by side, a chat delete (and a
    * restart) in one made the other's attachment 404. Fails against
@@ -151,7 +151,7 @@ describe('two databases in the same directory never share or clobber each other\
    */
   describe.each([
     ['main.db', 'main.bak', 'same stem, different extension'],
-    ['grunt', 'grunt.db', 'same stem, one with no extension at all'],
+    ['otherbench', 'otherbench.db', 'same stem, one with no extension at all'],
   ])('same-stem collision: %s vs %s (%s)', (nameA, nameB) => {
     it('a chat delete (sweep) and a restart in one database never 404s the other\'s attachment', async () => {
       const secretsPath = join(dir, 'secrets.json');
@@ -201,7 +201,7 @@ describe('two databases in the same directory never share or clobber each other\
 describe('a legacy-root blob is still served', () => {
   it('GET /attachments/:id/content serves a blob that only exists in the pre-fix shared "attachments" directory next to secretsPath', async () => {
     const secretsPath = join(dir, 'secrets.json');
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const legacyRoot = join(dir, 'attachments'); // dirname(secretsPath)/attachments -- the OLD shared location
     const content = 'uploaded before per-database roots existed';
     const sha256 = sha256Hex(content);
@@ -231,7 +231,7 @@ describe('a legacy-root blob is still served', () => {
 
   it('the startup sweep never removes a legacy-root blob, even one no row references any more', async () => {
     const secretsPath = join(dir, 'secrets.json');
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const legacyRoot = join(dir, 'attachments');
     const content = 'orphaned in the legacy root -- must be left alone regardless';
     const sha256 = sha256Hex(content);
@@ -248,13 +248,13 @@ describe('a legacy-root blob is still served', () => {
   });
 });
 
-describe(':memory: never touches the real default ~/.grunt directory', () => {
+describe(':memory: never touches the real default ~/.otherbench directory', () => {
   let fakeHome: string;
   let savedUserProfile: string | undefined;
   let savedHome: string | undefined;
 
   beforeEach(async () => {
-    fakeHome = await mkdtemp(join(tmpdir(), 'grunt-fake-home-'));
+    fakeHome = await mkdtemp(join(tmpdir(), 'otherbench-fake-home-'));
     savedUserProfile = process.env['USERPROFILE'];
     savedHome = process.env['HOME'];
     // node:os homedir() reads USERPROFILE on win32, HOME elsewhere -- both
@@ -271,13 +271,13 @@ describe(':memory: never touches the real default ~/.grunt directory', () => {
     await rm(fakeHome, { recursive: true, force: true });
   });
 
-  it('grunt serve --db :memory: (through the real CLI wiring) never writes to or deletes from ~/.grunt/attachments', async () => {
+  it('otherbench serve --db :memory: (through the real CLI wiring) never writes to or deletes from ~/.otherbench/attachments', async () => {
     // Pre-seeds the FAKE "real default database"'s own legitimate blob,
     // exactly where the pre-fix shared scheme would have put it --
     // dirname(defaultSecretsPath(':memory:'))/attachments ==
-    // <fakeHome>/.grunt/attachments. This simulates a machine that already
-    // has a real ~/.grunt/grunt.db with real attachments on it.
-    const realDefaultAttachments = join(fakeHome, '.grunt', 'attachments');
+    // <fakeHome>/.otherbench/attachments. This simulates a machine that already
+    // has a real ~/.otherbench/otherbench.db with real attachments on it.
+    const realDefaultAttachments = join(fakeHome, '.otherbench', 'attachments');
     const importantContent = 'a REAL user\'s REAL attachment on their REAL default database';
     const sha256 = sha256Hex(importantContent);
     const importantBlobPath = join(realDefaultAttachments, sha256.slice(0, 2), sha256);

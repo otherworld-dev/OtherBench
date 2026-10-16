@@ -3,17 +3,17 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
-import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
-import { FakeSandbox } from '@grunt/core/testing/fakes.js';
-import type { GruntToolProvider } from '@grunt/tools/provider.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
-import { encodeHlc } from '@grunt/core/domain/hlc.js';
-import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
-import { FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
-import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
+import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
+import { NO_MEMORY_MODEL_MESSAGE } from '@otherbench/core/domain/memory.js';
+import { FakeSandbox } from '@otherbench/core/testing/fakes.js';
+import type { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import { encodeHlc } from '@otherbench/core/domain/hlc.js';
+import type { SaveToolImage } from '@otherbench/core/domain/tool-images.js';
+import { FAKE_PNG, FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { openDatabase } from '@otherbench/store-sqlite/db.js';
+import { MIGRATIONS, runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
+import { COMPUTER_NO_SCREENSHOT_REASON } from '@otherbench/tools/computer-tool.js';
 import { createApp } from '../src/app.js';
 import { DESKTOP_NOT_AVAILABLE_REASON, type DesktopComputerDriver } from '../src/computer/desktop-driver.js';
 import { COMPUTER_END_UNCONFIRMED_REASON, ComputerSessions } from '../src/computer/sessions.js';
@@ -24,17 +24,17 @@ import { createContainer, loopbackPortsFromEnv, realFolderPath, resolveSecretsPa
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-container-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-container-test-'));
 });
 
 afterEach(async () => {
-  delete process.env['GRUNT_SECRETS_PASSPHRASE'];
+  delete process.env['OTHERBENCH_SECRETS_PASSPHRASE'];
   await rm(dir, { recursive: true, force: true });
 });
 
 describe('resolveSecretsPassphrase', () => {
-  it('uses GRUNT_SECRETS_PASSPHRASE when set, without touching the filesystem', async () => {
-    process.env['GRUNT_SECRETS_PASSPHRASE'] = 'env-supplied-passphrase';
+  it('uses OTHERBENCH_SECRETS_PASSPHRASE when set, without touching the filesystem', async () => {
+    process.env['OTHERBENCH_SECRETS_PASSPHRASE'] = 'env-supplied-passphrase';
     const secretsPath = join(dir, 'secrets.json');
 
     const passphrase = await resolveSecretsPassphrase(secretsPath);
@@ -97,27 +97,27 @@ describe('loopbackPortsFromEnv', () => {
 });
 
 describe('withoutOwnPorts', () => {
-  it("drops Grunt's own API and peer ports, and says which", () => {
+  it("drops OtherBench's own API and peer ports, and says which", () => {
     expect(withoutOwnPorts([4797, 4796, 4748], [4796, 4748])).toEqual({ ports: [4797], dropped: [4796, 4748] });
     expect(withoutOwnPorts([4797], [undefined, 0])).toEqual({ ports: [4797], dropped: [] });
   });
 });
 
 describe('createContainer', () => {
-  it("leaves Grunt's own ports out of GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS, with a warning", async () => {
-    const before = process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'];
-    process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'] = '4797,4796,4790';
+  it("leaves OtherBench's own ports out of OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS, with a warning", async () => {
+    const before = process.env['OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS'];
+    process.env['OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS'] = '4797,4796,4790';
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), apiPort: 4796, peerPort: 4790 });
       container.close();
       const lines = warn.mock.calls.map((c) => String(c[0]));
-      expect(lines).toContainEqual(expect.stringContaining("names Grunt's own port(s) 4796, 4790"));
+      expect(lines).toContainEqual(expect.stringContaining("names OtherBench's own port(s) 4796, 4790"));
       expect(lines).toContainEqual(expect.stringContaining('may reach 127.0.0.1 on port(s) 4797. This is for tests only.'));
     } finally {
       warn.mockRestore();
-      if (before === undefined) delete process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'];
-      else process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'] = before;
+      if (before === undefined) delete process.env['OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS'];
+      else process.env['OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS'] = before;
     }
   });
 
@@ -131,7 +131,7 @@ describe('createContainer', () => {
   });
 
   it('wires a working store, secrets, and engine over a real (temp-file) SQLite database', async () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');
 
     const container = await createContainer({ dbPath, secretsPath });
@@ -169,7 +169,7 @@ describe('createContainer', () => {
   });
 
   it('wires scheduled tasks: a run left running by the previous process is marked as an error at startup', async () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');
     const first = await createContainer({ dbPath, secretsPath });
     first.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
@@ -181,12 +181,12 @@ describe('createContainer', () => {
     first.close();
 
     const second = await createContainer({ dbPath, secretsPath });
-    expect(second.store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: 'Grunt stopped before this run finished.' });
+    expect(second.store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: 'OtherBench stopped before this run finished.' });
     second.close();
   });
 
   it("puts Claude Code clean chats' scratch folders next to the database, or in a private temp folder for :memory:", async () => {
-    const onDisk = await createContainer({ dbPath: join(dir, 'grunt.db'), secretsPath: join(dir, 'secrets.json') });
+    const onDisk = await createContainer({ dbPath: join(dir, 'otherbench.db'), secretsPath: join(dir, 'secrets.json') });
     expect(onDisk.claudeScratchRoot).toBe(join(dir, 'claude-scratch'));
     onDisk.close();
     const a = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
@@ -199,7 +199,7 @@ describe('createContainer', () => {
   });
 
   it('wires project memory: a restart re-queues a project chat that went quiet while the server was down', async () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');
     const old = Date.now() - 10 * 60_000;
 
@@ -256,13 +256,13 @@ describe('createContainer', () => {
   // is a fresh per-process temp directory (resolveAttachmentsRoots) that
   // nothing else will ever reuse -- without cleaning it up, it accumulates
   // forever under %TEMP%/$TMPDIR across every restart and every test run
-  // (confirmed: 28 stray `grunt-attachments-*` directories already there
+  // (confirmed: 28 stray `otherbench-attachments-*` directories already there
   // from exactly this, before this fix). Fails against 22cee46: the
   // directory survives `close()` there.
   it(':memory:\'s temp attachments directory is removed once the container is closed', async () => {
     const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
     const tempRoot = container.blobStore.root;
-    expect(tempRoot).toContain('grunt-attachments-');
+    expect(tempRoot).toContain('otherbench-attachments-');
     await expect(stat(tempRoot)).resolves.toBeTruthy();
 
     container.close();
@@ -273,7 +273,7 @@ describe('createContainer', () => {
   });
 
   it('a real FILE database\'s attachments directory is NEVER removed on close -- it is the user\'s own attachment storage, not scratch', async () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
     const writeRoot = container.blobStore.root;
     await container.blobStore.put(Buffer.from('a real user attachment'));
@@ -289,7 +289,7 @@ describe('createContainer', () => {
       'simulates the process dying mid-turn (kill -9 / power loss / crash): the row is never cleanly closed, so ' +
       'nothing but the next process opening this same file can ever move it out of "streaming"',
     async () => {
-      const dbPath = join(dir, 'grunt.db');
+      const dbPath = join(dir, 'otherbench.db');
       const secretsPath = join(dir, 'secrets.json');
 
       // First "process": creates the referential chain a message needs, and
@@ -345,7 +345,7 @@ describe('createContainer', () => {
     'startup blob sweep (task 32 decision #2c): removes a pre-existing orphan blob, and leaves a still-referenced ' +
       'blob and a stray non-blob file completely alone -- over a real reopened database and a real on-disk BlobStore',
     async () => {
-      const dbPath = join(dir, 'grunt.db');
+      const dbPath = join(dir, 'otherbench.db');
       const secretsPath = join(dir, 'secrets.json');
 
       // First "process": seeds a referential chain, an attachment row that
@@ -402,7 +402,7 @@ describe('createContainer', () => {
   );
 
   it('startup blob sweep tolerates an attachments directory that does not exist yet (nothing has ever been uploaded)', async () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');
 
     // A fresh database's derived write root never exists on disk yet.
@@ -461,7 +461,7 @@ describe('createContainer and the sandbox', () => {
   });
 
   it('builds one sandbox, hands it to the tool provider, never sets it up by itself, and closes it with the container', async () => {
-    vi.stubEnv('GRUNT_SANDBOX', 'fake');
+    vi.stubEnv('OTHERBENCH_SANDBOX', 'fake');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
     try {
@@ -470,7 +470,7 @@ describe('createContainer and the sandbox', () => {
       expect(sandbox.setupCalls).toBe(0);
       // The provider got it: the sandboxed run_command is relayed for a profile whose shell runs there.
       const policy: ToolPolicy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
-      expect((container.toolProvider as GruntToolProvider).relayTools(policy).map((t) => t.name)).toEqual(['run_command']);
+      expect((container.toolProvider as OtherBenchToolProvider).relayTools(policy).map((t) => t.name)).toEqual(['run_command']);
       container.close();
       await vi.waitFor(() => expect(sandbox.closed).toBe(true));
     } finally {
@@ -479,7 +479,7 @@ describe('createContainer and the sandbox', () => {
   });
 
   it("settles once the sandbox has closed, so a shutdown can wait for its agents and mounts; a failed close still settles", async () => {
-    vi.stubEnv('GRUNT_SANDBOX', 'fake');
+    vi.stubEnv('OTHERBENCH_SANDBOX', 'fake');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
@@ -494,7 +494,7 @@ describe('createContainer and the sandbox', () => {
       finish(new Error('unmount failed'));
       await done;
       expect(settled).toBe(true);
-      expect(error).toHaveBeenCalledWith('[grunt-server] error closing the sandbox:', expect.any(Error));
+      expect(error).toHaveBeenCalledWith('[otherbench-server] error closing the sandbox:', expect.any(Error));
     } finally {
       warn.mockRestore();
       error.mockRestore();
@@ -519,10 +519,10 @@ describe('computer use wiring', () => {
     createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), ...(computer ? { computer } : {}) });
 
   beforeEach(() => {
-    delete process.env['GRUNT_COMPUTER_FAKE_DRIVER'];
+    delete process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'];
   });
   afterEach(() => {
-    delete process.env['GRUNT_COMPUTER_FAKE_DRIVER'];
+    delete process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'];
   });
 
   it('offers no computer tool without a driver, even to a profile that turns it on', async () => {
@@ -531,7 +531,7 @@ describe('computer use wiring', () => {
       expect(container.computer).toBeUndefined();
       expect(await names(container, on)).not.toContain('computer');
       // Nor to Claude Code, whose tools are listed apart.
-      const relayed = (container.toolProvider as unknown as { relayGruntTools: (policy: typeof on) => { name: string }[] }).relayGruntTools(on);
+      const relayed = (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => { name: string }[] }).relayOtherBenchTools(on);
       expect(relayed.map((t) => t.name)).not.toContain('computer');
     } finally {
       container.close();
@@ -556,9 +556,9 @@ describe('computer use wiring', () => {
     }
   });
 
-  it('wires the fake driver for tests when GRUNT_COMPUTER_FAKE_DRIVER=1, and for no other value', async () => {
+  it('wires the fake driver for tests when OTHERBENCH_COMPUTER_FAKE_DRIVER=1, and for no other value', async () => {
     for (const value of ['0', 'true', 'yes', '']) {
-      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = value;
+      process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'] = value;
       const container = await open();
       try {
         expect(container.computer, JSON.stringify(value)).toBeUndefined();
@@ -567,7 +567,7 @@ describe('computer use wiring', () => {
         container.close();
       }
     }
-    process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '1';
+    process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'] = '1';
     // It says so at startup (the next test); kept out of this run's output.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const container = await open();
@@ -583,17 +583,17 @@ describe('computer use wiring', () => {
 
   it('says so at startup when the fake driver is wired, and only then', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const about = (): string[] => warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('GRUNT_COMPUTER_FAKE_DRIVER'));
+    const about = (): string[] => warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('OTHERBENCH_COMPUTER_FAKE_DRIVER'));
     try {
       (await open()).close();
       (await open(new FakeComputerDriver())).close();
-      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '0';
+      process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'] = '0';
       (await open()).close();
       expect(about()).toEqual([]);
-      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '1';
+      process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'] = '1';
       (await open()).close();
       expect(about()).toEqual([
-        '[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.',
+        '[otherbench-server] OTHERBENCH_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.',
       ]);
       // A real driver handed in wins, and then there is nothing to warn about.
       warn.mockClear();
@@ -696,7 +696,7 @@ describe('computer use wiring', () => {
     // The shell here is the in-memory stand-in (computer/fake-shell.ts): no shell or desktop app is started.
     const openOn = (driver: DesktopComputerDriver): Promise<Container> => createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), computer: driver });
     const relayed = (container: Container): string[] =>
-      (container.toolProvider as unknown as { relayGruntTools: (policy: typeof on) => { name: string }[] }).relayGruntTools(on).map((t) => t.name);
+      (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => { name: string }[] }).relayOtherBenchTools(on).map((t) => t.name);
 
     it('offers no computer tool at all while the shell says computer use is off, which is how it ships', async () => {
       const { shell, driver } = connect();

@@ -1,12 +1,12 @@
 import { connect as connectTcp, createServer as createTcpServer, type Socket } from 'node:net';
 import { connect, createServer, type Server } from 'node:tls';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import { createPeerApp, type PeerAppDeps } from '../../src/peer/app.js';
 import { IdentityStore } from '../../src/peer/identity.js';
 import type { PeerMonitorOptions } from '../../src/peer/monitor.js';
 import { PeerService } from '../../src/peer/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 
 export interface TestNode {
   name: string;

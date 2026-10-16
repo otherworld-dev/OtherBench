@@ -8,7 +8,7 @@ import { fsRoutes, type DirListing } from '../../src/routes/fs.js';
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-fs-dirs-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-fs-dirs-test-'));
 });
 
 afterEach(async () => {

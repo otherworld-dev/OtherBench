@@ -9,14 +9,14 @@ import {
   scheduledPromptText,
   type ScheduleRunStatus,
   type ScheduleTrigger,
-} from '@grunt/core/domain/schedule.js';
-import { extendToTip } from '@grunt/core/domain/tree.js';
-import { workspaceUnresolvedMessage, type TurnEvent, type TurnInput, type TurnResult } from '@grunt/core/domain/turn.js';
-import type { Schedule, ScheduleRun, Store } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import type { MessageStatus } from '@grunt/core/types/messages.js';
-import type { Workspace, WorkspaceStatus } from '@grunt/core/types/workspace.js';
+} from '@otherbench/core/domain/schedule.js';
+import { extendToTip } from '@otherbench/core/domain/tree.js';
+import { workspaceUnresolvedMessage, type TurnEvent, type TurnInput, type TurnResult } from '@otherbench/core/domain/turn.js';
+import type { Schedule, ScheduleRun, Store } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import type { MessageStatus } from '@otherbench/core/types/messages.js';
+import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import { collectMessageTree } from '../routes/chats.js';
 
@@ -126,7 +126,7 @@ export class ScheduleService {
   start(): void {
     const now = this.now();
     for (const run of this.store.schedules.runningRuns()) {
-      this.store.schedules.updateRun(run.id, { status: 'error', detail: 'Grunt stopped before this run finished.', finishedAt: now });
+      this.store.schedules.updateRun(run.id, { status: 'error', detail: 'OtherBench stopped before this run finished.', finishedAt: now });
     }
     this.off = this.turnRunner.on((e) => this.onTurnEvent(e));
     this.check();
@@ -153,11 +153,11 @@ export class ScheduleService {
           const due = schedule.nextRunAt ?? now;
           this.begin(schedule, this.triggerFor(now, due), due);
         } catch (err) {
-          console.error(`[grunt-server] schedule ${schedule.id} could not be checked:`, err);
+          console.error(`[otherbench-server] schedule ${schedule.id} could not be checked:`, err);
         }
       }
     } catch (err) {
-      console.error('[grunt-server] the schedules could not be checked:', err);
+      console.error('[otherbench-server] the schedules could not be checked:', err);
     } finally {
       this.arm(now);
     }
@@ -168,7 +168,7 @@ export class ScheduleService {
     try {
       this.check();
     } catch (err) {
-      console.error('[grunt-server] the schedules could not be checked:', err);
+      console.error('[otherbench-server] the schedules could not be checked:', err);
     }
   }
 
@@ -267,7 +267,7 @@ export class ScheduleService {
       throw err;
     }
     const launch: Promise<void> = this.launch(schedule, run)
-      .catch((err: unknown) => console.error(`[grunt-server] schedule ${schedule.id} run ${run.id} could not be set up:`, err))
+      .catch((err: unknown) => console.error(`[otherbench-server] schedule ${schedule.id} run ${run.id} could not be set up:`, err))
       .finally(() => this.launches.delete(launch));
     this.launches.add(launch);
     return run;
@@ -398,7 +398,7 @@ export class ScheduleService {
       entry.timedOut = true;
       this.turnRunner.cancel(entry.messageId);
     } catch (err) {
-      console.error(`[grunt-server] schedule ${entry.schedule.id} run ${entry.runId} could not be stopped at its timeout:`, err);
+      console.error(`[otherbench-server] schedule ${entry.schedule.id} run ${entry.runId} could not be stopped at its timeout:`, err);
       this.giveUp(entry, err);
       this.poke();
     }
@@ -411,12 +411,12 @@ export class ScheduleService {
       this.scheduler.clearTimeout(entry.timer);
       const run = this.store.schedules.updateRun(entry.runId, {
         status: 'error',
-        detail: `Grunt couldn't stop this run: ${errorMessage(cause)}`,
+        detail: `OtherBench couldn't stop this run: ${errorMessage(cause)}`,
         finishedAt: this.now(),
       });
       if (run) this.announceFinished(entry.schedule, run, entry.chatId);
     } catch (err) {
-      console.error(`[grunt-server] schedule ${entry.schedule.id} run ${entry.runId} could not be recorded as stopped:`, err);
+      console.error(`[otherbench-server] schedule ${entry.schedule.id} run ${entry.runId} could not be recorded as stopped:`, err);
     }
   }
 
@@ -505,7 +505,7 @@ export class ScheduleService {
       }
     } catch (err) {
       // Checked again within checkMaxMs either way.
-      console.error('[grunt-server] the schedules could not be listed:', err);
+      console.error('[otherbench-server] the schedules could not be listed:', err);
       wait = this.limits.checkMaxMs;
     }
     this.timer = this.scheduler.setTimeout(() => {

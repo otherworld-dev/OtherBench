@@ -1,4 +1,4 @@
-import { HIDDEN_RANGES, revealHidden } from '@grunt/core/domain/card-text.js';
+import { HIDDEN_RANGES, revealHidden } from '@otherbench/core/domain/card-text.js';
 
 /**
  * The hidden-character table and `revealHidden` live in core (domain/card-text.ts):

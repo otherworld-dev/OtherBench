@@ -21,7 +21,7 @@ function CodeBlock(props: ComponentPropsWithoutRef<'pre'>): JSX.Element {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (err) {
-      console.error('[grunt-web] copy to clipboard failed:', err);
+      console.error('[otherbench-web] copy to clipboard failed:', err);
     }
   }
 
@@ -55,7 +55,7 @@ export interface MarkdownFiles {
   base: string;
 }
 
-/** react-markdown blanks file: URLs by default; Grunt keeps them, since a click opens them only in the viewer, inside the chat's folders. */
+/** react-markdown blanks file: URLs by default; OtherBench keeps them, since a click opens them only in the viewer, inside the chat's folders. */
 function urlTransform(url: string): string {
   return /^file:/i.test(url) ? url : defaultUrlTransform(url);
 }

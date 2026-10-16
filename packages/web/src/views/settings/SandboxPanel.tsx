@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
+import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 import { ApiError, api } from '../../state/api.js';
 
 /** How often the panel asks for progress while the sandbox is being set up. */
@@ -111,7 +111,7 @@ export function SandboxPanel(): JSX.Element {
   function remove(): void {
     const where = status?.machine ?? 'this machine';
     const ok = window.confirm(
-      `Remove the sandbox from ${where}? This deletes the grunt-sandbox WSL distro and everything installed in it, including each chat's home folder there. Your own folders aren't touched.`
+      `Remove the sandbox from ${where}? This deletes the otherbench-sandbox WSL distro and everything installed in it, including each chat's home folder there. Your own folders aren't touched.`
     );
     if (ok) void act(() => api.sandbox.remove());
   }
@@ -139,7 +139,7 @@ export function SandboxPanel(): JSX.Element {
   return (
     <div data-testid="sandbox-panel" className="max-w-2xl space-y-4">
       <p className="text-sm text-[var(--text-muted)]">
-        Profiles whose shell runs &ldquo;in the sandbox&rdquo; run their commands in a Linux VM on {status.machine} (a WSL distro called grunt-sandbox).
+        Profiles whose shell runs &ldquo;in the sandbox&rdquo; run their commands in a Linux VM on {status.machine} (a WSL distro called otherbench-sandbox).
         Each command sees only its chat&rsquo;s folders and reaches only the hosts its profile allows; any other host asks you first. Under
         &ldquo;ask on mutate&rdquo; those commands need no approval.
       </p>
@@ -210,7 +210,7 @@ export function SandboxPanel(): JSX.Element {
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
         />
         <p id="sandbox-packages-help" className="text-xs text-[var(--text-muted)]">
-          Ubuntu (apt) package names. Grunt installs them as root when you press Apply; commands in the sandbox can&rsquo;t install system packages
+          Ubuntu (apt) package names. OtherBench installs them as root when you press Apply; commands in the sandbox can&rsquo;t install system packages
           themselves. Taking one off the list doesn&rsquo;t uninstall it.
         </p>
         <button type="button" disabled={busy || settingUp} onClick={() => void applyPackages(splitPackages(packages))} className="btn px-3 py-1.5">

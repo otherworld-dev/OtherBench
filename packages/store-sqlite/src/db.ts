@@ -83,7 +83,7 @@ function assertLocalWindows(path: string): void {
     // out explicitly, rather than folded silently into the happy path,
     // because it means the locality check did NOT actually run.
     console.warn(
-      `[@grunt/store-sqlite] Could not find any existing ancestor directory of "${path}"; ` +
+      `[@otherbench/store-sqlite] Could not find any existing ancestor directory of "${path}"; ` +
         'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
@@ -99,7 +99,7 @@ function assertLocalWindows(path: string): void {
     // it is broader than "detection is impossible on this platform" and is
     // therefore documented here rather than assumed obvious.
     console.warn(
-      `[@grunt/store-sqlite] Could not resolve the real (native) path of "${path}"; ` +
+      `[@otherbench/store-sqlite] Could not resolve the real (native) path of "${path}"; ` +
         'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
@@ -195,7 +195,7 @@ function assertLocalLinuxOnDisk(path: string): void {
     // transient read failure is worse), but made explicit here rather than
     // left implicit.
     console.warn(
-      `[@grunt/store-sqlite] Could not read /proc/mounts for "${path}"; ` +
+      `[@otherbench/store-sqlite] Could not read /proc/mounts for "${path}"; ` +
         'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
@@ -224,7 +224,7 @@ export function assertLocalDatabasePath(path: string): void {
     assertLocalLinuxOnDisk(path);
   } else {
     console.warn(
-      `[@grunt/store-sqlite] Local-database-path verification is not implemented for platform ` +
+      `[@otherbench/store-sqlite] Local-database-path verification is not implemented for platform ` +
         `"${process.platform}"; allowing "${path}".`
     );
   }

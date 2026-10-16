@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { CLOSED_STATE, type BrowserManager, type BrowserState } from '@grunt/tools/browser/manager.js';
+import { CLOSED_STATE, type BrowserManager, type BrowserState } from '@otherbench/tools/browser/manager.js';
 import type { Container } from '../container.js';
 import { sseStream } from '../stream/sse.js';
 import { EVENTS_KEEPALIVE_MS } from './events.js';

@@ -92,7 +92,7 @@ function parseRecord(raw: string, path: string): PasswordRecord {
 
 /**
  * `<dir of secrets.json>/login.json` (spec §2). Kept outside the database so
- * `grunt password` works while the server runs and nothing syncs it. A
+ * `otherbench password` works while the server runs and nothing syncs it. A
  * missing file means no one can sign in and every session ends.
  */
 export class PasswordFile {
@@ -145,7 +145,7 @@ export class PasswordFile {
   /**
    * The current epoch, or null when there's no usable file (missing, or not a
    * password record). Looks at the file at most once a second and re-reads it
-   * only when its mtime, size or inode changed, so `grunt password` against a
+   * only when its mtime, size or inode changed, so `otherbench password` against a
    * live server takes effect within a second and a busy server doesn't read
    * the file on every request. A transient I/O error (EBUSY, EPERM) keeps the
    * last good epoch, so it doesn't end every session.

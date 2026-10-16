@@ -7,7 +7,7 @@ import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js'
 import { looksSecret, redactMessage } from './redact.js';
 import { sameOrigin } from './url.js';
 import { resolveExecutable } from './spawn.js';
-import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
+import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 
 export type McpTransportConfig =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
@@ -25,7 +25,7 @@ export interface McpToolDescriptor {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  /** MCP's own behaviour hints, when the server declares them -- used by `@grunt/tools`'s `provider.ts` to classify risk (e.g. `readOnlyHint` -> our 'read' RiskClass). */
+  /** MCP's own behaviour hints, when the server declares them -- used by `@otherbench/tools`'s `provider.ts` to classify risk (e.g. `readOnlyHint` -> our 'read' RiskClass). */
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
 }
@@ -185,7 +185,7 @@ export class McpClient {
 
     try {
       const transport = this.buildTransport();
-      const client = new Client({ name: 'grunt', version: '1.0.0' }, { capabilities: {} });
+      const client = new Client({ name: 'otherbench', version: '1.0.0' }, { capabilities: {} });
       client.onclose = () => this.handleUnexpectedClose(seq);
       client.onerror = (err) => this.handleUnexpectedClose(seq, err);
       await client.connect(transport);

@@ -2,7 +2,7 @@ import {
   PAIRING_CODE_TTL_MS,
   PAIRING_MAX_FAILURES,
   generatePairingCode,
-} from '@grunt/core/domain/pairing.js';
+} from '@otherbench/core/domain/pairing.js';
 
 export interface PairingSession {
   code: string;

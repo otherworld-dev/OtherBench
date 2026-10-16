@@ -1,5 +1,5 @@
 /**
- * Machines and portable folders (v2 spec §6). Every Grunt install is a node
+ * Machines and portable folders (v2 spec §6). Every OtherBench install is a node
  * with its own id. A chat's folder is either location-relative -- a named
  * place that each machine maps to its own path, plus a subfolder -- or bound
  * to one machine's absolute path.
@@ -50,7 +50,7 @@ export interface LocationPath {
   path: string;
 }
 
-/** One Grunt install. */
+/** One OtherBench install. */
 export interface NodeInfo {
   id: string;
   name: string;

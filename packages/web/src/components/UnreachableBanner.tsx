@@ -1,8 +1,8 @@
 import { useState, type JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { ApiError, api } from '../state/api.js';
 import { machineName, remoteUnreachable } from '../state/machines.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 /**
  * Shown on a chat that runs on another machine which can't be reached (v2
@@ -12,8 +12,8 @@ import { useGruntStore } from '../state/store.js';
  * screen changes.
  */
 export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null {
-  const machines = useGruntStore((s) => s.machines);
-  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const machines = useOtherBenchStore((s) => s.machines);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The chat this banner moved here, and this machine's name. */

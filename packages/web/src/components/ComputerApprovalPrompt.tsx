@@ -1,6 +1,6 @@
 import { useState, type JSX } from 'react';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
-import { actionSummary, describeApp, isHighRiskApp, typedTextForCard, windowTitleForCard } from '@grunt/core/domain/computer-apps.js';
+import type { ApprovalChoice } from '@otherbench/core/ports/tool-provider.js';
+import { actionSummary, describeApp, isHighRiskApp, typedTextForCard, windowTitleForCard } from '@otherbench/core/domain/computer-apps.js';
 import type { ApprovalPromptProps } from './ApprovalPrompt.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
 import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
@@ -29,10 +29,10 @@ import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
  */
 /** What a lasting grant for a browser lets the model do there, said plainly. */
 const BROWSER_GRANT_WORDS =
-  "Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't.";
+  "Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. OtherBench's own app is refused here, but another OtherBench this browser can reach isn't.";
 /** What a lasting grant for an IDE lets the model do there: as much as running any program. */
 const IDE_GRANT_WORDS =
-  'Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included.';
+  'Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, OtherBench included.';
 
 export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
@@ -56,7 +56,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
       await onResolve(request.id, choice);
       // On success the card unmounts when the approval-resolved event lands (as the standard card).
     } catch (err) {
-      console.error(`[grunt-web] failed to resolve approval ${request.id}:`, err);
+      console.error(`[otherbench-web] failed to resolve approval ${request.id}:`, err);
       setPending(false);
       setError(answerErrorText(err, 'Could not send that decision -- please try again.'));
     }
@@ -79,7 +79,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
             ?
           </span>
         ) : (
-          <span>{"Grunt couldn't tell which app this action would use."}</span>
+          <span>{"OtherBench couldn't tell which app this action would use."}</span>
         )}
       </p>
       {app !== null && (
@@ -89,7 +89,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
       )}
       {app?.unusual === true && (
         <p data-testid="computer-app-unusual" className="text-xs text-[var(--warn)]">
-          {"This path has characters outside the plain Latin alphabet, so it may look like another program's. Grunt asks every time for it."}
+          {"This path has characters outside the plain Latin alphabet, so it may look like another program's. OtherBench asks every time for it."}
         </p>
       )}
       {title !== '' && (
@@ -120,12 +120,12 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
       {/* An unusual path is always once-only, and its warning above already says so: one such line, not two. */}
       {app !== null && onceOnly && !app.unusual && (
         <p data-testid="computer-high-risk" className="text-xs text-[var(--warn)]">
-          Grunt asks every time here.{' '}
+          OtherBench asks every time here.{' '}
           {args['appShellView'] === true
             ? 'This is a file dialog or file view, where any file can be opened or run.'
             : kind !== null
-              ? "Browsers and IDEs can be allowed for longer, but Grunt couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
-              : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+              ? "Browsers and IDEs can be allowed for longer, but OtherBench couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
+              : "This app can run commands or change system settings, or OtherBench couldn't fully identify it."}
         </p>
       )}
       {key !== null && !onceOnly && kind === 'browser' && (

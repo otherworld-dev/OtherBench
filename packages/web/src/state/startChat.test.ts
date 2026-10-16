@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('./api.js', () => ({
   api: { chats: { create: vi.fn() }, turns: { create: vi.fn() } },
@@ -9,7 +9,7 @@ vi.mock('./api.js', () => ({
 
 import { api } from './api.js';
 import { StartChatError, startChat } from './startChat.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 
 const profile = (id: string): Profile => ({
   id, name: `Profile ${id}`, description: null, colour: null, connectionId: 'c', modelId: 'm', systemPrompt: null, params: {},
@@ -22,8 +22,8 @@ const chat = (id: string, over: Partial<Chat> = {}): Chat => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ profiles: [profile('p-project')] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ profiles: [profile('p-project')] });
 });
 
 describe('startChat', () => {
@@ -36,7 +36,7 @@ describe('startChat', () => {
     expect(result.id).toBe('c1');
     expect(api.chats.create).toHaveBeenCalledWith({ projectId: 'proj' });
     expect(api.turns.create).toHaveBeenCalledWith('c1', { parentId: null, parts: [{ type: 'text', text: 'hello' }], profileIds: ['p-project'] });
-    const state = useGruntStore.getState();
+    const state = useOtherBenchStore.getState();
     expect(state.chats.map((c) => c.id)).toEqual(['c1']);
     expect(state.messages['u1']).toMatchObject({ role: 'user', chatId: 'c1', parentId: null });
     expect(state.messages['a1']).toMatchObject({ role: 'assistant', parentId: 'u1', producedBy: { profileId: 'p-project' } });
@@ -59,14 +59,14 @@ describe('startChat', () => {
     expect(err).toBeInstanceOf(StartChatError);
     expect((err as StartChatError).chat.id).toBe('c1');
     expect((err as StartChatError).cause).toBe(cause);
-    expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['c1']);
+    expect(useOtherBenchStore.getState().chats.map((c) => c.id)).toEqual(['c1']);
   });
 
   it("still returns the chat when the message went but its local stubs couldn't be added, so a retry doesn't send it twice", async () => {
     vi.mocked(api.chats.create).mockResolvedValue(chat('c1'));
     vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       registerMessage: () => {
         throw new Error('stub trouble');
       },

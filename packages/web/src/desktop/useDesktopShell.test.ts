@@ -11,7 +11,7 @@ vi.mock('./bridge.js', () => ({
   }),
 }));
 
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { setHotkey } from './bridge.js';
 import { HOTKEY_STORAGE_KEY } from './hotkey.js';
 import { useDesktopShell } from './useDesktopShell.js';
@@ -20,7 +20,7 @@ const mockedSetHotkey = vi.mocked(setHotkey);
 
 describe('useDesktopShell', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     window.localStorage.clear();
     listeners.clear();
     mockedSetHotkey.mockReset();
@@ -30,14 +30,14 @@ describe('useDesktopShell', () => {
     mockedSetHotkey.mockResolvedValue(undefined);
     renderHook(() => useDesktopShell());
     expect(mockedSetHotkey).toHaveBeenCalledWith('Ctrl+Alt+G');
-    await waitFor(() => expect(useGruntStore.getState().hotkeyStatus).toEqual({ accelerator: 'Ctrl+Alt+G', error: null }));
+    await waitFor(() => expect(useOtherBenchStore.getState().hotkeyStatus).toEqual({ accelerator: 'Ctrl+Alt+G', error: null }));
   });
 
   it('records why a saved hotkey could not be registered, for Settings to show', async () => {
     window.localStorage.setItem(HOTKEY_STORAGE_KEY, 'Ctrl+Shift+Q');
     mockedSetHotkey.mockRejectedValue('HotKey already registered');
     renderHook(() => useDesktopShell());
-    await waitFor(() => expect(useGruntStore.getState().hotkeyStatus).toEqual({ accelerator: 'Ctrl+Shift+Q', error: 'HotKey already registered' }));
+    await waitFor(() => expect(useOtherBenchStore.getState().hotkeyStatus).toEqual({ accelerator: 'Ctrl+Shift+Q', error: 'HotKey already registered' }));
   });
 
   it('opens a chat the quick window hands over', async () => {
@@ -45,6 +45,6 @@ describe('useDesktopShell', () => {
     renderHook(() => useDesktopShell());
     await waitFor(() => expect(listeners.has('open-chat')).toBe(true));
     listeners.get('open-chat')!('c9');
-    expect(useGruntStore.getState().activeChatId).toBe('c9');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c9');
   });
 });

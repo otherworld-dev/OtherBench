@@ -1,4 +1,4 @@
-import type { SerializedError } from '@grunt/core/types/messages.js';
+import type { SerializedError } from '@otherbench/core/types/messages.js';
 import { CLAUDE_BACKEND } from './env.js';
 
 const tail = (text: string): string => (text.length > 600 ? `...${text.slice(-600)}` : text);

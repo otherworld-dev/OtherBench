@@ -82,7 +82,7 @@ describe('parseSpreadsheet', () => {
     expect(errorOf(sheet([['=Nope!A1']]))).toMatch(/refers to sheet "Nope", which isn't in the workbook/);
     expect(errorOf(sheet([["='No such'!A1"]]))).toMatch(/refers to sheet "No such"/);
     for (const f of ['WEBSERVICE("https://x")', '_xlfn.WEBSERVICE("https://x")', 'FILTERXML(A1,"//a")', 'IMAGE("https://x/a.png")', 'hyperlink("https://x")', 'RTD("a",,"b")', 'CALL("a","b")', 'REGISTER("a")', 'REGISTER.ID("a","b")', 'EXEC("calc")']) {
-      expect(errorOf(sheet([[`=${f}`]])), f).toMatch(/which Grunt refuses/);
+      expect(errorOf(sheet([[`=${f}`]])), f).toMatch(/which OtherBench refuses/);
     }
     expect(errorOf(sheet([["=cmd|' /C calc'!A0"]]))).toMatch(/uses "\|"/);
     expect(errorOf(sheet([['=[Book2.xlsx]Sheet1!A1']]))).toMatch(/uses "\["/);
@@ -202,22 +202,22 @@ const ACCEPTED = [
 
 describe('formula functions', () => {
   const errorFor = (formula: string): string => errorOf(sheet([[formula]]));
-  const NOT_ALLOWED = /isn't one of Excel's built-in functions Grunt allows/;
+  const NOT_ALLOWED = /isn't one of Excel's built-in functions OtherBench allows/;
 
   it('refuses every function on the refused list, however it is written, called or not', () => {
     for (const f of REFUSED_FUNCTIONS) {
       for (const written of [`${f}(1)`, `${f.toLowerCase()}(1)`, `${f} (1)`, `${f}\n(1)`, `_xlfn._xlws.${f}(1)`, `_XLFN._xlfn.${f}(1)`, `1+${f}(1)`, `SUM(${f})`, `SUM(A1,${f.toLowerCase()})`]) {
-        expect(errorFor(`=${written}`), written).toMatch(new RegExp(`uses ${f.replace('.', '\\.')}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened`));
+        expect(errorFor(`=${written}`), written).toMatch(new RegExp(`uses ${f.replace('.', '\\.')}, which OtherBench refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened`));
       }
     }
   });
 
   it('refuses any _xl prefix but _xlfn. and _xlws., called or not', () => {
-    expect(errorFor('=_xlpm.x+1')).toMatch(/uses "_xlpm\.x", whose "_xlpm\." prefix Grunt refuses/);
-    expect(errorFor('=_xlfoo.SUM(1)')).toMatch(/uses "_xlfoo\.SUM", whose "_xlfoo\." prefix Grunt refuses/);
-    expect(errorFor('=SUM(A1,_xleta.WEBSERVICE)')).toMatch(/whose "_xleta\." prefix Grunt refuses/);
-    expect(errorFor('=_xludf.FOO(1)')).toMatch(/whose "_xludf\." prefix Grunt refuses/);
-    expect(errorFor('=_xlfn._xlpm.SUM(1)')).toMatch(/whose "_xlpm\." prefix Grunt refuses/);
+    expect(errorFor('=_xlpm.x+1')).toMatch(/uses "_xlpm\.x", whose "_xlpm\." prefix OtherBench refuses/);
+    expect(errorFor('=_xlfoo.SUM(1)')).toMatch(/uses "_xlfoo\.SUM", whose "_xlfoo\." prefix OtherBench refuses/);
+    expect(errorFor('=SUM(A1,_xleta.WEBSERVICE)')).toMatch(/whose "_xleta\." prefix OtherBench refuses/);
+    expect(errorFor('=_xludf.FOO(1)')).toMatch(/whose "_xludf\." prefix OtherBench refuses/);
+    expect(errorFor('=_xlfn._xlpm.SUM(1)')).toMatch(/whose "_xlpm\." prefix OtherBench refuses/);
   });
 
   it('refuses LET, LAMBDA and its helpers for now', () => {
@@ -238,7 +238,7 @@ describe('formula functions', () => {
       ['=GROUPBY(A1:A3,B1:B3,SUM)', 'GROUPBY'],
       ['=PIVOTBY(A1:A3,B1:B3,C1:C3,SUM)', 'PIVOTBY'],
     ] as const) {
-      expect(errorFor(f), f).toMatch(new RegExp(`uses ${name}, which Grunt doesn't support in spreadsheets yet`));
+      expect(errorFor(f), f).toMatch(new RegExp(`uses ${name}, which OtherBench doesn't support in spreadsheets yet`));
     }
     for (const name of NOT_YET_FUNCTIONS) expect(ALLOWED_FUNCTIONS.has(name), name).toBe(false);
   });
@@ -264,15 +264,15 @@ describe('formula functions', () => {
       '=WEBSERVICE\u0085("x")',
       '=SUM(INDIRECT)',
     ]) {
-      expect(errorFor(f), f).toMatch(/which Grunt refuses/);
+      expect(errorFor(f), f).toMatch(/which OtherBench refuses/);
     }
-    expect(errorFor('=1\\WEBSERVICE("x")')).toMatch(/has "\\" at character 3, which Grunt can't read in a formula/);
-    expect(errorFor('=@WEBSERVICE("x")')).toMatch(/uses "@" \(implicit intersection\), which Grunt doesn't support in spreadsheets yet/);
+    expect(errorFor('=1\\WEBSERVICE("x")')).toMatch(/has "\\" at character 3, which OtherBench can't read in a formula/);
+    expect(errorFor('=@WEBSERVICE("x")')).toMatch(/uses "@" \(implicit intersection\), which OtherBench doesn't support in spreadsheets yet/);
   });
 
   it("refuses @ and the # spill operator for now, but keeps # in error values and text", () => {
-    for (const f of ['=@A1:A3', '=@@A1', '=SUM(@A1:A3)', '=A1:A3 @B1']) expect(errorFor(f), f).toMatch(/uses "@" \(implicit intersection\), which Grunt doesn't support in spreadsheets yet/);
-    for (const f of ['=A1#', '=SORT(A1:A3)#', '=Costs!A1#', '=SUM(A1#)']) expect(errorFor(f), f).toMatch(/uses "#" \(a spill reference\), which Grunt doesn't support in spreadsheets yet/);
+    for (const f of ['=@A1:A3', '=@@A1', '=SUM(@A1:A3)', '=A1:A3 @B1']) expect(errorFor(f), f).toMatch(/uses "@" \(implicit intersection\), which OtherBench doesn't support in spreadsheets yet/);
+    for (const f of ['=A1#', '=SORT(A1:A3)#', '=Costs!A1#', '=SUM(A1#)']) expect(errorFor(f), f).toMatch(/uses "#" \(a spill reference\), which OtherBench doesn't support in spreadsheets yet/);
     for (const f of ['=A1=#DIV/0!', '="#A1#"', '=IFERROR(A1,#N/A)']) expect(parseSpreadsheet(sheet([[f]])), f).toMatchObject({ ok: true });
   });
 
@@ -306,7 +306,7 @@ describe('formula functions', () => {
   it('refuses a reference across sheets however it is spaced', () => {
     const named = (f: string) => JSON.stringify({ sheets: [{ name: 'Costs', rows: [[f]] }, { name: 'Sheet2', rows: [] }] });
     for (const f of ['=A1:Sheet2!B2', '=A1: Sheet2!B2', '=A1 :Sheet2!B2', '=A1 : Sheet2!B2', "=A1:'Sheet2'!B2"]) {
-      expect(errorOf(named(f)), f).toMatch(/uses references across sheets \(A1:'?Sheet2'?!\), which Grunt doesn't support/);
+      expect(errorOf(named(f)), f).toMatch(/uses references across sheets \(A1:'?Sheet2'?!\), which OtherBench doesn't support/);
     }
   });
 
@@ -322,7 +322,7 @@ describe('formula functions', () => {
   it('refuses what xmlSafe would take out, even inside text and quoted sheet names', () => {
     const lone = String.fromCharCode(0xd800);
     const nonCharacter = String.fromCharCode(0xfffe);
-    expect(errorFor(`="a${lone}b"`)).toMatch(/has the character U\+D800 at character 4, which Grunt can't read in a formula/);
+    expect(errorFor(`="a${lone}b"`)).toMatch(/has the character U\+D800 at character 4, which OtherBench can't read in a formula/);
     expect(errorFor(`="a${String.fromCharCode(0xdc00)}"`)).toMatch(/U\+DC00 at character 4/);
     expect(errorFor(`='Co${lone}sts'!A1`)).toMatch(/U\+D800 at character 5/);
     expect(errorFor(`="a${nonCharacter}"`)).toMatch(/U\+FFFE at character 4/);
@@ -346,7 +346,7 @@ describe('formula functions', () => {
   });
 
   it('refuses any function that is not one of Excel built-ins, including lookalike letters', () => {
-    expect(errorFor('=FOO(1)')).toMatch(/uses FOO, which isn't one of Excel's built-in functions Grunt allows/);
+    expect(errorFor('=FOO(1)')).toMatch(/uses FOO, which isn't one of Excel's built-in functions OtherBench allows/);
     for (const f of ['=ＷＥＢＳＥＲＶＩＣＥ("x")', '=WEBSERVICE\u200B("x")', '=WEBSERVIC\u0301E("x")', '=ſum(A1)', '=CUBEVALUE("c","m")', '=PY(1,0)', '=A1(2)']) {
       expect(errorFor(f), f).toMatch(NOT_ALLOWED);
     }
@@ -357,14 +357,14 @@ describe('formula functions', () => {
   it('fails closed: anything the tokenizer does not fully read is refused', () => {
     const named = (rows: unknown[][]) => JSON.stringify({ sheets: [{ name: 'Costs', rows }, { name: 'Sheet1', rows: [] }, { name: 'Sheet2', rows: [] }] });
     const cases: [string, RegExp][] = [
-      ['=A1\tB1', /has a tab at character 4, which Grunt can't read in a formula/],
+      ['=A1\tB1', /has a tab at character 4, which OtherBench can't read in a formula/],
       ['=A1+\u0001B1', /has a control character \(U\+0001\) at character 5/],
       ['=myName+1', /uses the name "myName", which isn't a cell reference, a function call, TRUE or FALSE/],
       ['=SUM(myName)', /uses the name "myName"/],
       ['=SUM(A1,SUM)', /uses SUM without calling it/],
-      ['=Sheet1:Sheet2!A1', /uses references across sheets \(Sheet1:Sheet2!\), which Grunt doesn't support/],
+      ['=Sheet1:Sheet2!A1', /uses references across sheets \(Sheet1:Sheet2!\), which OtherBench doesn't support/],
       ['=A1:Sheet2!B2', /uses references across sheets \(A1:Sheet2!\)/],
-      ['=SUM(A1:A3)~', /has "~" at character 12, which Grunt can't read in a formula/],
+      ['=SUM(A1:A3)~', /has "~" at character 12, which OtherBench can't read in a formula/],
       ['=SUM(A1;A2)', /has ";" at character 8/],
       ['={1,2;3,WEBSERVICE("x")}', /has an array constant that holds something other than numbers, text, TRUE\/FALSE and error values, at character 9/],
       ['={1,{2}}', /array constant/],
@@ -522,13 +522,13 @@ describe('checkOfficeContent: document size limits', () => {
 
   it('refuses more lines than the limit, naming it, and accepts exactly the limit', () => {
     expect(doc(lines(MAX_DOCUMENT_LINES))).toBeNull();
-    expect(doc(lines(MAX_DOCUMENT_LINES + 1))).toBe(`The document has ${(MAX_DOCUMENT_LINES + 1).toLocaleString('en-US')} lines; Grunt makes Word files of at most ${MAX_DOCUMENT_LINES.toLocaleString('en-US')} lines. Split it into more than one document.`);
+    expect(doc(lines(MAX_DOCUMENT_LINES + 1))).toBe(`The document has ${(MAX_DOCUMENT_LINES + 1).toLocaleString('en-US')} lines; OtherBench makes Word files of at most ${MAX_DOCUMENT_LINES.toLocaleString('en-US')} lines. Split it into more than one document.`);
     expect(doc(lines(MAX_DOCUMENT_LINES + 1).replace(/\n/g, '\r\n'))).toMatch(/lines/);
   });
 
   it('refuses more characters than the limit, and accepts exactly the limit', () => {
     expect(doc('a'.repeat(MAX_DOCUMENT_CHARS))).toBeNull();
-    expect(doc('a'.repeat(MAX_DOCUMENT_CHARS + 1))).toMatch(/characters; Grunt makes Word files of at most 120,000 characters/);
+    expect(doc('a'.repeat(MAX_DOCUMENT_CHARS + 1))).toMatch(/characters; OtherBench makes Word files of at most 120,000 characters/);
   });
 
   it('refuses a table of more rows than the limit, and accepts exactly the limit', () => {

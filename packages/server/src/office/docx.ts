@@ -19,7 +19,7 @@ import type { FootnoteDefinition, List, ListItem, PhrasingContent, RootContent, 
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { gfm } from 'micromark-extension-gfm';
-import { xmlSafe } from '@grunt/core/domain/office-spec.js';
+import { xmlSafe } from '@otherbench/core/domain/office-spec.js';
 
 /**
  * A `document` artifact's Markdown as a .docx (spec 2026-10-12-office-files
@@ -150,7 +150,7 @@ function list(node: List, level: number, ctx: Ctx): Block[] {
 }
 
 function listItem(item: ListItem, numbered: boolean, instance: number, level: number, ctx: Ctx): Block[] {
-  const numbering = numbered ? { reference: 'grunt-numbers', level, instance } : { reference: 'grunt-bullets', level };
+  const numbering = numbered ? { reference: 'otherbench-numbers', level, instance } : { reference: 'otherbench-bullets', level };
   const check = item.checked === true ? [run('☒ ', {})] : item.checked === false ? [run('☐ ', {})] : [];
   const out: Block[] = [];
   let first = true;
@@ -235,10 +235,10 @@ export async function renderDocx(markdown: string, title: string): Promise<Buffe
     children.push(...blocks(first?.type === 'paragraph' ? rest : note.children, ctx));
   }
   const doc = new Document({
-    creator: 'Grunt',
+    creator: 'OtherBench',
     title: xmlSafe(title),
     styles: { default: { document: { run: { font: FONT, size: 22 } } } },
-    numbering: { config: [numberingConfig('grunt-bullets', true), numberingConfig('grunt-numbers', false)] },
+    numbering: { config: [numberingConfig('otherbench-bullets', true), numberingConfig('otherbench-numbers', false)] },
     sections: [
       {
         properties: { page: { size: PAGE, margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN } } },

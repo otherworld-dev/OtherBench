@@ -10,16 +10,16 @@ import { join } from 'node:path';
  * secret store on import and never reach the browser.
  */
 
-/** Where Claude Desktop keeps its config on this machine. `GRUNT_CLAUDE_DESKTOP_CONFIG` overrides it (tests, e2e). */
+/** Where Claude Desktop keeps its config on this machine. `OTHERBENCH_CLAUDE_DESKTOP_CONFIG` overrides it (tests, e2e). */
 export function claudeDesktopConfigPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = homedir()): string {
-  const override = env['GRUNT_CLAUDE_DESKTOP_CONFIG'];
+  const override = env['OTHERBENCH_CLAUDE_DESKTOP_CONFIG'];
   if (override) return override;
   if (platform === 'win32') return join(env['APPDATA'] ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
   if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
   return join(env['XDG_CONFIG_HOME'] ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 }
 
-/** One `mcpServers` entry, read as Grunt would set it up. `env` and `headers` hold values: keep them on the server. */
+/** One `mcpServers` entry, read as OtherBench would set it up. `env` and `headers` hold values: keep them on the server. */
 export interface ClaudeDesktopServer {
   name: string;
   transport: 'stdio' | 'http' | null;
@@ -59,14 +59,14 @@ function parseEntry(name: string, raw: unknown): ClaudeDesktopServer {
   const unsupported = (reason: string): ClaudeDesktopServer => ({ ...base, supported: false, reason });
   if (!isObject(raw)) return unsupported('Not a server entry.');
   const type = raw['type'];
-  if (type === 'sse') return unsupported("SSE servers aren't supported: Grunt connects over stdio or Streamable HTTP.");
+  if (type === 'sse') return unsupported("SSE servers aren't supported: OtherBench connects over stdio or Streamable HTTP.");
   if (type === 'http' || type === 'streamable-http') {
     if (typeof raw['url'] !== 'string' || raw['url'].trim() === '') return unsupported('It has no URL.');
     const headers = stringRecord(raw['headers']);
     if ('bad' in headers) return unsupported(`Its header "${headers.bad}" isn't text.`);
     return { ...base, transport: 'http', url: raw['url'], headers: headers.ok, supported: true };
   }
-  if (type !== undefined && type !== 'stdio') return unsupported(`Grunt doesn't support "${String(type)}" servers.`);
+  if (type !== undefined && type !== 'stdio') return unsupported(`OtherBench doesn't support "${String(type)}" servers.`);
   if (typeof raw['command'] !== 'string' || raw['command'].trim() === '') return unsupported('It has no command to run.');
   const args = raw['args'];
   if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === 'string'))) return unsupported("Its arguments aren't a list of text.");

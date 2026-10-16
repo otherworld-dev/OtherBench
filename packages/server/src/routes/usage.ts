@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { buildUsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { UsageRecord } from '@grunt/core/ports/store.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import { buildUsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { UsageRecord } from '@otherbench/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
 import { collectMessageTree } from './chats.js';
 

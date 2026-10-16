@@ -26,7 +26,7 @@ export function toolPath(name: string, args: unknown): string | null {
   return null;
 }
 
-/** Whether a tool call is the artifact tool (Deck #896): both engines report Grunt's under this name. */
+/** Whether a tool call is the artifact tool (Deck #896): both engines report OtherBench's under this name. */
 export function isArtifactTool(name: string): boolean {
   return name === 'artifact';
 }

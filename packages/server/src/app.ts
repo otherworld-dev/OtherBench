@@ -44,12 +44,12 @@ export interface AppOptions {
    * When set, every `/api/*` route EXCEPT `/api/health` requires
    * `Authorization: Bearer <token>` (see routes/health.ts for why health is
    * exempt). Unset means no auth is enforced at all -- safe only when
-   * `grunt serve` is bound to loopback, which `cli.ts`'s security gate
+   * `otherbench serve` is bound to loopback, which `cli.ts`'s security gate
    * enforces before this app is ever constructed for a non-loopback host.
    */
   token?: string | null;
   /**
-   * Absolute path to the built `@grunt/web` bundle's directory. When set,
+   * Absolute path to the built `@otherbench/web` bundle's directory. When set,
    * every non-`/api` path serves that app (or a placeholder if it hasn't
    * been built yet -- see static.ts). Unset (the default in tests) mounts
    * no static handling at all, so `/` is a plain 404 -- tests that only
@@ -113,7 +113,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Open mode (no token, no sign-in) mounts no gate, as before.
   if (token || remote) authed.use('*', authGate({ token, remote }));
   // While computer use may be in control of this machine, changes come only from the desktop app's own window
-  // (its --cors-origin), never from a browser tab of Grunt that a model with a browser grant could be using.
+  // (its --cors-origin), never from a browser tab of OtherBench that a model with a browser grant could be using.
   authed.use('*', changesOnlyFromTheDesktopApp(container.computer, options.corsOrigins ?? []));
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
@@ -172,7 +172,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // /chats/:id/turns, /chats/:id/stream, /chats/:id/head, /messages/:id/cancel.
   authed.route('/', toolsRoutes(container));
   // MCP sign-in (spec 2026-10-12-mcp-oauth-design §5): full paths under /mcp-servers/:id/sign-in… and /mcp-servers/sign-in/redirect-uri. No collisions with toolsRoutes: GET /mcp-servers/:id matches two segments only.
-  // In sign-in mode Grunt's own port may speak only HTTPS, so the loopback http address wouldn't load: the redirect is the public origin (it passes the Host check, and works behind a trusted proxy).
+  // In sign-in mode OtherBench's own port may speak only HTTPS, so the loopback http address wouldn't load: the redirect is the public origin (it passes the Host check, and works behind a trusted proxy).
   const publicOrigin = remote?.publicOrigins[0] ?? null;
   const redirectUri = (): string | null =>
     remote ? (publicOrigin ? `${publicOrigin}/oauth/callback` : null) : oauthRedirectUri(options.oauthCallbackPort?.());
@@ -190,14 +190,14 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // MCP sign-in's redirect lands here, in every mode: no token or session (the system browser has none), Host check still applies, its own headers. Before the static UI, which would answer every other path.
   app.route('/oauth', oauthCallbackRoutes(container));
 
-  // Sign-in with --tls auto: the CA a device installs to trust Grunt (spec §4). No sign-in needed:
-  // it's public, and the device checks its fingerprint against what `grunt serve` printed.
+  // Sign-in with --tls auto: the CA a device installs to trust OtherBench (spec §4). No sign-in needed:
+  // it's public, and the device checks its fingerprint against what `otherbench serve` printed.
   const caDer = remote?.tls.mode === 'auto' ? remote.tls.caDer : undefined;
   if (caDer) {
-    app.get('/grunt-ca.crt', (c) =>
+    app.get('/otherbench-ca.crt', (c) =>
       c.body(new Uint8Array(caDer), 200, {
         'Content-Type': 'application/x-x509-ca-cert',
-        'Content-Disposition': 'attachment; filename="grunt-ca.crt"',
+        'Content-Disposition': 'attachment; filename="otherbench-ca.crt"',
         'X-Content-Type-Options': 'nosniff',
         'Cache-Control': 'no-store',
       })
@@ -224,7 +224,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
       // the user.
       return c.json({ error: err.message }, err.status);
     }
-    console.error('[grunt-server] unhandled error:', err);
+    console.error('[otherbench-server] unhandled error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
   });
 

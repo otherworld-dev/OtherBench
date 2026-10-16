@@ -1,9 +1,9 @@
 import type { JSONValue, ToolResultPart } from 'ai';
-import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@grunt/core/domain/tool-images.js';
-import type { ToolImageLoader, ToolImageSizer } from '@grunt/core/ports/chat-engine.js';
-import { IMAGE_UNSUPPORTED_NOTE, selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
-import type { ConnectionKind } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@otherbench/core/domain/tool-images.js';
+import type { ToolImageLoader, ToolImageSizer } from '@otherbench/core/ports/chat-engine.js';
+import { IMAGE_UNSUPPORTED_NOTE, selectWithinBudget, withinAfterLoad } from '@otherbench/core/domain/request-budget.js';
+import type { ConnectionKind } from '@otherbench/core/types/config.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 /**
  * Images in tool results, on the way to a model (spec

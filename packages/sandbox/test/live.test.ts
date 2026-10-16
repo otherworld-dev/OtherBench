@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isPublicAddress } from '@grunt/core/domain/browser-hosts.js';
-import { toSandboxPath } from '@grunt/core/domain/sandbox-paths.js';
-import type { SandboxRunRequest, StoredSandboxState } from '@grunt/core/ports/sandbox.js';
-import { DEFAULT_SANDBOX_HOSTS } from '@grunt/core/types/config.js';
+import { isPublicAddress } from '@otherbench/core/domain/browser-hosts.js';
+import { toSandboxPath } from '@otherbench/core/domain/sandbox-paths.js';
+import type { SandboxRunRequest, StoredSandboxState } from '@otherbench/core/ports/sandbox.js';
+import { DEFAULT_SANDBOX_HOSTS } from '@otherbench/core/types/config.js';
 // Plain ESM that ships into the VM; vitest loads it as it is.
 import { DENIED_RESOLVED_ADDRESSES } from '../resources/agent-core.mjs';
 import { sandboxResourcesDir } from '../src/resources.js';
@@ -16,10 +16,10 @@ import { addressSample, carriesV4 } from './address-sample.js';
 
 /**
  * The real sandbox on this Windows machine (spec 2026-10-12-sandbox-design §6,
- * "Live"): set up or repair the grunt-sandbox distro (which runs the
- * self-test), then real commands. Opt in with GRUNT_SANDBOX_LIVE=1. Not CI.
+ * "Live"): set up or repair the otherbench-sandbox distro (which runs the
+ * self-test), then real commands. Opt in with OTHERBENCH_SANDBOX_LIVE=1. Not CI.
  */
-const live = process.env['GRUNT_SANDBOX_LIVE'] === '1' && process.platform === 'win32';
+const live = process.env['OTHERBENCH_SANDBOX_LIVE'] === '1' && process.platform === 'win32';
 
 describe.skipIf(!live)('the sandbox on this machine (live)', () => {
   const runner = createWslRunner();
@@ -29,7 +29,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
   const asked: string[] = [];
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'grunt-sandbox-live-'));
+    dir = mkdtempSync(join(tmpdir(), 'otherbench-sandbox-live-'));
     mkdirSync(join(dir, 'ws'));
     // The folders of the protected files the live checks write: a refusal is then the sandbox's, not a missing folder's.
     for (const rel of PROTECTED_PROBES) mkdirSync(join(dir, 'ws', rel, '..'), { recursive: true });
@@ -46,7 +46,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
         },
       },
       machineName: () => 'this machine',
-      gruntPort: () => 4747,
+      otherBenchPort: () => 4747,
       selfTestDir: join(dir, 'selftest'),
     });
   });
@@ -173,7 +173,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
       const before = requests();
       expect(before, served).toBeGreaterThan(0);
       // By number, not on the allowlist, even with every card answered yes: the agent refuses a private
-      // address without asking (Grunt's allowlist can't hold an IP literal; the runtime's resolved-address
+      // address without asking (OtherBench's allowlist can't hold an IP literal; the runtime's resolved-address
       // guard is for names only and lets an allowlisted literal through).
       const askedBefore = asked.length;
       for (const target of ['127.0.0.1:8765', `${vmAddress}:8765`, '10.0.0.1:80', '169.254.169.254:80']) {
@@ -221,7 +221,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     }
     const input = { denied: DENIED_RESOLVED_ADDRESSES, hosts: DEFAULT_SANDBOX_HOSTS, addresses };
     const script = `const INPUT = ${JSON.stringify(input)};\n${readFileSync(new URL('./fixtures/runtime-address-check.mjs', import.meta.url), 'utf8')}`;
-    const child = runner.spawn('grunt', [AGENT_ARGV[0] as string, '--input-type=module', '-']);
+    const child = runner.spawn('otherbench', [AGENT_ARGV[0] as string, '--input-type=module', '-']);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
@@ -277,7 +277,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
 
   it("with file access off sees none of the chat's folders, even one an earlier command of the chat mounted, and starts in a writable home", async () => {
     const chatId = 'live-off-chat';
-    const home = `/home/grunt/chats/${chatId}`;
+    const home = `/home/otherbench/chats/${chatId}`;
     // A workspace of this chat's alone, so the only mount of it is the one this chat's read run asks for.
     mkdirSync(join(dir, 'offws'));
     writeFileSync(join(dir, 'offws', 'seen.txt'), 'x\n');
@@ -330,6 +330,6 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
 
   it("release removes the chat's home folder", async () => {
     await sandbox.release('live-chat');
-    expect((await runner.exec('root', ['/usr/bin/test', '-e', '/home/grunt/chats/live-chat'])).code).toBe(1);
+    expect((await runner.exec('root', ['/usr/bin/test', '-e', '/home/otherbench/chats/live-chat'])).code).toBe(1);
   }, 120_000);
 });

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { Connection } from '@grunt/core/types/config.js';
-import type { PlanUsage } from '@grunt/core/types/usage.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { Connection } from '@otherbench/core/types/config.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';

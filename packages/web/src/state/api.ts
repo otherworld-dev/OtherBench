@@ -1,24 +1,24 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
-import type { ScheduleRule } from '@grunt/core/domain/schedule.js';
-import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
-import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '@grunt/core/ports/tool-provider.js';
-import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
-import type { ImportPreview, ImportStart, ImportStatus } from '@grunt/core/types/claude-import.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { PlanUsage, RecordedUsage } from '@grunt/core/types/usage.js';
-import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
-import type { InferredMapping } from '@grunt/core/domain/workspace.js';
-import type { PublicPeer } from '@grunt/core/types/peer.js';
-import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
+import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
+import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '@otherbench/core/ports/tool-provider.js';
+import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
+import type { ImportPreview, ImportStart, ImportStatus } from '@otherbench/core/types/claude-import.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { PlanUsage, RecordedUsage } from '@otherbench/core/types/usage.js';
+import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@otherbench/core/types/workspace.js';
+import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
+import type { PublicPeer } from '@otherbench/core/types/peer.js';
+import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
 export interface AuthStatus {
   mode: 'open' | 'token' | 'login';
   signedIn: boolean;
-  /** Sign-in with Grunt's own certificate: the login page offers it. */
+  /** Sign-in with OtherBench's own certificate: the login page offers it. */
   caDownload?: boolean;
   session?: { expiresAt: number; remember: boolean };
   remote?: {
@@ -208,7 +208,7 @@ export interface ClaudeDesktopServerView {
   url: string | null;
   envNames: string[];
   headerNames: string[];
-  /** Grunt already has a server with this name. */
+  /** OtherBench already has a server with this name. */
   exists: boolean;
   supported: boolean;
   reason?: string;

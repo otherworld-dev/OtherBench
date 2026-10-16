@@ -23,14 +23,14 @@ fn app() -> Identity {
     }
 }
 
-fn grunt() -> Identity {
+fn otherbench() -> Identity {
     Identity {
-        path: "C:\\Program Files\\Grunt\\grunt-desktop.exe".into(),
+        path: "C:\\Program Files\\OtherBench\\otherbench-desktop.exe".into(),
         shell_view: false,
         window_id: "900".into(),
         pid: 9,
         started_at: "1".into(),
-        title: "Grunt".into(),
+        title: "OtherBench".into(),
     }
 }
 
@@ -229,7 +229,7 @@ impl Desktop for Fake {
             location: Location::Fixed,
             elevated: false,
             ui_access: false,
-            grunt: Some(false),
+            otherbench: Some(false),
         })
     }
     fn identity(&self, at: &Where) -> Result<Identity, String> {
@@ -577,7 +577,7 @@ fn the_title_is_one_plain_line_marked_as_the_chats_name() {
     assert_eq!(long.chars().count(), 80);
     assert!(long.ends_with('\u{2026}'));
     let text = dialog_text("OK to everything");
-    assert!(text.starts_with("Let Grunt control this computer for the chat named '\u{2068}OK to everything\u{2069}'?"));
+    assert!(text.starts_with("Let OtherBench control this computer for the chat named '\u{2068}OK to everything\u{2069}'?"));
     assert!(text.ends_with("Stop any time with Ctrl+Alt+Backspace."));
 }
 
@@ -726,7 +726,7 @@ fn an_act_refuses_before_anything_is_pressed() {
     // Its own shortcuts, whatever the server thinks.
     for own in ["ctrl+shift+space", "ctrl+alt+backspace"] {
         let r = call(json!({ "action": "key", "text": own }), expect(&app()));
-        assert!(r["reason"].as_str().unwrap().contains("Grunt's own shortcuts"), "{own}: {r}");
+        assert!(r["reason"].as_str().unwrap().contains("OtherBench's own shortcuts"), "{own}: {r}");
     }
     // A held modifier or an unreadable keyboard, for every kind of action.
     for (state, reason) in [(Keyboard::Held, act::MODIFIER_HELD), (Keyboard::Unknown, act::KEYBOARD_UNKNOWN)] {
@@ -773,25 +773,25 @@ fn the_whole_expectation_is_checked_before_every_chunk() {
 }
 
 #[test]
-fn nothing_more_is_done_once_the_approved_window_shows_grunts_own_ui() {
-    // The same browser window, process and run: only the page changed, to Grunt's.
-    let mut grunt_page = app();
-    grunt_page.title = "Grunt [grunt-ui] - Google Chrome".into();
+fn nothing_more_is_done_once_the_approved_window_shows_otherbenchs_own_ui() {
+    // The same browser window, process and run: only the page changed, to OtherBench's.
+    let mut otherbench_page = app();
+    otherbench_page.title = "OtherBench [otherbench-ui] - Google Chrome".into();
     let h = H::new();
     h.hello();
     let t = h.start("a");
-    *h.fake.change_after.lock().unwrap() = Some((1, grunt_page.clone()));
+    *h.fake.change_after.lock().unwrap() = Some((1, otherbench_page.clone()));
     let r = h.act("a", &t, json!({ "action": "type", "text": "y".repeat(100) }));
-    assert_eq!(r, json!({ "ok": false, "reason": act::GRUNT_UI }));
+    assert_eq!(r, json!({ "ok": false, "reason": act::OTHERBENCH_UI }));
     assert_eq!(h.fake.sends.load(Ordering::SeqCst), 1, "one chunk of 20, then the check failed");
     // Already showing it: nothing at all, a key and a click alike.
     let h = H::new();
     h.hello();
     let t = h.start("a");
     h.shot("a", &t);
-    *h.fake.change_after.lock().unwrap() = Some((0, grunt_page));
-    assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" })), json!({ "ok": false, "reason": act::GRUNT_UI }));
-    assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 10] })), json!({ "ok": false, "reason": act::GRUNT_UI }));
+    *h.fake.change_after.lock().unwrap() = Some((0, otherbench_page));
+    assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" })), json!({ "ok": false, "reason": act::OTHERBENCH_UI }));
+    assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 10] })), json!({ "ok": false, "reason": act::OTHERBENCH_UI }));
     assert!(h.fake.sent().is_empty());
     assert!(h.fake.activated.lock().unwrap().is_empty(), "never brought forward either");
     // The browser's undocked developer tools, the same way.
@@ -811,7 +811,7 @@ fn a_double_click_sends_no_second_click_once_the_window_changed() {
     h.hello();
     let t = h.start("a");
     h.shot("a", &t);
-    *h.fake.change_after.lock().unwrap() = Some((1, grunt()));
+    *h.fake.change_after.lock().unwrap() = Some((1, otherbench()));
     let r = h.act("a", &t, json!({ "action": "triple_click", "coordinate": [10, 10] }));
     assert_eq!(r, json!({ "ok": false, "reason": act::WINDOW_CHANGED }));
     assert_eq!(h.fake.sent(), click_at(10, 10));
@@ -820,7 +820,7 @@ fn a_double_click_sends_no_second_click_once_the_window_changed() {
     h.hello();
     let t = h.start("a");
     h.shot("a", &t);
-    *h.fake.change_after.lock().unwrap() = Some((2, grunt()));
+    *h.fake.change_after.lock().unwrap() = Some((2, otherbench()));
     let r = h.act("a", &t, json!({ "action": "scroll", "coordinate": [1, 1], "scroll_direction": "down", "scroll_amount": 10 }));
     assert_eq!(r["ok"], json!(false));
     assert_eq!(h.fake.sends.load(Ordering::SeqCst), 2);
@@ -831,14 +831,14 @@ fn the_approved_window_may_be_brought_forward_once_and_only_it() {
     let h = H::new();
     h.hello();
     let t = h.start("a");
-    *h.fake.foreground.lock().unwrap() = grunt();
+    *h.fake.foreground.lock().unwrap() = otherbench();
     assert_eq!(h.act("a", &t, json!({ "action": "type", "text": "hello" })), json!({ "ok": true }));
     assert_eq!(*h.fake.activated.lock().unwrap(), ["100"]);
     // It doesn't come forward: refused, never retried.
     let h = H::new();
     h.hello();
     let t = h.start("a");
-    *h.fake.foreground.lock().unwrap() = grunt();
+    *h.fake.foreground.lock().unwrap() = otherbench();
     h.fake.activate_works.store(false, Ordering::SeqCst);
     assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" }))["reason"], json!(act::WINDOW_CHANGED));
     assert_eq!(h.fake.activated.lock().unwrap().len(), 1);
@@ -846,7 +846,7 @@ fn the_approved_window_may_be_brought_forward_once_and_only_it() {
     let h = H::new();
     h.hello();
     let t = h.start("a");
-    *h.fake.foreground.lock().unwrap() = grunt();
+    *h.fake.foreground.lock().unwrap() = otherbench();
     let mut replaced = app();
     replaced.pid = 8;
     *h.fake.window.lock().unwrap() = Some(replaced);
@@ -857,7 +857,7 @@ fn the_approved_window_may_be_brought_forward_once_and_only_it() {
     h.hello();
     let t = h.start("a");
     h.shot("a", &t);
-    *h.fake.at_point.lock().unwrap() = grunt();
+    *h.fake.at_point.lock().unwrap() = otherbench();
     assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [1, 1] }))["ok"], json!(false));
     assert!(h.fake.activated.lock().unwrap().is_empty());
     assert!(h.fake.sent().is_empty());
@@ -1044,7 +1044,7 @@ fn the_cursor_and_a_point_are_checked_against_the_last_screenshot_never_clamped(
         assert_eq!(ask("computer.target", json!({ "x": x, "y": y }))["result"], json!({ "refuse": "That point is not inside the last screenshot." }));
     }
     let facts = ask("computer.target", json!({ "x": 5, "y": 6 }))["result"].clone();
-    for field in ["path", "originalName", "signer", "console", "location", "elevated", "uiAccess", "grunt", "shellView", "title", "windowId", "pid", "startedAt"] {
+    for field in ["path", "originalName", "signer", "console", "location", "elevated", "uiAccess", "otherbench", "shellView", "title", "windowId", "pid", "startedAt"] {
         assert!(facts.get(field).is_some(), "{field}");
     }
     // The screen changed size: refused until a new screenshot.

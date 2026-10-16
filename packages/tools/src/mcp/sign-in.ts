@@ -3,9 +3,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { fetchWithServerHeaders } from './client.js';
-import { GruntOAuthProvider, hasAuthorizationHeader, McpOAuthMetadataError, signInCapable, type HeldRegistration } from './oauth-provider.js';
+import { OtherBenchOAuthProvider, hasAuthorizationHeader, McpOAuthMetadataError, signInCapable, type HeldRegistration } from './oauth-provider.js';
 import { hostOf, parseHttpUrl } from './url.js';
 import type { McpOAuthStore } from './oauth-store.js';
 import { redactMessage } from './redact.js';
@@ -25,7 +25,7 @@ export class SignInError extends Error {
 
 const DEFAULT_SIGN_IN_TIMEOUT_MS = 600_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-const REPLACED_MESSAGE = 'This sign-in was replaced or cancelled before it was ready. Start it again from Grunt.';
+const REPLACED_MESSAGE = 'This sign-in was replaced or cancelled before it was ready. Start it again from OtherBench.';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /** A provider's error code, reduced to [A-Za-z0-9_.-] and 64 characters before it is shown or stored. */
@@ -39,7 +39,7 @@ export function checkAuthorizationUrl(url: URL): void {
   const parsed = parseHttpUrl(url.href);
   if (parsed?.protocol === 'https:') return;
   if (parsed?.protocol === 'http:' && LOOPBACK_HOSTS.has(hostOf(parsed))) return;
-  throw new SignInError(502, "The sign-in provider gave an address Grunt won't open: it must be https.");
+  throw new SignInError(502, "The sign-in provider gave an address OtherBench won't open: it must be https.");
 }
 
 function fetchWithTimeout(ms: number): FetchLike {
@@ -55,14 +55,14 @@ function startFailureMessage(err: unknown, redirectUri: string, secrets: Iterabl
   if (err instanceof McpOAuthMetadataError) return `Couldn't start the sign-in: ${err.message}`;
   const message = err instanceof Error ? err.message : String(err);
   if (/does not support dynamic client registration/i.test(message)) {
-    return `This server's sign-in provider doesn't let apps register themselves. Register Grunt with it (redirect address: ${redirectUri}) and enter the client ID under Sign-in app.`;
+    return `This server's sign-in provider doesn't let apps register themselves. Register OtherBench with it (redirect address: ${redirectUri}) and enter the client ID under Sign-in app.`;
   }
   return `Couldn't start the sign-in: ${redactMessage(message, secrets)}`;
 }
 
 interface PendingFlow {
   serverId: string;
-  provider: GruntOAuthProvider;
+  provider: OtherBenchOAuthProvider;
   transport: StreamableHTTPClientTransport;
   expiresAt: number;
 }
@@ -73,7 +73,7 @@ function drop(flow: Pick<PendingFlow, 'transport'>): void {
 }
 
 /** The verifier a provider is holding, if it has one yet. */
-function verifierOf(provider: GruntOAuthProvider): string | null {
+function verifierOf(provider: OtherBenchOAuthProvider): string | null {
   try {
     return provider.codeVerifier();
   } catch {
@@ -152,7 +152,7 @@ export class McpSignIns {
 
     const state = randomBytes(32).toString('base64url');
     const captured: { url: URL | null } = { url: null };
-    const provider = new GruntOAuthProvider(row.id, this.oauth, {
+    const provider = new OtherBenchOAuthProvider(row.id, this.oauth, {
       kind: 'sign-in',
       redirectUri,
       state,
@@ -167,7 +167,7 @@ export class McpSignIns {
       authProvider: provider,
       fetch: fetchWithServerHeaders(url, headers, fetchWithTimeout(this.requestTimeoutMs)),
     });
-    const client = new Client({ name: 'grunt', version: '1.0.0' }, { capabilities: {} });
+    const client = new Client({ name: 'otherbench', version: '1.0.0' }, { capabilities: {} });
     try {
       await client.connect(transport);
     } catch (err) {
@@ -204,7 +204,7 @@ export class McpSignIns {
   async complete(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string }> {
     this.sweep();
     const flow = this.flows.get(params.state);
-    if (!flow) throw new SignInError(400, 'This sign-in has expired or was already used. Start it again from Grunt.');
+    if (!flow) throw new SignInError(400, 'This sign-in has expired or was already used. Start it again from OtherBench.');
     if (params.serverId !== undefined && params.serverId !== flow.serverId) {
       throw new SignInError(400, 'That address belongs to a sign-in for another server.');
     }

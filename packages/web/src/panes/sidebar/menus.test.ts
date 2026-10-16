@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {

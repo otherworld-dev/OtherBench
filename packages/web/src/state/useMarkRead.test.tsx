@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 
 vi.mock('./api.js', () => ({
   api: { chats: { patch: vi.fn() } },
@@ -8,7 +8,7 @@ vi.mock('./api.js', () => ({
 
 import { api } from './api.js';
 import { DEFAULT_PANE_STATE } from './panes.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 import { useMarkRead } from './useMarkRead.js';
 
 const mockedPatch = vi.mocked(api.chats.patch);
@@ -23,10 +23,10 @@ function chat(id: string, over: Partial<Chat> = {}): Chat {
 let focused = true;
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   focused = true;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
-  mockedPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().chats.find((c) => c.id === id)!, ...body }) as Chat);
+  mockedPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().chats.find((c) => c.id === id)!, ...body }) as Chat);
 });
 
 afterEach(() => {
@@ -36,34 +36,34 @@ afterEach(() => {
 });
 
 function show(...panes: (string | null)[]): void {
-  useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, layout: panes.length === 2 ? 'columns-2' : 'single', panes, focusedPane: 0 }, activeChatId: panes[0] ?? null });
+  useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, layout: panes.length === 2 ? 'columns-2' : 'single', panes, focusedPane: 0 }, activeChatId: panes[0] ?? null });
 }
 
 describe('useMarkRead', () => {
   it('marks an unread chat read once it is on screen in a focused window, here and on the server', () => {
-    useGruntStore.setState({ chats: [chat('a', { unread: true }), chat('b', { unread: true })] });
+    useOtherBenchStore.setState({ chats: [chat('a', { unread: true }), chat('b', { unread: true })] });
     show('a');
     renderHook(() => useMarkRead(false));
 
     expect(mockedPatch).toHaveBeenCalledWith('a', { unread: false });
     expect(mockedPatch).toHaveBeenCalledTimes(1);
-    expect(useGruntStore.getState().chats.map((c) => c.unread)).toEqual([false, true]);
+    expect(useOtherBenchStore.getState().chats.map((c) => c.unread)).toEqual([false, true]);
   });
 
   it('marks a chat read when a reply finishes while it is on screen', () => {
-    useGruntStore.setState({ chats: [chat('a')] });
+    useOtherBenchStore.setState({ chats: [chat('a')] });
     show('a');
     renderHook(() => useMarkRead(false));
     expect(mockedPatch).not.toHaveBeenCalled();
 
-    act(() => useGruntStore.getState().upsertChat(chat('a', { unread: true })));
+    act(() => useOtherBenchStore.getState().upsertChat(chat('a', { unread: true })));
     expect(mockedPatch).toHaveBeenCalledWith('a', { unread: false });
-    expect(useGruntStore.getState().chats[0]!.unread).toBe(false);
+    expect(useOtherBenchStore.getState().chats[0]!.unread).toBe(false);
   });
 
   it('leaves it unread while the window is in the background, and marks it read when the window comes back', () => {
     focused = false;
-    useGruntStore.setState({ chats: [chat('a', { unread: true })] });
+    useOtherBenchStore.setState({ chats: [chat('a', { unread: true })] });
     show('a');
     renderHook(() => useMarkRead(false));
     expect(mockedPatch).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe('useMarkRead', () => {
   });
 
   it('only counts the focused pane as on screen in a narrow window', () => {
-    useGruntStore.setState({ chats: [chat('a'), chat('b', { unread: true })] });
+    useOtherBenchStore.setState({ chats: [chat('a'), chat('b', { unread: true })] });
     show('a', 'b');
     renderHook(() => useMarkRead(true));
     expect(mockedPatch).not.toHaveBeenCalled();

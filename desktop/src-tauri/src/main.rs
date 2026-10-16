@@ -4,6 +4,7 @@
 mod computer;
 mod download;
 mod hotkey;
+mod legacy;
 mod notify;
 mod rpc;
 mod sidecar;
@@ -43,7 +44,7 @@ struct AppState {
     args: Mutex<Option<Vec<String>>>,
 }
 
-/// The arguments Grunt was started with, the first time it's asked and never
+/// The arguments OtherBench was started with, the first time it's asked and never
 /// again, so a reload of the web app doesn't act on them twice.
 #[tauri::command]
 fn launch_args(state: tauri::State<'_, AppState>) -> Vec<String> {
@@ -97,19 +98,19 @@ fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id
 }
 
 /// Saves a download from the web app in the user's Downloads folder (download.rs) and returns its full path.
-/// The file comes as the raw request body; its name, percent-encoded, in the `x-grunt-name` header.
+/// The file comes as the raw request body; its name, percent-encoded, in the `x-otherbench-name` header.
 #[tauri::command]
 async fn save_download(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("Expected the file's bytes.".into());
     };
-    let name = request.headers().get("x-grunt-name").and_then(|v| v.to_str().ok()).ok_or("Expected the file's name.")?;
+    let name = request.headers().get("x-otherbench-name").and_then(|v| v.to_str().ok()).ok_or("Expected the file's name.")?;
     let name = download::decode_name(name)?;
     let dir = app.path().download_dir().map_err(|e| e.to_string())?;
     download::save(&dir, &name, bytes).map(|p| p.display().to_string())
 }
 
-/// Opens a website from a chat in its own window, with no access to Grunt (site.rs).
+/// Opens a website from a chat in its own window, with no access to OtherBench (site.rs).
 #[tauri::command]
 fn open_site(app: tauri::AppHandle, url: String) -> Result<(), String> {
     site::open(&app, &url)
@@ -138,11 +139,11 @@ fn cors_origins() -> Vec<String> {
     origins
 }
 
-/// The server entry point. `GRUNT_SERVER_SCRIPT` overrides; otherwise a
+/// The server entry point. `OTHERBENCH_SERVER_SCRIPT` overrides; otherwise a
 /// bundled `server/cli.js` resource if present (packaging, Task 40), else
 /// the built server in this checkout -- which is what dev runs use.
 fn server_script(app: &tauri::AppHandle) -> PathBuf {
-    if let Ok(p) = std::env::var("GRUNT_SERVER_SCRIPT") {
+    if let Ok(p) = std::env::var("OTHERBENCH_SERVER_SCRIPT") {
         return PathBuf::from(p);
     }
     if let Ok(dir) = app.path().resource_dir() {
@@ -160,11 +161,11 @@ fn server_script(app: &tauri::AppHandle) -> PathBuf {
         .join("cli.js")
 }
 
-/// `GRUNT_NODE` overrides; otherwise the Node runtime the installer carries
+/// `OTHERBENCH_NODE` overrides; otherwise the Node runtime the installer carries
 /// (`node/node.exe` among the resources, Task 40), else `node` from PATH --
 /// which is what dev runs use.
 fn node_binary(app: &tauri::AppHandle) -> PathBuf {
-    if let Ok(p) = std::env::var("GRUNT_NODE") {
+    if let Ok(p) = std::env::var("OTHERBENCH_NODE") {
         return PathBuf::from(p);
     }
     if let Ok(dir) = app.path().resource_dir() {
@@ -177,6 +178,8 @@ fn node_binary(app: &tauri::AppHandle) -> PathBuf {
 }
 
 fn main() {
+    // Before the builder: the webview opens its storage folder as the windows are made.
+    legacy::adopt_webview_data();
     let launch = Arc::new(Launch::default());
     let server: Arc<Mutex<Option<sidecar::Server>>> = Arc::new(Mutex::new(None));
 
@@ -237,7 +240,7 @@ fn main() {
                     boot
                 });
                 if let Err(e) = &outcome {
-                    eprintln!("[grunt-desktop] server failed to start: {e}");
+                    eprintln!("[otherbench-desktop] server failed to start: {e}");
                 }
                 *launch.result.lock().expect("launch lock") = Some(outcome);
                 launch.ready.notify_all();
@@ -245,7 +248,7 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building the Grunt desktop app");
+        .expect("error while building the OtherBench desktop app");
 
     app.run(move |handle, event| {
         if let RunEvent::Exit = event {

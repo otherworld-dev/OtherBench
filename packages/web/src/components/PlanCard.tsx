@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import { CHANGES_MAX_CHARS } from '@grunt/core/domain/thread-tools.js';
-import type { AskReply, UserAsk } from '@grunt/core/types/thread.js';
+import { CHANGES_MAX_CHARS } from '@otherbench/core/domain/thread-tools.js';
+import type { AskReply, UserAsk } from '@otherbench/core/types/thread.js';
 import { ApiError } from '../state/api.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
@@ -37,7 +37,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
     try {
       await onAnswer(ask.id, reply);
     } catch (err) {
-      console.error(`[grunt-web] failed to answer plan ${ask.id}:`, err);
+      console.error(`[otherbench-web] failed to answer plan ${ask.id}:`, err);
       setPending(false);
       // A 400 carries the server's reason (e.g. an answer over the length limit), so show that.
       setError(err instanceof ApiError && err.status === 400 ? err.message : answerErrorText(err, 'Could not send that answer. Please try again.'));

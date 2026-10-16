@@ -1,9 +1,9 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { actionSummary } from '@grunt/core/domain/computer-apps.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import { useGruntStore } from '../state/store.js';
+import { actionSummary } from '@otherbench/core/domain/computer-apps.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ComputerBanner } from './ComputerBanner.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -15,11 +15,11 @@ import { api } from '../state/api.js';
 
 const chat = { id: 'chat-1', title: 'Budget' } as Chat;
 const session = (lastAction?: string): void =>
-  act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, ...(lastAction === undefined ? {} : { lastAction }) }));
+  act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, ...(lastAction === undefined ? {} : { lastAction }) }));
 
 describe('ComputerBanner', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     vi.mocked(api.chats.stopComputer).mockReset().mockResolvedValue(undefined);
   });
   afterEach(cleanup);
@@ -30,20 +30,20 @@ describe('ComputerBanner', () => {
     session('click at 1, 2');
     const banner = screen.getByTestId('computer-banner');
     expect(banner).toHaveAttribute('role', 'status');
-    expect(banner).toHaveTextContent('Grunt is controlling this computer.');
+    expect(banner).toHaveTextContent('OtherBench is controlling this computer.');
     expect(banner).toHaveTextContent('Last: click at 1, 2');
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
     expect(screen.queryByTestId('computer-banner')).toBeNull();
   });
 
   it('shows the banner for a session the hello reports (a window opened mid-session)', () => {
-    act(() => useGruntStore.getState().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'chat-1', lastAction: 'press ctrl+s' }] }));
+    act(() => useOtherBenchStore.getState().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'chat-1', lastAction: 'press ctrl+s' }] }));
     render(<ComputerBanner chat={chat} />);
     expect(screen.getByTestId('computer-banner')).toHaveTextContent('Last: press ctrl+s');
   });
 
   it("ignores another chat's session", () => {
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'other', active: true }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'other', active: true }));
     render(<ComputerBanner chat={chat} />);
     expect(screen.queryByTestId('computer-banner')).toBeNull();
   });

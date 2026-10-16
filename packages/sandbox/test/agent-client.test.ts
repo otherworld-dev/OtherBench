@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SANDBOX_MAX_OUTPUT_BYTES } from '@grunt/core/ports/sandbox.js';
+import { SANDBOX_MAX_OUTPUT_BYTES } from '@otherbench/core/ports/sandbox.js';
 import { AgentClient, CLOSE_GRACE_MS, type AgentRun } from '../src/agent-client.js';
 import { FakeChannel, scriptedAgent, type AgentScript } from './helpers.js';
 
@@ -19,9 +19,9 @@ const done = (id: number, over: Record<string, unknown> = {}) => ({ type: 'done'
 
 describe('AgentClient', () => {
   it("starts the agent for its chat, and is ready when the agent says so", async () => {
-    const { client, channel } = scriptedAgent({}, { home: '/home/grunt/chats/c1', tmpRoot: '/tmp/grunt-chats/c1', allowedHosts: ['pypi.org'] });
+    const { client, channel } = scriptedAgent({}, { home: '/home/otherbench/chats/c1', tmpRoot: '/tmp/otherbench-chats/c1', allowedHosts: ['pypi.org'] });
     await client.ready;
-    expect(channel.sent[0]).toEqual({ type: 'init', home: '/home/grunt/chats/c1', tmpRoot: '/tmp/grunt-chats/c1', allowedHosts: ['pypi.org'] });
+    expect(channel.sent[0]).toEqual({ type: 'init', home: '/home/otherbench/chats/c1', tmpRoot: '/tmp/otherbench-chats/c1', allowedHosts: ['pypi.org'] });
     expect(client.alive).toBe(true);
   });
 
@@ -278,7 +278,7 @@ describe('AgentClient', () => {
 
   it('reports the folders an agent says it could not put back, before the run settles', async () => {
     const unguarded: string[][] = [];
-    const { client } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.finish(m.id, '', 0, ['/mnt/e/ws', '/home/grunt/chats/c1'])) });
+    const { client } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.finish(m.id, '', 0, ['/mnt/e/ws', '/home/otherbench/chats/c1'])) });
     let seenFirst = false;
     await client.run(run({ onUnguarded: (p) => unguarded.push(p) })).then(() => (seenFirst = unguarded.length > 0));
     // Only the run's writable folders (not the chat's home, which isn't on Windows).

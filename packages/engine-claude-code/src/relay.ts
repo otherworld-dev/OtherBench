@@ -1,24 +1,24 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
-import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
-import { NO_APPROVAL_REASON, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { GruntServerTool } from './grunt-server.js';
+import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@otherbench/core/domain/tool-images.js';
+import { NO_APPROVAL_REASON, type ToolContext, type ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { OtherBenchServerTool } from './otherbench-server.js';
 import type { ApprovalTickets } from './tickets.js';
 
 /**
- * Relaying Grunt's MCP servers into Claude Code (spec
+ * Relaying OtherBench's MCP servers into Claude Code (spec
  * 2026-10-11-claude-code-clean-chat-and-mcp-design §2). Each tool of a
- * profile's allowlisted servers goes on Grunt's per-process server under a
- * relay name; Claude Code calls it as `mcp__grunt_<16 hex>__<relay name>`.
+ * profile's allowlisted servers goes on OtherBench's per-process server under a
+ * relay name; Claude Code calls it as `mcp__otherbench_<16 hex>__<relay name>`.
  * The gate approves the call with the tool's own ToolSpec (exactly as for an
  * API model), and only then does the server run the spec's executor.
  */
 
 /** The model API's limit on a tool name, which Claude Code's full MCP name must fit. */
 const MAX_TOOL_NAME = 64;
-/** `mcp__grunt_<16 hex>__`, the part of the full name before the relay name. */
-const SERVER_PART = 'mcp__grunt_0123456789abcdef__'.length;
+/** `mcp__otherbench_<16 hex>__`, the part of the full name before the relay name. */
+const SERVER_PART = 'mcp__otherbench_0123456789abcdef__'.length;
 const MAX_RELAY_NAME = MAX_TOOL_NAME - SERVER_PART;
 
 /**
@@ -75,7 +75,7 @@ export const NO_TICKET = NO_APPROVAL_REASON;
  *
  * The ticket is this engine's half of the rule: it ties Claude Code's raw
  * input to what the gate approved for this reply. The tool provider holds the
- * other half itself: the `execute` of a spec from `relayGruntTools` runs only
+ * other half itself: the `execute` of a spec from `relayOtherBenchTools` runs only
  * an argument object its own `requestApproval` approved, for the same chat,
  * reply and profile, once, and audits what came of it. So a call that got
  * past this function some other way still runs nothing.
@@ -87,7 +87,7 @@ export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext
   return spec.execute(ticket.args, ctx);
 }
 
-/** The running reply's relay executor, or undefined when no Grunt reply is running. */
+/** The running reply's relay executor, or undefined when no OtherBench reply is running. */
 type CurrentRelay = () => ((spec: ToolSpec, args: unknown) => Promise<unknown>) | undefined;
 
 /**
@@ -121,19 +121,19 @@ function budgetFor(run: object): ToolImageBudget {
 }
 
 /**
- * A relayed tool as Grunt's server lists it: the server's own description and
+ * A relayed tool as OtherBench's server lists it: the server's own description and
  * JSON schema. A call runs on the running reply; the executor's MCP content
  * comes back as is, and its error (or a throw, say the server went away)
  * as an error result.
  */
-export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRelay): GruntServerTool {
+export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRelay): OtherBenchServerTool {
   return {
     name,
     description: spec.description,
     inputSchema: spec.parameters as Record<string, unknown>,
     call: async (args) => {
       const run = current();
-      if (!run) return errorResult('No Grunt reply is waiting on this tool call.');
+      if (!run) return errorResult('No OtherBench reply is waiting on this tool call.');
       try {
         const out = await run(spec, args);
         if (isToolError(out)) return errorResult(out.message, out.about);

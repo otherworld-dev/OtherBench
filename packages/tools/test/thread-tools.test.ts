@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { createPlanGate, PLAN_APPROVED, planChangesText } from '@grunt/core/domain/thread-tools.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolApprovalEvent, ToolContext, UserAsk } from '@grunt/core/ports/tool-provider.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { createPlanGate, PLAN_APPROVED, planChangesText } from '@otherbench/core/domain/thread-tools.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolApprovalEvent, ToolContext, UserAsk } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { McpServerManager } from '../src/mcp/manager.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 
 const emptyMcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 const off: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false, recall: false };
@@ -13,7 +13,7 @@ const ctx = (o: Partial<ToolContext> = {}): ToolContext => ({ chatId: 'chat-1', 
 
 function setup() {
   const store = new InMemoryStore();
-  const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
   const asks: UserAsk[] = [];
   provider.onApprovalEvent((e: ToolApprovalEvent) => {
     if (e.type === 'ask') asks.push(e.ask);

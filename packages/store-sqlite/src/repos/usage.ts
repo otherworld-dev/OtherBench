@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { UsageRecord, UsageRepo } from '@grunt/core/ports/store.js';
-import type { PricingSnapshot } from '@grunt/core/types/usage.js';
+import type { UsageRecord, UsageRepo } from '@otherbench/core/ports/store.js';
+import type { PricingSnapshot } from '@otherbench/core/types/usage.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
 import { fromJson, toJson } from './util.js';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { Connection } from '@grunt/core/types/config.js';
+import { FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { Connection } from '@otherbench/core/types/config.js';
 import { endpointModelLister, RoutingChatEngine } from '../src/engine-router.js';
 
 const conn = (kind: Connection['kind'], baseUrl: string | null = null): Connection => ({ id: 'c', name: 'n', kind, baseUrl, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });

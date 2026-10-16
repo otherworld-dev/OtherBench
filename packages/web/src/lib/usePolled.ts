@@ -37,7 +37,7 @@ export function usePolled<T>(fetcher: () => Promise<T>, deps: unknown[], interva
           setFailed(false);
         }
       } catch (err) {
-        console.error('[grunt-web] usePolled fetch failed:', err);
+        console.error('[otherbench-web] usePolled fetch failed:', err);
         if (!cancelled) setFailed(true);
       }
       if (!cancelled) timer = setTimeout(() => void tick(), intervalMs);

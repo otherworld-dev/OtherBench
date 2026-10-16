@@ -1,7 +1,7 @@
-//! The Grunt server as a child process of the shell.
+//! The OtherBench server as a child process of the shell.
 //!
 //! The server is started with `serve --port 0 --announce --desktop-rpc`, its
-//! per-launch token in `GRUNT_TOKEN` (never on the command line, which every
+//! per-launch token in `OTHERBENCH_TOKEN` (never on the command line, which every
 //! process on the machine can read), and stdin piped. Its first stdout line is
 //! `{"port":N,"rpc":"<word>"}`; after it, stdout and stdin carry only the
 //! computer-use channel (rpc.rs). Everything it logs goes to stderr, which is
@@ -95,7 +95,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
     for origin in &spec.cors_origins {
         cmd.args(["--cors-origin", origin]);
     }
-    cmd.env("GRUNT_TOKEN", &token)
+    cmd.env("OTHERBENCH_TOKEN", &token)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -108,7 +108,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
 
     let mut child = cmd.spawn().map_err(|e| {
         format!(
-            "could not start the Grunt server ({} {}): {e}",
+            "could not start the OtherBench server ({} {}): {e}",
             spec.node.display(),
             spec.script.display()
         )
@@ -138,7 +138,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
     }
 
     // The first stdout line is the handshake; it carries this launch's word,
-    // which stays in this thread. After it come GRUNT-RPC requests (rpc.rs);
+    // which stays in this thread. After it come OTHERBENCH-RPC requests (rpc.rs);
     // anything else is read and dropped, so a stray write can never block the
     // server on a full pipe.
     let (tx, rx) = mpsc::channel::<Result<u16, String>>();
@@ -162,7 +162,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
     let port = match rx.recv_timeout(ANNOUNCE_TIMEOUT) {
         Ok(Ok(port)) => port,
         Ok(Err(e)) => {
-            let _ = writeln!(log, "[grunt-desktop] {e}");
+            let _ = writeln!(log, "[otherbench-desktop] {e}");
             return Err(fail(child, &log_path, e));
         }
         Err(_) => return Err(fail(child, &log_path, "the server did not announce a port within 15s".into())),
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert!(parse_announce("Grunt server listening on http://127.0.0.1:4747").is_err());
+        assert!(parse_announce("OtherBench server listening on http://127.0.0.1:4747").is_err());
     }
 
     #[test]
@@ -227,8 +227,8 @@ mod tests {
     #[test]
     fn strips_the_verbatim_prefix_node_cannot_start_a_script_from() {
         assert_eq!(
-            plain_path(Path::new(r"\\?\C:\Users\Adam\AppData\Local\Grunt\server\cli.js")),
-            PathBuf::from(r"C:\Users\Adam\AppData\Local\Grunt\server\cli.js")
+            plain_path(Path::new(r"\\?\C:\Users\Adam\AppData\Local\OtherBench\server\cli.js")),
+            PathBuf::from(r"C:\Users\Adam\AppData\Local\OtherBench\server\cli.js")
         );
         assert_eq!(plain_path(Path::new(r"\\?\UNC\server\share\cli.js")), PathBuf::from(r"\\server\share\cli.js"));
         assert_eq!(plain_path(Path::new(r"C:\plain\cli.js")), PathBuf::from(r"C:\plain\cli.js"));

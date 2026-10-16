@@ -44,8 +44,8 @@ describe('resolveWorkspace', () => {
   });
 
   it('no path for the location here: says where it is elsewhere', () => {
-    expect(resolveWorkspace({ kind: 'location', locationId: 'git', subpath: 'Grunt' }, LAPTOP, paths, all)).toEqual({
-      status: 'unresolved', reason: 'no-location-path', hint: { nodeId: PC, path: 'E:\\Git\\Grunt' },
+    expect(resolveWorkspace({ kind: 'location', locationId: 'git', subpath: 'OtherBench' }, LAPTOP, paths, all)).toEqual({
+      status: 'unresolved', reason: 'no-location-path', hint: { nodeId: PC, path: 'E:\\Git\\OtherBench' },
     });
     expect(resolveWorkspace({ kind: 'location', locationId: 'gone', subpath: '' }, PC, paths, all)).toEqual({ status: 'unresolved', reason: 'no-location-path' });
   });
@@ -81,11 +81,11 @@ describe('inferLocationMapping', () => {
   });
 
   it('null with no common tail', () => {
-    expect(inferLocationMapping('E:\\Git\\Grunt', 'C:\\Projects\\Other')).toBeNull();
+    expect(inferLocationMapping('E:\\Git\\OtherBench', 'C:\\Projects\\Other')).toBeNull();
   });
 
   it('the whole path in common: the same layout on both machines, never rooted at a drive', () => {
-    expect(inferLocationMapping('E:\\Git\\Grunt', 'E:\\Git\\Grunt')).toEqual({ fromRoot: 'E:\\Git', toRoot: 'E:\\Git', tail: ['Grunt'], name: 'Git' });
+    expect(inferLocationMapping('E:\\Git\\OtherBench', 'E:\\Git\\OtherBench')).toEqual({ fromRoot: 'E:\\Git', toRoot: 'E:\\Git', tail: ['OtherBench'], name: 'Git' });
     expect(inferLocationMapping('/notes', '/home/adam/notes')).toEqual({ fromRoot: '/notes', toRoot: '/home/adam/notes', tail: [], name: 'notes' });
   });
 
@@ -98,7 +98,7 @@ describe('inferLocationMapping', () => {
 
 describe('adoptIntoLocation', () => {
   it("moves a folder bound to that machine under the root into the location, and leaves everything else", () => {
-    expect(adoptIntoLocation({ kind: 'machine', nodeId: PC, root: 'E:\\Git\\Grunt\\src' }, PC, 'E:\\Git', 'git')).toEqual({ kind: 'location', locationId: 'git', subpath: 'Grunt/src' });
+    expect(adoptIntoLocation({ kind: 'machine', nodeId: PC, root: 'E:\\Git\\OtherBench\\src' }, PC, 'E:\\Git', 'git')).toEqual({ kind: 'location', locationId: 'git', subpath: 'OtherBench/src' });
     expect(adoptIntoLocation({ kind: 'machine', nodeId: PC, root: 'E:\\Git' }, PC, 'e:\\git', 'git')).toEqual({ kind: 'location', locationId: 'git', subpath: '' });
     expect(adoptIntoLocation({ kind: 'machine', nodeId: LAPTOP, root: 'E:\\Git\\x' }, PC, 'E:\\Git', 'git')).toBeNull();
     expect(adoptIntoLocation({ kind: 'machine', nodeId: PC, root: 'E:\\Gitlab' }, PC, 'E:\\Git', 'git')).toBeNull();
@@ -117,7 +117,7 @@ describe('extra folders', () => {
   it('tells the same place by location and subfolder, or by machine and path (any case on Windows)', () => {
     expect(sameWorkspace(nc('PhD/papers'), nc('PhD/papers'))).toBe(true);
     expect(sameWorkspace(nc('PhD/papers'), nc('PhD'))).toBe(false);
-    expect(sameWorkspace({ kind: 'machine', nodeId: 'pc', root: 'E:\\Git\\Grunt' }, { kind: 'machine', nodeId: 'pc', root: 'e:\\git\\grunt\\' })).toBe(true);
+    expect(sameWorkspace({ kind: 'machine', nodeId: 'pc', root: 'E:\\Git\\OtherBench' }, { kind: 'machine', nodeId: 'pc', root: 'e:\\git\\otherbench\\' })).toBe(true);
     expect(sameWorkspace({ kind: 'machine', nodeId: 'pc', root: 'E:\\Git' }, { kind: 'machine', nodeId: 'laptop', root: 'E:\\Git' })).toBe(false);
     expect(sameWorkspace(nc('Git'), { kind: 'machine', nodeId: 'pc', root: 'E:\\Nextcloud\\Git' })).toBe(false);
   });

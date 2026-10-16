@@ -2,8 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-/** Sent as `__Host-grunt_device`: Secure, HttpOnly, SameSite=Strict, Path=/. */
-export const DEVICE_COOKIE = 'grunt_device';
+/** Sent as `__Host-otherbench_device`: Secure, HttpOnly, SameSite=Strict, Path=/. */
+export const DEVICE_COOKIE = 'otherbench_device';
 export const DEVICE_MS = 90 * 24 * 60 * 60_000;
 const KEY_BYTES = 32;
 const FILE_MODE = 0o600;
@@ -79,11 +79,11 @@ export class DeviceKeys {
     if (this.save(key)) return;
     try {
       this.io.unlink(this.path);
-      this.log(`[grunt-server] couldn't save a new ${this.path}, so the old one was deleted: remembered devices stay forgotten after a restart, which makes a new key`);
+      this.log(`[otherbench-server] couldn't save a new ${this.path}, so the old one was deleted: remembered devices stay forgotten after a restart, which makes a new key`);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       this.log(
-        `[grunt-server] COULDN'T SAVE OR DELETE ${this.path} (${(err as Error).message}). The devices just signed out stay out until a restart, but after one they would be remembered again. Delete the file by hand.`
+        `[otherbench-server] COULDN'T SAVE OR DELETE ${this.path} (${(err as Error).message}). The devices just signed out stay out until a restart, but after one they would be remembered again. Delete the file by hand.`
       );
     }
   }
@@ -91,12 +91,12 @@ export class DeviceKeys {
   private fresh(): Buffer {
     const key = randomBytes(KEY_BYTES);
     this.key = key;
-    if (!this.save(key)) this.log(`[grunt-server] couldn't save ${this.path}; devices remembered from now on are forgotten at the next restart`);
+    if (!this.save(key)) this.log(`[otherbench-server] couldn't save ${this.path}; devices remembered from now on are forgotten at the next restart`);
     return key;
   }
 
   private mac(id: string, expiresAt: number, epoch: string): string {
-    return createHmac('sha256', this.secret()).update(`grunt-device-v1\n${id}\n${expiresAt}\n${epoch}`).digest('base64url');
+    return createHmac('sha256', this.secret()).update(`otherbench-device-v1\n${id}\n${expiresAt}\n${epoch}`).digest('base64url');
   }
 
   /** The key, read from its file or made once. A broken file is replaced, which only forgets the devices. */

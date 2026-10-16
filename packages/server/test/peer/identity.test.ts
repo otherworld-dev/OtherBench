@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect, createServer, type TLSSocket } from 'node:tls';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fingerprintOf } from '@grunt/core/domain/pairing.js';
+import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
 import { IdentityStore } from '../../src/peer/identity.js';
 
 const dirs: string[] = [];
@@ -20,7 +20,7 @@ describe('node identity', () => {
     expect(cert.verify(cert.publicKey)).toBe(true);
     expect(cert.checkPrivateKey(createPrivateKey(identity.keyPem))).toBe(true);
     expect(cert.publicKey.asymmetricKeyDetails?.namedCurve).toBe('prime256v1');
-    expect(cert.subject).toBe('CN=grunt-node-a');
+    expect(cert.subject).toBe('CN=otherbench-node-a');
     expect(cert.ca).toBe(false);
     expect(identity.fingerprint).toBe(fingerprintOf(cert.raw));
     expect(identity.fingerprint).toMatch(/^[0-9a-f]{64}$/);
@@ -29,7 +29,7 @@ describe('node identity', () => {
   });
 
   it('is created once per machine and reused from disk; nothing is written until it is first needed', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'grunt-identity-'));
+    const dir = mkdtempSync(join(tmpdir(), 'otherbench-identity-'));
     dirs.push(dir);
     const store = new IdentityStore(() => 'node-a', dir);
     expect(readdirSync(dir)).toEqual([]);

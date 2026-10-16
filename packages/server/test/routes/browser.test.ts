@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import type { BrowserFrame, BrowserState } from '@grunt/tools/browser/manager.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import type { BrowserFrame, BrowserState } from '@otherbench/tools/browser/manager.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import type { BrowserPort } from '../../src/routes/browser.js';
@@ -21,7 +21,7 @@ let unwatched: boolean;
 let browser: { [K in keyof BrowserPort]: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-browser-route-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-browser-route-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);

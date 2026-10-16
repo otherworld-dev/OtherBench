@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { ATTACHMENT_BUDGET_NOTE, MAX_REQUEST_ATTACHMENT_BYTES, replayToolName, toModelMessages, type ModelCapabilities } from '../src/convert.js';
 import { IMAGE_UNSUPPORTED_NOTE } from '../src/tool-images.js';
 

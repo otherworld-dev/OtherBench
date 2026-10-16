@@ -1,6 +1,6 @@
 [
   { "name": "a folder", "windows": "E:\\a", "target": "/mnt/e/a", "linux": "/mnt/e/a" },
-  { "name": "nested folders", "windows": "E:\\Git\\Grunt", "target": "/mnt/e/Git/Grunt", "linux": "/mnt/e/Git/Grunt" },
+  { "name": "nested folders", "windows": "E:\\Git\\OtherBench", "target": "/mnt/e/Git/OtherBench", "linux": "/mnt/e/Git/OtherBench" },
   { "name": "a drive root", "windows": "E:\\", "target": "/mnt/e", "linux": "/mnt/e" },
   { "name": "a lower-case drive", "windows": "e:\\Git", "target": "/mnt/e/Git", "linux": "/mnt/e/Git" },
   { "name": "spaces", "windows": "D:\\My Documents\\Work Stuff", "target": "/mnt/d/My Documents/Work Stuff", "linux": "/mnt/d/My Documents/Work Stuff" },

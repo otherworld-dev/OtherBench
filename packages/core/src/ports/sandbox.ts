@@ -4,9 +4,9 @@ import type { ResolvedFolder } from '../types/workspace.js';
 /**
  * The sandbox port (spec 2026-10-12-sandbox-design §1): where a profile's
  * shell commands run when its `shellRuns` is 'sandbox'. On Windows it is a
- * Grunt-owned WSL2 distro with Anthropic's sandbox runtime inside
- * (`@grunt/sandbox`'s WslSandbox); elsewhere it refuses (UnsupportedSandbox).
- * Only `@grunt/tools`' sandboxed `run_command` calls `run`, and only after
+ * OtherBench-owned WSL2 distro with Anthropic's sandbox runtime inside
+ * (`@otherbench/sandbox`'s WslSandbox); elsewhere it refuses (UnsupportedSandbox).
+ * Only `@otherbench/tools`' sandboxed `run_command` calls `run`, and only after
  * the PermissionBroker has allowed the call.
  */
 
@@ -143,6 +143,6 @@ export interface Sandbox {
   run(req: SandboxRunRequest): Promise<SandboxRunResult>;
   /** The chat was deleted: close its agent, drop its mounts, remove its home folder in the VM. */
   release(chatId: string): Promise<void>;
-  /** Grunt is stopping: close every agent and unmount. */
+  /** OtherBench is stopping: close every agent and unmount. */
   close(): Promise<void>;
 }

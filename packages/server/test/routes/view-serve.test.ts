@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { livePolicy, parseRange, relativeOf, sandboxPolicy, viewServeRoutes } from '../../src/routes/view-serve.js';
@@ -16,8 +16,8 @@ let ws: string;
 let outside: string;
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-serve-ws-'));
-  outside = mkdtempSync(join(tmpdir(), 'grunt-serve-out-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-serve-ws-'));
+  outside = mkdtempSync(join(tmpdir(), 'otherbench-serve-out-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);
@@ -145,7 +145,7 @@ describe('GET /view/<id>/', () => {
   });
 
   it('is served ahead of the web app when the server also serves the UI', async () => {
-    const dist = mkdtempSync(join(tmpdir(), 'grunt-serve-dist-'));
+    const dist = mkdtempSync(join(tmpdir(), 'otherbench-serve-dist-'));
     writeFileSync(join(dist, 'index.html'), '<html>app</html>');
     writeFileSync(join(ws, 'a.png'), Buffer.from([0x89]));
     const app = createApp(container, { webDistDir: dist });
@@ -171,7 +171,7 @@ describe('GET /view/<id>/', () => {
     expect(await served.text()).toBe('<p>bear</p>');
   });
 
-  // Reads Grunt's 5 MB mermaid.min.js, which can take seconds the first time while the whole suite runs.
+  // Reads OtherBench's 5 MB mermaid.min.js, which can take seconds the first time while the whole suite runs.
   it('serves artifact versions: a page and an SVG in the sandbox, a Mermaid diagram with its script, nothing else', async () => {
     const store = container.store;
     store.messages.create({ id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
@@ -237,7 +237,7 @@ describe('relativeOf and parseRange', () => {
 describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
   const LIVE = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] };
   const STRICT = (id: string) =>
-    `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:4747/view/${id}/grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
+    `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:4747/view/${id}/otherbench-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
 
   async function artifactLink(app: ReturnType<typeof createApp>, versionId: string): Promise<string> {
     const res = await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', artifactVersionId: versionId }) });
@@ -260,7 +260,7 @@ describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
     expect(await page.text()).toBe('<p>live</p>');
     expect(page.headers.get('Content-Security-Policy')).toBe(STRICT(id));
     expect(page.headers.get('X-DNS-Prefetch-Control')).toBe('off');
-    const helper = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js`);
+    const helper = await app.request(`http://127.0.0.1:4747/view/${id}/otherbench-live.js`);
     expect(helper.status).toBe(200);
     expect(helper.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8');
     expect(helper.headers.get('Content-Security-Policy')).toBe(STRICT(id));
@@ -271,15 +271,15 @@ describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
     const app = createApp(container);
     const url = await artifactLink(app, 'live');
     const id = url.split('/')[2]!;
-    for (const path of [`/view/${id}/other.js`, `/view/${id}/dash.html/x`, `/view/${id}/..%2Fdash.html`, `/view/${id}/sub/grunt-live.js`, '/view/not-a-link/grunt-live.js']) {
+    for (const path of [`/view/${id}/other.js`, `/view/${id}/dash.html/x`, `/view/${id}/..%2Fdash.html`, `/view/${id}/sub/otherbench-live.js`, '/view/not-a-link/otherbench-live.js']) {
       const res = await app.request(`http://127.0.0.1:4747${path}`);
       expect(res.status, path).toBe(404);
       expect(res.headers.get('Content-Security-Policy'), path).toBe("default-src 'none'; sandbox");
       expect(res.headers.get('X-Content-Type-Options'), path).toBe('nosniff');
     }
     // Nothing a request carries changes what the helper is served with.
-    const plain = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js`);
-    const odd = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js?x=1`, {
+    const plain = await app.request(`http://127.0.0.1:4747/view/${id}/otherbench-live.js`);
+    const odd = await app.request(`http://127.0.0.1:4747/view/${id}/otherbench-live.js?x=1`, {
       headers: { Range: 'bytes=0-3', Origin: 'https://exfil.invalid', Accept: 'text/html', Cookie: 'a=b', 'Content-Security-Policy': "script-src *", 'Sec-Fetch-Dest': 'document' },
     });
     expect(odd.status).toBe(200);
@@ -303,13 +303,13 @@ describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
     const page = await app.request(`http://127.0.0.1:4747${url}`);
     expect(page.headers.get('Content-Security-Policy')).toBe(sandboxPolicy(`http://127.0.0.1:4747/view/${id}/`));
     expect(page.headers.get('X-DNS-Prefetch-Control')).toBeNull();
-    expect((await app.request(`/view/${id}/grunt-live.js`)).status).toBe(404);
+    expect((await app.request(`/view/${id}/otherbench-live.js`)).status).toBe(404);
   });
 
-  it('the helper is small, has no eval, freezes grunt and answers only its parent', () => {
+  it('the helper is small, has no eval, freezes otherbench and answers only its parent', () => {
     expect(Buffer.byteLength(LIVE_CLIENT_JS, 'utf8')).toBeLessThan(2048);
     expect(LIVE_CLIENT_JS).not.toMatch(/eval|new Function/);
-    expect(LIVE_CLIENT_JS).toContain("grunt: 'live-call'");
+    expect(LIVE_CLIENT_JS).toContain("otherbench: 'live-call'");
     expect(LIVE_CLIENT_JS).toContain('e.source !== parent');
     expect(LIVE_CLIENT_JS).toContain('Object.freeze');
     expect(LIVE_CLIENT_JS).toContain('45000');

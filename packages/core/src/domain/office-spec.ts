@@ -336,19 +336,19 @@ type Named = { name: string } | { problem: string; unknown?: true };
 function functionName(written: string): Named {
   const bare = written.replace(FILE_PREFIXES, '');
   const other = OTHER_PREFIX.exec(bare);
-  if (other) return { problem: `uses "${shorten(written)}", whose "${other[0]}" prefix Grunt refuses` };
+  if (other) return { problem: `uses "${shorten(written)}", whose "${other[0]}" prefix OtherBench refuses` };
   const name = ASCII_NAME.test(bare) ? bare.toUpperCase() : undefined;
   if (name !== undefined && REFUSED.has(name)) {
-    return { problem: `uses ${name}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened` };
+    return { problem: `uses ${name}, which OtherBench refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened` };
   }
-  if (name !== undefined && NOT_YET.has(name)) return { problem: `uses ${name}, which Grunt doesn't support in spreadsheets yet` };
+  if (name !== undefined && NOT_YET.has(name)) return { problem: `uses ${name}, which OtherBench doesn't support in spreadsheets yet` };
   const prefix = name === undefined ? undefined : ALLOWED_FUNCTIONS.get(name);
-  if (name === undefined || prefix === undefined) return { problem: `uses ${shorten(bare || written)}, which isn't one of Excel's built-in functions Grunt allows`, unknown: true };
+  if (name === undefined || prefix === undefined) return { problem: `uses ${shorten(bare || written)}, which isn't one of Excel's built-in functions OtherBench allows`, unknown: true };
   return { name: prefix + name };
 }
 
-const PIPE = 'uses "|" (a link to another program), which Grunt refuses';
-const BRACKET = 'uses "[" (a link to another workbook, or a table reference), which Grunt refuses';
+const PIPE = 'uses "|" (a link to another program), which OtherBench refuses';
+const BRACKET = 'uses "[" (a link to another workbook, or a table reference), which OtherBench refuses';
 
 /** Why a name that isn't a reference, a call or TRUE/FALSE can't be there. */
 function bareNameProblem(word: string, text: string, end: number, sheetNames: ReadonlySet<string>): string {
@@ -356,12 +356,12 @@ function bareNameProblem(word: string, text: string, end: number, sheetNames: Re
   if (text[end] === '[') return BRACKET;
   if (text[end] === ':' && sheetNames.has(word.toLowerCase())) {
     WORD.lastIndex = end + 1;
-    return `uses references across sheets (${shorten(word)}:${shorten(WORD.exec(text)?.[0] ?? '')}!), which Grunt doesn't support`;
+    return `uses references across sheets (${shorten(word)}:${shorten(WORD.exec(text)?.[0] ?? '')}!), which OtherBench doesn't support`;
   }
   const named = functionName(word);
-  if ('name' in named) return `uses ${word.toUpperCase()} without calling it, which Grunt doesn't support: write ${word.toUpperCase()}(...)`;
+  if ('name' in named) return `uses ${word.toUpperCase()} without calling it, which OtherBench doesn't support: write ${word.toUpperCase()}(...)`;
   if (!named.unknown) return named.problem;
-  return `uses the name "${shorten(word)}", which isn't a cell reference, a function call, TRUE or FALSE (Grunt's spreadsheets have no named ranges)`;
+  return `uses the name "${shorten(word)}", which isn't a cell reference, a function call, TRUE or FALSE (OtherBench's spreadsheets have no named ranges)`;
 }
 
 type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator';
@@ -407,7 +407,7 @@ function grammarProblem(tokens: readonly Token[], base: number): string | null {
         if (previous?.kind !== 'reference' || t.kind !== 'reference') return `has a space ${at(space)} between values that aren't both cell references`;
       }
       if (afterColon && t.kind !== 'reference' && t.kind !== 'call') return range(previous!);
-      if (afterColon && t.sheet !== undefined) return `uses references across sheets (${shorten(beforePrevious?.text ?? '')}:${shorten(t.sheet)}), which Grunt doesn't support`;
+      if (afterColon && t.sheet !== undefined) return `uses references across sheets (${shorten(beforePrevious?.text ?? '')}:${shorten(t.sheet)}), which OtherBench doesn't support`;
       if (t.kind === 'call' || t.kind === 'open') calls.push(t.kind === 'call');
       wantValue = t.kind === 'call' || t.kind === 'open';
     } else if (t.kind === 'close') {
@@ -458,7 +458,7 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
     const ch = String.fromCodePoint(cp);
     const code = `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`;
     const what = cp === 9 ? 'a tab' : cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) ? `a control character (${code})` : INVISIBLE.test(ch) ? `the character ${code}` : `"${ch}"`;
-    return `has ${what} at character ${at + base}, which Grunt can't read in a formula`;
+    return `has ${what} at character ${at + base}, which OtherBench can't read in a formula`;
   };
   // Nothing xmlSafe would take out, even inside text or a quoted sheet name, so what's written is what was checked.
   const unsafe = XML_UNSAFE.exec(body);
@@ -512,10 +512,10 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
       push('operator', i + (two ? 2 : 1));
     } else if (ch === '@') {
       // Excel's file grammar has no "@": it saves _xlfn.SINGLE(...), which would need rewriting.
-      return 'uses "@" (implicit intersection), which Grunt doesn\'t support in spreadsheets yet';
+      return 'uses "@" (implicit intersection), which OtherBench doesn\'t support in spreadsheets yet';
     } else if (ch === '#') {
       // Right after a reference or ")" it's the spill operator (saved as _xlfn.ANCHORARRAY(...)); anywhere else it starts an error value.
-      if (previous?.kind === 'reference' || previous?.kind === 'close') return 'uses "#" (a spill reference), which Grunt doesn\'t support in spreadsheets yet';
+      if (previous?.kind === 'reference' || previous?.kind === 'close') return 'uses "#" (a spill reference), which OtherBench doesn\'t support in spreadsheets yet';
       else {
         const end = matchAt(ERROR_VALUE, body, i);
         if (end === -1) return unreadable(i);
@@ -924,11 +924,11 @@ function fenceOf(line: string): { char: string; length: number; rest: string } |
  */
 function documentProblem(content: string): string | null {
   if (content.length > MAX_DOCUMENT_CHARS) {
-    return `The document has ${number(content.length)} characters; Grunt makes Word files of at most ${number(MAX_DOCUMENT_CHARS)} characters. Split it into more than one document.`;
+    return `The document has ${number(content.length)} characters; OtherBench makes Word files of at most ${number(MAX_DOCUMENT_CHARS)} characters. Split it into more than one document.`;
   }
   const lines = content.split(/\r\n|\r|\n/);
   if (lines.length > MAX_DOCUMENT_LINES) {
-    return `The document has ${number(lines.length)} lines; Grunt makes Word files of at most ${number(MAX_DOCUMENT_LINES)} lines. Split it into more than one document.`;
+    return `The document has ${number(lines.length)} lines; OtherBench makes Word files of at most ${number(MAX_DOCUMENT_LINES)} lines. Split it into more than one document.`;
   }
   let fence: { char: string; length: number } | null = null;
   let tableRows = 0;
@@ -951,7 +951,7 @@ function documentProblem(content: string): string | null {
       if (c === 42 || c === 95 || c === 126 || c === 96 || c === 91 || c === 60) marks++;
     }
     if (marks > MAX_DOCUMENT_MARKS) {
-      return `The document has more than ${number(MAX_DOCUMENT_MARKS)} formatting marks (* _ ~ backtick [ <) outside code blocks (it passes that at line ${number(n + 1)}); Grunt makes Word files with at most ${number(MAX_DOCUMENT_MARKS)}. Split it into more than one document.`;
+      return `The document has more than ${number(MAX_DOCUMENT_MARKS)} formatting marks (* _ ~ backtick [ <) outside code blocks (it passes that at line ${number(n + 1)}); OtherBench makes Word files with at most ${number(MAX_DOCUMENT_MARKS)}. Split it into more than one document.`;
     }
     // Leading whitespace and `>` markers: a tab is 4 columns, one space after a `>` belongs to it.
     let column = 0;
@@ -970,11 +970,11 @@ function documentProblem(content: string): string | null {
       } else break;
     }
     if (quote > MAX_DOCUMENT_QUOTE_DEPTH) {
-      return `Line ${number(n + 1)} of the document is quoted ${number(quote)} levels deep; Grunt makes Word files with quotes at most ${MAX_DOCUMENT_QUOTE_DEPTH} levels deep.`;
+      return `Line ${number(n + 1)} of the document is quoted ${number(quote)} levels deep; OtherBench makes Word files with quotes at most ${MAX_DOCUMENT_QUOTE_DEPTH} levels deep.`;
     }
     widest = Math.max(widest, column);
     if (widest > MAX_DOCUMENT_INDENT) {
-      return `Line ${number(n + 1)} of the document is indented ${number(widest)} columns; Grunt makes Word files with indents of at most ${MAX_DOCUMENT_INDENT} columns.`;
+      return `Line ${number(n + 1)} of the document is indented ${number(widest)} columns; OtherBench makes Word files with indents of at most ${MAX_DOCUMENT_INDENT} columns.`;
     }
     // A table starts at a line with a `|` and, as in GFM, runs to the next blank line: its body rows need no pipe.
     if (line.trim() === '') {
@@ -987,10 +987,10 @@ function documentProblem(content: string): string | null {
     tableRows++;
     tableCells += pipes;
     if (tableRows > MAX_DOCUMENT_TABLE_ROWS) {
-      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_ROWS)} rows (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_ROWS)} rows. Split the table.`;
+      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_ROWS)} rows (it passes that at line ${number(n + 1)}); OtherBench makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_ROWS)} rows. Split the table.`;
     }
     if (tableCells > MAX_DOCUMENT_TABLE_CELLS) {
-      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_CELLS)} cells (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_CELLS)} cells. Split the table.`;
+      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_CELLS)} cells (it passes that at line ${number(n + 1)}); OtherBench makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_CELLS)} cells. Split the table.`;
     }
   }
   return null;
@@ -1012,10 +1012,10 @@ export function checkOfficeContent(kind: string, content: string): string | null
 
 /** Appended to ARTIFACTS_GUIDANCE: fixed text, so it never churns the system prompt. */
 export const OFFICE_GUIDANCE = [
-  'Office files: for a Word document, Excel spreadsheet or PowerPoint deck the user wants as a file, make a "document", "spreadsheet" or "presentation" artifact. Grunt makes the .docx, .xlsx or .pptx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
+  'Office files: for a Word document, Excel spreadsheet or PowerPoint deck the user wants as a file, make a "document", "spreadsheet" or "presentation" artifact. OtherBench makes the .docx, .xlsx or .pptx when the user downloads or saves it. Use "markdown" for notes read in OtherBench.',
   '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file. At most 120,000 characters and 6,000 lines: split a bigger one.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
-  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers, '@' and the '#' spill operator aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
+  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. OtherBench can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers, '@' and the '#' spill operator aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
   '- "presentation": JSON, e.g. {"theme":{"accent":"#1F4E79"},"slides":[{"layout":"title","title":"Q3 review"},{"layout":"bullets","title":"Highlights","bullets":["Revenue up 12%",{"text":"Two new clients","level":1}],"notes":"Mention churn."}]}. Layouts: title and section (title, subtitle), bullets (title, bullets), two-column (title, left and right, each {"heading","bullets"}), table (title, table: {"header","rows"}). A bullet is text or {"text","level":0-2}; "notes" are speaker notes. Keep slides to about six short bullets.',
   '- Errors name the place in the JSON to fix.',
 ].join('\n');

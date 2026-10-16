@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
-import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@grunt/core/types/config.js';
+import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
 import { promptHistory } from '../lib/promptHistory.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
@@ -85,21 +85,21 @@ export interface ComposerProps {
   onPrimaryProfileChange?: (profileId: string | null) => void;
 }
 
-/** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than Grunt's tool layer. */
+/** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than OtherBench's tool layer. */
 export function isClaudeCodeProfile(profile: Profile, connections: Connection[]): boolean {
   return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
 }
 
 export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfileChange }: ComposerProps): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
-  const connections = useGruntStore((s) => s.connections);
-  const messages = useGruntStore((s) => s.messages);
-  const registerMessage = useGruntStore((s) => s.registerMessage);
-  const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
-  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const messages = useOtherBenchStore((s) => s.messages);
+  const registerMessage = useOtherBenchStore((s) => s.registerMessage);
+  const setHeadMessageId = useOtherBenchStore((s) => s.setHeadMessageId);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
   // The store's copy, so an optimistic toggle shows at once even if the parent
   // hasn't re-rendered with the new chat yet.
-  const storedChat = useGruntStore((s) => s.chats.find((c) => c.id === chat.id));
+  const storedChat = useOtherBenchStore((s) => s.chats.find((c) => c.id === chat.id));
 
   const [text, setText] = useState('');
   // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
@@ -142,7 +142,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         const unsent = list.filter((a) => a.messageId === null);
         if (unsent.length > 0) setAttachments((prev) => [...prev, ...unsent.filter((a) => !prev.some((p) => p.id === a.id))]);
       })
-      .catch((err: unknown) => console.error(`[grunt-web] failed to load unsent attachments for chat ${chat.id}:`, err));
+      .catch((err: unknown) => console.error(`[otherbench-web] failed to load unsent attachments for chat ${chat.id}:`, err));
     return () => {
       cancelled = true;
     };
@@ -157,7 +157,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   // prompt above the composer is answered (v2 spec §6).
   const folderUnresolved = (storedChat ?? chat).workspaceStatus?.status === 'unresolved';
   // A chat that runs on a machine that can't be reached waits for it, or for Run here (UnreachableBanner).
-  const machines = useGruntStore((s) => s.machines);
+  const machines = useOtherBenchStore((s) => s.machines);
   const elsewhereUnreachable = remoteUnreachable(machines, storedChat ?? chat);
   // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
   // when any selected profile runs through Claude Code; it needs the Claude
@@ -182,7 +182,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const isStreaming = inFlightIds.length > 0;
 
   async function handleStop(): Promise<void> {
-    await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[grunt-web] failed to cancel ${id}:`, err))));
+    await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[otherbench-web] failed to cancel ${id}:`, err))));
   }
 
   /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies from the next turn. */
@@ -190,14 +190,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (autoSaving) return;
     const previous = autoMode;
     const next = !previous;
-    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
     setAutoError(null);
     setAutoSaving(true);
     upsertChat({ ...latest(), autoMode: next });
     try {
       upsertChat(await api.chats.patch(chat.id, { autoMode: next }));
     } catch (err) {
-      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
       // A chat removed mid-save must not be re-inserted by the revert.
       if (current) upsertChat({ ...current, autoMode: previous });
       setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
@@ -211,14 +211,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (planSaving) return;
     const previous = planMode;
     const next = !previous;
-    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
     setPlanError(null);
     setPlanSaving(true);
     upsertChat({ ...latest(), planMode: next });
     try {
       upsertChat(await api.chats.patch(chat.id, { planMode: next }));
     } catch (err) {
-      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
       if (current) upsertChat({ ...current, planMode: previous });
       setPlanError(err instanceof ApiError ? err.message : "Couldn't change plan mode. Please try again.");
     } finally {
@@ -230,14 +230,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   async function changeEffort(next: ClaudeEffort | null): Promise<void> {
     if (effortSaving) return;
     const previous = effort;
-    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
     setEffortError(null);
     setEffortSaving(true);
     upsertChat({ ...latest(), effort: next });
     try {
       upsertChat(await api.chats.patch(chat.id, { effort: next }));
     } catch (err) {
-      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
       if (current) upsertChat({ ...current, effort: previous });
       setEffortError(err instanceof ApiError ? err.message : "Couldn't change the effort. Please try again.");
     } finally {
@@ -261,7 +261,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         const created = await api.attachments.upload(chat.id, file);
         setAttachments((prev) => [...prev, created]);
       } catch (err) {
-        console.error(`[grunt-web] failed to upload attachment "${file.name}":`, err);
+        console.error(`[otherbench-web] failed to upload attachment "${file.name}":`, err);
       }
     }
   }
@@ -315,7 +315,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         setAttachments((prev) => prev.filter((a) => a.id !== id));
         return;
       }
-      console.error(`[grunt-web] failed to delete attachment ${id}:`, err);
+      console.error(`[otherbench-web] failed to delete attachment ${id}:`, err);
       setRemoveError(err instanceof ApiError ? err.message : 'Failed to remove the attachment. Please try again.');
     }
   }
@@ -359,14 +359,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       // (compare) turn instead surfaces as an open tab strip right after
       // this message, since its several replies are NOT a single-child run.
       setHeadMessageId(chat.id, result.userMessageId);
-      void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
+      void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
 
       setText('');
       setBrowsing(null);
       setAttachments([]);
       textareaRef.current?.focus();
     } catch (err) {
-      console.error('[grunt-web] failed to send turn:', err);
+      console.error('[otherbench-web] failed to send turn:', err);
       // The message stays in the box to send again; say why it didn't go.
       setSendError(err instanceof ApiError ? `Couldn't send: ${err.message}` : "Couldn't send the message. Please try again.");
     } finally {
@@ -578,7 +578,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                       className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
                     >
                       {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
-                      <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
+                      <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'OtherBench tools'}</span>
                     </button>
                   </li>
                 ))}

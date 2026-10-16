@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LiveOutcome } from '../state/api.js';
 import { createLiveBridge, MAX_IN_FLIGHT, MAX_OUTSTANDING, parseLiveRequest } from './live-bridge.js';
 
-const ask = (requestId = 'r1', call = 'value', params: unknown = { key: 'b' }) => ({ grunt: 'live-call', v: 1, requestId, call, params });
+const ask = (requestId = 'r1', call = 'value', params: unknown = { key: 'b' }) => ({ otherbench: 'live-call', v: 1, requestId, call, params });
 const OK: LiveOutcome = { ok: true, text: '{}', json: {}, cached: false, at: 5 };
 
 function harness(opts: { allowed?: string[]; call?: () => Promise<LiveOutcome> } = {}) {
@@ -30,7 +30,7 @@ describe('parseLiveRequest', () => {
     expect(parseLiveRequest(ask())).toEqual({ requestId: 'r1', call: 'value', params: { key: 'b' } });
     expect(parseLiveRequest({ ...ask(), params: undefined })).toEqual({ requestId: 'r1', call: 'value', params: {} });
     expect(parseLiveRequest(null)).toBeNull();
-    expect(parseLiveRequest({ ...ask(), grunt: 'other' })).toBeNull();
+    expect(parseLiveRequest({ ...ask(), otherbench: 'other' })).toBeNull();
     expect(parseLiveRequest({ ...ask(), v: 2 })).toBeNull();
     expect(parseLiveRequest(ask('bad id!'))).toBeNull();
     expect(parseLiveRequest(ask('r'.repeat(65)))).toBeNull();
@@ -53,22 +53,22 @@ describe('createLiveBridge', () => {
     h.fromPage(ask());
     await vi.waitFor(() => expect(h.posted).toHaveLength(1));
     expect(h.call).toHaveBeenCalledWith('value', { key: 'b' }, false);
-    expect(h.win.postMessage).toHaveBeenCalledWith({ grunt: 'live-result', v: 1, requestId: 'r1', ...OK }, '*');
+    expect(h.win.postMessage).toHaveBeenCalledWith({ otherbench: 'live-result', v: 1, requestId: 'r1', ...OK }, '*');
     expect(h.onOutcome).toHaveBeenCalledWith('value', OK);
   });
 
   it("keeps the envelope's own fields over anything in the outcome", async () => {
-    const h = harness({ call: async () => ({ ...OK, grunt: 'other', v: 9, requestId: 'forged' }) as LiveOutcome });
+    const h = harness({ call: async () => ({ ...OK, otherbench: 'other', v: 9, requestId: 'forged' }) as LiveOutcome });
     h.fromPage(ask());
     await vi.waitFor(() => expect(h.posted).toHaveLength(1));
-    expect(h.posted[0]).toMatchObject({ grunt: 'live-result', v: 1, requestId: 'r1' });
+    expect(h.posted[0]).toMatchObject({ otherbench: 'live-result', v: 1, requestId: 'r1' });
   });
 
   it('ignores a message from another source, one after a second load, and one that is malformed', async () => {
     const h = harness();
     h.bridge.onMessage({ source: { postMessage: vi.fn() }, data: ask() });
     h.bridge.onMessage({ source: null, data: ask() });
-    h.fromPage({ grunt: 'live-call' });
+    h.fromPage({ otherbench: 'live-call' });
     h.state.loads = 2;
     h.fromPage(ask());
     await Promise.resolve();
@@ -80,7 +80,7 @@ describe('createLiveBridge', () => {
     const h = harness({ allowed: [] });
     h.fromPage(ask());
     expect(h.call).not.toHaveBeenCalled();
-    expect(h.posted).toEqual([{ grunt: 'live-result', v: 1, requestId: 'r1', ok: false, code: 'not_approved', message: expect.stringContaining('allow it') }]);
+    expect(h.posted).toEqual([{ otherbench: 'live-result', v: 1, requestId: 'r1', ok: false, code: 'not_approved', message: expect.stringContaining('allow it') }]);
   });
 
   it('answers busy past 16 outstanding requests, counting the queued ones', () => {
@@ -117,7 +117,7 @@ describe('createLiveBridge', () => {
     await vi.waitFor(() => expect(h.posted).toHaveLength(6));
     expect(peak).toBe(4);
     expect(h.call.mock.calls.map((c) => c[1])).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ n })));
-    expect(h.posted).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ grunt: 'live-result', v: 1, requestId: `r${n}`, ...OK })));
+    expect(h.posted).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ otherbench: 'live-result', v: 1, requestId: `r${n}`, ...OK })));
   });
 
   it('drops queued requests, without calling the server, once the bridge is disposed, the frame replaced or the page navigates away', async () => {
@@ -190,7 +190,7 @@ describe('createLiveBridge', () => {
     h.state.loads = 1;
     finish(OK);
     await vi.waitFor(() => expect(h.posted).toHaveLength(1));
-    expect(h.posted).toEqual([{ grunt: 'live-result', v: 1, requestId: 'r1', ...OK }]);
+    expect(h.posted).toEqual([{ otherbench: 'live-result', v: 1, requestId: 'r1', ...OK }]);
   });
 
   it('drops a result when a second load follows a request made at the first, or two loads follow one made before any', async () => {
@@ -222,6 +222,6 @@ describe('createLiveBridge', () => {
   it('turns a failed request into a failed outcome', async () => {
     const h = harness({ call: async () => Promise.reject(new Error('Network down')) });
     h.fromPage(ask());
-    await vi.waitFor(() => expect(h.posted).toEqual([{ grunt: 'live-result', v: 1, requestId: 'r1', ok: false, code: 'failed', message: 'Network down' }]));
+    await vi.waitFor(() => expect(h.posted).toEqual([{ otherbench: 'live-result', v: 1, requestId: 'r1', ok: false, code: 'failed', message: 'Network down' }]));
   });
 });

@@ -169,7 +169,7 @@ describe('renderMemoryTranscript', () => {
           { type: 'text', text: 'Reading it.' },
           { type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a.txt' } },
           { type: 'tool-result', id: 't1', name: 'read_file', result: 'nope', isError: true },
-          { type: 'notice', text: 'a Grunt notice' },
+          { type: 'notice', text: 'an OtherBench notice' },
         ],
       }),
     ]);

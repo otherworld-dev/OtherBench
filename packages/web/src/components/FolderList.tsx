@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react';
-import type { FolderAccess, FolderView } from '@grunt/core/types/workspace.js';
+import type { FolderAccess, FolderView } from '@otherbench/core/types/workspace.js';
 import { pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, type FolderEntry } from '../state/api.js';

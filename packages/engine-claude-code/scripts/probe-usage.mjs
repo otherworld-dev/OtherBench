@@ -5,7 +5,7 @@
 // scan), then for the account, and prints both. Times each call.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-// Same scrubbing as Grunt's buildChildEnv for the Claude backend.
+// Same scrubbing as OtherBench's buildChildEnv for the Claude backend.
 const env = {};
 for (const [k, v] of Object.entries(process.env)) {
   if (v === undefined) continue;

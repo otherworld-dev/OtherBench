@@ -17,8 +17,8 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const run = (args) => execFileSync(npm, args, { cwd: repoRoot, stdio: 'inherit', shell: process.platform === 'win32' });
 
 run(['run', 'build']);
-run(['run', 'bundle', '-w', '@grunt/server']);
-run(['run', 'bundle:smoke', '-w', '@grunt/server']);
+run(['run', 'bundle', '-w', '@otherbench/server']);
+run(['run', 'bundle:smoke', '-w', '@otherbench/server']);
 
 await rm(staged, { recursive: true, force: true });
 await cp(join(repoRoot, 'packages', 'server', 'dist-bundle', 'server'), join(staged, 'server'), { recursive: true });

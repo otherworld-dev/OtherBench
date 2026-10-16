@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import type { PaneState } from './panes.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 
 /**
  * What a chat's dot says: an approval, question or plan is waiting for the user, a reply is
@@ -32,8 +32,8 @@ export function groupStatus(statuses: readonly (ChatStatus | null)[]): ChatStatu
 
 /** The chats with an approval pending, and with a reply running, from the app-wide events. */
 export function useChatActivity(): { waiting: ReadonlySet<string>; working: ReadonlySet<string> } {
-  const pending = useGruntStore((s) => s.appPendingApprovals);
-  const running = useGruntStore((s) => s.appRunningTurns);
+  const pending = useOtherBenchStore((s) => s.appPendingApprovals);
+  const running = useOtherBenchStore((s) => s.appRunningTurns);
   const waiting = useMemo(() => new Set(Object.values(pending).map((p) => p.chatId)), [pending]);
   const working = useMemo(() => new Set(Object.values(running)), [running]);
   return { waiting, working };
@@ -41,7 +41,7 @@ export function useChatActivity(): { waiting: ReadonlySet<string>; working: Read
 
 /** The chats the user is reading: on screen while the window has focus. */
 export function useReadingChatIds(narrow: boolean): ReadonlySet<string> {
-  const paneState = useGruntStore((s) => s.paneState);
+  const paneState = useOtherBenchStore((s) => s.paneState);
   const focused = useWindowFocused();
   return useMemo(() => new Set(focused ? shownChatIds(paneState, narrow) : []), [paneState, narrow, focused]);
 }

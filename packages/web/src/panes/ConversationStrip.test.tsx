@@ -1,8 +1,8 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -10,7 +10,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
 const mockedPatch = vi.mocked(api.chats.patch);
@@ -29,7 +29,7 @@ const reply = (id: string, parentId: string, text: string, status: CanonMessage[
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 const originalMatchMedia = window.matchMedia;
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   window.localStorage.clear();
 });
 afterEach(() => {
@@ -71,7 +71,7 @@ describe('ConversationStrip', () => {
   });
 
   it('is collapsed by default: title, count, latest prompt preview, no list', () => {
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'first'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'latest question')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'first'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'latest question')], null);
     renderFor('u2');
     const strip = screen.getByRole('region', { name: 'Conversation' });
     expect(strip).toHaveTextContent('Chat 1');
@@ -82,7 +82,7 @@ describe('ConversationStrip', () => {
   });
 
   it('uses the singular for one prompt', () => {
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'only')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'only')], null);
     renderFor('u1');
     expect(screen.getByRole('region', { name: 'Conversation' })).toHaveTextContent('· 1 prompt');
     expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('1 prompts');
@@ -90,12 +90,12 @@ describe('ConversationStrip', () => {
 
   it('the pin toggle pins and unpins the chat', async () => {
     const c = makeChat(null);
-    useGruntStore.setState({ chats: [c] });
+    useOtherBenchStore.setState({ chats: [c] });
     mockedPatch.mockResolvedValueOnce({ ...c, pinned: true });
     render(<ConversationStrip chat={c} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
     expect(mockedPatch).toHaveBeenCalledWith('chat-1', { pinned: true });
-    await waitFor(() => expect(useGruntStore.getState().chats[0]!.pinned).toBe(true));
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.pinned).toBe(true));
     cleanup();
     render(<ConversationStrip chat={{ ...c, pinned: true }} />);
     expect(screen.getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
@@ -122,7 +122,7 @@ describe('ConversationStrip', () => {
     renderFor(null);
     expect(screen.queryByTestId('stream-status')).toBeNull();
     cleanup();
-    useGruntStore.setState({ streamStatus: 'reconnecting' });
+    useOtherBenchStore.setState({ streamStatus: 'reconnecting' });
     renderFor(null);
     expect(screen.getByTestId('stream-status')).toHaveTextContent('Reconnecting…');
     expect(screen.getByTestId('stream-status')).toHaveClass('min-w-0', 'truncate');
@@ -136,7 +136,7 @@ describe('ConversationStrip', () => {
     narrow(true);
     renderFor(null);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspector' }));
-    expect(useGruntStore.getState().inspectorOverlayOpen).toBe(true);
+    expect(useOtherBenchStore.getState().inspectorOverlayOpen).toBe(true);
   });
 
   it('has a Viewer toggle when given one, pressed while the viewer is open', async () => {
@@ -158,7 +158,7 @@ describe('ConversationStrip', () => {
   });
 
   it('expands and collapses with the chevron', async () => {
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
     renderFor('u2');
     await open();
     expect(screen.getByRole('button', { name: 'Hide conversation outline' })).toHaveAttribute('aria-expanded', 'true');
@@ -169,7 +169,7 @@ describe('ConversationStrip', () => {
 
   it('lists every prompt on the current branch with a truncated reply preview, oldest first', async () => {
     const long = 'x'.repeat(100);
-    useGruntStore.getState().loadMessages('chat-1', [
+    useOtherBenchStore.getState().loadMessages('chat-1', [
       user('u1', null, 'first question'), reply('a1', 'u1', long),
       user('u2', 'a1', 'second question'), reply('a2', 'u2', '', 'streaming'),
       user('u3', 'a2', 'third question'),
@@ -188,7 +188,7 @@ describe('ConversationStrip', () => {
   });
 
   it('truncates long user text to one line of about 60 characters', async () => {
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, `${'y'.repeat(70)}\nsecond line`)], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, `${'y'.repeat(70)}\nsecond line`)], null);
     renderFor('u1');
     await open();
     const entry = screen.getByTestId('outline-u1');
@@ -202,7 +202,7 @@ describe('ConversationStrip', () => {
     target.id = 'msg-u2';
     document.body.appendChild(target);
     const spy = vi.spyOn(target, 'scrollIntoView');
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
     renderFor('u2');
     await open();
     await userEvent.setup().click(screen.getByTestId('outline-u2'));
@@ -212,15 +212,15 @@ describe('ConversationStrip', () => {
   });
 
   it('persists the open state per device in localStorage', async () => {
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'a')], null);
     renderFor('u1');
     await open();
-    expect(window.localStorage.getItem('grunt.outlineOpen')).toBe('1');
+    expect(window.localStorage.getItem('otherbench.outlineOpen')).toBe('1');
     cleanup();
     renderFor('u1');
     expect(screen.getByTestId('outline-u1')).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Hide conversation outline' }));
-    expect(window.localStorage.getItem('grunt.outlineOpen')).toBe('0');
+    expect(window.localStorage.getItem('otherbench.outlineOpen')).toBe('0');
     cleanup();
     renderFor('u1');
     expect(screen.queryByTestId('outline-u1')).not.toBeInTheDocument();
@@ -229,7 +229,7 @@ describe('ConversationStrip', () => {
   it('still works when localStorage throws', async () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
-    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a')], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'a')], null);
     renderFor('u1');
     await open();
     expect(within(screen.getByRole('region', { name: 'Conversation' })).getByTestId('outline-u1')).toBeInTheDocument();

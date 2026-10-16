@@ -7,16 +7,16 @@ not a priority; the Linux notes are for when it is.
 
 ## Shell
 
-- [ ] The app launches and the UI loads (`npm run app:dev -w @grunt/desktop`, or a `tauri build --debug --no-bundle` build).
+- [ ] The app launches and the UI loads (`npm run app:dev -w @otherbench/desktop`, or a `tauri build --debug --no-bundle` build).
 - [ ] DevTools: every request goes to `127.0.0.1:<port>` and carries `Authorization`.
 - [ ] Killing the app's process ends the server within 3 seconds.
 - [ ] `npm run serve` while the app runs refuses with the database lock message.
 
 ## Tray, single instance, start at login
 
-- [ ] Closing the window hides it to the tray; *Quit Grunt* in the tray exits.
+- [ ] Closing the window hides it to the tray; *Quit OtherBench* in the tray exits.
 - [ ] A second launch focuses the running window.
-- [ ] *Start Grunt when I sign in* (Settings → Desktop) survives a reboot.
+- [ ] *Start OtherBench when I sign in* (Settings → Desktop) survives a reboot.
 - [ ] The tooltip counts tool calls waiting for approval.
 
 ## Hotkey and quick chat
@@ -68,7 +68,7 @@ tested against a fake desktop, but that is all. It ships switched off. See
 
 **Switch it on** (from this checkout, in PowerShell):
 
-1. `$env:GRUNT_COMPUTER_USE = '1'; npm run app:dev -w @grunt/desktop` (the
+1. `$env:OTHERBENCH_COMPUTER_USE = '1'; npm run app:dev -w @otherbench/desktop` (the
    value must be exactly `1`; the dev command builds the packages first).
 2. Settings → Profiles: tick **Computer use** on a profile. The box only shows
    when the server says the shell has a driver (`GET /api/computer/status`).
@@ -76,8 +76,8 @@ tested against a fake desktop, but that is all. It ships switched off. See
    (Opus 5.5, say), one on a model that gets the JSON tool, and a Claude Code
    profile.
 
-**Switch it off:** quit Grunt from the tray and start it again from a window
-where the variable isn't set (`Remove-Item Env:GRUNT_COMPUTER_USE`, or a new
+**Switch it off:** quit OtherBench from the tray and start it again from a window
+where the variable isn't set (`Remove-Item Env:OTHERBENCH_COMPUTER_USE`, or a new
 PowerShell window). The profile's tick can stay: with no driver the tool is
 never offered.
 
@@ -91,29 +91,29 @@ tools never do.
 
 ### Consent and stop
 
-- [ ] 1. The first action in a chat (a screenshot is enough) brings up a Windows message box titled *Grunt*: "Let Grunt control this computer for the chat named '<title>'? It will ask before using each app. Stop any time with Ctrl+Alt+Backspace." It is on top, also with focus-stealing prevention in the way (another app typed in just before), and the title reads as one plain line. Cancel is the default: Enter is Cancel, and Tab then Enter is OK.
-- [ ] 2. Cancel refuses: the reply's tool result says "The user didn't let Grunt control the computer." and nothing else happens.
-- [ ] 3. Left unanswered, the dialog closes by itself after 110 seconds and the tool result says "Nobody answered the desktop app's question in time, so Grunt didn't take control." It also closes as Cancel when Grunt quits. Stop the reply while the dialog is up, then press OK: no session is left running (no bar, and the next action asks again).
+- [ ] 1. The first action in a chat (a screenshot is enough) brings up a Windows message box titled *OtherBench*: "Let OtherBench control this computer for the chat named '<title>'? It will ask before using each app. Stop any time with Ctrl+Alt+Backspace." It is on top, also with focus-stealing prevention in the way (another app typed in just before), and the title reads as one plain line. Cancel is the default: Enter is Cancel, and Tab then Enter is OK.
+- [ ] 2. Cancel refuses: the reply's tool result says "The user didn't let OtherBench control the computer." and nothing else happens.
+- [ ] 3. Left unanswered, the dialog closes by itself after 110 seconds and the tool result says "Nobody answered the desktop app's question in time, so OtherBench didn't take control." It also closes as Cancel when OtherBench quits. Stop the reply while the dialog is up, then press OK: no session is left running (no bar, and the next action asks again).
 - [ ] 4. The dialog comes before the first app card, never after it.
-- [ ] 5. On OK the bar appears at the top centre of the primary monitor: "Grunt is controlling this computer", the chat title and the last action. It doesn't take focus, it isn't in the model's screenshots, and its Stop ends control. Stop is the only thing that works from the bar (the indicator has no other command).
-- [ ] 6. The thread banner reads "Grunt is controlling this computer." with the last action, and its Stop ends control.
-- [ ] 7. Ctrl+Alt+Backspace stops a long `type` part way: no character arrives after the stop. The same with an end from Grunt (the banner's Stop) mid-typing.
+- [ ] 5. On OK the bar appears at the top centre of the primary monitor: "OtherBench is controlling this computer", the chat title and the last action. It doesn't take focus, it isn't in the model's screenshots, and its Stop ends control. Stop is the only thing that works from the bar (the indicator has no other command).
+- [ ] 6. The thread banner reads "OtherBench is controlling this computer." with the last action, and its Stop ends control.
+- [ ] 7. Ctrl+Alt+Backspace stops a long `type` part way: no character arrives after the stop. The same with an end from OtherBench (the banner's Stop) mid-typing.
 - [ ] 8. Each of the three stops (banner, bar, hotkey) cancels the running reply, puts the bar away and unregisters the stop hotkey.
 - [ ] 9. Ctrl+Alt+Backspace is only registered while a chat holds control: after a session ends, the combination does whatever it did before.
-- [ ] 10. The server's shortcut list follows the stop hotkey being registered and released (the shell sends a `computer.shortcuts` event each time). A `key` action sent before the shell's hello is refused ("Grunt doesn't know the desktop app's shortcuts yet; no key was pressed.").
+- [ ] 10. The server's shortcut list follows the stop hotkey being registered and released (the shell sends a `computer.shortcuts` event each time). A `key` action sent before the shell's hello is refused ("OtherBench doesn't know the desktop app's shortcuts yet; no key was pressed.").
 - [ ] 11. Setting the quick-chat hotkey to Ctrl+Alt+Backspace is refused in Settings → Desktop ("Ctrl+Alt+Backspace stops computer use; pick another shortcut."). The quick-chat hotkey still works during and after a session.
 - [ ] 12. A second chat can't start while one holds control ("Another chat is controlling this computer. Stop it first."), and starts normally once the first is stopped.
 - [ ] 13. A session that was used carries over to the chat's next reply with no new dialog. One that was started but never used ends with its reply.
 - [ ] 14. After 10 minutes with no action the session ends by itself: the banner and the bar go and the hotkey is released.
 - [ ] 15. Deleting the chat (or its profile) while it holds control ends the session.
-- [ ] 16. With the screen locked (Win+L), start from a paired machine or another signed-in device: no session starts until someone at the machine answers the dialog, and an action in a session that is already live is refused ("Grunt couldn't read the keyboard state (is the computer locked?); nothing was done."). The same with a UAC prompt up.
+- [ ] 16. With the screen locked (Win+L), start from a paired machine or another signed-in device: no session starts until someone at the machine answers the dialog, and an action in a session that is already live is refused ("OtherBench couldn't read the keyboard state (is the computer locked?); nothing was done."). The same with a UAC prompt up.
 - [ ] 17. A start whose bar can't be shown (if that can be provoked) is refused and the stop hotkey is released.
 
 ### Targets and risk
 
 - [ ] 18. A click on the taskbar asks every time (Explorer only gets Allow once). Start, Search and Settings the same.
-- [ ] 19. A click on Grunt's own window is refused with no card. So is a dropdown, a context menu and devtools opened in Grunt (they belong to its WebView2 processes), a second copy of Grunt, and an app run as administrator. A window of the node server itself (its console, if one shows) counts as Grunt's.
-- [ ] 20. A click on content under the indicator bar is refused, with a reason that makes sense to the model (the bar is Grunt's own window).
+- [ ] 19. A click on OtherBench's own window is refused with no card. So is a dropdown, a context menu and devtools opened in OtherBench (they belong to its WebView2 processes), a second copy of OtherBench, and an app run as administrator. A window of the node server itself (its console, if one shows) counts as OtherBench's.
+- [ ] 20. A click on content under the indicator bar is refused, with a reason that makes sense to the model (the bar is OtherBench's own window).
 - [ ] 21. With Allow for this chat on an ordinary app, a `key` action of `super+r`, `ctrl+escape`, `alt+tab`, `alt+f4`, `ctrl+alt+delete` and `ctrl+a ctrl+c` (two combinations) is each refused with no card, and nothing is pressed.
 - [ ] 22. Start a program by its 8.3 short path, and by a different letter case: the card shows the long, on-disk-case path both times. Junctions and subst drives resolve to the real path; a program on a share shows `\\server\share\...`.
 - [ ] 23. A program on a network share and one on a USB stick: Allow once only.
@@ -126,31 +126,31 @@ tools never do.
 - [ ] 30. Move or close the target window while its card is up, then allow: nothing is done.
 - [ ] 31. A program installed under a folder with an accented name (a user folder such as `C:\Users\José`): the card shows the warning line about unusual characters and only Allow once.
 - [ ] 32. Replace an app's exe while it runs and point at it: the card shows the new file's signer and original name. Only the process start time ties the action to the run (a known residual).
-- [ ] 33. Chrome, Edge and Firefox, each in its main window: the card offers all four answers, with the line "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't." Allow for this chat on Chrome: the next click and `type` in Chrome run with no card, Edge still asks, and another chat asks again. Note the original name the shell reports for each (Brave, Vivaldi and Opera may report `chrome.exe`, which is fine); if one of them is offered only Allow once, write down its path, signer and original name.
-- [ ] 34. VS Code (the per-user install), Visual Studio and a JetBrains IDE (IntelliJ IDEA or PyCharm), each in its main window: all four answers, with the line "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included." VS Code, Cursor and Windsurf should report `electron.exe` as their original name and still get all four; if one reports another name and gets Allow once only, write it down. With Allow for this chat on VS Code, a click and a `type` into its built-in terminal run with no card; a separate Windows Terminal or PowerShell window still asks every time with Allow once only.
+- [ ] 33. Chrome, Edge and Firefox, each in its main window: the card offers all four answers, with the line "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. OtherBench's own app is refused here, but another OtherBench this browser can reach isn't." Allow for this chat on Chrome: the next click and `type` in Chrome run with no card, Edge still asks, and another chat asks again. Note the original name the shell reports for each (Brave, Vivaldi and Opera may report `chrome.exe`, which is fine); if one of them is offered only Allow once, write down its path, signer and original name.
+- [ ] 34. VS Code (the per-user install), Visual Studio and a JetBrains IDE (IntelliJ IDEA or PyCharm), each in its main window: all four answers, with the line "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, OtherBench included." VS Code, Cursor and Windsurf should report `electron.exe` as their original name and still get all four; if one reports another name and gets Allow once only, write it down. With Allow for this chat on VS Code, a click and a `type` into its built-in terminal run with no card; a separate Windows Terminal or PowerShell window still asks every time with Allow once only.
 - [ ] 35. With Allow for this chat on Chrome and on VS Code: Chrome's Save As dialog, a page's own "Choose file" upload dialog and VS Code's Open Folder dialog each ask every time with Allow once only, saying it is a file dialog.
-- [ ] 36. Still Allow once only, with no browser or IDE line: Internet Explorer (if it still starts rather than handing over to Edge), Notepad++, Sublime Text, JetBrains Gateway and Toolbox, VS Code installed under a user folder with an accented name (the unusual-characters line instead), and a copy of Chrome run from a USB stick (the line that Grunt couldn't fully identify this browser).
+- [ ] 36. Still Allow once only, with no browser or IDE line: Internet Explorer (if it still starts rather than handing over to Edge), Notepad++, Sublime Text, JetBrains Gateway and Toolbox, VS Code installed under a user folder with an accented name (the unusual-characters line instead), and a copy of Chrome run from a USB stick (the line that OtherBench couldn't fully identify this browser).
 - [ ] 37. With Always allow on a browser:
-  - Open a second Grunt (`npm run serve`, browser mode) in that browser: the tab's title shows `Grunt [grunt-ui]` and the browser's window title includes it; any click or key the model sends into that window is refused with no card ("That window is showing Grunt's own pages. Grunt never controls itself, in a browser or anywhere else."). Have the model type its address and press Enter in one `type` action while on another page: nothing more is typed once the title changes ("That window is showing Grunt's own pages now...").
+  - Open a second OtherBench (`npm run serve`, browser mode) in that browser: the tab's title shows `OtherBench [otherbench-ui]` and the browser's window title includes it; any click or key the model sends into that window is refused with no card ("That window is showing OtherBench's own pages. OtherBench never controls itself, in a browser or anywhere else."). Have the model type its address and press Enter in one `type` action while on another page: nothing more is typed once the title changes ("That window is showing OtherBench's own pages now...").
   - Undock that browser's developer tools (F12, then the dock menu's separate window): any action in it is refused ("That's a browser's developer tools window...").
-  - Edge or Chrome split view with Grunt in the unfocused pane: note whether an action in that pane goes through. It is expected to (a known residual: the window title is the focused pane's).
+  - Edge or Chrome split view with OtherBench in the unfocused pane: note whether an action in that pane goes through. It is expected to (a known residual: the window title is the focused pane's).
   - The desktop app itself, mid-session: answering a card and sending a message still work there (its origin is on the server's list). The desktop server's API can't be opened in a browser tab without the per-launch token; a paired machine can't answer until Stop.
-  - Then remove the grant (Inspector) and close the second Grunt.
+  - Then remove the grant (Inspector) and close the second OtherBench.
 
 ### Input accuracy
 
 - [ ] 38. Screenshots and clicks at 100 %, 125 % and 150 % display scaling: the screenshot is in physical pixels scaled to fit 1366×768, and clicks land on what the model aimed at. Tauri's event loop makes the process per-monitor DPI aware (tao 0.37.1, `become_dpi_aware`); if clicks land off by the scale factor, start there.
 - [ ] 39. Click, double-click, triple-click and scroll while moving the mouse yourself, also with a second monitor to the left of the primary and at 125 % and 150 % scaling: each lands exactly on the checked point or is refused ("The mouse pointer moved away from the point that was checked, so nothing more was done."), never where you moved the pointer to.
 - [ ] 40. Absolute mapping: a double-click and a triple-click on a 1-pixel target near the right and bottom edges of the virtual desktop land exactly, and the app takes them as a double and a triple click.
-- [ ] 41. With "Scroll inactive windows when I hover over them" off (Settings → Bluetooth & devices → Mouse), a scroll reaches the window under the point, not Grunt.
+- [ ] 41. With "Scroll inactive windows when I hover over them" off (Settings → Bluetooth & devices → Mouse), a scroll reaches the window under the point, not OtherBench.
 - [ ] 42. With the mouse buttons swapped (left-handed), `left_click` is a primary click.
 - [ ] 43. Double-click a point where the first click opens something over it (a menu button): the second click is not sent.
 - [ ] 44. Notepad: Allow once, then `type` some text and `ctrl+s`; the Save dialog asks again as a file dialog.
-- [ ] 45. Answer a card in Grunt's window, then let a `type` run: the approved window comes forward and gets the text, or the action is refused. Nothing is ever typed into Grunt.
+- [ ] 45. Answer a card in OtherBench's window, then let a `type` run: the approved window comes forward and gets the text, or the action is refused. Nothing is ever typed into OtherBench.
 - [ ] 46. `type` a string with an accented letter, an emoji, a line break and a tab into Notepad, with a non-English keyboard layout active: the same characters arrive and no shortcut fires. Extended keys and the punctuation keys press the expected key on that layout.
 - [ ] 47. Hold Shift, then Ctrl, then the Windows key while the model clicks, types and presses a key: each is refused with "A modifier key is held; nothing was done.", and nothing is released for you. A modifier held while an elevated window is in front is still seen.
 - [ ] 48. An action into an elevated window that Windows blocks part way leaves no key down (check with the on-screen keyboard).
-- [ ] 49. Change the quick-chat hotkey to `Ctrl+Shift+Space`: a `key` action of `ctrl+shift+space` is refused. With the list withheld from the server (sent empty), the shell refuses it itself as its own shortcut ("Grunt never sends ctrl+shift+space: it's one of Grunt's own shortcuts. Nothing was pressed.").
+- [ ] 49. Change the quick-chat hotkey to `Ctrl+Shift+Space`: a `key` action of `ctrl+shift+space` is refused. With the list withheld from the server (sent empty), the shell refuses it itself as its own shortcut ("OtherBench never sends ctrl+shift+space: it's one of OtherBench's own shortcuts. Nothing was pressed.").
 
 ### Models
 
@@ -158,18 +158,18 @@ tools never do.
 - [ ] 51. A chat on a toolset model whose history has a `computer` call with a broken or non-member action (make one on a JSON-tool model, then switch the chat's profile): it replays as `invalid_computer_call` and the API accepts it. If it is refused, such a chat fails on toolset models until the profile changes.
 - [ ] 52. A chat that switches between a toolset model and a JSON-tool model mid-task carries on (the same stored calls replayed both ways).
 - [ ] 53. OpenAI (Responses API): the screenshot reaches the model inside the `function_call_output` as `input_image`, and the model can see it.
-- [ ] 54. Gemini 3: the screenshot reaches the model inside the function response; a chat with earlier tool calls replays (Grunt keeps no thought signatures, so the SDK puts in its stand-in). A Google model before Gemini 3 gets "[image omitted: this model can't take images]" in place of each screenshot and acts blind: check it says so rather than guessing.
+- [ ] 54. Gemini 3: the screenshot reaches the model inside the function response; a chat with earlier tool calls replays (OtherBench keeps no thought signatures, so the SDK puts in its stand-in). A Google model before Gemini 3 gets "[image omitted: this model can't take images]" in place of each screenshot and acts blind: check it says so rather than guessing.
 - [ ] 55. A tool result with no image (a refusal, a `wait`) reaches each provider as one string, with the screen-content line first.
 - [ ] 56. A model whose row has no vision flag gets "[image omitted: this model can't take images]" instead of screenshots.
-- [ ] 57. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__grunt_<hex>__computer`). Its screenshots reach Claude Code, but the thread shows only the text of each result (a known gap). Note any limit Claude Code puts on image results from an MCP tool.
+- [ ] 57. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__otherbench_<hex>__computer`). Its screenshots reach Claude Code, but the thread shows only the text of each result (a known gap). Note any limit Claude Code puts on image results from an MCP tool.
 - [ ] 58. Every screenshot result in the thread starts with the small "This is content from the computer's screen…" label, and the thread's tool-call line shows only the action ("computer: click at 512, 300"), never an app name.
 
 ### Failure modes
 
-- [ ] 59. Kill the node server mid-`key` action, press the stop hotkey mid-typing, and quit Grunt mid-action: no modifier is left down afterwards (check with the on-screen keyboard), and the act stops at its next check.
-- [ ] 60. Kill the node server: the tray tooltip and a notification say "Computer use is off until Grunt restarts.", and the tooltip stays after the web app updates its approval count. Computer use stays off until Grunt is restarted.
-- [ ] 61. Quit Grunt during a session with the main window busy: it quits in about 2 seconds, the stop hotkey and bar go, and the server hears `computer.stopped` with the reason "quit" (it may be lost if an act is mid-step: shutdown waits 2 seconds, an end's settle 3). Also quit at the instant a consent OK is clicked, and while an end runs: no hang.
-- [ ] 62. Stop takes effect within 4 seconds while the main window is busy (the server gives the shell 4 seconds to confirm an end); the bar may linger a moment after the banner goes. If an end is never confirmed, every start is refused until one is, or until Grunt restarts.
+- [ ] 59. Kill the node server mid-`key` action, press the stop hotkey mid-typing, and quit OtherBench mid-action: no modifier is left down afterwards (check with the on-screen keyboard), and the act stops at its next check.
+- [ ] 60. Kill the node server: the tray tooltip and a notification say "Computer use is off until OtherBench restarts.", and the tooltip stays after the web app updates its approval count. Computer use stays off until OtherBench is restarted.
+- [ ] 61. Quit OtherBench during a session with the main window busy: it quits in about 2 seconds, the stop hotkey and bar go, and the server hears `computer.stopped` with the reason "quit" (it may be lost if an act is mid-step: shutdown waits 2 seconds, an end's settle 3). Also quit at the instant a consent OK is clicked, and while an end runs: no hang.
+- [ ] 62. Stop takes effect within 4 seconds while the main window is busy (the server gives the shell 4 seconds to confirm an end); the bar may linger a moment after the banner goes. If an end is never confirmed, every start is refused until one is, or until OtherBench restarts.
 - [ ] 63. With a key stuck down (one the shell pressed and couldn't release), an end answers `{ ok: false }` rather than claiming a clean stop.
 - [ ] 64. An act on an app run from a share that has since gone away: an end still answers in under 4 seconds, and nothing is pressed after it.
 - [ ] 65. With a misbehaving low-level keyboard hook installed (one that is slow to pass keys on), an end still answers within 4 seconds.

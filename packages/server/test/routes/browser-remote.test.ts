@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import type { BrowserFrame, BrowserState } from '@grunt/tools/browser/manager.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import type { BrowserFrame, BrowserState } from '@otherbench/tools/browser/manager.js';
 import type { Hono } from 'hono';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
@@ -23,7 +23,7 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 
 const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null };
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
-const PUBLIC_HOST = 'grunt.test:4747';
+const PUBLIC_HOST = 'otherbench.test:4747';
 const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
 const ROUTES = [
   ['GET', '/api/chats/c1/browser'],
@@ -37,7 +37,7 @@ let browser: { [K in keyof BrowserPort]: ReturnType<typeof vi.fn> };
 let fx: RemoteFixture;
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-browser-remote-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-browser-remote-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);
@@ -93,16 +93,16 @@ async function finish(res: Response): Promise<void> {
 }
 
 describe("the model's browser routes in sign-in mode", () => {
-  it('answers all three with 401 "Sign in to Grunt." to anyone not signed in, and touches no browser', async () => {
+  it('answers all three with 401 "Sign in to OtherBench." to anyone not signed in, and touches no browser', async () => {
     const app = createApp(container, { remote: fx.remote });
     for (const [method, path] of ROUTES) {
       const res = await call(app, method, path);
       expect(res.status, `${method} ${path}`).toBe(401);
-      expect(await res.json(), `${method} ${path}`).toEqual({ error: 'Sign in to Grunt.' });
+      expect(await res.json(), `${method} ${path}`).toEqual({ error: 'Sign in to OtherBench.' });
     }
     // A made-up cookie and a bearer token (none is set in this mode) are no better.
     for (const [method, path] of ROUTES) {
-      expect((await call(app, method, path, { Cookie: '__Host-grunt_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })).status, `${method} ${path}`).toBe(401);
+      expect((await call(app, method, path, { Cookie: '__Host-otherbench_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })).status, `${method} ${path}`).toBe(401);
       expect((await call(app, method, path, { Authorization: 'Bearer guess' })).status, `${method} ${path}`).toBe(401);
     }
     untouched();
@@ -160,7 +160,7 @@ describe("the model's browser routes and the cross-site check", () => {
         { Origin: 'https://evil.example' },
         { Origin: 'null' },
         { 'Sec-Fetch-Site': 'same-site' },
-        // From this origin, but a form or a page load, not Grunt's own fetch.
+        // From this origin, but a form or a page load, not OtherBench's own fetch.
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'document' },
       ] as Record<string, string>[]) {
@@ -169,7 +169,7 @@ describe("the model's browser routes and the cross-site check", () => {
       }
     }
     expect(browser.close).not.toHaveBeenCalled();
-    // Grunt's own window, in both modes.
+    // OtherBench's own window, in both modes.
     expect((await call(open, 'DELETE', '/api/chats/c1/browser', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'empty' })).status).toBe(204);
     expect((await call(signedIn, 'DELETE', '/api/chats/c1/browser', { Cookie: cookie, Origin: PUBLIC_ORIGIN, 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'empty' })).status).toBe(204);
     expect(browser.close).toHaveBeenCalledTimes(2);
@@ -190,7 +190,7 @@ describe("the model's browser routes and the Host check", () => {
   it('answers only on the names the server is reached by: a rebinding Host gets 421 from all three, signed in or not', async () => {
     const app = createApp(container, { remote: fx.remote, hostCheckPort: () => 4747 });
     const cookie = await signIn(app, { Host: PUBLIC_HOST });
-    for (const host of ['evil.example:4747', 'evil.example', 'grunt.test:9999', 'grunt.test.evil.example:4747']) {
+    for (const host of ['evil.example:4747', 'evil.example', 'otherbench.test:9999', 'otherbench.test.evil.example:4747']) {
       for (const [method, path] of ROUTES) {
         const res = await call(app, method, path, { Host: host, Cookie: cookie });
         expect(res.status, `${host} ${method} ${path}`).toBe(421);

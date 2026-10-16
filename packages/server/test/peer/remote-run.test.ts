@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 async function machine(name: string, streamTimings?: StreamTimings): Promise<Machine> {
-  const dir = mkdtempSync(join(tmpdir(), `grunt-remote-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `otherbench-remote-${name}-`));
   const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), peerPort: 0, peerHosts: ['127.0.0.1'], ...(streamTimings ? { streamTimings } : {}) });
   container.store.nodes.rename(name);
   const app = createApp(container);
@@ -49,7 +49,7 @@ async function setup(streamTimings?: StreamTimings): Promise<{ pc: Machine; lapt
   const view = await pc.container.peers!.startPairing();
   await laptop.container.peers!.pairWith(view.addresses[0]!, view.code);
 
-  const folder = mkdtempSync(join(tmpdir(), 'grunt-pc-folder-'));
+  const folder = mkdtempSync(join(tmpdir(), 'otherbench-pc-folder-'));
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'note.txt'), 'only on the PC');
   cleanup.push(() => rmSync(folder, { recursive: true, force: true }));

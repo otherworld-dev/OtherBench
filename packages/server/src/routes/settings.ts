@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { AppSettings, Store } from '@grunt/core/ports/store.js';
+import type { AppSettings, Store } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
 import { optionalNullableString } from '../validation.js';
 

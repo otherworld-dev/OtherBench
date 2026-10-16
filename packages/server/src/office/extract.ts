@@ -7,7 +7,7 @@ import { readWord } from './word.js';
 const MAX_NOTES_CHARS = 3200;
 
 /**
- * An Office file's text (spec 2026-10-12-office-files §1), read with Grunt's
+ * An Office file's text (spec 2026-10-12-office-files §1), read with OtherBench's
  * own ZIP reader: no new dependencies, and no inflating past an entry's
  * stated size. The main part that's present decides the kind, so a misnamed
  * file is still read as what it is. Null when there's no Office main part or
@@ -27,7 +27,7 @@ export function extractOfficeText(data: Buffer, limits: Partial<OfficeLimits> = 
   // A reader that stopped with the text not yet past the cap says so itself (past the cap, attachment-text.ts's truncate() marks it).
   // The note stays inside the cap, by trimming the end of the text to make room, so truncate() never cuts it or marks the end twice.
   if (out.full && body.length <= caps.maxChars) {
-    const note = `[Grunt stopped reading here: the text reached its ${caps.maxChars}-character limit.]`;
+    const note = `[OtherBench stopped reading here: the text reached its ${caps.maxChars}-character limit.]`;
     body = body.slice(0, Math.max(0, caps.maxChars - note.length - 2)).trimEnd();
     stopNotes.push(note);
   }

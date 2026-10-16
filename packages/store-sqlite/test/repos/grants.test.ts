@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Grant } from '@grunt/core/ports/store.js';
+import type { Grant } from '@otherbench/core/ports/store.js';
 import { freshDb, seedChatChain } from '../helpers.js';
 import { SqliteGrantRepo } from '../../src/repos/grants.js';
 

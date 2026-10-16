@@ -1,8 +1,8 @@
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ApprovalRequest, UserAsk } from '@grunt/core/ports/tool-provider.js';
-import type { CanonMessage, MessageStatus, Part } from '@grunt/core/types/messages.js';
-import type { Usage } from '@grunt/core/types/usage.js';
-import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ApprovalRequest, UserAsk } from '@otherbench/core/ports/tool-provider.js';
+import type { CanonMessage, MessageStatus, Part } from '@otherbench/core/types/messages.js';
+import type { Usage } from '@otherbench/core/types/usage.js';
+import { appendDelta, applySubagentEvent, isSubagentEvent } from '@otherbench/core/domain/parts.js';
 
 /** Everything a single message accrues from its `TurnEvent`s that isn't part of `CanonMessage` itself. */
 export interface MessageExtras {

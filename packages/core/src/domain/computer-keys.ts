@@ -84,7 +84,7 @@ for (const digit of '0123456789') key(digit);
  */
 export const KEY_NAMES: readonly string[] = Object.freeze(keyNames);
 
-/** Names a Tauri accelerator uses that a `key` action doesn't (Grunt's own shortcuts are written that way). */
+/** Names a Tauri accelerator uses that a `key` action doesn't (OtherBench's own shortcuts are written that way). */
 const ACCELERATOR_ALIASES: ReadonlyMap<string, string> = new Map<string, string>([
   ['commandorcontrol', 'ctrl'],
   ['commandorctrl', 'ctrl'],
@@ -129,8 +129,8 @@ export const KEY_LIMITS = Object.freeze({ textLength: 64, keysPerCombo: 4, combo
 
 export const KEYS_WINDOWS_REASON = 'Key combinations with the Windows key are never sent.';
 /** What a `key` action is refused with while the shell has not reported its shortcuts (or the caller gave no list). */
-export const SHORTCUTS_UNKNOWN_REASON = "Grunt doesn't know the desktop app's shortcuts yet; no key was pressed.";
-const ONE_COMBO_REASON = 'Grunt sends one key combination per action. Send each one as its own action.';
+export const SHORTCUTS_UNKNOWN_REASON = "OtherBench doesn't know the desktop app's shortcuts yet; no key was pressed.";
+const ONE_COMBO_REASON = 'OtherBench sends one key combination per action. Send each one as its own action.';
 const NO_TEXT_REASON = 'A key action needs one key combination as its text, such as "ctrl+s" or "Return".';
 
 const refuse = (reason: string): ParsedKeys => ({ ok: false, reason });
@@ -162,7 +162,7 @@ function canonicalText(combo: Combo): string {
 }
 
 /**
- * One of Grunt's own global shortcuts as a canonical combination; `null` when
+ * One of OtherBench's own global shortcuts as a canonical combination; `null` when
  * it reserves nothing a `key` action could send (blank, or it needs a key that
  * is never sent anyway); `undefined` when it can't be read.
  */
@@ -180,7 +180,7 @@ function reservedCombo(entry: unknown): string | null | undefined {
 }
 
 /**
- * Reads the text of a `key` action. `reserved` is Grunt's own global
+ * Reads the text of a `key` action. `reserved` is OtherBench's own global
  * shortcuts as the shell registered them (`ComputerDriver.reservedKeys()`):
  * the model may not press them. It is a required argument and only an array
  * is a list: `[]` says there are none to hold back (the broker and the
@@ -210,14 +210,14 @@ export function parseKeys(text: unknown, reserved: unknown): ParsedKeys {
   }
   for (const token of tokens) {
     if (!/^[A-Za-z0-9_]+$/.test(token)) {
-      return refuse(token === '' ? `"${cardLine(trimmed, 40)}" isn't a key combination Grunt can read.` : `"${cardLine(token, 40)}" isn't a key name Grunt knows.`);
+      return refuse(token === '' ? `"${cardLine(trimmed, 40)}" isn't a key combination OtherBench can read.` : `"${cardLine(token, 40)}" isn't a key name OtherBench knows.`);
     }
   }
   const combo = comboOf(tokens);
-  if ('unknown' in combo) return refuse(`"${combo.unknown}" isn't a key name Grunt knows.`);
+  if ('unknown' in combo) return refuse(`"${combo.unknown}" isn't a key name OtherBench knows.`);
   if (combo.windows) return refuse(KEYS_WINDOWS_REASON);
-  if (combo.never !== null) return refuse(`Grunt never sends ${combo.never}.`);
-  if (combo.keys.length === 0) return refuse('Grunt never sends a modifier key on its own. Add the key it goes with, as in "ctrl+s".');
+  if (combo.never !== null) return refuse(`OtherBench never sends ${combo.never}.`);
+  if (combo.keys.length === 0) return refuse('OtherBench never sends a modifier key on its own. Add the key it goes with, as in "ctrl+s".');
   if (combo.keys.length > 1) return refuse('A key combination is one key with its modifiers, as in "ctrl+shift+s".');
 
   const canonical = canonicalText(combo);
@@ -225,29 +225,29 @@ export function parseKeys(text: unknown, reserved: unknown): ParsedKeys {
   const ctrl = combo.modifiers.has('ctrl');
   const alt = combo.modifiers.has('alt');
   if (ctrl && alt) {
-    return refuse(`Grunt never sends ${canonical}: ctrl+alt combinations belong to Windows and to global shortcuts, not to the app.`);
+    return refuse(`OtherBench never sends ${canonical}: ctrl+alt combinations belong to Windows and to global shortcuts, not to the app.`);
   }
   // Start (ctrl+escape), Task Manager (ctrl+shift+escape), the window switchers
   // (alt+tab, alt+escape), the window menu (alt+space), and alt with a function
   // key: alt+f4 closes the window, after which the keyboard is some other app's.
   const functionKey = pressed !== undefined && /^f[0-9]+$/.test(pressed);
   if ((pressed === 'escape' && (ctrl || alt)) || (alt && (pressed === 'tab' || pressed === 'space' || functionKey))) {
-    return refuse(`Grunt never sends ${canonical}: it leaves the app this action was approved for.`);
+    return refuse(`OtherBench never sends ${canonical}: it leaves the app this action was approved for.`);
   }
 
   if (!Array.isArray(reserved)) return refuse(SHORTCUTS_UNKNOWN_REASON);
   for (const entry of reserved as readonly unknown[]) {
     const held = reservedCombo(entry);
     if (held === undefined) {
-      return refuse(`Grunt couldn't read one of its own shortcuts ("${cardLine(entry, 40)}"), so it sends no key combinations until that is fixed.`);
+      return refuse(`OtherBench couldn't read one of its own shortcuts ("${cardLine(entry, 40)}"), so it sends no key combinations until that is fixed.`);
     }
-    if (held === canonical) return refuse(`Grunt never sends ${canonical}: it's one of Grunt's own shortcuts.`);
+    if (held === canonical) return refuse(`OtherBench never sends ${canonical}: it's one of OtherBench's own shortcuts.`);
   }
   return { ok: true, combos: [[...KEY_MODIFIERS.filter((m) => combo.modifiers.has(m)), ...combo.keys]], text: canonical };
 }
 
 /**
- * Whether `text` is one key combination a `key` action could send, Grunt's own
+ * Whether `text` is one key combination a `key` action could send, OtherBench's own
  * shortcuts aside (`[]`: nothing held back; this only asks what the text is).
  */
 export function isKeyCombination(text: unknown): boolean {

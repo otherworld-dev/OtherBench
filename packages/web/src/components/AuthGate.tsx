@@ -43,7 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }): JSX.Element | n
 function TokenNeeded(): JSX.Element {
   return (
     <div className="mx-auto mt-16 max-w-md px-4 font-sans text-sm">
-      <h1 className="label-caps mb-2 text-lg">Grunt</h1>
+      <h1 className="label-caps mb-2 text-lg">OtherBench</h1>
       <p role="alert">This server needs a token. Use the desktop app, or turn on sign-in (--public-url).</p>
     </div>
   );

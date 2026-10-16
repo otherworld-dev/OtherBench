@@ -1,7 +1,7 @@
 /**
  * Live artifacts (spec 2026-10-12-live-artifacts): the in-memory cache, the
  * per-artifact rate limits and the shaping of a tool's result for the page.
- * GruntToolProvider.runLiveCall uses all three, only after the broker has
+ * OtherBenchToolProvider.runLiveCall uses all three, only after the broker has
  * allowed a call. Nothing here touches disk.
  */
 

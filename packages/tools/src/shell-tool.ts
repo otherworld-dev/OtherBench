@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 
 const execFileAsync = promisify(execFile);
 

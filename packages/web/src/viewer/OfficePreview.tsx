@@ -9,13 +9,13 @@ import {
   type SheetSpec,
   type SlideColumn,
   type SlideSpec,
-} from '@grunt/core/domain/office-spec.js';
+} from '@otherbench/core/domain/office-spec.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 
 /**
  * Office artifacts drawn from their source (spec 2026-10-12-office-files §5),
  * not from the made file: close to the file, not exact, and formulas show as
- * formulas because Grunt doesn't work them out. Everything is React text: no
+ * formulas because OtherBench doesn't work them out. Everything is React text: no
  * HTML from the source, no links or images in a sheet, no iframe.
  */
 
@@ -296,7 +296,7 @@ function SlideBody({ slide, accent }: { slide: SlideSpec; accent: string }): JSX
   }
 }
 
-/** A deck drawn as 16:9 cards, laid out like the .pptx Grunt makes. Memoized on content: a 200-slide deck must not redraw on the viewer's unrelated state changes. */
+/** A deck drawn as 16:9 cards, laid out like the .pptx OtherBench makes. Memoized on content: a 200-slide deck must not redraw on the viewer's unrelated state changes. */
 export const PresentationPreview = memo(function PresentationPreview({ content }: { content: string }): JSX.Element {
   const parsed = useMemo(() => parsePresentation(content), [content]);
   if (!parsed.ok) return <Unreadable error={parsed.error} />;

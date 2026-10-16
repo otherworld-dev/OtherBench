@@ -1,9 +1,9 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
-import { useGruntStore } from '../../state/store.js';
+import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { ProfilesPanel } from './ProfilesPanel.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -95,7 +95,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 }
 
 function reset(): void {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   mockedCreate.mockReset();
   mockedPatch.mockReset();
   mockedDelete.mockReset();
@@ -106,8 +106,8 @@ function reset(): void {
 
 describe('ProfilesPanel', () => {
   it("saves the Artifacts switch in the profile's tools, on by default", async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -131,9 +131,9 @@ describe('ProfilesPanel', () => {
     ['cannot be reached', () => mockedComputerStatus.mockRejectedValue(new TypeError('Failed to fetch'))],
   ])('hides the Computer use switch where the server %s, and keeps a profile’s stored value', async (_label, arrange) => {
     arrange();
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
     mockedPatch.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -148,8 +148,8 @@ describe('ProfilesPanel', () => {
 
   it('shows the Computer use switch, off by default, with its hint, when the server can offer it', async () => {
     mockedComputerStatus.mockResolvedValue({ computerUse: true });
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -169,9 +169,9 @@ describe('ProfilesPanel', () => {
 
   it('shows a profile with computer use on as checked, and turning it off saves false', async () => {
     mockedComputerStatus.mockResolvedValue({ computerUse: true });
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
     mockedPatch.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -186,8 +186,8 @@ describe('ProfilesPanel', () => {
   });
 
   it("saves the Search past chats switch in the profile's tools, on by default", async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -205,8 +205,8 @@ describe('ProfilesPanel', () => {
   });
 
   it("saves the Sub-agents switch for an API profile, off by default", async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -225,9 +225,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('hides the Sub-agents switch for a Claude Code profile', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
-    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
-    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useOtherBenchStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
     const user = userEvent.setup();
     render(<ProfilesPanel />);
     await user.click(screen.getByTestId('profile-row-profile-1'));
@@ -237,9 +237,9 @@ describe('ProfilesPanel', () => {
 
   it('can turn sub-agents off again for a profile that had them on', async () => {
     const profile = makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true } });
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([profile]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([profile]);
     mockedPatch.mockResolvedValue(profile);
     const user = userEvent.setup();
     render(<ProfilesPanel />);
@@ -255,9 +255,9 @@ describe('ProfilesPanel', () => {
   afterEach(cleanup);
 
   it('saves the Use global memory switch, on by default, and shows it off for a profile that has it off', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ useGlobalMemory: false })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ useGlobalMemory: false })]);
     mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
     const user = userEvent.setup();
 
@@ -278,8 +278,8 @@ describe('ProfilesPanel', () => {
   });
 
   it('creates a new profile with connection, model and tool policy', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile', name: 'Fast local' }));
     const user = userEvent.setup();
 
@@ -306,8 +306,8 @@ describe('ProfilesPanel', () => {
   });
 
   it('saves the Browser switch, off by default, and its blocked sites one per line', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -330,9 +330,9 @@ describe('ProfilesPanel', () => {
   });
 
   it("pre-fills Browser and the blocked sites when editing, and doesn't send the hidden box once Browser is unticked", async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
       makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] } }),
     ]);
     mockedPatch.mockResolvedValue(makeProfile());
@@ -356,8 +356,8 @@ describe('ProfilesPanel', () => {
   });
 
   it('shows why the server refused a blocked site (400), in the form', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     const refusal = '"https://ads.test" isn\'t a website name. Use a name like example.com, one per line.';
     mockedCreate.mockRejectedValue(new ApiError(400, refusal));
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -380,7 +380,7 @@ describe('ProfilesPanel', () => {
   });
 
   it('requires a model to be chosen before saving', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
     // No models discovered yet -- the model select is empty/disabled.
     const user = userEvent.setup();
 
@@ -397,8 +397,8 @@ describe('ProfilesPanel', () => {
   });
 
   it('numeric params are optional -- blank omits the key, a non-number is rejected', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     const user = userEvent.setup();
 
     render(<ProfilesPanel />);
@@ -414,8 +414,8 @@ describe('ProfilesPanel', () => {
   });
 
   it('leaving every param field blank sends an empty params object', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile());
     const user = userEvent.setup();
 
@@ -430,9 +430,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('editing an existing profile pre-fills its fields (name, params, tool policy)', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
       makeProfile({
         name: 'Careful reviewer',
         params: { temperature: 0.2, topP: 0.9 },
@@ -455,9 +455,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('resetting the model when switching to a connection with no shared models', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Ollama' }), makeConnection({ id: 'conn-2', name: 'OpenAI' })]);
-    useGruntStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1', modelId: 'llama3.2' })]);
-    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'conn-1', modelId: 'llama3.2' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Ollama' }), makeConnection({ id: 'conn-2', name: 'OpenAI' })]);
+    useOtherBenchStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1', modelId: 'llama3.2' })]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ connectionId: 'conn-1', modelId: 'llama3.2' })]);
     const user = userEvent.setup();
 
     render(<ProfilesPanel />);
@@ -471,9 +471,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('deleting a profile confirms first and warns that dependent chats are deleted too', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -492,10 +492,10 @@ describe('ProfilesPanel', () => {
   // Finding 9 regression: put the real dependent-chat count in the
   // confirmation, the same as ConnectionsPanel's delete does.
   it('the delete confirmation states the REAL dependent chat count', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
-    useGruntStore.getState().setChats([
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
+    useOtherBenchStore.getState().setChats([
       { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
       { id: 'chat-2', title: 'B', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
       { id: 'chat-3', title: 'C', profileId: 'some-other-profile', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
@@ -516,17 +516,17 @@ describe('ProfilesPanel', () => {
   });
 
   it('with paired machines, the delete confirmation says their copies go too, and offers archiving; a profile bound to another machine says so', async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       machines: {
         self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
         listening: { running: true, addresses: [] },
         peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
       },
     });
-    useGruntStore.getState().setConnections([makeConnection({ availability: 'node-pc' })]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Local Llama' })]);
-    useGruntStore.getState().setChats([
+    useOtherBenchStore.getState().setConnections([makeConnection({ availability: 'node-pc' })]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Local Llama' })]);
+    useOtherBenchStore.getState().setChats([
       { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
     ]);
     mockedDelete.mockResolvedValue(undefined);
@@ -541,13 +541,13 @@ describe('ProfilesPanel', () => {
     await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
     expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/Paired machines delete them too.*Archive the profile instead/);
     confirmSpy.mockRestore();
-    useGruntStore.setState({ machines: null });
+    useOtherBenchStore.setState({ machines: null });
   });
 
   it('the delete confirmation omits the chat clause when no chat depends on this profile', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Lonely' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Lonely' })]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -563,9 +563,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('surfaces the server error instead of throwing when delete is refused', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
-    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1' })]);
     mockedDelete.mockRejectedValue(new Error('nope'));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -581,8 +581,8 @@ describe('ProfilesPanel', () => {
 
   describe('MCP server allowlist (toolPolicy.mcpServerIds)', () => {
     it('shows an honest empty state when no MCP servers are configured', async () => {
-      useGruntStore.getState().setConnections([makeConnection()]);
-      useGruntStore.getState().setModels([makeModel()]);
+      useOtherBenchStore.getState().setConnections([makeConnection()]);
+      useOtherBenchStore.getState().setModels([makeModel()]);
       const user = userEvent.setup();
 
       render(<ProfilesPanel />);
@@ -592,8 +592,8 @@ describe('ProfilesPanel', () => {
     });
 
     it('lists configured MCP servers, including disabled ones, and includes checked ids on save', async () => {
-      useGruntStore.getState().setConnections([makeConnection()]);
-      useGruntStore.getState().setModels([makeModel()]);
+      useOtherBenchStore.getState().setConnections([makeConnection()]);
+      useOtherBenchStore.getState().setModels([makeModel()]);
       mockedMcpList.mockResolvedValue([
         makeMcpServerHealth({ id: 'mcp-1', name: 'Filesystem MCP', enabled: true }),
         makeMcpServerHealth({ id: 'mcp-2', name: 'Disabled Server', enabled: false }),
@@ -627,9 +627,9 @@ describe('ProfilesPanel', () => {
     // access-control surface. The stored mcpServerIds must stay untouched
     // either way (nothing here widens or narrows the actual policy).
     it('shows an error state, not the "no servers configured" empty state, when the MCP server list fails to load', async () => {
-      useGruntStore.getState().setConnections([makeConnection()]);
-      useGruntStore.getState().setModels([makeModel()]);
-      useGruntStore.getState().setProfiles([
+      useOtherBenchStore.getState().setConnections([makeConnection()]);
+      useOtherBenchStore.getState().setModels([makeModel()]);
+      useOtherBenchStore.getState().setProfiles([
         makeProfile({ id: 'profile-1', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['mcp-1', 'mcp-2'], approvalMode: 'always_ask' } }),
       ]);
       mockedMcpList.mockRejectedValue(new Error('network down'));
@@ -648,9 +648,9 @@ describe('ProfilesPanel', () => {
     });
 
     it('pre-checks the servers already in an existing profile\'s allowlist, and unchecking one removes it on save', async () => {
-      useGruntStore.getState().setConnections([makeConnection()]);
-      useGruntStore.getState().setModels([makeModel()]);
-      useGruntStore.getState().setProfiles([
+      useOtherBenchStore.getState().setConnections([makeConnection()]);
+      useOtherBenchStore.getState().setModels([makeModel()]);
+      useOtherBenchStore.getState().setProfiles([
         makeProfile({ id: 'profile-1', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['mcp-1', 'mcp-2'], approvalMode: 'always_ask' } }),
       ]);
       mockedMcpList.mockResolvedValue([
@@ -675,9 +675,9 @@ describe('ProfilesPanel', () => {
   });
 
   it('shows Claude Code tool controls and hides sampling params for a claude_code connection', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
-    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
-    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useOtherBenchStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
     mockedMcpList.mockResolvedValue([makeMcpServerHealth()]);
     mockedPatch.mockResolvedValue(makeProfile({ connectionId: 'cc', modelId: 'sonnet' }));
     const user = userEvent.setup();
@@ -690,9 +690,9 @@ describe('ProfilesPanel', () => {
     expect(screen.getByLabelText('Bash')).toBeInTheDocument();
     expect(screen.getByLabelText('Web tools')).toBeInTheDocument();
     expect(screen.getByLabelText('MCP servers from your Claude Code config (folder chats only)')).toBeInTheDocument();
-    // Grunt's own MCP servers are relayed into Claude Code chats, so the checklist is there too.
+    // OtherBench's own MCP servers are relayed into Claude Code chats, so the checklist is there too.
     expect(await screen.findByTestId('mcp-server-allowlist')).toBeInTheDocument();
-    expect(screen.getByText('MCP servers (from Grunt)')).toBeInTheDocument();
+    expect(screen.getByText('MCP servers (from OtherBench)')).toBeInTheDocument();
 
     await user.click(screen.getByLabelText('Web tools'));
     await user.click(screen.getByRole('button', { name: /^save$/i }));
@@ -711,8 +711,8 @@ describe('ProfilesPanel: where the shell runs', () => {
   afterEach(cleanup);
 
   async function newProfileWithShell(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
     render(<ProfilesPanel />);
     await user.click(screen.getByRole('button', { name: '+ New profile' }));
@@ -754,10 +754,10 @@ describe('ProfilesPanel: where the shell runs', () => {
   });
 
   it('"Reset to defaults" on a profile with its own list sends null', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     const own = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
-    useGruntStore.getState().setProfiles([own]);
+    useOtherBenchStore.getState().setProfiles([own]);
     mockedPatch.mockResolvedValue(own);
     const user = userEvent.setup();
     render(<ProfilesPanel />);
@@ -769,10 +769,10 @@ describe('ProfilesPanel: where the shell runs', () => {
   });
 
   it('switching a sandboxed profile back to this machine saves shellRuns "host"', async () => {
-    useGruntStore.getState().setConnections([makeConnection()]);
-    useGruntStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
     const sandboxed = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
-    useGruntStore.getState().setProfiles([sandboxed]);
+    useOtherBenchStore.getState().setProfiles([sandboxed]);
     mockedPatch.mockResolvedValue(sandboxed);
     const user = userEvent.setup();
     render(<ProfilesPanel />);
@@ -804,8 +804,8 @@ describe('ProfilesPanel: where the shell runs', () => {
   });
 
   it('a Claude Code profile can run its shell in the sandbox too', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
-    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useOtherBenchStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
     mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
     const user = userEvent.setup();
     render(<ProfilesPanel />);

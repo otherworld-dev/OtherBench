@@ -4,7 +4,7 @@ import { useAuthStore } from '../state/auth.js';
 import { serverUrl } from '../state/transport.js';
 
 /**
- * Sign in to a Grunt reached from another device (spec
+ * Sign in to an OtherBench reached from another device (spec
  * 2026-10-12-remote-access §5). Full page when signed out at load; over the
  * app (`overlay`) when a session ends while it's open, so an unsent message
  * survives. Works at 390 px wide.
@@ -25,7 +25,7 @@ export function LoginView({ overlay = false }: { overlay?: boolean }): JSX.Eleme
     try {
       await signIn(password, remember);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reach Grunt. Check the connection and try again.");
+      setError(err instanceof ApiError ? err.message : "Couldn't reach OtherBench. Check the connection and try again.");
       setPassword('');
     } finally {
       setBusy(false);
@@ -37,11 +37,11 @@ export function LoginView({ overlay = false }: { overlay?: boolean }): JSX.Eleme
       data-testid="login-view"
       className={`${overlay ? 'fixed inset-0 z-50' : 'min-h-screen'} flex items-center justify-center bg-[var(--bg)] px-4 font-sans text-[var(--text)]`}
     >
-      <form onSubmit={(e) => void submit(e)} aria-label="Sign in to Grunt" className="w-full max-w-sm space-y-4">
-        <h1 className="label-caps text-lg">Grunt</h1>
+      <form onSubmit={(e) => void submit(e)} aria-label="Sign in to OtherBench" className="w-full max-w-sm space-y-4">
+        <h1 className="label-caps text-lg">OtherBench</h1>
         {overlay && <p className="text-sm text-[var(--text-muted)]">You've been signed out. Sign in again to carry on; nothing you typed is lost.</p>}
         {/* Password managers save a password against a user name; there's only ever this one. */}
-        <input type="text" name="username" autoComplete="username" value="grunt" readOnly hidden />
+        <input type="text" name="username" autoComplete="username" value="otherbench" readOnly hidden />
         <label className="block text-sm">
           Password
           <input
@@ -68,8 +68,8 @@ export function LoginView({ overlay = false }: { overlay?: boolean }): JSX.Eleme
         </button>
         {caDownload && (
           <p className="text-xs text-[var(--text-muted)]">
-            <a href={serverUrl('/grunt-ca.crt')} download className="underline">
-              Download Grunt's certificate
+            <a href={serverUrl('/otherbench-ca.crt')} download className="underline">
+              Download OtherBench's certificate
             </a>
             . Check its fingerprint against the one the server printed when it started.
           </p>

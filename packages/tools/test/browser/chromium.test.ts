@@ -4,8 +4,8 @@ import { browserAttempts, ChromiumSessions, CHROMIUM_ARGS, WEBRTC_SWITCHES } fro
 import { BrowserUnavailableError } from '../../src/browser/session.js';
 
 describe('browserAttempts', () => {
-  it("tries GRUNT_BROWSER_PATH alone when it's set", () => {
-    expect(browserAttempts({ GRUNT_BROWSER_PATH: ' C:\\Edge\\msedge.exe ' })).toEqual([{ name: 'C:\\Edge\\msedge.exe', options: { executablePath: 'C:\\Edge\\msedge.exe' } }]);
+  it("tries OTHERBENCH_BROWSER_PATH alone when it's set", () => {
+    expect(browserAttempts({ OTHERBENCH_BROWSER_PATH: ' C:\\Edge\\msedge.exe ' })).toEqual([{ name: 'C:\\Edge\\msedge.exe', options: { executablePath: 'C:\\Edge\\msedge.exe' } }]);
   });
 
   it("otherwise tries Playwright's Chromium, then Chrome, then Edge", () => {

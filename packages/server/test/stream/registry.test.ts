@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { FakeToolProvider, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Connection, ModelInfo, ResolvedProfile } from '@grunt/core/types/config.js';
-import { applySubagentEvent, type SubagentEvent } from '@grunt/core/domain/parts.js';
-import type { Part } from '@grunt/core/types/messages.js';
+import { FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { TurnRunner, type TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Connection, ModelInfo, ResolvedProfile } from '@otherbench/core/types/config.js';
+import { applySubagentEvent, type SubagentEvent } from '@otherbench/core/domain/parts.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------

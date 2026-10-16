@@ -3,7 +3,7 @@ import type { WslResult } from '../src/wsl.js';
 import { BASE_PACKAGES, distroNames, installExtraPackages, NODE_URL, parseWslVersion, runSetup } from '../src/setup.js';
 import { FakeWsl, happyWsl, STAGING, type WslCall } from './helpers.js';
 
-const RESOURCES = 'E:\\Grunt\\packages\\sandbox\\resources';
+const RESOURCES = 'E:\\OtherBench\\packages\\sandbox\\resources';
 
 async function setUp(wsl: FakeWsl, opts: { packages?: string[]; selfTest?: () => Promise<void> } = {}) {
   const log: string[] = [];
@@ -27,29 +27,29 @@ describe('runSetup', () => {
       expect(i, line).toBeGreaterThanOrEqual(0);
       return i;
     };
-    expect(at('wsl --version')).toBeLessThan(at('wsl --install Ubuntu-24.04 --name grunt-sandbox --no-launch'));
-    expect(at(`root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro`)).toBeLessThan(at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/wsl.conf /etc/wsl.conf'));
-    expect(at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/wsl.conf /etc/wsl.conf')).toBeLessThan(at('wsl --terminate grunt-sandbox'));
+    expect(at('wsl --version')).toBeLessThan(at('wsl --install Ubuntu-24.04 --name otherbench-sandbox --no-launch'));
+    expect(at(`root: /bin/mount -t drvfs ${RESOURCES} /mnt/otherbench-setup -o ro`)).toBeLessThan(at('root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/wsl.conf /etc/wsl.conf'));
+    expect(at('root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/wsl.conf /etc/wsl.conf')).toBeLessThan(at('wsl --terminate otherbench-sandbox'));
     at(`root: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q ${[...BASE_PACKAGES, 'ffmpeg'].join(' ')}`);
-    at('root: /usr/sbin/useradd -m -s /bin/bash grunt');
-    // Created by the grunt user, so a link grunt planted at `chats` is never followed by a root chown.
-    at('grunt: /bin/mkdir -p -m 0700 /home/grunt/chats');
-    expect(c.filter((line) => line.startsWith('root:') && line.includes('/home/grunt'))).toEqual([]);
+    at('root: /usr/sbin/useradd -m -s /bin/bash otherbench');
+    // Created by the otherbench user, so a link otherbench planted at `chats` is never followed by a root chown.
+    at('otherbench: /bin/mkdir -p -m 0700 /home/otherbench/chats');
+    expect(c.filter((line) => line.startsWith('root:') && line.includes('/home/otherbench'))).toEqual([]);
     // Everything root downloads, unpacks and installs happens in a private build folder under /opt, never in /tmp or in the old install.
     const tree = `${STAGING}/tree`;
-    const mktemp = at('root: /usr/bin/mktemp -d /opt/.grunt-sandbox.XXXXXX');
-    expect(at('root: /usr/bin/find /opt -mindepth 1 -maxdepth 1 -name .grunt-sandbox.* -exec /bin/rm -rf {} +')).toBeLessThan(mktemp);
+    const mktemp = at('root: /usr/bin/mktemp -d /opt/.otherbench-sandbox.XXXXXX');
+    expect(at('root: /usr/bin/find /opt -mindepth 1 -maxdepth 1 -name .otherbench-sandbox.* -exec /bin/rm -rf {} +')).toBeLessThan(mktemp);
     const curl = at(`root: /usr/bin/curl -fsSL --proto =https --tlsv1.2 --retry 3 -o ${STAGING}/node.tar.xz ${NODE_URL}`);
     expect(mktemp).toBeLessThan(curl);
     const sha = at(`root: /usr/bin/sha256sum ${STAGING}/node.tar.xz`);
     const tar = at(`root: /bin/tar --no-same-owner -xJf ${STAGING}/node.tar.xz -C ${tree}/node --strip-components=1`);
     expect(curl).toBeLessThan(sha);
     expect(sha).toBeLessThan(tar);
-    const copy = at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent.mjs ${tree}/agent.mjs`);
-    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent-core.mjs ${tree}/agent-core.mjs`);
-    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/package-lock.json ${tree}/package-lock.json`);
-    at(`root: /usr/bin/install -o root -g root -m 0755 /mnt/grunt-setup/mount.sh ${tree}/mount.sh`);
-    at('root: /bin/rm -rf /opt/grunt-probe');
+    const copy = at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/agent.mjs ${tree}/agent.mjs`);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/agent-core.mjs ${tree}/agent-core.mjs`);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/package-lock.json ${tree}/package-lock.json`);
+    at(`root: /usr/bin/install -o root -g root -m 0755 /mnt/otherbench-setup/mount.sh ${tree}/mount.sh`);
+    at('root: /bin/rm -rf /opt/otherbench-probe');
     const npm = at(
       `root: /usr/bin/env PATH=${tree}/node/bin:/usr/bin:/bin HOME=${STAGING} ${tree}/node/bin/npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache ${STAGING}/npm-cache --prefix ${tree}`
     );
@@ -59,8 +59,8 @@ describe('runSetup', () => {
     const lock = at(`root: /bin/chmod -R go-w,a+rX ${tree}`);
     // The tree is checked before it is swapped in, and again where it ends up.
     const before = c.findIndex((line) => line.startsWith(`root: /usr/bin/find ${tree} `));
-    const swap = [at('root: /usr/bin/test -e /opt/grunt-sandbox'), at(`root: /bin/mv -T ${tree} /opt/grunt-sandbox`), at('root: /bin/chmod 0755 /opt/grunt-sandbox')];
-    const verify = c.findIndex((line) => line.startsWith('root: /usr/bin/find /opt/grunt-sandbox '));
+    const swap = [at('root: /usr/bin/test -e /opt/otherbench-sandbox'), at(`root: /bin/mv -T ${tree} /opt/otherbench-sandbox`), at('root: /bin/chmod 0755 /opt/otherbench-sandbox')];
+    const verify = c.findIndex((line) => line.startsWith('root: /usr/bin/find /opt/otherbench-sandbox '));
     const cleanup = c.lastIndexOf(`root: /bin/rm -rf ${STAGING}`);
     const order = [npm, lock, before, ...swap, verify, cleanup];
     expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -68,19 +68,19 @@ describe('runSetup', () => {
     expect(before).toBeGreaterThan(0);
     expect(verify).toBeGreaterThan(0);
     // Nothing there to set aside on a fresh machine, and nothing deleted outside the build folder.
-    expect(c.some((line) => line.startsWith('root: /bin/mv -T /opt/grunt-sandbox '))).toBe(false);
-    expect(c.some((line) => line === 'root: /bin/rm -rf /opt/grunt-sandbox')).toBe(false);
+    expect(c.some((line) => line.startsWith('root: /bin/mv -T /opt/otherbench-sandbox '))).toBe(false);
+    expect(c.some((line) => line === 'root: /bin/rm -rf /opt/otherbench-sandbox')).toBe(false);
     expect(c.some((line) => line.includes('chown'))).toBe(false);
-    expect(c.some((line) => line.includes('/tmp/grunt'))).toBe(false);
+    expect(c.some((line) => line.includes('/tmp/otherbench'))).toBe(false);
     // The resource folder is mounted before it is read and unmounted after, each time it is used: for wsl.conf,
     // for the interop check after the restart, and for the install.
-    const mounts = c.flatMap((line, i) => (line === `root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro` ? [i] : []));
-    const unmounts = c.flatMap((line, i) => (line === 'root: /bin/umount /mnt/grunt-setup' ? [i] : []));
+    const mounts = c.flatMap((line, i) => (line === `root: /bin/mount -t drvfs ${RESOURCES} /mnt/otherbench-setup -o ro` ? [i] : []));
+    const unmounts = c.flatMap((line, i) => (line === 'root: /bin/umount /mnt/otherbench-setup' ? [i] : []));
     expect(mounts).toHaveLength(3);
     for (const m of mounts) expect(unmounts.some((u) => u > m)).toBe(true);
     expect(unmounts.filter((u) => u < mounts[0]!).length).toBeGreaterThan(0);
     expect(unmounts.at(-1)).toBeGreaterThan(mounts.at(-1)!);
-    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/interop-check.sh ${tree}/interop-check.sh`);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/otherbench-setup/interop-check.sh ${tree}/interop-check.sh`);
     expect(selfTest).toHaveBeenCalledTimes(1);
     expect(log).toEqual(expect.arrayContaining(['▶ Check WSL', '✔ Check WSL', '▶ Self-test', '✔ Self-test']));
     // Nothing is ever run through a Linux shell.
@@ -89,23 +89,23 @@ describe('runSetup', () => {
 
   it('repairs an existing distro: no new distro, no new user, and the install is rebuilt rather than reused', async () => {
     const wsl = happyWsl({
-      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      distros: 'Ubuntu\r\notherbench-sandbox\r\n',
       user: true,
       node: true,
-      override: (c) => (isProgram(c, '/usr/bin/test', '/opt/grunt-sandbox') ? { code: 0 } : undefined),
+      override: (c) => (isProgram(c, '/usr/bin/test', '/opt/otherbench-sandbox') ? { code: 0 } : undefined),
     });
     const { outcome, log } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     expect(wsl.commands.some((l) => l.startsWith('wsl --install'))).toBe(false);
     expect(wsl.commands.some((l) => l.includes('useradd'))).toBe(false);
-    // An existing /opt/grunt-sandbox may have been written by the grunt user: it is replaced, never trusted.
+    // An existing /opt/otherbench-sandbox may have been written by the otherbench user: it is replaced, never trusted.
     expect(wsl.commands.some((l) => l.includes('/usr/bin/curl'))).toBe(true);
     // ... set aside inside the build folder (removed with it), not deleted up front.
-    const aside = wsl.commands.indexOf(`root: /bin/mv -T /opt/grunt-sandbox ${STAGING}/old`);
+    const aside = wsl.commands.indexOf(`root: /bin/mv -T /opt/otherbench-sandbox ${STAGING}/old`);
     expect(aside).toBeGreaterThan(0);
-    expect(aside).toBeLessThan(wsl.commands.indexOf(`root: /bin/mv -T ${STAGING}/tree /opt/grunt-sandbox`));
-    expect(wsl.commands).not.toContain('root: /bin/rm -rf /opt/grunt-sandbox');
-    expect(log).toContain('grunt-sandbox already exists: repairing it.');
+    expect(aside).toBeLessThan(wsl.commands.indexOf(`root: /bin/mv -T ${STAGING}/tree /opt/otherbench-sandbox`));
+    expect(wsl.commands).not.toContain('root: /bin/rm -rf /opt/otherbench-sandbox');
+    expect(log).toContain('otherbench-sandbox already exists: repairing it.');
   });
 
   it('stops at "Check WSL" with how to install it when WSL is missing', async () => {
@@ -126,7 +126,7 @@ describe('runSetup', () => {
     const { outcome, log } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     const at = wsl.commands.indexOf(DRIVES);
-    expect(at).toBeGreaterThan(wsl.commands.indexOf('root: /bin/sh /mnt/grunt-setup/interop-check.sh'));
+    expect(at).toBeGreaterThan(wsl.commands.indexOf('root: /bin/sh /mnt/otherbench-setup/interop-check.sh'));
     expect(at).toBeLessThan(wsl.commands.findIndex((line) => line.includes('apt-get update')));
     expect(log).toContain("Made /mnt/c, /mnt/e writable by root only (left by WSL's first start).");
     // Nothing to close: nothing said.
@@ -139,19 +139,19 @@ describe('runSetup', () => {
     expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('Operation not permitted') });
   });
 
-  const interopCheck = (c: WslCall): boolean => isProgram(c, '/bin/sh', '/mnt/grunt-setup/interop-check.sh');
+  const interopCheck = (c: WslCall): boolean => isProgram(c, '/bin/sh', '/mnt/otherbench-setup/interop-check.sh');
 
   it('tries to start a Windows program after the restart, as root, from the mounted resources', async () => {
     const wsl = happyWsl();
     const { outcome } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     const c = wsl.commands;
-    const check = c.indexOf('root: /bin/sh /mnt/grunt-setup/interop-check.sh');
-    expect(check).toBeGreaterThan(c.indexOf('wsl --terminate grunt-sandbox'));
+    const check = c.indexOf('root: /bin/sh /mnt/otherbench-setup/interop-check.sh');
+    expect(check).toBeGreaterThan(c.indexOf('wsl --terminate otherbench-sandbox'));
     // The resources are mounted again after the restart (the restart drops the earlier mount) and unmounted after.
-    const mounted = c.lastIndexOf(`root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro`, check);
-    expect(mounted).toBeGreaterThan(c.indexOf('wsl --terminate grunt-sandbox'));
-    expect(c.indexOf('root: /bin/umount /mnt/grunt-setup', check)).toBeGreaterThan(check);
+    const mounted = c.lastIndexOf(`root: /bin/mount -t drvfs ${RESOURCES} /mnt/otherbench-setup -o ro`, check);
+    expect(mounted).toBeGreaterThan(c.indexOf('wsl --terminate otherbench-sandbox'));
+    expect(c.indexOf('root: /bin/umount /mnt/otherbench-setup', check)).toBeGreaterThan(check);
     // The registration is no longer what decides.
     expect(c.some((line) => line.includes('/proc/sys/fs/binfmt_misc'))).toBe(false);
   });
@@ -220,7 +220,7 @@ describe('runSetup', () => {
     expect((await setUp(npm)).outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('npm ci failed') });
     expect(npm.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
     // Nothing was swapped into place.
-    expect(npm.commands).not.toContain('root: /bin/rm -rf /opt/grunt-sandbox');
+    expect(npm.commands).not.toContain('root: /bin/rm -rf /opt/otherbench-sandbox');
     const selfTest = happyWsl();
     await setUp(selfTest, { selfTest: async () => { throw new Error('surprise'); } });
     expect(selfTest.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
@@ -235,7 +235,7 @@ describe('runSetup', () => {
 
   it('never swaps in a tree whose ownership check fails', async () => {
     const wsl = happyWsl({
-      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      distros: 'Ubuntu\r\notherbench-sandbox\r\n',
       override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === `${STAGING}/tree` ? { stdout: `${STAGING}/tree/node_modules/evil\n` } : undefined),
     });
     const { outcome } = await setUp(wsl);
@@ -246,7 +246,7 @@ describe('runSetup', () => {
   it('puts the old install back when the new one cannot be moved in', async () => {
     const wsl = happyWsl({
       override: (c) => {
-        if (isProgram(c, '/usr/bin/test', '/opt/grunt-sandbox')) return { code: 0 };
+        if (isProgram(c, '/usr/bin/test', '/opt/otherbench-sandbox')) return { code: 0 };
         if (isProgram(c, '/bin/mv', `${STAGING}/tree`)) return { code: 1, stderr: 'mv: cannot move' };
         return undefined;
       },
@@ -254,16 +254,16 @@ describe('runSetup', () => {
     const { outcome } = await setUp(wsl);
     expect(outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('cannot move') });
     const c = wsl.commands;
-    const aside = c.indexOf(`root: /bin/mv -T /opt/grunt-sandbox ${STAGING}/old`);
-    const back = c.indexOf(`root: /bin/mv -T ${STAGING}/old /opt/grunt-sandbox`);
+    const aside = c.indexOf(`root: /bin/mv -T /opt/otherbench-sandbox ${STAGING}/old`);
+    const back = c.indexOf(`root: /bin/mv -T ${STAGING}/old /opt/otherbench-sandbox`);
     expect(aside).toBeGreaterThan(0);
     expect(back).toBeGreaterThan(aside);
     expect(c.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
   });
 
   it('fails the install when something in it is not root-owned or is writable by others, naming the first few', async () => {
-    const found = Array.from({ length: 8 }, (_, i) => `/opt/grunt-sandbox/node_modules/x${i}`).join('\n');
-    const wsl = happyWsl({ override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === '/opt/grunt-sandbox' ? { stdout: `${found}\n` } : undefined) });
+    const found = Array.from({ length: 8 }, (_, i) => `/opt/otherbench-sandbox/node_modules/x${i}`).join('\n');
+    const wsl = happyWsl({ override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === '/opt/otherbench-sandbox' ? { stdout: `${found}\n` } : undefined) });
     const { outcome } = await setUp(wsl);
     expect(outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('8 item(s)') });
     expect(outcome).toMatchObject({ message: expect.stringContaining('x4') });
@@ -297,7 +297,7 @@ describe('setup helpers', () => {
   });
 
   it('lists distro names, dropping blank lines and stray NULs', () => {
-    expect(distroNames('Ubuntu\r\n\0grunt-sandbox\r\n\r\n')).toEqual(['Ubuntu', 'grunt-sandbox']);
+    expect(distroNames('Ubuntu\r\n\0otherbench-sandbox\r\n\r\n')).toEqual(['Ubuntu', 'otherbench-sandbox']);
   });
 
   it("installs extra packages as root, and fails with apt's message", async () => {

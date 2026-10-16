@@ -2,14 +2,14 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ClaudeExportError } from '@grunt/core/domain/claude-import.js';
+import { ClaudeExportError } from '@otherbench/core/domain/claude-import.js';
 import { classifyExportPath, readClaudeExport } from '../../src/import/claude-reader.js';
 import { makeZip } from './make-zip.js';
 
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-claude-reader-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-claude-reader-'));
 });
 
 afterEach(async () => {
@@ -92,7 +92,7 @@ describe('readClaudeExport', () => {
   });
 
   it('follows a link only when it leads somewhere inside the folder', async () => {
-    const outside = await mkdtemp(join(tmpdir(), 'grunt-claude-outside-'));
+    const outside = await mkdtemp(join(tmpdir(), 'otherbench-claude-outside-'));
     try {
       await mkdir(join(outside, 'projects'));
       await writeFile(join(outside, 'projects', 'secret.json'), '{"uuid":"outside"}');

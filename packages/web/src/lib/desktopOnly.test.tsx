@@ -1,11 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@grunt/core/domain/computer-apps.js';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@otherbench/core/domain/computer-apps.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import { ApprovalPrompt } from '../components/ApprovalPrompt.js';
 import { ApiError } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { answerErrorText, DesktopOnlyNote } from './desktopOnly.js';
 
 const request: ApprovalRequest = {
@@ -31,7 +31,7 @@ const request: ApprovalRequest = {
 describe('answers while the computer is in control', () => {
   afterEach(() => {
     cleanup();
-    useGruntStore.setState({ computerSessions: {} });
+    useOtherBenchStore.setState({ computerSessions: {} });
     delete (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'];
   });
 
@@ -47,9 +47,9 @@ describe('answers while the computer is in control', () => {
     render(<DesktopOnlyNote />);
     expect(screen.queryByTestId('desktop-only-note')).toBeNull();
     cleanup();
-    useGruntStore.setState({ computerSessions: { 'chat-9': {} } });
+    useOtherBenchStore.setState({ computerSessions: { 'chat-9': {} } });
     render(<DesktopOnlyNote />);
-    expect(screen.getByTestId('desktop-only-note')).toHaveTextContent('Grunt is controlling this computer. Until that ends, answer this in the Grunt app on this computer.');
+    expect(screen.getByTestId('desktop-only-note')).toHaveTextContent('OtherBench is controlling this computer. Until that ends, answer this in the OtherBench app on this computer.');
     cleanup();
     (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {};
     render(<DesktopOnlyNote />);
@@ -57,7 +57,7 @@ describe('answers while the computer is in control', () => {
   });
 
   it("puts the note and the server's refusal on an approval card", async () => {
-    useGruntStore.setState({ computerSessions: { 'chat-1': {} } });
+    useOtherBenchStore.setState({ computerSessions: { 'chat-1': {} } });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const onResolve = vi.fn().mockRejectedValue(new ApiError(403, COMPUTER_DESKTOP_ONLY_REASON));
     render(<ApprovalPrompt request={request} onResolve={onResolve} />);

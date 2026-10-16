@@ -1,16 +1,16 @@
 import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent } from 'react';
-import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
+import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { Menu } from '../components/Menu.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { useChatActivity } from '../state/chatStatus.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { itemName, parseViewTab } from '../viewer/items.js';
 
 /** `dataTransfer` type a dragged tab carries; its value is the chat id. */
-export const TAB_DRAG_MIME = 'application/x-grunt-tab';
+export const TAB_DRAG_MIME = 'application/x-otherbench-tab';
 
 function carries(e: DragEvent, type: string): boolean {
   return Array.from(e.dataTransfer.types).includes(type);
@@ -45,17 +45,17 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  * one pane.
  */
 export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
-  const chats = useGruntStore((s) => s.chats);
-  const projects = useGruntStore((s) => s.projects);
-  const projectsLoaded = useGruntStore((s) => s.projectsLoaded);
-  const paneState = useGruntStore((s) => s.paneState);
-  const activeChatId = useGruntStore((s) => s.activeChatId);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const projectsLoaded = useOtherBenchStore((s) => s.projectsLoaded);
+  const paneState = useOtherBenchStore((s) => s.paneState);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
   const { waiting, working } = useChatActivity();
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
-  const openTab = useGruntStore((s) => s.openTab);
-  const closeTab = useGruntStore((s) => s.closeTab);
-  const moveTab = useGruntStore((s) => s.moveTab);
-  const setLayout = useGruntStore((s) => s.setLayout);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
+  const openTab = useOtherBenchStore((s) => s.openTab);
+  const closeTab = useOtherBenchStore((s) => s.closeTab);
+  const moveTab = useOtherBenchStore((s) => s.moveTab);
+  const setLayout = useOtherBenchStore((s) => s.setLayout);
   const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   // The layout picker is one button with a dropdown, rather than a button per layout, to save room.

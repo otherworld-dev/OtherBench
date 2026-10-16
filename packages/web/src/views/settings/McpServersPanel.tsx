@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { McpServer } from '@grunt/core/ports/store.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { usePolled } from '../../lib/usePolled.js';
 import { ClaudeDesktopImport } from './ClaudeDesktopImport.js';
 import { McpSignIn } from './McpSignIn.js';
@@ -358,7 +358,7 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
       setRemoveClientSecret(false);
       onSaved(saved);
     } catch (err) {
-      console.error('[grunt-web] failed to save MCP server:', err);
+      console.error('[otherbench-web] failed to save MCP server:', err);
       setError(errorMessage(err, 'Save failed -- please try again.'));
     } finally {
       setSaving(false);
@@ -375,7 +375,7 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
       await api.mcpServers.delete(server.id);
       onDeleted(server.id);
     } catch (err) {
-      console.error(`[grunt-web] failed to delete MCP server ${server.id}:`, err);
+      console.error(`[otherbench-web] failed to delete MCP server ${server.id}:`, err);
       setError(errorMessage(err, 'Delete failed -- please try again.'));
     } finally {
       setDeleting(false);
@@ -390,7 +390,7 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
       await api.mcpServers.refresh(server.id);
       setRefreshMessage('Refresh requested -- see status in the list on the left.');
     } catch (err) {
-      console.error(`[grunt-web] failed to refresh MCP server ${server.id}:`, err);
+      console.error(`[otherbench-web] failed to refresh MCP server ${server.id}:`, err);
       setRefreshMessage(errorMessage(err, 'Refresh failed -- please try again.'));
     } finally {
       setRefreshing(false);
@@ -591,7 +591,7 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
           <details data-testid="mcp-sign-in-app" className="rounded border border-[var(--border)] px-2 py-1.5">
             <summary className="cursor-pointer text-xs font-medium text-[var(--text-muted)]">Sign-in app</summary>
             <p className="mt-1.5 text-xs text-[var(--text-muted)]">
-              {`Only needed when the server's sign-in provider can't register Grunt itself. Register Grunt there with the redirect address ${redirectUri ?? 'http://127.0.0.1:<port>/oauth/callback'}. The provider must allow any port: the desktop app's port changes each launch.`}
+              {`Only needed when the server's sign-in provider can't register OtherBench itself. Register OtherBench there with the redirect address ${redirectUri ?? 'http://127.0.0.1:<port>/oauth/callback'}. The provider must allow any port: the desktop app's port changes each launch.`}
             </p>
             <div className="mt-1.5 space-y-1.5">
               <input
@@ -806,7 +806,7 @@ export function McpServersPanel(): JSX.Element {
         if (!cancelled) setSelectedConfig(cfg);
       })
       .catch((err: unknown) => {
-        console.error(`[grunt-web] failed to load MCP server ${editingId}:`, err);
+        console.error(`[otherbench-web] failed to load MCP server ${editingId}:`, err);
         if (!cancelled) setLoadError(errorMessage(err, 'Failed to load this server -- please try again.'));
       })
       .finally(() => {
@@ -843,7 +843,7 @@ export function McpServersPanel(): JSX.Element {
       await api.mcpServers.patch(health.id, { enabled: !health.enabled });
       bumpPoll();
     } catch (err) {
-      console.error(`[grunt-web] failed to toggle MCP server ${health.id}:`, err);
+      console.error(`[otherbench-web] failed to toggle MCP server ${health.id}:`, err);
     } finally {
       setBusyIds((s) => {
         const next = new Set(s);
@@ -859,7 +859,7 @@ export function McpServersPanel(): JSX.Element {
       await api.mcpServers.refresh(health.id);
       bumpPoll();
     } catch (err) {
-      console.error(`[grunt-web] failed to refresh MCP server ${health.id}:`, err);
+      console.error(`[otherbench-web] failed to refresh MCP server ${health.id}:`, err);
     } finally {
       setBusyIds((s) => {
         const next = new Set(s);

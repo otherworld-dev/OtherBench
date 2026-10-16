@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { PlanUsage, PlanWindow } from '@grunt/core/types/usage.js';
+import type { PlanUsage, PlanWindow } from '@otherbench/core/types/usage.js';
 import { api } from '../state/api.js';
 
 /** How often an open meter reads the plan usage again (the server serves its last reading until it's this old). */
@@ -46,7 +46,7 @@ export function PlanUsageMeter({ busy }: { busy: boolean }): JSX.Element | null 
       setUsage((await api.claude.planUsage(refresh)).usage);
     } catch (err) {
       // Keep the last reading; the next poll tries again.
-      console.error('[grunt-web] failed to read the Claude plan usage:', err);
+      console.error('[otherbench-web] failed to read the Claude plan usage:', err);
     }
   }
 

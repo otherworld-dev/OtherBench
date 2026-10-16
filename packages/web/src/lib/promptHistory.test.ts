@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { promptHistory } from './promptHistory.js';
 
 function msg(id: string, parentId: string | null, role: 'user' | 'assistant', text = ''): CanonMessage {

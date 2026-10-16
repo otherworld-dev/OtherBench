@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { actionSummary, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { ComputerAction, ComputerAnswer, ComputerExpectation, ComputerStopReason } from '@grunt/core/ports/computer.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { FAKE_COMPUTER_APP, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { actionSummary, expectationOf, parseAction } from '@otherbench/core/domain/computer-apps.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { ComputerAction, ComputerAnswer, ComputerExpectation, ComputerStopReason } from '@otherbench/core/ports/computer.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { COMPUTER_NO_SCREENSHOT_REASON } from '@otherbench/tools/computer-tool.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import {
   cancelChatReplies,
   COMPUTER_CONFIRMING_REASON,
@@ -119,7 +119,7 @@ describe('ComputerSessions', () => {
 
   it('does not count a refused start as a session, and asks again the next time', async () => {
     const { sessions, driver, events, stopped } = setup();
-    const refusal = { ok: false as const, reason: "The user didn't let Grunt control the computer." };
+    const refusal = { ok: false as const, reason: "The user didn't let OtherBench control the computer." };
     driver.startAnswer = refusal;
     // The driver's own answer, the same object: nothing is reworded.
     expect(await sessions.ensureSession('c1', 'One')).toBe(refusal);
@@ -207,7 +207,7 @@ describe('ComputerSessions is the port, and adds nothing to what passes through'
     // The window is no longer the one the card was about.
     driver.pointTarget = fakeComputerTarget({ windowId: 'hwnd-2' });
     const refused = await sessions.act('c1', CLICK, EXPECT);
-    expect(refused).toEqual({ ok: false, reason: 'The window changed after Grunt asked, so nothing was done.' });
+    expect(refused).toEqual({ ok: false, reason: 'The window changed after OtherBench asked, so nothing was done.' });
     expect(act).toHaveBeenCalledTimes(1);
     expect(driver.actions).toEqual([]);
     expect(driver.refused).toHaveLength(1);
@@ -226,7 +226,7 @@ describe('ComputerSessions is the port, and adds nothing to what passes through'
     const odd = Object.freeze({ ...FAKE_COMPUTER_APP, path: 'C:\\Users\\Jos\u00e9\\App\\Tool.exe', title: '  A  title  ' });
     driver.pointTarget = odd;
     expect(await sessions.target('c1', { x: 3, y: 4 })).toBe(odd);
-    const refusal = { refuse: 'Grunt could not open that process.' };
+    const refusal = { refuse: 'OtherBench could not open that process.' };
     driver.foregroundTarget = refusal;
     expect(await sessions.target('c1', 'foreground')).toBe(refusal);
     expect(driver.targets).toEqual([
@@ -286,7 +286,7 @@ describe('one native dialog per chat', () => {
   it('shares a refusal between the calls that were waiting, and asks again for the next one', async () => {
     const { sessions, driver } = setup();
     driver.dialogUp = true;
-    driver.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
+    driver.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
     const calls = [sessions.ensureSession('c1', 'One'), sessions.ensureSession('c1', 'One')];
     await tick();
     driver.answer();
@@ -333,7 +333,7 @@ describe('one native dialog per chat', () => {
     await sessions.ensureSession('c1', 'One');
     // The shell dropped the session without saying so (it should say; this is the fail-closed side).
     await driver.endSession('c1');
-    driver.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
+    driver.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
     expect(await sessions.ensureSession('c1', 'One')).toBe(driver.startAnswer);
     expect(sessions.activeChat()).toBeNull();
     expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c1', active: false });
@@ -402,7 +402,7 @@ describe('a late OK on the start dialog', () => {
   it('passes a late No on as it is', async () => {
     const { sessions, driver } = setup();
     driver.dialogUp = true;
-    driver.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
+    driver.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
     const starting = sessions.ensureSession('c1', 'One');
     await tick();
     await sessions.stop('c1');
@@ -593,7 +593,7 @@ describe('when the server ends a session itself', () => {
     const driver = new DialogDriver();
     const sessions = new ComputerSessions(driver, { emit: () => {}, cancelChat: () => {} });
     // The provider is given the sessions, not the driver: that is what wires the tool's stopped hook to them.
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true, artifacts: false, recall: false };
     const tool = (await provider.listTools(policy)).find((t) => t.name === 'computer')!;
     const abort = new AbortController();
@@ -1128,7 +1128,7 @@ describe.each([
     // Read lazily: the runner is made after the sessions, as in the container.
     const holder: { runner?: TurnRunner } = {};
     const sessions = new ComputerSessions(driver, { emit: (e) => bus.emit(e), cancelChat: (chatId) => cancelChatReplies(bus, holder.runner!, chatId) });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
     const runner = new TurnRunner(store, screenshotEngine(waitsForTheTool), { toolProvider: provider });
     holder.runner = runner;
     bus.attach(runner, store);
@@ -1232,11 +1232,11 @@ describe('while an earlier end is still being confirmed', () => {
 
   it('says what to do when it stays that way', () => {
     expect(COMPUTER_END_UNCONFIRMED_REASON).toBe(
-      "Grunt couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart Grunt."
+      "OtherBench couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart OtherBench."
     );
   });
 
-  it('tells another chat that Grunt is still confirming, not that a chat is in control: nobody is', async () => {
+  it('tells another chat that OtherBench is still confirming, not that a chat is in control: nobody is', async () => {
     const { sessions, driver } = setup();
     await sessions.ensureSession('c1', 'One');
     await sessions.screenshot('c1');
@@ -1247,7 +1247,7 @@ describe('while an earlier end is still being confirmed', () => {
     await tick();
     expect(sessions.activeChat()).toBeNull();
     expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_CONFIRMING_REASON });
-    expect(COMPUTER_CONFIRMING_REASON).toBe('Grunt is still confirming that the last control session was stopped. Try again in a moment.');
+    expect(COMPUTER_CONFIRMING_REASON).toBe('OtherBench is still confirming that the last control session was stopped. Try again in a moment.');
     expect(COMPUTER_CONFIRMING_REASON).not.toBe(COMPUTER_OTHER_CHAT_REASON);
 
     // Once the end is confirmed and c1's dialog is up, c1 does hold the computer, and the other chat is told so.

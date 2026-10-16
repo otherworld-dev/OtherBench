@@ -23,7 +23,7 @@
  * ordinary (Adam's ruling, 2026-10-14); terminals and shells, Explorer and
  * the other shell surfaces, Settings and the admin tools, script hosts and
  * installers, a path with anything outside plain ASCII, a catalog-signed or
- * unsigned program and anything Grunt can't identify are never ordinary.
+ * unsigned program and anything OtherBench can't identify are never ordinary.
  */
 import { asciiLower, cardLine, hasHiddenCharacter, isWellFormedText, revealAllHidden, revealHidden } from './card-text.js';
 import { KEY_LIMITS, parseKeys } from './computer-keys.js';
@@ -54,22 +54,22 @@ export const READ_ACTIONS: readonly ComputerActionName[] = Object.freeze<Compute
 
 export const COMPUTER_OFF_REASON = 'Computer use is turned off for this profile.';
 export const COMPUTER_UNATTENDED_REASON = 'Computer use needs someone at the machine; it never runs unattended.';
-export const COMPUTER_NO_APP_REASON = "Grunt couldn't tell which app this action would use, so it didn't run it.";
-export const COMPUTER_GRUNT_REASON = "That's Grunt's own window. Grunt never controls itself.";
-export const COMPUTER_GRUNT_UI_REASON = "That window is showing Grunt's own pages. Grunt never controls itself, in a browser or anywhere else.";
+export const COMPUTER_NO_APP_REASON = "OtherBench couldn't tell which app this action would use, so it didn't run it.";
+export const COMPUTER_OTHERBENCH_REASON = "That's OtherBench's own window. OtherBench never controls itself.";
+export const COMPUTER_OTHERBENCH_UI_REASON = "That window is showing OtherBench's own pages. OtherBench never controls itself, in a browser or anywhere else.";
 
 /**
- * The marker every page of Grunt's web UI carries in its title, so a browser
- * window that is showing Grunt is refused like Grunt's own window. Without it
- * a model holding a lasting grant for a browser could open Grunt there and
- * answer its own approval cards. Grunt's UI sets `GRUNT_UI_TITLE` and keeps
+ * The marker every page of OtherBench's web UI carries in its title, so a browser
+ * window that is showing OtherBench is refused like OtherBench's own window. Without it
+ * a model holding a lasting grant for a browser could open OtherBench there and
+ * answer its own approval cards. OtherBench's UI sets `OTHERBENCH_UI_TITLE` and keeps
  * it (packages/web/src/title.ts); the desktop shell refuses a window whose
  * title holds the marker before every step of an action too
- * (desktop/src-tauri/src/computer/facts.rs, `GRUNT_UI_TITLE_MARKER`, which
+ * (desktop/src-tauri/src/computer/facts.rs, `OTHERBENCH_UI_TITLE_MARKER`, which
  * must stay this exact string). A page that copies the marker only gets
  * itself refused, which is safe.
  */
-export const GRUNT_UI_TITLE_MARKER = '[grunt-ui]';
+export const OTHERBENCH_UI_TITLE_MARKER = '[otherbench-ui]';
 /**
  * Why the server refused a change (a card's answer, a message, a setting)
  * while computer use may be in control of this machine and the change didn't
@@ -77,31 +77,31 @@ export const GRUNT_UI_TITLE_MARKER = '[grunt-ui]';
  * are when it gets them back.
  */
 export const COMPUTER_DESKTOP_ONLY_REASON =
-  'Grunt is controlling this computer, so until that ends it only takes answers and changes from the Grunt app on this computer. Answer there, or stop computer use first.';
+  'OtherBench is controlling this computer, so until that ends it only takes answers and changes from the OtherBench app on this computer. Answer there, or stop computer use first.';
 /**
  * The same refusal when no chat holds the computer but the desktop app hasn't
  * confirmed that the last session ended (an end in flight, or one it never
- * answered, which lasts until it does or Grunt is restarted).
+ * answered, which lasts until it does or OtherBench is restarted).
  */
 export const COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON =
-  "Grunt hasn't had the desktop app confirm that computer use ended, so until it does it only takes answers and changes from the Grunt app on this computer. If this doesn't clear in a few seconds, restart Grunt.";
+  "OtherBench hasn't had the desktop app confirm that computer use ended, so until it does it only takes answers and changes from the OtherBench app on this computer. If this doesn't clear in a few seconds, restart OtherBench.";
 
-/** The title of every page of Grunt's web UI. */
-export const GRUNT_UI_TITLE = `Grunt ${GRUNT_UI_TITLE_MARKER}`;
+/** The title of every page of OtherBench's web UI. */
+export const OTHERBENCH_UI_TITLE = `OtherBench ${OTHERBENCH_UI_TITLE_MARKER}`;
 
-/** Whether a window title shows Grunt's own UI: it holds `GRUNT_UI_TITLE_MARKER`, in any letter case. */
-export function showsGruntUi(title: unknown): boolean {
-  return typeof title === 'string' && asciiLower(title).includes(GRUNT_UI_TITLE_MARKER);
+/** Whether a window title shows OtherBench's own UI: it holds `OTHERBENCH_UI_TITLE_MARKER`, in any letter case. */
+export function showsOtherBenchUi(title: unknown): boolean {
+  return typeof title === 'string' && asciiLower(title).includes(OTHERBENCH_UI_TITLE_MARKER);
 }
 
-export const COMPUTER_DEVTOOLS_REASON = "That's a browser's developer tools window, which can run any script in the pages it inspects, so Grunt doesn't control it.";
+export const COMPUTER_DEVTOOLS_REASON = "That's a browser's developer tools window, which can run any script in the pages it inspects, so OtherBench doesn't control it.";
 
 /**
  * The titles an undocked developer tools window starts with: Chrome's and
  * Edge's (`DevTools - example.com/`) and Firefox's (`Developer Tools - ...`).
  * It belongs to the browser's own process, so a lasting grant for the browser
- * would otherwise reach a console that runs any script in a page (Grunt's
- * own included). Refused like Grunt's UI, by `classifyTarget`, the broker and
+ * would otherwise reach a console that runs any script in a page (OtherBench's
+ * own included). Refused like OtherBench's UI, by `classifyTarget`, the broker and
  * the shell before every step (`DEVTOOLS_TITLE_PREFIXES` in
  * desktop/src-tauri/src/computer/facts.rs, which must stay the same).
  */
@@ -113,9 +113,9 @@ export function isDevToolsTitle(title: unknown): boolean {
   const lower = asciiLower(title);
   return DEVTOOLS_TITLE_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
-export const COMPUTER_UNCHECKED_REASON = "Grunt couldn't check what kind of window that is, so it didn't use it.";
-export const COMPUTER_NO_WINDOW_REASON = "Grunt couldn't pin down which window that is, so it didn't use it.";
-export const COMPUTER_BAD_ACTION_REASON = "Grunt can't carry out that action as it was sent, so it didn't run it.";
+export const COMPUTER_UNCHECKED_REASON = "OtherBench couldn't check what kind of window that is, so it didn't use it.";
+export const COMPUTER_NO_WINDOW_REASON = "OtherBench couldn't pin down which window that is, so it didn't use it.";
+export const COMPUTER_BAD_ACTION_REASON = "OtherBench can't carry out that action as it was sent, so it didn't run it.";
 
 /**
  * The line a result of the computer tool carries, first, whenever it holds
@@ -157,16 +157,16 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 
 // ---------------------------------------------------------------------------
-// Words that are not Grunt's own, on their way to a person or a model
+// Words that are not OtherBench's own, on their way to a person or a model
 
-/** The longest line taken from words that are not Grunt's own (what the desktop app answered, an error's message). */
+/** The longest line taken from words that are not OtherBench's own (what the desktop app answered, an error's message). */
 const MAX_DESKTOP_TEXT = 300;
-/** The longest message or text item a result of the computer tool holds: the desktop's line and Grunt's own sentences around it. */
+/** The longest message or text item a result of the computer tool holds: the desktop's line and OtherBench's own sentences around it. */
 const MAX_RESULT_TEXT = 1000;
 const MAX_CHAT_TITLE = 80;
 
 /**
- * Words that are not Grunt's own (the desktop app's reason for refusing, the
+ * Words that are not OtherBench's own (the desktop app's reason for refusing, the
  * message of an error it threw, anything that may quote the screen) as one
  * clean bounded line: hidden, control and bidi characters gone, line breaks
  * and runs of spaces one space, at most 300 characters. The only form such
@@ -186,7 +186,7 @@ export function chatTitleForDialog(title: unknown): string {
   return cardLine(title, MAX_CHAT_TITLE) || 'this chat';
 }
 
-/** An error of the computer tool whose message may hold words that are not Grunt's: the line that says so is its first field. */
+/** An error of the computer tool whose message may hold words that are not OtherBench's: the line that says so is its first field. */
 export interface ScreenContentError {
   about: string;
   error: true;
@@ -199,7 +199,7 @@ export interface ScreenContentError {
  * desktop app (a refusal in the shell's words, what an error said, a
  * program's name): `COMPUTER_SCREEN_ABOUT` first, and the message as one
  * clean line. Every refusal and error of a computer call that is not made of
- * Grunt's own fixed words alone is built here, whoever makes it (the tool,
+ * OtherBench's own fixed words alone is built here, whoever makes it (the tool,
  * the tool provider on either engine's path, the Claude Code relay).
  */
 export function screenContentError(code: string, message: unknown): ScreenContentError {
@@ -365,9 +365,9 @@ const withAndWithout64 = (stems: readonly string[]): string[] => stems.flatMap((
  * its exact program path like any app's. Such a grant is broad, and the card
  * says so: the model can go to any site the browser reaches, signed in as the
  * person, download and open files (which can run programs) and open other
- * apps from links. A window showing Grunt's own UI (`showsGruntUi`) and the
+ * apps from links. A window showing OtherBench's own UI (`showsOtherBenchUi`) and the
  * browser's undocked developer tools (`isDevToolsTitle`) are refused even so;
- * another Grunt the browser can reach is not. Internet Explorer (`iexplore`)
+ * another OtherBench the browser can reach is not. Internet Explorer (`iexplore`)
  * is not here: it runs ActiveX and is on the high-risk list.
  */
 export const BROWSER_STEMS: readonly string[] = Object.freeze(['chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'chromium']);
@@ -377,7 +377,7 @@ export const BROWSER_STEMS: readonly string[] = Object.freeze(['chrome', 'msedge
  * all. Adam's ruling (2026-10-14): an IDE may have "this chat" and "always"
  * grants, pinned to its exact program path; the card says that lets the model
  * edit and run code there and type into its terminal, which is as good as
- * running any program as the person, Grunt included. Not here, so still
+ * running any program as the person, OtherBench included. Not here, so still
  * asked about every time: editors that are not IDEs (`notepad++`,
  * `sublime_text`) and JetBrains Gateway (`gateway`), a client for another
  * machine.
@@ -392,10 +392,10 @@ export const IDE_STEMS: readonly string[] = Object.freeze(['code', 'code - insid
 const ELECTRON_IDE_STEMS: ReadonlySet<string> = new Set(['code', 'code - insiders', 'vscodium', 'cursor', 'windsurf']);
 
 /**
- * Programs Grunt asks about every time ("Allow once" only: no grant is stored
+ * Programs OtherBench asks about every time ("Allow once" only: no grant is stored
  * for them and none is matched), by file name without `.exe`, lower case.
  * They can run commands, change the system, hold credentials, reach another
- * machine, or host content and terminals Grunt can't see into. The list
+ * machine, or host content and terminals OtherBench can't see into. The list
  * lives here and nowhere else. Browsers and IDEs are not on it: they are in
  * `BROWSER_STEMS` and `IDE_STEMS`, which may have lasting grants.
  */
@@ -454,8 +454,8 @@ const SIGNER_OWN_IDES: Readonly<Record<string, ReadonlySet<string>>> = Object.fr
 const HIGH_RISK_STEM_SET: ReadonlySet<string> = new Set(HIGH_RISK_STEMS);
 const BROWSER_STEM_SET: ReadonlySet<string> = new Set(BROWSER_STEMS);
 const IDE_STEM_SET: ReadonlySet<string> = new Set(IDE_STEMS);
-/** Grunt's own programs. A window of one is refused outright, whatever the shell said about whose it is. */
-const GRUNT_STEMS: ReadonlySet<string> = new Set(['grunt', 'grunt-desktop']);
+/** OtherBench's own programs. A window of one is refused outright, whatever the shell said about whose it is. */
+const OTHERBENCH_STEMS: ReadonlySet<string> = new Set(['otherbench', 'otherbench-desktop']);
 
 function isListedStem(stem: string): boolean {
   return HIGH_RISK_STEM_SET.has(stem) || HIGH_RISK_FAMILIES.some((family) => stem.startsWith(family));
@@ -489,22 +489,22 @@ function exeStem(name: unknown): string | null {
 
 /**
  * Whether a program's file name (with extension, any letter case) is one
- * Grunt asks about every time. True for every name on the list or in a
- * family, for Grunt's own, and for any name that can't be vouched for
+ * OtherBench asks about every time. True for every name on the list or in a
+ * family, for OtherBench's own, and for any name that can't be vouched for
  * (see `exeStem`): unknown is never ordinary.
  */
 export function isHighRiskProgramName(name: string): boolean {
   const stem = exeStem(name);
-  return stem === null || GRUNT_STEMS.has(stem) || isListedStem(stem);
+  return stem === null || OTHERBENCH_STEMS.has(stem) || isListedStem(stem);
 }
 
-type Risk = 'normal' | 'high' | 'grunt';
+type Risk = 'normal' | 'high' | 'otherbench';
 
-/** What the key alone says: its file name, and whether the path is one Grunt can't take at its word. */
+/** What the key alone says: its file name, and whether the path is one OtherBench can't take at its word. */
 function keyRisk(key: string): Risk {
   const name = fileNameOf(key);
   const stem = exeStem(name);
-  if (stem !== null && GRUNT_STEMS.has(stem)) return 'grunt';
+  if (stem !== null && OTHERBENCH_STEMS.has(stem)) return 'otherbench';
   // The one test of a program's name: the exported one, so the two can't drift.
   if (isHighRiskProgramName(name)) return 'high';
   // A short (8.3) segment hides the real name; a share does not pin what a
@@ -537,7 +537,7 @@ function originalNameRisk(original: unknown, keyStem: string | null): Risk {
   if (stem.endsWith('.mui')) stem = stem.slice(0, -4);
   if (stem.endsWith('.exe')) stem = stem.slice(0, -4);
   if (stem === '') return 'high';
-  if (GRUNT_STEMS.has(stem)) return 'grunt';
+  if (OTHERBENCH_STEMS.has(stem)) return 'otherbench';
   if (isListedStem(stem)) return stem === 'electron' && keyStem !== null && ELECTRON_IDE_STEMS.has(keyStem) && kindOfStem(keyStem) === 'ide' ? 'normal' : 'high';
   const kind = kindOfStem(stem);
   if (kind === null) return 'normal';
@@ -601,13 +601,13 @@ export type DescribedTarget = Readonly<{
 export type ClassifiedApp = DescribedTarget;
 export type ClassifiedTarget = Readonly<{ kind: 'refuse'; reason: string }> | DescribedTarget;
 /**
- * Decides what a target the driver reported is: something Grunt never
+ * Decides what a target the driver reported is: something OtherBench never
  * touches (a refusal, with no card), or an app with a risk. The ONLY place
  * that is decided, and it fails closed: a missing or wrong-typed fact is a
  * refusal or high risk, never an ordinary app.
  *
- * Refused: no valid path; a Grunt window or program; a window whose title shows Grunt's UI
- * (`showsGruntUi`, a browser tab of Grunt, say); a browser's undocked developer
+ * Refused: no valid path; an OtherBench window or program; a window whose title shows OtherBench's UI
+ * (`showsOtherBenchUi`, a browser tab of OtherBench, say); a browser's undocked developer
  * tools (`isDevToolsTitle`); an elevated process;
  * one with UI access; a flag for any of those that isn't a boolean; no
  * window, pid or start time to bind the action to.
@@ -646,15 +646,15 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const keyStem = exeStem(fileNameOf(key));
   const byOriginalName = t['originalName'] === undefined ? 'high' : originalNameRisk(t['originalName'], keyStem);
 
-  if (t['grunt'] === true || byKey === 'grunt' || byOriginalName === 'grunt') return refuse(COMPUTER_GRUNT_REASON);
-  // Grunt's UI in any window (a browser tab, say), by the whole title as the shell read it, before it is cut for the card.
-  if (showsGruntUi(t['title'])) return refuse(COMPUTER_GRUNT_UI_REASON);
-  // A browser's undocked developer tools: a console for any page, Grunt's included.
+  if (t['otherbench'] === true || byKey === 'otherbench' || byOriginalName === 'otherbench') return refuse(COMPUTER_OTHERBENCH_REASON);
+  // OtherBench's UI in any window (a browser tab, say), by the whole title as the shell read it, before it is cut for the card.
+  if (showsOtherBenchUi(t['title'])) return refuse(COMPUTER_OTHERBENCH_UI_REASON);
+  // A browser's undocked developer tools: a console for any page, OtherBench's included.
   if (isDevToolsTitle(t['title'])) return refuse(COMPUTER_DEVTOOLS_REASON);
-  if (t['grunt'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
-  if (t['elevated'] === true) return refuse(`${said} is running as administrator, so Grunt can't control it.`);
+  if (t['otherbench'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
+  if (t['elevated'] === true) return refuse(`${said} is running as administrator, so OtherBench can't control it.`);
   if (t['elevated'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
-  if (t['uiAccess'] === true) return refuse(`${said} can control other apps (UI access), so Grunt doesn't control it.`);
+  if (t['uiAccess'] === true) return refuse(`${said} can control other apps (UI access), so OtherBench doesn't control it.`);
   if (t['uiAccess'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
 
   const windowId = t['windowId'];
@@ -716,7 +716,7 @@ export function describedCallArgs(action: ComputerAction, target: DescribedTarge
 }
 
 /**
- * Whether described call arguments are for something Grunt asks about every
+ * Whether described call arguments are for something OtherBench asks about every
  * time. Read from the described fields alone (`app`, `appRisk`,
  * `appShellView`), never from live state. True unless the call is provably
  * ordinary: a valid key, a risk of exactly `'normal'` from `classifyTarget`,
@@ -785,7 +785,7 @@ export const COMPUTER_LIMITS = Object.freeze({
   windowTitleLength: MAX_WINDOW_TITLE,
   /** A chat's title in the native start dialog, in characters. */
   chatTitleLength: MAX_CHAT_TITLE,
-  /** A line of words that are not Grunt's own (a refusal's reason, an error's message) in a result, in characters. */
+  /** A line of words that are not OtherBench's own (a refusal's reason, an error's message) in a result, in characters. */
   desktopTextLength: MAX_DESKTOP_TEXT,
   /** A message or a text item of a result that carries the screen-content line, in characters. */
   resultTextLength: MAX_RESULT_TEXT,
@@ -884,9 +884,9 @@ function typedTextProblem(text: string): string | null {
     if (characters > COMPUTER_LIMITS.typeTextLength) return TOO_MUCH_TO_TYPE;
     const cp = ch.codePointAt(0) ?? 0;
     // The one test of text that can be written down (card-text.ts).
-    if (!isWellFormedText(ch)) return "Grunt can't type that text: part of it isn't a character (half of a surrogate pair).";
+    if (!isWellFormedText(ch)) return "OtherBench can't type that text: part of it isn't a character (half of a surrogate pair).";
     if ((cp < 0x20 && ch !== '\n' && ch !== '\t') || (cp >= 0x7f && cp <= 0x9f)) {
-      return "Grunt can't type that text: it has a control character in it. Only line breaks (\\n) and tabs are typed; use a key action for a key such as Escape or Backspace.";
+      return "OtherBench can't type that text: it has a control character in it. Only line breaks (\\n) and tabs are typed; use a key action for a key such as Escape or Backspace.";
     }
   }
   return null;
@@ -942,7 +942,7 @@ export function parseAction(args: unknown, options: { bounds?: { width: number; 
   const a = recordOf(args);
   const action = a?.['action'];
   if (a === null || !isComputerAction(action)) {
-    return no(`"${cardLine(action, 40)}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.`);
+    return no(`"${cardLine(action, 40)}" isn't a computer action OtherBench can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.`);
   }
   const unused = unusedFieldsProblem(a, action);
   if (unused !== null) return no(unused);

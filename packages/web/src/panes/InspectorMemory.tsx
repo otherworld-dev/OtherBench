@@ -1,11 +1,11 @@
 import { useEffect, useState, type JSX } from 'react';
-import { hasMemoryContent, validateMemoryBody, type MemoryUpdateOutcome } from '@grunt/core/domain/memory.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import { hasMemoryContent, validateMemoryBody, type MemoryUpdateOutcome } from '@otherbench/core/domain/memory.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { MemoryNote } from '../components/MemoryNote.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { ApiError, api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
 import { useSectionSummary } from './InspectorSection.js';
 
@@ -38,7 +38,7 @@ function outcomeText(outcome: MemoryUpdateOutcome): string {
  * History with View and Restore, and the last automatic failure with Retry.
  */
 export function InspectorMemory({ chat, project }: { chat: Chat; project: Project }): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
+  const chats = useOtherBenchStore((s) => s.chats);
   // Loaded on a project switch, then polled. A poll never touches the edit draft.
   const { view, loadFailed, setView } = useProjectMemory(project.id);
   const [updating, setUpdating] = useState(false);

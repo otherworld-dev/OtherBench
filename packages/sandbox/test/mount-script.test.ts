@@ -5,16 +5,16 @@ import { hasBash, runMountScript as run, runMountScriptWithEnvPaths as runWithEn
 const mountLine = (win: string, target: string, mode: string): string => `mount|-t|drvfs|-o|${mode},uid=UID,gid=GID|--|${win}|${target}|`;
 
 describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
-  it('mounts a folder at its /mnt path, read-only, owned by grunt', () => {
-    const r = run(['mount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'ro']);
+  it('mounts a folder at its /mnt path, read-only, owned by otherbench', () => {
+    const r = run(['mount', 'E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'ro']);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     // Missing folders are made one level at a time, as root, with their mode set.
     expect(r.out.split('\n').filter(Boolean)).toEqual([
       'mkdir|-m|0755|--|/mnt/e|',
       'mkdir|-m|0755|--|/mnt/e/Git|',
-      'mkdir|-m|0755|--|/mnt/e/Git/Grunt|',
-      mountLine('E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'ro'),
+      'mkdir|-m|0755|--|/mnt/e/Git/OtherBench|',
+      mountLine('E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'ro'),
     ]);
   });
 
@@ -58,7 +58,7 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
   });
 
   describe('the folders on the way to the target', () => {
-    const request = ['mount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'rw'];
+    const request = ['mount', 'E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'rw'];
 
     it('refuses a symbolic link', () => {
       const r = run(request, undefined, { SYMLINK: '/mnt/e/Git' });
@@ -68,23 +68,23 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
     });
 
     it('refuses the target itself being a symbolic link', () => {
-      const r = run(request, undefined, { SYMLINK: '/mnt/e/Git/Grunt' });
+      const r = run(request, undefined, { SYMLINK: '/mnt/e/Git/OtherBench' });
       expect(r.code).toBe(2);
       expect(r.err).toMatch(/symbolic link/);
     });
 
     it('refuses a folder the sandbox user owns on a writable mount', () => {
-      const r = run(request, undefined, { GRUNT_OWNED: '/mnt/e/Git' });
+      const r = run(request, undefined, { OTHERBENCH_OWNED: '/mnt/e/Git' });
       expect(r.code).toBe(2);
       expect(r.err).toMatch(/\/mnt\/e\/Git could be changed by the sandbox user/);
       expect(r.out).not.toContain('mount|');
     });
 
     it('accepts a folder the sandbox user owns when it lies on a read-only mount (a rw child inside a ro parent)', () => {
-      const r = run(request, undefined, { GRUNT_OWNED: '/mnt/e/Git', READONLY: '1' });
+      const r = run(request, undefined, { OTHERBENCH_OWNED: '/mnt/e/Git', READONLY: '1' });
       expect(r.err).toBe('');
       expect(r.code).toBe(0);
-      expect(r.out.split('\n').filter(Boolean)).toContain(mountLine('E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'rw'));
+      expect(r.out.split('\n').filter(Boolean)).toContain(mountLine('E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'rw'));
     });
 
     it('refuses a root-owned folder that group or others can write to, unless it lies on a read-only mount', () => {
@@ -94,18 +94,18 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
       expect(refused.out).not.toContain('mount|');
       const accepted = run(request, undefined, { WRITABLE: '/mnt/e', READONLY: '1' });
       expect(accepted.code).toBe(0);
-      expect(accepted.out).toContain(mountLine('E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'rw'));
+      expect(accepted.out).toContain(mountLine('E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'rw'));
     });
 
     it("doesn't hold the target's own mount to the ownership rule", () => {
-      const r = run(request, 'ro', { GRUNT_OWNED: '/mnt/e/Git/Grunt' });
+      const r = run(request, 'ro', { OTHERBENCH_OWNED: '/mnt/e/Git/OtherBench' });
       expect(r.err).toBe('');
       expect(r.code).toBe(0);
-      expect(r.out.split('\n').filter(Boolean)).toEqual(['umount|--|/mnt/e/Git/Grunt|', mountLine('E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'rw')]);
+      expect(r.out.split('\n').filter(Boolean)).toEqual(['umount|--|/mnt/e/Git/OtherBench|', mountLine('E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench', 'rw')]);
     });
 
     it('checks the way to an unmount too', () => {
-      const r = run(['unmount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt'], undefined, { SYMLINK: '/mnt/e/Git' });
+      const r = run(['unmount', 'E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench'], undefined, { SYMLINK: '/mnt/e/Git' });
       expect(r.code).toBe(2);
       expect(r.err).toMatch(/symbolic link/);
       expect(r.out).toBe('');

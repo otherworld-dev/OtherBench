@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 
 const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', ...over });
 const mcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
@@ -19,7 +19,7 @@ describe('the recall tool', () => {
     const store = new InMemoryStore();
     chat(store, 'old', 'We picked Hetzner for the staging box.');
     chat(store, 'asking', 'Which host did we pick for Hetzner staging?');
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcp as never);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never);
     const requests: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
       if (e.type === 'request') requests.push(e.request);

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_APP_SETTINGS } from '@grunt/core/domain/settings.js';
-import type { AppSettings, SettingsRepo } from '@grunt/core/ports/store.js';
+import { DEFAULT_APP_SETTINGS } from '@otherbench/core/domain/settings.js';
+import type { AppSettings, SettingsRepo } from '@otherbench/core/ports/store.js';
 
 /** App-wide settings as key/value rows (`app_setting`, migration 008); each value is JSON. Unknown keys are ignored. Also holds machine-local values (`getValue`/`setValue`) under keys that aren't settings. */
 export class SqliteSettingsRepo implements SettingsRepo {
@@ -15,7 +15,7 @@ export class SqliteSettingsRepo implements SettingsRepo {
         (settings as unknown as Record<string, unknown>)[row.key] = JSON.parse(row.value);
       } catch (err) {
         // A damaged row must not take every settings read down; this key keeps its default.
-        console.warn(`[grunt] ignoring unreadable app setting "${row.key}":`, err);
+        console.warn(`[otherbench] ignoring unreadable app setting "${row.key}":`, err);
       }
     }
     return settings;
@@ -35,7 +35,7 @@ export class SqliteSettingsRepo implements SettingsRepo {
     try {
       return JSON.parse(row.value) as unknown;
     } catch (err) {
-      console.warn(`[grunt] ignoring unreadable app value "${key}":`, err);
+      console.warn(`[otherbench] ignoring unreadable app value "${key}":`, err);
       return null;
     }
   }

@@ -1,21 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
-import { COMPUTER_UNATTENDED_REASON } from '@grunt/core/domain/computer-apps.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Grant } from '@grunt/core/ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent } from '@grunt/core/ports/tool-provider.js';
-import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { COMPUTER_UNATTENDED_REASON } from '@otherbench/core/domain/computer-apps.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Grant } from '@otherbench/core/ports/store.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent } from '@otherbench/core/ports/tool-provider.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 import { ctx, policy as computerPolicy } from './computer-helpers.js';
 
 // The integration seams of computer use with scheduled runs (unattended),
 // Plan mode (thread cards) and API sub-agents, through the real TurnRunner,
-// SubagentRunner, GruntToolProvider and PermissionBroker. The desktop is
+// SubagentRunner, OtherBenchToolProvider and PermissionBroker. The desktop is
 // FakeComputerDriver: nothing here moves a mouse or reads a screen, and
 // `driver.started` is every native start dialog that would have come up.
 
@@ -55,7 +55,7 @@ async function turn(o: TurnOptions = {}) {
   store.profiles.create(main);
   const driver = new FakeComputerDriver();
   const broker = new PermissionBroker(store);
-  const provider = new GruntToolProvider(store, broker, emptyMcp, { computer: driver });
+  const provider = new OtherBenchToolProvider(store, broker, emptyMcp, { computer: driver });
   const cards: ApprovalRequest[] = [];
   provider.onApprovalEvent((e: ToolApprovalEvent) => {
     if (e.type !== 'request') return;
@@ -145,12 +145,12 @@ describe('computer use in a scheduled run (seam 1: unattended)', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const driver = new FakeComputerDriver();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, { computer: driver });
     const cards: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
       if (e.type === 'request') cards.push(e.request);
     });
-    const [spec] = provider.relayGruntTools(computerPolicy());
+    const [spec] = provider.relayOtherBenchTools(computerPolicy());
     expect(spec).toMatchObject({ name: 'computer', source: 'computer' });
     for (const args of [LOOK, CLICK]) {
       // `deferAsk` as in auto mode: a scheduled run never hands a call to Claude Code's classifier either.
@@ -189,9 +189,9 @@ describe('computer use in a Plan-mode chat (seam 3)', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const driver = new FakeComputerDriver();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp, { computer: driver });
-    const [spec] = provider.relayGruntTools(computerPolicy());
-    const { createPlanGate } = await import('@grunt/core/domain/thread-tools.js');
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, { computer: driver });
+    const [spec] = provider.relayOtherBenchTools(computerPolicy());
+    const { createPlanGate } = await import('@otherbench/core/domain/thread-tools.js');
     for (const args of [LOOK, CLICK]) {
       expect(await provider.requestApproval(spec!, args, computerPolicy(), ctx({ plan: createPlanGate() }))).toEqual({ allowed: false, reason: PLAN_REFUSAL });
     }

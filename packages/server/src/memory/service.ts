@@ -9,12 +9,12 @@ import {
   renderMemoryTranscript,
   type MemoryFailure,
   type MemoryUpdateOutcome,
-} from '@grunt/core/domain/memory.js';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { Chat, Project, ProjectMemory, Store } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+} from '@otherbench/core/domain/memory.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { Chat, Project, ProjectMemory, Store } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import { collectMessageTree } from '../routes/chats.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
@@ -146,7 +146,7 @@ export class ProjectMemoryService {
         if (wait <= 0) void this.enqueue(chat.projectId, chat.id);
         else this.schedule(chat.id, wait);
       } catch (err) {
-        console.warn(`[grunt-server] project memory sweep skipped chat ${chat.id}:`, err);
+        console.warn(`[otherbench-server] project memory sweep skipped chat ${chat.id}:`, err);
       }
     }
   }
@@ -276,7 +276,7 @@ export class ProjectMemoryService {
 
   private fail(projectId: string, chatId: string, message: string): MemoryUpdateOutcome {
     this.failures.set(projectId, { message, at: this.now(), chatId });
-    console.warn(`[grunt-server] project memory update for project ${projectId} (chat ${chatId}) failed: ${message}`);
+    console.warn(`[otherbench-server] project memory update for project ${projectId} (chat ${chatId}) failed: ${message}`);
     return { status: 'failed', error: message };
   }
 }

@@ -1,6 +1,6 @@
 import { lstat, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Store } from '@grunt/core/ports/store.js';
+import type { Store } from '@otherbench/core/ports/store.js';
 import type { BlobStore } from './blob-store.js';
 
 /** A well-formed blob filename: a lowercase 64-hex sha256 digest, nothing else. */
@@ -120,7 +120,7 @@ export async function gcBlobIfOrphaned(store: Store, blobStore: BlobStore, sha25
     await blobStore.remove(sha256, () => !isPinned(sha256) && !store.attachments.isReferenced(sha256));
   } catch (err) {
     if (!isFilesystemError(err)) throw err;
-    console.error(`[grunt] failed to garbage-collect attachment blob "${sha256}":`, err);
+    console.error(`[otherbench] failed to garbage-collect attachment blob "${sha256}":`, err);
   }
 }
 
@@ -209,7 +209,7 @@ export async function sweepOrphanedBlobs(store: Store, blobStore: BlobStore): Pr
             try {
               await unlink(full);
             } catch (err) {
-              console.error(`[grunt] blob sweep: failed to remove stale temp file "${full}":`, err);
+              console.error(`[otherbench] blob sweep: failed to remove stale temp file "${full}":`, err);
             }
           }
           continue;
@@ -232,13 +232,13 @@ export async function sweepOrphanedBlobs(store: Store, blobStore: BlobStore): Pr
           await unlink(full);
           result.removed++;
         } catch (err) {
-          console.error(`[grunt] blob sweep: failed to remove orphaned blob "${full}":`, err);
+          console.error(`[otherbench] blob sweep: failed to remove orphaned blob "${full}":`, err);
         }
       }
     }
   } catch (err) {
     if (!isFilesystemError(err)) throw err;
-    console.error('[grunt] blob sweep failed:', err);
+    console.error('[otherbench] blob sweep failed:', err);
   }
   return result;
 }

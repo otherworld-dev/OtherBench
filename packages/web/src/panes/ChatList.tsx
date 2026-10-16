@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import { exportFilename } from '@grunt/core/domain/export.js';
-import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import { exportFilename } from '@otherbench/core/domain/export.js';
+import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
@@ -15,7 +15,7 @@ import { chatStatus, groupStatus, useChatActivity, useReadingChatIds, type ChatS
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
@@ -62,7 +62,7 @@ function chatRowSelector(chatId: string): string {
 }
 
 /** localStorage key: whether the "Show archived" section is open. Per device. */
-export const SHOW_ARCHIVED_STORAGE_KEY = 'grunt.showArchived';
+export const SHOW_ARCHIVED_STORAGE_KEY = 'otherbench.showArchived';
 
 function loadShowArchived(): boolean {
   try {
@@ -111,21 +111,21 @@ function headingSelector(projectId: string): string {
  * can't fit).
  */
 export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; wrapFooter?: boolean } = {}): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
-  const projects = useGruntStore((s) => s.projects);
-  const profiles = useGruntStore((s) => s.profiles);
-  const activeChatId = useGruntStore((s) => s.activeChatId);
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
-  const upsertChat = useGruntStore((s) => s.upsertChat);
-  const upsertProject = useGruntStore((s) => s.upsertProject);
-  const openProjectPage = useGruntStore((s) => s.openProjectPage);
-  const removeChat = useGruntStore((s) => s.removeChat);
-  const removeProject = useGruntStore((s) => s.removeProject);
-  const setProjects = useGruntStore((s) => s.setProjects);
-  const openTab = useGruntStore((s) => s.openTab);
-  const openSchedules = useGruntStore((s) => s.openSchedules);
-  const paneTabs = useGruntStore((s) => s.paneState.tabs);
-  const machines = useGruntStore((s) => s.machines);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
+  const upsertProject = useOtherBenchStore((s) => s.upsertProject);
+  const openProjectPage = useOtherBenchStore((s) => s.openProjectPage);
+  const removeChat = useOtherBenchStore((s) => s.removeChat);
+  const removeProject = useOtherBenchStore((s) => s.removeProject);
+  const setProjects = useOtherBenchStore((s) => s.setProjects);
+  const openTab = useOtherBenchStore((s) => s.openTab);
+  const openSchedules = useOtherBenchStore((s) => s.openSchedules);
+  const paneTabs = useOtherBenchStore((s) => s.paneState.tabs);
+  const machines = useOtherBenchStore((s) => s.machines);
   const collapsedGroups = useCollapsedGroups();
   const groupSorts = useGroupSorts();
   const now = useNow(60_000);
@@ -212,7 +212,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       if (seq !== searchSeq.current) return;
       setSearchChatIds(new Set(results.map((r) => r.chatId)));
     } catch (err) {
-      console.error('[grunt-web] search failed:', err);
+      console.error('[otherbench-web] search failed:', err);
     }
   }
 
@@ -240,7 +240,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       upsertChat(chat);
       setActiveChatId(chat.id);
     } catch (err) {
-      console.error('[grunt-web] failed to create chat:', err);
+      console.error('[otherbench-web] failed to create chat:', err);
       setError(errorText(err, "Couldn't create the chat"));
     } finally {
       setCreating(false);
@@ -254,7 +254,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       upsertChat(updated);
       return updated;
     } catch (err) {
-      console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
+      console.error(`[otherbench-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, action));
       return null;
     }
@@ -266,7 +266,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
    * already there.
    */
   async function moveChat(chatId: string, projectId: string | null): Promise<void> {
-    const chat = useGruntStore.getState().chats.find((c) => c.id === chatId);
+    const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
     if (!chat || chat.projectId === projectId) return;
     const group = allGroups(sidebar).find((g) => g.key === (projectId ?? NO_PROJECT_KEY))?.chats ?? [];
     const top = chat.pinned ? [] : placeChatPatches(group, chat, group[0]?.id ?? null).filter((p) => p.id === chat.id);
@@ -280,7 +280,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
    * PATCH; a renumbered section sends one per chat that changes.
    */
   async function placeChat(chatId: string, section: Section, beforeId: string | null): Promise<void> {
-    const chat = useGruntStore.getState().chats.find((c) => c.id === chatId);
+    const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
     if (!chat || chat.archivedAt !== null) return;
     const patches = placeChatPatches(section.chats, chat, beforeId);
     const own = patches.find((p) => p.id === chatId);
@@ -300,11 +300,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         upsertChat(await api.chats.patch(p.id, { sortOrder: p.sortOrder }));
       }
     } catch (err) {
-      console.error('[grunt-web] failed to reorder chats:', err);
+      console.error('[otherbench-web] failed to reorder chats:', err);
       setError(errorText(err, "Couldn't move the chat"));
       // Part of the reorder may have landed: show the server's order, not a guess.
       try {
-        useGruntStore.getState().setChats(await api.chats.list());
+        useOtherBenchStore.getState().setChats(await api.chats.list());
       } catch {
         // the error line above already says something went wrong.
       }
@@ -354,7 +354,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       upsertProject(project);
       await moveChat(chat.id, project.id);
     } catch (err) {
-      console.error('[grunt-web] failed to create a project for the chat:', err);
+      console.error('[otherbench-web] failed to create a project for the chat:', err);
       setError(errorText(err, "Couldn't create the project"));
     }
   }
@@ -395,7 +395,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       await setChatPinned(chat.id, pinned);
       focusLater(chatRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
     } catch (err) {
-      console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
+      console.error(`[otherbench-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
     }
   }
@@ -415,7 +415,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     try {
       await saveFile(await api.chats.export(chat.id, format), exportFilename(chat.title, format === 'json' ? 'json' : 'md'));
     } catch (err) {
-      console.error(`[grunt-web] failed to export chat ${chat.id}:`, err);
+      console.error(`[otherbench-web] failed to export chat ${chat.id}:`, err);
       setError(errorText(err, "Couldn't export the chat"));
     }
     focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
@@ -426,7 +426,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const next = neighbourSelector(chat.id);
     const updated = await patchChat(chat, { archivedAt: Date.now() }, "Couldn't archive the chat");
     if (!updated) return;
-    if (useGruntStore.getState().activeChatId === chat.id) setActiveChatId(null);
+    if (useOtherBenchStore.getState().activeChatId === chat.id) setActiveChatId(null);
     focusLater(next, LIST_SELECTOR);
   }
 
@@ -439,7 +439,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const next = neighbourSelector(chatId);
     await api.chats.delete(chatId);
     removeChat(chatId);
-    if (useGruntStore.getState().activeChatId === chatId) setActiveChatId(null);
+    if (useOtherBenchStore.getState().activeChatId === chatId) setActiveChatId(null);
     setDeletingChatId(null);
     focusLater(next, LIST_SELECTOR);
   }
@@ -461,7 +461,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     try {
       upsertProject(await api.projects.patch(projectId, { name }));
     } catch (err) {
-      console.error(`[grunt-web] failed to rename project ${projectId}:`, err);
+      console.error(`[otherbench-web] failed to rename project ${projectId}:`, err);
       setError(errorText(err, "Couldn't rename the project"));
     }
     focusLater(headingSelector(projectId), LIST_SELECTOR);
@@ -474,7 +474,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       upsertProject(await api.projects.patch(projectId, { parentId }));
       if (parentId) setGroupCollapsed(parentId, false);
     } catch (err) {
-      console.error(`[grunt-web] failed to move project ${projectId}:`, err);
+      console.error(`[otherbench-web] failed to move project ${projectId}:`, err);
       setError(errorText(err, "Couldn't move the project"));
     }
     focusLater(headingSelector(projectId), LIST_SELECTOR);
@@ -486,7 +486,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     try {
       for (const { id, sortOrder } of patches) upsertProject(await api.projects.patch(id, { sortOrder }));
     } catch (err) {
-      console.error('[grunt-web] failed to reorder projects:', err);
+      console.error('[otherbench-web] failed to reorder projects:', err);
       setError(errorText(err, "Couldn't reorder the projects"));
       try {
         setProjects(await api.projects.list());

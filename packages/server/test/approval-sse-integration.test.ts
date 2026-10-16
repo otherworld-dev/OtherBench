@@ -2,19 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 
 /**
  * End-to-end proof (task 26's verification requirement) that a tool call
- * gated by `GruntToolProvider` surfaces as a real `approval-request`
+ * gated by `OtherBenchToolProvider` surfaces as a real `approval-request`
  * `TurnEvent` on the SAME SSE channel a client already listens to for
  * text/tool deltas (`GET /chats/:id/stream`) -- no separate transport, no
  * extra client wiring beyond handling one more event type -- and that
@@ -25,7 +25,7 @@ import { StreamRegistry } from '../src/stream/registry.js';
  * `execute` itself -- that is AI SDK's job in the real `engine-aisdk`
  * package, already covered by that package's own tests). What this test
  * exercises instead is the piece task 26 actually adds: TurnRunner asking
- * `GruntToolProvider.listTools()` for a profile's tools and threading
+ * `OtherBenchToolProvider.listTools()` for a profile's tools and threading
  * `chatId`/`messageId`/`workspaceRoot` through correctly, such that calling
  * `.execute()` on one of the tools it handed back -- exactly what
  * `engine-aisdk`'s `buildToolSet` does for a real model's tool call --
@@ -98,12 +98,12 @@ let container: Container;
 let manual: { engine: ChatEngine; requests: EngineRequest[] };
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-approval-sse-test-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-approval-sse-test-'));
   const store = new InMemoryStore();
   const secrets = new FakeSecretStore();
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager);
   manual = manualEngine();
   const turnRunner = new TurnRunner(store, manual.engine, { toolProvider });
   container = {

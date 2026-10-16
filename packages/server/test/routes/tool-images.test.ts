@@ -2,11 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Attachment } from '@grunt/core/ports/store.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Attachment } from '@otherbench/core/ports/store.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -15,7 +15,7 @@ let container: Container;
 let dataDir: string;
 
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-tool-image-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-tool-image-route-test-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);

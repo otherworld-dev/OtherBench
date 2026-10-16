@@ -23,6 +23,6 @@ describe('AppearancePanel', () => {
     render(<AppearancePanel />);
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Text size' }), '130');
     expect(document.documentElement.style.fontSize).toBe('130%');
-    expect(window.localStorage.getItem('grunt.textSize')).toBe('130');
+    expect(window.localStorage.getItem('otherbench.textSize')).toBe('130');
   });
 });

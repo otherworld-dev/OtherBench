@@ -1,5 +1,5 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { EngineEvent } from '@grunt/core/ports/chat-engine.js';
+import type { EngineEvent } from '@otherbench/core/ports/chat-engine.js';
 
 export type MappedEvent =
   | EngineEvent
@@ -33,7 +33,7 @@ function resultText(content: unknown): unknown {
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 
 /**
- * Turns the SDK's message stream into Grunt engine events, one turn at a time.
+ * Turns the SDK's message stream into OtherBench engine events, one turn at a time.
  * Text comes from partial stream deltas (main agent only); an assistant
  * message's text blocks are used only when no deltas arrived for it. Tool
  * calls include subagent calls, so everything the gate approved is visible.
@@ -42,7 +42,7 @@ export class SdkEventMapper {
   private readonly toolNames = new Map<string, string>();
   private sawDelta = false;
 
-  /** `renames`: tool names reported under another name (this process's own Grunt tools as `artifact` and `recall`). */
+  /** `renames`: tool names reported under another name (this process's own OtherBench tools as `artifact` and `recall`). */
   constructor(private readonly renames: ReadonlyMap<string, string> = new Map()) {}
 
   map(msg: SDKMessage): MappedEvent[] {

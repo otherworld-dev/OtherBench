@@ -11,24 +11,24 @@ use serde_json::{json, Map, Value};
 /// The longest window title reported, in UTF-16 units (cut, not refused).
 pub const MAX_TITLE_UNITS: usize = 1024;
 
-/// The marker every page of Grunt's web UI carries in its title. Core's
-/// `GRUNT_UI_TITLE_MARKER` (packages/core/src/domain/computer-apps.ts) is the
+/// The marker every page of OtherBench's web UI carries in its title. Core's
+/// `OTHERBENCH_UI_TITLE_MARKER` (packages/core/src/domain/computer-apps.ts) is the
 /// same string, and core refuses such a window before any card; this is the
 /// one rule the shell holds besides its own shortcuts, because a browser's
-/// window can turn into Grunt's page between the card and the action (the
+/// window can turn into OtherBench's page between the card and the action (the
 /// same window, process and run). A page that copies the marker only gets
 /// itself refused.
-pub const GRUNT_UI_TITLE_MARKER: &str = "[grunt-ui]";
+pub const OTHERBENCH_UI_TITLE_MARKER: &str = "[otherbench-ui]";
 
-/// Whether a window title shows Grunt's own UI: it holds the marker, in any
+/// Whether a window title shows OtherBench's own UI: it holds the marker, in any
 /// letter case.
-pub fn shows_grunt_ui(title: &str) -> bool {
-    title.to_ascii_lowercase().contains(GRUNT_UI_TITLE_MARKER)
+pub fn shows_otherbench_ui(title: &str) -> bool {
+    title.to_ascii_lowercase().contains(OTHERBENCH_UI_TITLE_MARKER)
 }
 
 /// The titles a browser's undocked developer tools window starts with
 /// (Chrome and Edge, Firefox), lower case. Core's `DEVTOOLS_TITLE_PREFIXES`
-/// is the same list: such a window is a console for any page, Grunt's own
+/// is the same list: such a window is a console for any page, OtherBench's own
 /// included, and belongs to the browser's process, so a browser grant would
 /// otherwise reach it.
 pub const DEVTOOLS_TITLE_PREFIXES: [&str; 2] = ["devtools - ", "developer tools - "];
@@ -49,7 +49,7 @@ pub struct Identity {
     pub pid: u32,
     pub started_at: String,
     /// The window's title as it is now: never compared with the card's, only
-    /// checked for Grunt's marker (`shows_grunt_ui`).
+    /// checked for OtherBench's marker (`shows_otherbench_ui`).
     pub title: String,
 }
 
@@ -65,7 +65,7 @@ pub struct Facts {
     pub location: Location,
     pub elevated: bool,
     pub ui_access: bool,
-    pub grunt: Option<bool>,
+    pub otherbench: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,8 +112,8 @@ impl Facts {
         m.insert("location".into(), json!(self.location.as_str()));
         m.insert("elevated".into(), json!(self.elevated));
         m.insert("uiAccess".into(), json!(self.ui_access));
-        if let Some(grunt) = self.grunt {
-            m.insert("grunt".into(), json!(grunt));
+        if let Some(otherbench) = self.otherbench {
+            m.insert("otherbench".into(), json!(otherbench));
         }
         m.insert("shellView".into(), json!(self.id.shell_view));
         m.insert("title".into(), json!(self.id.title));
@@ -148,14 +148,14 @@ impl Expect {
     }
 
     /// All five equal, the path byte for byte (no case folding, no trimming),
-    /// and the window not showing Grunt's own UI.
+    /// and the window not showing OtherBench's own UI.
     pub fn matches(&self, id: &Identity) -> bool {
         self.app.as_bytes() == id.path.as_bytes()
             && self.shell_view == id.shell_view
             && self.window_id == id.window_id
             && self.pid == id.pid
             && self.started_at == id.started_at
-            && !shows_grunt_ui(&id.title)
+            && !shows_otherbench_ui(&id.title)
             && !is_dev_tools(&id.title)
     }
 }
@@ -308,13 +308,13 @@ mod tests {
             location: Location::Fixed,
             elevated: false,
             ui_access: false,
-            grunt: Some(false),
+            otherbench: Some(false),
         };
         assert_eq!(
             f.to_json(),
             json!({
                 "path": "C:\\Program Files\\Fake App\\FakeApp.exe", "originalName": "FakeApp.exe", "signer": "Fake Corp", "console": false,
-                "location": "fixed", "elevated": false, "uiAccess": false, "grunt": false, "shellView": false, "title": "Fake App",
+                "location": "fixed", "elevated": false, "uiAccess": false, "otherbench": false, "shellView": false, "title": "Fake App",
                 "windowId": "1234", "pid": 42, "startedAt": "133000000000000000"
             })
         );
@@ -324,30 +324,30 @@ mod tests {
         assert_eq!(f.to_json()["signer"], Value::Null);
         f.original_name = None;
         f.console = None;
-        f.grunt = None;
+        f.otherbench = None;
         let j = f.to_json();
-        for left_out in ["originalName", "console", "grunt"] {
+        for left_out in ["originalName", "console", "otherbench"] {
             assert!(j.get(left_out).is_none(), "{left_out}");
         }
         assert!(j["pid"].is_u64());
     }
 
     #[test]
-    fn never_matches_a_window_showing_grunts_own_ui() {
+    fn never_matches_a_window_showing_otherbenchs_own_ui() {
         let e = Expect::parse(Some(&json!({ "app": id().path, "shellView": false, "windowId": "1234", "pid": 42, "startedAt": "133000000000000000" }))).unwrap();
-        // The same window, process and run, now titled as Grunt's page: a browser that went to Grunt.
-        for title in ["Grunt [grunt-ui] - Google Chrome", "GRUNT [GRUNT-UI]", "x [grunt-ui]"] {
+        // The same window, process and run, now titled as OtherBench's page: a browser that went to OtherBench.
+        for title in ["OtherBench [otherbench-ui] - Google Chrome", "OTHERBENCH [OTHERBENCH-UI]", "x [otherbench-ui]"] {
             let mut now = id();
             now.title = title.into();
             assert!(!e.matches(&now), "{title}");
-            assert!(shows_grunt_ui(title), "{title}");
+            assert!(shows_otherbench_ui(title), "{title}");
         }
-        for title in ["Grunt", "grunt-ui", "[grunt ui]", ""] {
+        for title in ["OtherBench", "otherbench-ui", "[otherbench ui]", ""] {
             let mut now = id();
             now.title = title.into();
             assert!(e.matches(&now), "{title}");
         }
-        assert_eq!(GRUNT_UI_TITLE_MARKER, "[grunt-ui]", "core's GRUNT_UI_TITLE_MARKER is the same string");
+        assert_eq!(OTHERBENCH_UI_TITLE_MARKER, "[otherbench-ui]", "core's OTHERBENCH_UI_TITLE_MARKER is the same string");
     }
 
     #[test]

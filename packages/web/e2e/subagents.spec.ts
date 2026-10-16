@@ -16,7 +16,7 @@ import { BASE_URL } from '../playwright.config.js';
 let workspaceRoot: string;
 
 test.beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'grunt-e2e-subagents-'));
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'otherbench-e2e-subagents-'));
   writeFileSync(join(workspaceRoot, 'secrets.txt'), 'THE TREASURE IS BURIED UNDER THE OAK TREE');
 });
 
@@ -81,7 +81,7 @@ test('two sub-agents run at once, one waits on its own card, and their cards sur
 
   const answer = page.locator('article[data-role="assistant"]').getByText(/Sub-agents answered:/);
   await expect(answer).toContainText('THE TREASURE IS BURIED UNDER THE OAK TREE');
-  await expect(answer).toContainText('Here is a mock reply from Grunt');
+  await expect(answer).toContainText('Here is a mock reply from OtherBench');
 
   await first.locator('summary').first().click();
   await expect(first.getByText(/Used 1 tool: read_file/)).toBeVisible();

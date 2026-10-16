@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
-import type { Grant, McpServer } from '@grunt/core/ports/store.js';
-import { mcpServerUrlProblem } from '@grunt/tools/mcp/url.js';
+import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
+import type { Grant, McpServer } from '@otherbench/core/ports/store.js';
+import { mcpServerUrlProblem } from '@otherbench/tools/mcp/url.js';
 import type { Container } from '../container.js';
 import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
 import {
@@ -364,8 +364,8 @@ export function toolsRoutes(container: Container): Hono {
     for (const name of body.names as string[]) {
       const s = read.servers.find((x) => x.name === name);
       if (!s) skipped.push({ name, reason: "It isn't in Claude Desktop's config." });
-      else if (existing.has(name)) skipped.push({ name, reason: `Grunt already has a server called "${name}".` });
-      else if (!s.supported || !s.transport) skipped.push({ name, reason: s.reason ?? "Grunt can't use it." });
+      else if (existing.has(name)) skipped.push({ name, reason: `OtherBench already has a server called "${name}".` });
+      else if (!s.supported || !s.transport) skipped.push({ name, reason: s.reason ?? "OtherBench can't use it." });
       else if (s.transport === 'http' && mcpServerUrlProblem(s.url)) skipped.push({ name, reason: mcpServerUrlProblem(s.url)! });
       else {
         const created = await createMcpServer(container, { name, transport: s.transport, command: s.command, args: s.args, env: s.env, url: s.url, headers: s.headers, enabled: true });

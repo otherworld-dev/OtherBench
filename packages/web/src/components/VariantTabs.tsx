@@ -1,12 +1,12 @@
 import { useEffect, useReducer, useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@grunt/core/ports/tool-provider.js';
-import type { ModelInfo } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { PricingSnapshot, RecordedUsage, Usage } from '@grunt/core/types/usage.js';
-import { estimateCost } from '@grunt/core/types/usage.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { PricingSnapshot, RecordedUsage, Usage } from '@otherbench/core/types/usage.js';
+import { estimateCost } from '@otherbench/core/types/usage.js';
 import { Message } from './Message.js';
 import type { MessageExtras } from '../state/reducer.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 /** All-null pricing -- `estimateCost` returns `null` for this, rendered as "—" rather than a misleading $0.00. */
 const UNKNOWN_PRICING: PricingSnapshot = { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
@@ -84,7 +84,7 @@ function useLatencyMs(variant: CanonMessage): number | null {
  * and a wall-clock latency.
  */
 function useVariantMetrics(variant: CanonMessage, liveUsage: Usage | null, models: ModelInfo[]): { usage: Usage | null; cost: number | null; latencyMs: number | null } {
-  const recorded: RecordedUsage | undefined = useGruntStore((s) => s.recordedUsage[variant.id]);
+  const recorded: RecordedUsage | undefined = useOtherBenchStore((s) => s.recordedUsage[variant.id]);
   const liveLatency = useLatencyMs(variant);
   if (recorded) return { usage: recorded, cost: estimateCost(recorded, recorded.pricingSnapshot), latencyMs: recorded.latencyMs };
   if (!liveUsage) return { usage: null, cost: null, latencyMs: liveLatency };

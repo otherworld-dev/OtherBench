@@ -1,8 +1,8 @@
 import { HTTPException } from 'hono/http-exception';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { Store } from '@grunt/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { Store } from '@otherbench/core/ports/store.js';
 import type { Container } from './container.js';
-import { availableOn } from '@grunt/core/domain/availability.js';
+import { availableOn } from '@otherbench/core/domain/availability.js';
 
 /**
  * Resolves a stored `Profile` into the `ResolvedProfile` a `ChatEngine`

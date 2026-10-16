@@ -269,10 +269,10 @@ export function fencedFileText(filename: string, text: string): string {
   return `<attached-file name="${fileLabel(filename)}">\n${defuse(text, 'attached-file')}\n</attached-file>`;
 }
 
-/** The notice's sentence for attached files Grunt had no text for. */
+/** The notice's sentence for attached files OtherBench had no text for. */
 function unreadFilesNotice(unread: { filename: string }[], modelId: string): string {
   const names = unread.map((u) => `"${fileLabel(u.filename)}"`).join(', ');
-  return `Grunt couldn't read ${names} as text, so ${modelId} didn't get ${unread.length === 1 ? 'it' : 'them'}.`;
+  return `OtherBench couldn't read ${names} as text, so ${modelId} didn't get ${unread.length === 1 ? 'it' : 'them'}.`;
 }
 
 /**
@@ -643,7 +643,7 @@ export class TurnRunner {
         profile.model?.supportsTools === false
           ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread' && t.source !== 'subagent')
           : listed;
-      // Claude Code runs its own sub-agents (Task/Agent); Grunt's tool is for API profiles only.
+      // Claude Code runs its own sub-agents (Task/Agent); OtherBench's tool is for API profiles only.
       const offered = profile.connection.kind === 'claude_code' ? usable.filter((t) => t.source !== 'subagent') : usable;
       // propose_plan only while the chat's Plan mode is on (spec 2026-10-12-thread-cards-design §4).
       const tools = planMode ? offered : offered.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));

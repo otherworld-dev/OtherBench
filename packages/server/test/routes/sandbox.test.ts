@@ -2,11 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { SandboxError, type Sandbox, type SandboxStatus } from '@grunt/core/ports/sandbox.js';
-import { FakeChatEngine, FakeSandbox, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { UnsupportedSandbox } from '@grunt/sandbox/unsupported-sandbox.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { SandboxError, type Sandbox, type SandboxStatus } from '@otherbench/core/ports/sandbox.js';
+import { FakeChatEngine, FakeSandbox, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { UnsupportedSandbox } from '@otherbench/sandbox/unsupported-sandbox.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';
@@ -14,7 +14,7 @@ import { StreamRegistry } from '../../src/stream/registry.js';
 
 let dataDir: string;
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-sandbox-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-sandbox-route-test-'));
 });
 afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });

@@ -24,7 +24,7 @@ const DAY_MS = 86_400_000;
 const day = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /** When a certificate needs a warning in the log: inside its last 30 days, or expired. */
-export function expiryWarning(notAfter: number, now: number, what = "Grunt's HTTPS certificate"): string | null {
+export function expiryWarning(notAfter: number, now: number, what = "OtherBench's HTTPS certificate"): string | null {
   if (notAfter <= now) return `Warning: ${what} expired on ${day(notAfter)}. Browsers will refuse it.`;
   if (notAfter - now <= RENEW_WITHIN_MS) return `Warning: ${what} expires on ${day(notAfter)} (in ${Math.ceil((notAfter - now) / DAY_MS)} days).`;
   return null;
@@ -49,7 +49,7 @@ export interface AutoTls {
   keyPem: string;
   certPem: string;
   caDer: Buffer;
-  /** SHA-256 of the CA, colon-separated hex, as `grunt serve` prints it and a phone shows it. */
+  /** SHA-256 of the CA, colon-separated hex, as `otherbench serve` prints it and a phone shows it. */
   caFingerprint: string;
   notAfter: number;
   names: string[];
@@ -58,7 +58,7 @@ export interface AutoTls {
 }
 
 function reuse(dir: string, names: string[], now: number): AutoTls | null {
-  const caPath = join(dir, 'grunt-ca.crt');
+  const caPath = join(dir, 'otherbench-ca.crt');
   const certPath = join(dir, 'server.crt');
   const keyPath = join(dir, 'server.key');
   // Reading is the only step whose failure says nothing about the files'
@@ -76,7 +76,7 @@ function reuse(dir: string, names: string[], now: number): AutoTls | null {
         missing = true;
         continue;
       }
-      throw new TlsFilesError(`Refusing to start: couldn't read ${p}: ${(err as Error).message}. Grunt's certificate files were left as they are.`);
+      throw new TlsFilesError(`Refusing to start: couldn't read ${p}: ${(err as Error).message}. OtherBench's certificate files were left as they are.`);
     }
   }
   if (missing) return null;
@@ -97,7 +97,7 @@ function reuse(dir: string, names: string[], now: number): AutoTls | null {
 }
 
 /**
- * `--tls auto` (spec §4): `<dir>/grunt-ca.crt`, `server.crt` and `server.key`.
+ * `--tls auto` (spec §4): `<dir>/otherbench-ca.crt`, `server.crt` and `server.key`.
  * Reused when they match each other, name exactly `names` and have more
  * than 30 days left; otherwise a new CA and certificate are made. A file
  * that can't be read for any reason but being absent stops the start with a
@@ -114,7 +114,7 @@ export function loadOrCreateAutoTls(opts: { dir: string; names: string[]; nodeNa
 
   const notBefore = new Date(now - DAY_MS);
   const notAfter = new Date(now + AUTO_CERT_DAYS * DAY_MS);
-  const caCn = `Grunt local CA ${opts.nodeName} ${day(now)}`;
+  const caCn = `OtherBench local CA ${opts.nodeName} ${day(now)}`;
   const ca = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const caId = keyIdOf(ca.publicKey);
   const caDer = certificate({
@@ -141,7 +141,7 @@ export function loadOrCreateAutoTls(opts: { dir: string; names: string[]; nodeNa
     // A no-op on Windows, as for the secrets key.
   }
   writeFileSync(join(opts.dir, 'server.crt'), certPem);
-  writeFileSync(join(opts.dir, 'grunt-ca.crt'), certificatePem(caDer));
+  writeFileSync(join(opts.dir, 'otherbench-ca.crt'), certificatePem(caDer));
   const caCert = new X509Certificate(caDer);
   return {
     keyPem,
@@ -156,7 +156,7 @@ export function loadOrCreateAutoTls(opts: { dir: string; names: string[]; nodeNa
 
 function signServer(caKey: KeyObject, caId: Buffer, caCn: string, publicKey: KeyObject, names: string[], notBefore: Date, notAfter: Date): Buffer {
   return certificate({
-    subjectCn: names[0] ?? 'grunt',
+    subjectCn: names[0] ?? 'otherbench',
     issuerCn: caCn,
     publicKey,
     signingKey: caKey,

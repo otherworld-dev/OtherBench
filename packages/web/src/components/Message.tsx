@@ -1,12 +1,12 @@
 import { useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@grunt/core/ports/tool-provider.js';
-import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@grunt/core/domain/thread-tools.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
+import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { SUBAGENT_TOOL_NAME } from '@otherbench/core/domain/parts.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
-import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@grunt/core/domain/computer-apps.js';
-import { isToolImageRef, type ToolImageRef } from '@grunt/core/domain/tool-images.js';
+import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
+import { isToolImageRef, type ToolImageRef } from '@otherbench/core/domain/tool-images.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { AuthedImage } from './AuthedImage.js';
@@ -64,8 +64,8 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
   );
 }
 
-/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__grunt_<hex>__computer`). */
-const COMPUTER_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?computer$/;
+/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__otherbench_<hex>__computer`). */
+const COMPUTER_TOOL_NAME = /^(?:mcp__otherbench_[0-9a-f]+__)?computer$/;
 
 function isComputerTool(name: string): boolean {
   return COMPUTER_TOOL_NAME.test(name);
@@ -277,7 +277,7 @@ function ToolResultBlock({ name, result, isError, scope }: { name: string; resul
     <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
       <span className="font-medium">{isError ? '⚠️' : '↳'} {name} result</span>
       {isSandboxResult(name, result) && (
-        <span data-testid="sandbox-tag" title="Ran in Grunt's sandbox" className="ml-2 rounded-sm border border-[var(--border)] px-1 text-[10px] tracking-wide text-[var(--text-muted)] uppercase">
+        <span data-testid="sandbox-tag" title="Ran in OtherBench's sandbox" className="ml-2 rounded-sm border border-[var(--border)] px-1 text-[10px] tracking-wide text-[var(--text-muted)] uppercase">
           sandbox
         </span>
       )}

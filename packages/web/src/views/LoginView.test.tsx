@@ -52,17 +52,17 @@ describe('LoginView', () => {
   it('lets password managers save it: a hidden username and current-password', () => {
     const { container } = render(<LoginView />);
 
-    expect(container.querySelector('input[name="username"]')).toHaveValue('grunt');
+    expect(container.querySelector('input[name="username"]')).toHaveValue('otherbench');
     expect(screen.getByLabelText('Password')).toHaveAttribute('autocomplete', 'current-password');
   });
 
-  it("offers Grunt's certificate only when the server has one to give", () => {
+  it("offers OtherBench's certificate only when the server has one to give", () => {
     const { rerender } = render(<LoginView />);
-    expect(screen.queryByRole('link', { name: "Download Grunt's certificate" })).toBeNull();
+    expect(screen.queryByRole('link', { name: "Download OtherBench's certificate" })).toBeNull();
 
     useAuthStore.setState({ info: { mode: 'login', signedIn: false, caDownload: true } });
     rerender(<LoginView />);
-    expect(screen.getByRole('link', { name: "Download Grunt's certificate" })).toHaveAttribute('href', '/grunt-ca.crt');
+    expect(screen.getByRole('link', { name: "Download OtherBench's certificate" })).toHaveAttribute('href', '/otherbench-ca.crt');
     expect(screen.getByText(/Check its fingerprint against the one the server printed when it started\./)).toBeInTheDocument();
   });
 });

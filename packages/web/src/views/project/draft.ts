@@ -1,5 +1,5 @@
-import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
-import type { Project } from '@grunt/core/ports/store.js';
+import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } from '@otherbench/core/domain/projects.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 import { folderPath } from '../../components/FolderList.js';
 import { validateWorkspaceRoot } from '../../lib/workspaceRoot.js';
 import type { CreateProjectBody, FolderEntry, PatchProjectBody } from '../../state/api.js';

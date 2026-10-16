@@ -1,9 +1,9 @@
 // Live probe for extra folders (spec 2026-10-07-extra-folders, Deck #839). NOT part of CI.
 // Usage: node packages/engine-claude-code/scripts/probe-extra-folders.mjs <scratch-dir>
-// Uses the Claude login: three short turns. Question: if Grunt stops passing a
+// Uses the Claude login: three short turns. Question: if OtherBench stops passing a
 // chat's extra folders as `additionalDirectories` (so Claude Code loads no
 // skills or commands from them), can Claude Code still read and write in them
-// when Grunt's PreToolUse hook allows the call? The workspace (cwd) and the
+// when OtherBench's PreToolUse hook allows the call? The workspace (cwd) and the
 // other folder each carry a probe skill and command; init lists what loaded.
 // Transcripts go to <scratch-dir>/probe-*.json.
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -44,7 +44,7 @@ seedConfig(ws, 'ws');
 seedConfig(other, 'other');
 writeFileSync(join(other, 'notes.txt'), 'THE MAP IS IN THE OTHER FOLDER\n');
 
-// Same scrubbing as Grunt's buildChildEnv for the Claude backend.
+// Same scrubbing as OtherBench's buildChildEnv for the Claude backend.
 const env = {};
 for (const [k, v] of Object.entries(process.env)) {
   if (v === undefined) continue;
@@ -66,10 +66,10 @@ function oneShot(text) {
 const MUTATING = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 /**
- * `hook`: 'allow' answers allow for every call (Grunt in default mode, once
- * approved). 'grunt-auto' allows reads and hands mutating calls to Claude
- * Code with no decision (Grunt in auto mode for a call it would ask about).
- * canUseTool records the call and allows it (Grunt would show a card).
+ * `hook`: 'allow' answers allow for every call (OtherBench in default mode, once
+ * approved). 'otherbench-auto' allows reads and hands mutating calls to Claude
+ * Code with no decision (OtherBench in auto mode for a call it would ask about).
+ * canUseTool records the call and allows it (OtherBench would show a card).
  */
 async function run(name, { text, model, permissionMode, hook, addDir }) {
   rmSync(join(other, 'out.txt'), { force: true });
@@ -96,8 +96,8 @@ async function run(name, { text, model, permissionMode, hook, addDir }) {
         hooks: {
           PreToolUse: [{ hooks: [async (i) => {
             seen.hook.push(i.tool_name);
-            if (hook === 'grunt-auto' && MUTATING.has(i.tool_name)) return {};
-            return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in Grunt' } };
+            if (hook === 'otherbench-auto' && MUTATING.has(i.tool_name)) return {};
+            return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in OtherBench' } };
           }], timeout: 600 }],
         },
         canUseTool: async (n, input) => { seen.canUseTool.push(n); return { behavior: 'allow', updatedInput: input }; },
@@ -161,10 +161,10 @@ const task = (marker) =>
 
 // Today: the folder is passed as an added directory.
 const today = await run('add-dir', { text: PONG, model: 'haiku', permissionMode: 'default', hook: 'allow', addDir: true });
-// Proposed: not passed; Grunt's hook allows the calls.
+// Proposed: not passed; OtherBench's hook allows the calls.
 const plain = await run('no-add-dir-default', { text: task('written-in-default-mode'), model: 'haiku', permissionMode: 'default', hook: 'allow', addDir: false });
 // Proposed, auto mode: reads allowed, the write handed to Claude Code.
-const auto = await run('no-add-dir-auto', { text: task('written-in-auto-mode'), model: 'sonnet', permissionMode: 'auto', hook: 'grunt-auto', addDir: false });
+const auto = await run('no-add-dir-auto', { text: task('written-in-auto-mode'), model: 'sonnet', permissionMode: 'auto', hook: 'otherbench-auto', addDir: false });
 
 console.log('\n=== VERDICT ===');
 console.log(JSON.stringify({

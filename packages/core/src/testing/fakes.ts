@@ -178,7 +178,7 @@ export const FAKE_SANDBOX_VERSIONS: SandboxVersions = { distro: 'Fake Linux 1.0'
 /** Where a fake run starts: the workspace's sandbox path, or with no folders (fs 'off') the chat's home. */
 function fakeSandboxCwd(req: SandboxRunRequest): string {
   const root = req.workspaceRoot;
-  if (req.fs === 'off' || root === null) return `/home/grunt/chats/${req.chatId.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  if (req.fs === 'off' || root === null) return `/home/otherbench/chats/${req.chatId.replace(/[^A-Za-z0-9_-]/g, '_')}`;
   try {
     return toSandboxPath(normaliseWindowsPath(root));
   } catch {
@@ -187,7 +187,7 @@ function fakeSandboxCwd(req: SandboxRunRequest): string {
 }
 
 /**
- * A `Sandbox` test double, and the e2e server's (GRUNT_SANDBOX=fake): records
+ * A `Sandbox` test double, and the e2e server's (OTHERBENCH_SANDBOX=fake): records
  * every request, runs nothing, and answers like a sandbox that worked.
  */
 export class FakeSandbox implements Sandbox {
@@ -287,7 +287,7 @@ export interface FakeToolProviderOptions {
 /**
  * A `ToolProvider` test double. It deliberately does NOT re-implement the
  * permission rules: every decision is made by a real `PermissionBroker` over a
- * private `InMemoryStore`, exactly as `GruntToolProvider` does, so the fake
+ * private `InMemoryStore`, exactly as `OtherBenchToolProvider` does, so the fake
  * cannot drift from the real policy / grant / auto-approve / ask semantics.
  * What it does mirror (and what the shared contract in
  * tool-provider-contract.ts pins) is the provider's own orchestration: policy-
@@ -297,14 +297,14 @@ export interface FakeToolProviderOptions {
  * Claude Code auto mode's `deferAsk`). Tool bodies are stubs that return
  * `{ ok: true }` (MCP stubs return a text content array); nothing touches disk.
  */
-/** What GruntToolProvider returns when a turn ends before a call is authorised. */
+/** What OtherBenchToolProvider returns when a turn ends before a call is authorised. */
 const FAKE_CANCELLED = {
   ok: false as const,
   code: 'cancelled' as const,
   reason: 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.',
 };
 
-/** What GruntToolProvider returns when an unattended run's call would need a card. */
+/** What OtherBenchToolProvider returns when an unattended run's call would need a card. */
 const FAKE_UNATTENDED = { ok: false as const, code: 'approval_unavailable' as const, reason: UNATTENDED_REASON };
 
 export class FakeToolProvider implements ToolProvider {
@@ -316,7 +316,7 @@ export class FakeToolProvider implements ToolProvider {
   private readonly broker: PermissionBroker;
   private readonly tools: ToolSpec[];
   private readonly mcpServers: FakeMcpServer[];
-  /** The real ask bookkeeping, so the fake behaves exactly as GruntToolProvider does. */
+  /** The real ask bookkeeping, so the fake behaves exactly as OtherBenchToolProvider does. */
   private readonly asks = new UserAsks((event) => this.notify(event));
 
   constructor(options: FakeToolProviderOptions = {}) {
@@ -427,7 +427,7 @@ export class FakeToolProvider implements ToolProvider {
     return {
       ...tool,
       execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
-        // Mirrors GruntToolProvider: a call that arrives after its turn ended
+        // Mirrors OtherBenchToolProvider: a call that arrives after its turn ended
         // never runs, even when a grant or policy would allow it.
         const auth = ctx.signal.aborted ? FAKE_CANCELLED : await this.settle(this.broker.decide(tool, args, policy, ctx), ctx);
         if (!auth.ok) return { error: true, code: auth.code, message: auth.reason };

@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { Usage } from '@grunt/core/types/usage.js';
-import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { Usage } from '@otherbench/core/types/usage.js';
+import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
 import { configureTransport } from '../state/transport.js';
 import { Message } from './Message.js';
 
@@ -431,7 +431,7 @@ describe('Message', () => {
     });
 
     it("shows a relayed computer call (Claude Code's name for it) the same way", async () => {
-      await renderOpen([callPart({ action: 'key', text: 'ctrl+s', app: 'not a path' }, 'mcp__grunt_ab12__computer')]);
+      await renderOpen([callPart({ action: 'key', text: 'ctrl+s', app: 'not a path' }, 'mcp__otherbench_ab12__computer')]);
       const call = screen.getByTestId('computer-call');
       expect(call).toHaveTextContent('computer: press ctrl+s');
       expect(call).not.toHaveTextContent('not a path');
@@ -514,7 +514,7 @@ describe('Message', () => {
     });
 
     it("shows a Claude Code computer result (kept as one string) with the screen-content line as its label and each line as plain text", async () => {
-      const name = 'mcp__grunt_ab12__computer';
+      const name = 'mcp__otherbench_ab12__computer';
       const result = `${COMPUTER_SCREEN_ABOUT}\nDone.\nScreenshot, 1366×768. **bold**‮`;
       await renderOpen([callPart({ action: 'left_click', coordinate: [1, 2] }, name), resultPart(result, false, name)]);
       const about = screen.getByTestId('computer-screen-about');

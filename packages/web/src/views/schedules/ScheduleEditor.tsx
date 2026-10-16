@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, unattendedWarnings, type ScheduleTarget } from '@grunt/core/domain/schedule.js';
-import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
-import type { ScheduleView } from '@grunt/core/ports/store.js';
+import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, unattendedWarnings, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
+import type { ScheduleView } from '@otherbench/core/ports/store.js';
 import { api } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import {
   WEEKDAYS_MONDAY_FIRST,
   browserTimeZone,
@@ -31,10 +31,10 @@ const FIELD ='w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 p
 
 /** New or Edit schedule (spec 2026-10-12-scheduled-tasks-design §5). Esc or Cancel closes it unsaved. */
 export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: ScheduleEditorProps): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
-  const projects = useGruntStore((s) => s.projects);
-  const profiles = useGruntStore((s) => s.profiles);
-  const connections = useGruntStore((s) => s.connections);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const connections = useOtherBenchStore((s) => s.connections);
   const [initial] = useState<ScheduleDraft>(() =>
     schedule ? draftFromSchedule(schedule) : emptyDraft(prefill ?? null, defaultProfileFor(prefill ?? null, chats, projects, profiles))
   );

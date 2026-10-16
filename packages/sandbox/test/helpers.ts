@@ -84,7 +84,7 @@ export class FakeWsl implements WslRunner {
 }
 
 /** The build folder happyWsl's mktemp makes. */
-export const STAGING = '/opt/.grunt-sandbox.AbC123';
+export const STAGING = '/opt/.otherbench-sandbox.AbC123';
 
 /** A distro where every setup step works. `override` answers first, for the step a test wants to fail. */
 export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolean; override?: (call: WslCall) => Partial<WslResult> | undefined } = {}): FakeWsl {
@@ -100,7 +100,7 @@ export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolea
     const [program, ...rest] = call.argv;
     if (program === '/usr/bin/test') return { code: 1 }; // "not there"
     if (program === '/bin/sh' && rest[0]?.endsWith('/interop-check.sh')) return { stdout: 'interop-off\n' };
-    if (program === '/usr/bin/id') return opts.user === true ? { stdout: '1000\n' } : { code: 1, stderr: "id: 'grunt': no such user" };
+    if (program === '/usr/bin/id') return opts.user === true ? { stdout: '1000\n' } : { code: 1, stderr: "id: 'otherbench': no such user" };
     if (program === '/usr/bin/mktemp') return { stdout: `${STAGING}\n` };
     if (program === '/usr/bin/find' && (rest[0] === INSTALL_DIR || rest[0] === `${STAGING}/tree`)) return { stdout: '' }; // nothing in the install belongs to anyone but root
     if (program === '/usr/bin/sha256sum') return { stdout: `${NODE_SHA256}  ${rest[0] ?? ''}\n` };
@@ -129,14 +129,14 @@ export interface ScriptResult {
 
 /**
  * mount.sh in dry-run mode. `mounted` pretends the target is already mounted in that mode
- * (GRUNT_MOUNT_DRY_RUN_MOUNTED); `sim` sets the other GRUNT_MOUNT_DRY_RUN_* variables that
- * simulate the filesystem (SYMLINK, GRUNT_OWNED, WRITABLE, READONLY).
+ * (OTHERBENCH_MOUNT_DRY_RUN_MOUNTED); `sim` sets the other OTHERBENCH_MOUNT_DRY_RUN_* variables that
+ * simulate the filesystem (SYMLINK, OTHERBENCH_OWNED, WRITABLE, READONLY).
  */
 export function runMountScript(args: string[], mounted?: string, sim: Record<string, string> = {}): ScriptResult {
-  const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1' };
-  for (const key of Object.keys(env)) if (key.startsWith('GRUNT_MOUNT_DRY_RUN_')) delete env[key];
-  if (mounted) env['GRUNT_MOUNT_DRY_RUN_MOUNTED'] = mounted;
-  for (const [key, value] of Object.entries(sim)) env[`GRUNT_MOUNT_DRY_RUN_${key}`] = value;
+  const env: NodeJS.ProcessEnv = { ...process.env, OTHERBENCH_MOUNT_DRY_RUN: '1' };
+  for (const key of Object.keys(env)) if (key.startsWith('OTHERBENCH_MOUNT_DRY_RUN_')) delete env[key];
+  if (mounted) env['OTHERBENCH_MOUNT_DRY_RUN_MOUNTED'] = mounted;
+  for (const [key, value] of Object.entries(sim)) env[`OTHERBENCH_MOUNT_DRY_RUN_${key}`] = value;
   const r = spawnSync(BASH, [MOUNT_SH, ...args], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
@@ -147,8 +147,8 @@ export function runMountScript(args: string[], mounted?: string, sim: Record<str
  * real caller (wsl.exe --exec) doesn't.
  */
 export function runMountScriptWithEnvPaths(win: string, target: string, mode = 'ro'): ScriptResult {
-  const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1', TEST_WIN: win, TEST_TARGET: target, TEST_MODE: mode, TEST_SCRIPT: MOUNT_SH };
-  for (const key of Object.keys(env)) if (key.startsWith('GRUNT_MOUNT_DRY_RUN_')) delete env[key];
+  const env: NodeJS.ProcessEnv = { ...process.env, OTHERBENCH_MOUNT_DRY_RUN: '1', TEST_WIN: win, TEST_TARGET: target, TEST_MODE: mode, TEST_SCRIPT: MOUNT_SH };
+  for (const key of Object.keys(env)) if (key.startsWith('OTHERBENCH_MOUNT_DRY_RUN_')) delete env[key];
   // exec "$BASH": a bare `bash` would be found through PATH, and on Windows that can be System32\bash.exe (WSL).
   const r = spawnSync(BASH, ['-c', 'exec "$BASH" "$TEST_SCRIPT" mount "$TEST_WIN" "$TEST_TARGET" "$TEST_MODE"'], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
@@ -230,7 +230,7 @@ export class FakeChannel implements AgentChannel {
 
 export function scriptedAgent(
   script: AgentScript = {},
-  init: AgentInit = { home: '/home/grunt/chats/c1', tmpRoot: '/tmp/grunt-chats/c1', allowedHosts: [] }
+  init: AgentInit = { home: '/home/otherbench/chats/c1', tmpRoot: '/tmp/otherbench-chats/c1', allowedHosts: [] }
 ): { client: AgentClient; channel: FakeChannel } {
   const channel = new FakeChannel(script);
   return { channel, client: new AgentClient(channel, init) };

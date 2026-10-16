@@ -34,7 +34,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 export function buildServer() {
-  const server = new McpServer({ name: 'grunt-echo-fixture', version: '1.0.0' });
+  const server = new McpServer({ name: 'otherbench-echo-fixture', version: '1.0.0' });
 
   server.registerTool(
     'echo',

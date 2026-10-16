@@ -9,10 +9,10 @@ import {
   pairingKey,
   pairingMac,
   shortFingerprint,
-} from '@grunt/core/domain/pairing.js';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { Peer, PeerInfo, PublicPeer } from '@grunt/core/types/peer.js';
+} from '@otherbench/core/domain/pairing.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { Peer, PeerInfo, PublicPeer } from '@otherbench/core/types/peer.js';
 import type { Hono } from 'hono';
 import type { AppEventBus } from '../stream/events.js';
 import { PeerClient, PeerUnreachableError, parsePeerAddress, type PeerRequest, type PeerResponse, type ResponseLimits } from './client.js';
@@ -447,7 +447,7 @@ export class PeerService {
   /** `refreshListener` once the request being answered on the listener has gone out. */
   private refreshListenerSoon(): void {
     setTimeout(() => {
-      this.refreshListener().catch((err: unknown) => console.error('[grunt-server] peer listener refresh failed:', err));
+      this.refreshListener().catch((err: unknown) => console.error('[otherbench-server] peer listener refresh failed:', err));
     }, 50);
   }
 

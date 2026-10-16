@@ -1,10 +1,10 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { NodeInfo } from '@grunt/core/types/workspace.js';
+import type { NodeInfo } from '@otherbench/core/types/workspace.js';
 import { ConfirmDialog } from '../../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../../lib/workspaceRoot.js';
 import { ApiError, api, type LocationView } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 export const LOCATIONS_HELP =
   'A location is a folder you keep on more than one machine -- Nextcloud, say -- wherever each machine has it. A chat folder inside a location works on every machine that knows where the location is; each machine sets only its own path.';
@@ -44,7 +44,7 @@ function PathInput({ value, onChange, label, onEnter }: { value: string; onChang
               .then((picked) => {
                 if (picked !== null) onChange(picked);
               })
-              .catch((err: unknown) => console.error('[grunt-web] folder picker failed:', err));
+              .catch((err: unknown) => console.error('[otherbench-web] folder picker failed:', err));
           }}
         >
           Choose…
@@ -192,9 +192,9 @@ function LocationRow({
 
 /** Settings → Locations (v2 plan, Task 43). */
 export function LocationsPanel(): JSX.Element {
-  const setProjects = useGruntStore((s) => s.setProjects);
+  const setProjects = useOtherBenchStore((s) => s.setProjects);
   // Another machine's locations, and its paths for them, arrive by sync.
-  const syncRevision = useGruntStore((s) => s.syncRevision);
+  const syncRevision = useOtherBenchStore((s) => s.syncRevision);
   const serverPlatform = useServerPlatform();
   const [locations, setLocations] = useState<LocationView[] | null>(null);
   const [self, setSelf] = useState<NodeInfo | null>(null);
@@ -213,7 +213,7 @@ export function LocationsPanel(): JSX.Element {
         setSelf(node);
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load locations:', err);
+        console.error('[otherbench-web] failed to load locations:', err);
         if (!cancelled) setError("Couldn't load the locations.");
       });
     return () => {
@@ -226,7 +226,7 @@ export function LocationsPanel(): JSX.Element {
     api.projects
       .list()
       .then(setProjects)
-      .catch((err: unknown) => console.error('[grunt-web] failed to reload projects:', err));
+      .catch((err: unknown) => console.error('[otherbench-web] failed to reload projects:', err));
   }
 
   function replace(next: LocationView): void {

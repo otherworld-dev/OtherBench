@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { freezableProxy, makeNode, pair, type TestNode } from './helpers.js';
 
 const nodes: TestNode[] = [];

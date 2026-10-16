@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ConnectionKind, ResolvedProfile } from '@grunt/core/types/config.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { COMPUTER_ACTIONS, desktopTextForResult, parseAction, screenContentError } from '@grunt/core/domain/computer-apps.js';
-import { IMAGE_NOT_KEPT_LIMIT, MAX_TOOL_IMAGE_BYTES, TOOL_IMAGE_REF_REMOVED } from '@grunt/core/domain/tool-images.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ConnectionKind, ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { COMPUTER_ACTIONS, desktopTextForResult, parseAction, screenContentError } from '@otherbench/core/domain/computer-apps.js';
+import { IMAGE_NOT_KEPT_LIMIT, MAX_TOOL_IMAGE_BYTES, TOOL_IMAGE_REF_REMOVED } from '@otherbench/core/domain/tool-images.js';
 import { AiSdkChatEngine, COMPUTER_TOOLSET_CONFIGS, COMPUTER_TOOLSET_MODELS, usesComputerToolset } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 import { IMAGE_OMITTED_NOTE } from '../src/tool-images.js';
@@ -96,7 +96,7 @@ function fakeAnthropic(...replies: string[]) {
   return { provider, bodies, urls, fetch };
 }
 
-/** The parameters Grunt's own `computer` tool declares (packages/tools/src/computer-tool.ts). */
+/** The parameters OtherBench's own `computer` tool declares (packages/tools/src/computer-tool.ts). */
 const COMPUTER_PARAMETERS = {
   type: 'object',
   properties: {
@@ -113,7 +113,7 @@ const COMPUTER_PARAMETERS = {
 const SHOT = [{ type: 'text', text: SHOT_TEXT }, { type: 'image', data: PNG, mimeType: 'image/png' }];
 
 /** What the provider's gate answers for a name that is not an action (the shape of its refusals; the real one is pinned in packages/server/test/computer-toolset.test.ts). */
-const refusedByGate = (action: unknown): { error: true; code: string; message: string } => ({ error: true, code: 'permission_denied', message: `"${String(action)}" isn't a computer action Grunt can do.` });
+const refusedByGate = (action: unknown): { error: true; code: string; message: string } => ({ error: true, code: 'permission_denied', message: `"${String(action)}" isn't a computer action OtherBench can do.` });
 
 function answerLikeTheGate(args: { action: string }): unknown {
   if (!(COMPUTER_ACTIONS as readonly string[]).includes(args.action)) return refusedByGate(args.action);
@@ -268,7 +268,7 @@ describe("Anthropic's computer toolset", () => {
       expect(JSON.stringify(bodies[0])).not.toContain('computer_toolset');
       expect(((bodies[0]!['tools'] as Block[] | undefined) ?? []).map((t) => t['name'])).toEqual(tools.map((t) => t.name));
     }
-    // A tool that only shares the name, or only the source, is not Grunt's computer tool either.
+    // A tool that only shares the name, or only the source, is not OtherBench's computer tool either.
     const lookalikes: ToolSpec[] = [{ ...plainSpec('computer', 'ok') }, { ...computerSpec([]), name: 'computer_2' }];
     for (const spec of lookalikes) {
       const { provider, bodies } = fakeAnthropic(ANSWER);
@@ -301,7 +301,7 @@ describe("Anthropic's computer toolset", () => {
     for (const id of ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5']) expect(usesComputerToolset('anthropic', id), id).toBe(false);
     // On the plan's list but never checked against the API: they keep the plain tool, which any model can call.
     for (const id of ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5-20261001']) expect(usesComputerToolset('anthropic', id), id).toBe(false);
-    // Not a bare prefix or a substring: a model Grunt does not know keeps the plain tool.
+    // Not a bare prefix or a substring: a model OtherBench does not know keeps the plain tool.
     for (const id of ['claude-opus-5-9', 'claude-opus-50', 'claude-opus-5-5x', 'claude-opus-5-5-', 'claude-opus-5-5-2026', 'claude-opus-5-5-202610011', 'claude-opus-5-5-latest', 'xclaude-opus-5-5', 'my-claude-opus-5-5', 'CLAUDE-OPUS-5-5', ' claude-opus-5-5', 'claude-opus-5-5\n', '']) {
       expect(usesComputerToolset('anthropic', id), JSON.stringify(id)).toBe(false);
     }

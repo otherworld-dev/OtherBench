@@ -1,7 +1,7 @@
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import type { McpServer, Store } from '@grunt/core/ports/store.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import type { McpServer, Store } from '@otherbench/core/ports/store.js';
 import { McpClient, type McpClientOptions, type McpTransportConfig } from './client.js';
-import { GruntOAuthProvider, signInCapable } from './oauth-provider.js';
+import { OtherBenchOAuthProvider, signInCapable } from './oauth-provider.js';
 import { McpOAuthStore } from './oauth-store.js';
 import { McpSignIns, SignInError } from './sign-in.js';
 
@@ -56,7 +56,7 @@ function persistedStatus(status: McpClient['status']): McpServer['status'] {
  * so it can just ask the manager to reconcile immediately afterward.
  *
  * Also owns sign-in state (spec 2026-10-12-mcp-oauth-design §4): one
- * `McpOAuthStore`, and a background `GruntOAuthProvider` on every http
+ * `McpOAuthStore`, and a background `OtherBenchOAuthProvider` on every http
  * connection without a fixed Authorization header.
  */
 export class McpServerManager {
@@ -390,7 +390,7 @@ export class McpServerManager {
       transport: 'http',
       url: row.url,
       headers,
-      authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background', resource: row.url }),
+      authProvider: new OtherBenchOAuthProvider(row.id, this.oauth, { kind: 'background', resource: row.url }),
       secrets: () => this.oauth.cachedSecrets(row.id),
     };
   }

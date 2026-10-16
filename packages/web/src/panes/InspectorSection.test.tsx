@@ -35,10 +35,10 @@ describe('Inspector Section', () => {
   it('starts open when asked to', () => {
     render(
       <Section title="Workspace" defaultOpen>
-        <Body text="Grunt" />
+        <Body text="OtherBench" />
       </Section>
     );
-    expect(screen.getByRole('button', { name: 'Workspace Grunt' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Workspace OtherBench' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('opens by itself and colours the header when its body reports a problem', () => {

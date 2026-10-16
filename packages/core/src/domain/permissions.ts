@@ -8,7 +8,7 @@ import {
   appKey,
   COMPUTER_BAD_ACTION_REASON,
   COMPUTER_DEVTOOLS_REASON,
-  COMPUTER_GRUNT_UI_REASON,
+  COMPUTER_OTHERBENCH_UI_REASON,
   COMPUTER_NO_APP_REASON,
   COMPUTER_NO_WINDOW_REASON,
   COMPUTER_OFF_REASON,
@@ -21,7 +21,7 @@ import {
   isReadAction,
   isUnattendedRun,
   parseAction,
-  showsGruntUi,
+  showsOtherBenchUi,
 } from './computer-apps.js';
 import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
 import { containPathIn } from './paths.js';
@@ -41,7 +41,7 @@ export type Decision =
 export interface PermissionBrokerOptions {
   /** Hard cap on simultaneously pending approvals; the oldest is evicted past it. Default 200. */
   maxPending?: number;
-  /** Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): the browser may use 127.0.0.1; the proxy holds it to these ports. */
+  /** Tests only (`OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS`): the browser may use 127.0.0.1; the proxy holds it to these ports. */
   allowLoopbackPorts?: readonly number[];
 }
 
@@ -106,7 +106,7 @@ function isShellTool(tool: ToolSpec): boolean {
  *      instead of `'execute'`) still can't slip through auto-approval --
  *      shell is unsandboxed and must always be at least grant- or ask-gated.
  *      The shell now has a sandboxed sibling (spec 2026-10-12-sandbox-design):
- *      `source: 'sandbox'` is `run_command` running in Grunt's WSL sandbox,
+ *      `source: 'sandbox'` is `run_command` running in OtherBench's WSL sandbox,
  *      which reaches only the chat's folders and allowlisted hosts. Under
  *      `ask_on_mutate` it needs no card (`grantedBy: 'sandbox'`); under
  *      `always_ask` it is grant- or ask-gated exactly like the host shell.
@@ -214,7 +214,7 @@ export class PermissionBroker {
   /**
    * Subscribes to the BACKSTOP evicting a request (see `enforceBound`). The
    * eviction is a safety net for a request whose owner never ended it; whoever
-   * is waiting on it (GruntToolProvider) must settle that wait as a denial.
+   * is waiting on it (OtherBenchToolProvider) must settle that wait as a denial.
    * Never fired by `resolve()`/`discard()`, which are the callers' own doing.
    */
   onEvict(cb: (requestId: string) => void): () => void {
@@ -297,10 +297,10 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
-    // Artifacts (Deck #896) change nothing outside Grunt and keep every
+    // Artifacts (Deck #896) change nothing outside OtherBench and keep every
     // version, so they never need a card; the profile's switch (checked
     // above) is how they're turned off. Only the source says a call is
-    // Grunt's: never a Claude Code tool's name, which any MCP server can take
+    // OtherBench's: never a Claude Code tool's name, which any MCP server can take
     // (the Claude Code engine marks its own server's call itself).
     if (tool.source === 'artifact') {
       return { kind: 'allow', grantedBy: 'policy' };
@@ -351,8 +351,8 @@ export class PermissionBroker {
       const action = stringField(args, 'action');
       // Exactly one of the known names, as a string: anything else (another
       // case, an array, a missing action) is refused, never treated as a look.
-      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${cardLine(action, 40)}" isn't a computer action Grunt can do.` };
-      // The whole action must be one Grunt would carry out, within every cap
+      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${cardLine(action, 40)}" isn't a computer action OtherBench can do.` };
+      // The whole action must be one OtherBench would carry out, within every cap
       // (`parseAction`): a readable coordinate, a key combination that stays
       // in the app, typed text with no control characters, a wait that is a
       // number. The tool's describeCall refuses these first, with a fuller
@@ -368,10 +368,10 @@ export class PermissionBroker {
       // could land anywhere, so it is refused.
       if (expectationOf(args) === null) return { kind: 'deny', reason: COMPUTER_NO_WINDOW_REASON };
       if (!valid) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
-      // A window showing Grunt's own UI (a browser tab of it) is refused before
+      // A window showing OtherBench's own UI (a browser tab of it) is refused before
       // any grant is looked at: `classifyTarget` refuses it first, and this is
-      // the backstop, so no grant for the browser ever reaches Grunt's cards.
-      if (showsGruntUi(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON };
+      // the backstop, so no grant for the browser ever reaches OtherBench's cards.
+      if (showsOtherBenchUi(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_OTHERBENCH_UI_REASON };
       if (isDevToolsTitle(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_DEVTOOLS_REASON };
     }
 
@@ -540,7 +540,7 @@ export class PermissionBroker {
 
     if (choice.choice === 'deny' || choice.choice === 'once') return;
 
-    // Fail closed: Grunt cannot know what an unrecognised Claude Code tool does,
+    // Fail closed: OtherBench cannot know what an unrecognised Claude Code tool does,
     // so it never pre-authorises future calls. 'chat'/'always' act like 'once'.
     if (pending.tool.source === 'agent' && classifyAgentTool(pending.tool.name).category === 'other') return;
 
@@ -560,7 +560,7 @@ export class PermissionBroker {
     if (pending.tool.source === 'computer') {
       const app = appForGrant(pending);
       if (isHighRiskApp(pending.args)) {
-        throw new Error(`Refusing to store a grant for computer use of ${cardLine(describeApp(app)?.name, 80)}: Grunt asks every time for this app.`);
+        throw new Error(`Refusing to store a grant for computer use of ${cardLine(describeApp(app)?.name, 80)}: OtherBench asks every time for this app.`);
       }
     }
 
@@ -642,7 +642,7 @@ export class PermissionBroker {
   /**
    * Drops a pending request created by `decide()` without answering it: no
    * grant, no event. Used when auto mode hands the call to Claude Code's
-   * classifier instead of a card (GruntToolProvider.requestApproval). An
+   * classifier instead of a card (OtherBenchToolProvider.requestApproval). An
    * unknown or already-settled id is a no-op, never an error.
    */
   discard(requestId: string): void {
@@ -748,7 +748,7 @@ export const UNATTENDED_REASON =
 
 /**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go
- * to Claude Code's own classifier instead of a Grunt card (spec
+ * to Claude Code's own classifier instead of an OtherBench card (spec
  * 2026-10-03-claude-code-auto-mode-design section 3). Only Claude Code tools
  * qualify. A write to Claude Code's own config (see isProtectedAgentPath) and
  * an unrecognised tool (`other`) never do: those are escalation paths and
@@ -762,7 +762,7 @@ export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
 
 /**
  * Whether a call may run while its reply's plan is still unapproved (spec
- * 2026-10-12-thread-cards-design §2): Grunt's own thread, artifact and
+ * 2026-10-12-thread-cards-design §2): OtherBench's own thread, artifact and
  * recall tools; read-risk fs and MCP tools; and Claude Code's file-read,
  * web and internal tools; and the browser's reads of the page that is already
  * open. Everything else, including any source added later, is refused: the
@@ -776,7 +776,7 @@ export function allowedWhilePlanning(tool: ToolSpec, args?: unknown): boolean {
     // does. Everything that changes a page or sends something to a site is
     // refused: `click`, `type`, `select`, `press`, `back`, and `open` too (a
     // request to an address the model chose, which can carry anything in its
-    // query). A call with no command, or one Grunt doesn't know, is refused.
+    // query). A call with no command, or one OtherBench doesn't know, is refused.
     case 'browser':
       return BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '');
     // Computer use (spec 2026-10-12-computer-use-design): every action is
@@ -840,7 +840,7 @@ function isHighRiskComputerCall(tool: ToolSpec, args: unknown): boolean {
 function appForGrant(pending: PendingRequest): string {
   const app = appKey(rawField(pending.args, 'app'));
   if (app === null) {
-    throw new Error('Refusing to create a grant for computer use: the approved call named no app Grunt could identify.');
+    throw new Error('Refusing to create a grant for computer use: the approved call named no app OtherBench could identify.');
   }
   return app;
 }
@@ -916,7 +916,7 @@ const CONSTRAINT_KEYS: readonly ConstraintKey[] = ['pathPrefix', 'commandPrefix'
 /**
  * The keys a constraint actually sets. A key holding `undefined` is absent
  * (the server's parser spells "not given" that way). Returns `null` when the
- * constraint carries a key Grunt doesn't know: such a grant can't be read,
+ * constraint carries a key OtherBench doesn't know: such a grant can't be read,
  * so it neither matches nor gets stored.
  */
 function constraintKeys(constraint: object): ConstraintKey[] | null {
@@ -937,7 +937,7 @@ function constraintKeys(constraint: object): ConstraintKey[] | null {
  * call, and such a call needs one; an `app` key matches only a computer call,
  * and such a call needs exactly `{ app }` and nothing else; a shell call
  * needs a command key. A grant with no constraint never covers a shell,
- * network, browser or computer call, and one with no key Grunt knows covers
+ * network, browser or computer call, and one with no key OtherBench knows covers
  * nothing. A key whose stored value isn't a string never matches (and never
  * throws).
  *
@@ -1026,7 +1026,7 @@ function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint'])
   const tool = pending.tool;
   const keys = sent === null || sent === undefined ? [] : constraintKeys(sent);
   if (keys === null) {
-    throw new Error(`Refusing to create an "always" grant for "${tool.name}": its constraint has a key Grunt doesn't know.`);
+    throw new Error(`Refusing to create an "always" grant for "${tool.name}": its constraint has a key OtherBench doesn't know.`);
   }
   const value = (key: ConstraintKey): string => {
     const v = sent?.[key];

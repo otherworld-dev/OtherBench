@@ -209,7 +209,7 @@ describe('unattendedWarnings', () => {
     expect(unattendedWarnings(policy({ fs: 'read', subagents: true }), 'anthropic', true)).toEqual([line]);
     expect(unattendedWarnings(policy({ fs: 'read', subagents: false }), 'anthropic', true)).toEqual([]);
     expect(unattendedWarnings(policy({ fs: 'read' }), 'anthropic', true)).toEqual([]);
-    // Claude Code never gets Grunt's subagent tool, and an always-ask profile already says everything is refused.
+    // Claude Code never gets OtherBench's subagent tool, and an always-ask profile already says everything is refused.
     expect(unattendedWarnings(policy({ fs: 'read', subagents: true }), 'claude_code', true)).toEqual([]);
     expect(unattendedWarnings(policy({ approvalMode: 'always_ask', subagents: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
   });

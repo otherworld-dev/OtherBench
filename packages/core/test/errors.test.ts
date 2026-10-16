@@ -14,7 +14,7 @@ import { classifyProviderError } from '../src/types/errors.js';
  * These tests exercise `classifyProviderError` against *real* instances of
  * the error classes the installed AI SDK (`@ai-sdk/provider` 3.0.15, `ai`
  * 6.0.253) actually throws -- not invented shapes -- per task 14's decision
- * #1. `@grunt/core` still has zero *runtime* dependency on either package
+ * #1. `@otherbench/core` still has zero *runtime* dependency on either package
  * (see errors.ts: classification is done by duck-typing `err.name`/
  * structural fields, not `instanceof`/`isInstance`); both are devDependencies
  * here purely so this test file can construct authentic error instances.

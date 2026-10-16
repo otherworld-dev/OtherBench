@@ -1,19 +1,19 @@
-import type { Connection } from '@grunt/core/types/config.js';
-import { isServerOnlyEnvVar } from '@grunt/core/domain/child-env.js';
+import type { Connection } from '@otherbench/core/types/config.js';
+import { isServerOnlyEnvVar } from '@otherbench/core/domain/child-env.js';
 
 /** The `EngineMeta.backend` value for the Claude login (no base URL). */
 export const CLAUDE_BACKEND = 'claude';
 
 const CREDENTIAL_VARS = /^ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)$/i;
 /**
- * Set when Grunt itself was started from inside a Claude Code session. Passed
+ * Set when OtherBench itself was started from inside a Claude Code session. Passed
  * on, they would make the child think it is nested in that session (or attach
  * to its IDE port) instead of being a fresh top-level run.
  */
 const PARENT_SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE_PORT)$/i;
 /**
  * Makes Claude Code read CLAUDE.md from each `additionalDirectories` entry.
- * Grunt passes none (a chat's extra folders are folders to work in, never
+ * OtherBench passes none (a chat's extra folders are folders to work in, never
  * configuration), and this keeps it so if one is ever passed.
  */
 const ADDED_DIR_CONFIG_VARS = /^CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD$/i;
@@ -40,17 +40,17 @@ export function backendOf(conn: Connection): string {
 export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    // The server's own API token (GRUNT_TOKEN) never reaches Claude Code or its Bash (core/domain/child-env.ts).
+    // The server's own API token (OTHERBENCH_TOKEN) never reaches Claude Code or its Bash (core/domain/child-env.ts).
     if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
   }
   if (conn.baseUrl) {
     env['ANTHROPIC_BASE_URL'] = trimTrailingSlash(conn.baseUrl);
-    env['ANTHROPIC_AUTH_TOKEN'] = token ?? 'grunt-local';
+    env['ANTHROPIC_AUTH_TOKEN'] = token ?? 'otherbench-local';
     env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = modelId;
     env['ANTHROPIC_SMALL_FAST_MODEL'] = modelId;
   }
   // Newer models aren't offered TodoWrite in SDK sessions; this turns it on
-  // for every model (probe: test/fixtures/README.md, "Thread tools"). Grunt
+  // for every model (probe: test/fixtures/README.md, "Thread tools"). OtherBench
   // shows the list as the reply's checklist.
   env['CLAUDE_CODE_ENABLE_TODO_TOOLS'] = '1';
   return env;

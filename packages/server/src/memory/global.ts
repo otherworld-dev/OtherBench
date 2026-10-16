@@ -1,10 +1,10 @@
-import { emptyGlobalMemoryBody, finaliseGlobalSummary, globalMemoryUpdatePrompt, normaliseGlobalMemoryBody } from '@grunt/core/domain/global-memory.js';
-import { MEMORY_QUIET_MS, pendingMemoryMessages, renderMemoryTranscript, type MemoryFailure } from '@grunt/core/domain/memory.js';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { Chat, GlobalMemory, Store } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { emptyGlobalMemoryBody, finaliseGlobalSummary, globalMemoryUpdatePrompt, normaliseGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
+import { MEMORY_QUIET_MS, pendingMemoryMessages, renderMemoryTranscript, type MemoryFailure } from '@otherbench/core/domain/memory.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { Chat, GlobalMemory, Store } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import { collectMessageTree } from '../routes/chats.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
@@ -124,7 +124,7 @@ export class GlobalMemoryService {
         if (wait <= 0) void this.enqueue(chat.id);
         else this.schedule(chat.id, wait);
       } catch (err) {
-        console.warn(`[grunt-server] global memory sweep skipped chat ${chat.id}:`, err);
+        console.warn(`[otherbench-server] global memory sweep skipped chat ${chat.id}:`, err);
       }
     }
   }
@@ -234,7 +234,7 @@ export class GlobalMemoryService {
 
   private fail(chatId: string, message: string): GlobalMemoryUpdateOutcome {
     this.failure = { message, at: this.now(), chatId };
-    console.warn(`[grunt-server] global memory update (chat ${chatId}) failed: ${message}`);
+    console.warn(`[otherbench-server] global memory update (chat ${chatId}) failed: ${message}`);
     return { status: 'failed', error: message };
   }
 }

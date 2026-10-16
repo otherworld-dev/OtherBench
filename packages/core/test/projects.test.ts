@@ -41,13 +41,13 @@ describe('projectParentOf and projectDisplayName', () => {
   const nested = (id: string, name: string, parentId: string | null): Project => ({ ...project(id, name, 0), parentId });
 
   it('finds a top-level parent and names the child after it', () => {
-    const grunt = nested('g', 'Grunt', null);
+    const otherbench = nested('g', 'OtherBench', null);
     const desktop = nested('d', 'Desktop', 'g');
-    const lookup = projectLookup([grunt, desktop]);
-    expect(projectParentOf(desktop, lookup)).toBe(grunt);
-    expect(projectDisplayName(desktop, lookup)).toBe('Grunt / Desktop');
-    expect(projectParentOf(grunt, lookup)).toBeNull();
-    expect(projectDisplayName(grunt, lookup)).toBe('Grunt');
+    const lookup = projectLookup([otherbench, desktop]);
+    expect(projectParentOf(desktop, lookup)).toBe(otherbench);
+    expect(projectDisplayName(desktop, lookup)).toBe('OtherBench / Desktop');
+    expect(projectParentOf(otherbench, lookup)).toBeNull();
+    expect(projectDisplayName(otherbench, lookup)).toBe('OtherBench');
   });
 
   it('treats a project as top level when its parent is missing, itself, or nested', () => {

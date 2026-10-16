@@ -9,9 +9,9 @@ import { tooManyMessage } from './limiter.js';
 import { MAX_PASSWORD_LENGTH, passwordProblem, verifyPassword, type PasswordRecord } from './password.js';
 import { REMEMBER_MS, type Session, type SessionStore } from './sessions.js';
 
-/** Sent as `__Host-grunt_session` (Hono's `prefix: 'host'`): Secure, Path=/, no Domain. */
-export const SESSION_COOKIE = 'grunt_session';
-const SIGN_IN = 'Sign in to Grunt.';
+/** Sent as `__Host-otherbench_session` (Hono's `prefix: 'host'`): Secure, Path=/, no Domain. */
+export const SESSION_COOKIE = 'otherbench_session';
+const SIGN_IN = 'Sign in to OtherBench.';
 const BAD_TOKEN = 'Missing or invalid bearer token.';
 /** `Sec-Fetch-Site` values the cookie counts for; absent (old browsers) counts too. */
 const COOKIE_SITES = new Set(['same-origin', 'none']);
@@ -258,7 +258,7 @@ async function checkPassword(c: Context, remote: RemoteAccess, address: string, 
     if (!record) {
       granted.release('unavailable');
       remote.limiter.note('no-password-file', address);
-      return c.json({ error: 'No password is set on this server. Run "grunt password" on it.' }, 503);
+      return c.json({ error: 'No password is set on this server. Run "otherbench password" on it.' }, 503);
     }
     if (await verifyPassword(password, record, granted)) {
       granted.release('right');
@@ -317,7 +317,7 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     setSessionCookie(c, id, remember);
     // "Keep me signed in on this device" is also what makes it a remembered device.
     if (remember) setDeviceCookie(c, remote, checked.epoch);
-    remote.log(`[grunt-server] signed in from ${address}${remember ? ' (kept signed in for 30 days)' : ''}`);
+    remote.log(`[otherbench-server] signed in from ${address}${remember ? ' (kept signed in for 30 days)' : ''}`);
     return c.json({ expiresAt: session.expiresAt });
   });
 
@@ -337,7 +337,7 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     remote.devices.rotate();
     clearSessionCookie(c);
     clearDeviceCookie(c);
-    remote.log(`[grunt-server] every device signed out by ${remote.clientAddress(c) ?? 'unknown'}`);
+    remote.log(`[otherbench-server] every device signed out by ${remote.clientAddress(c) ?? 'unknown'}`);
     return c.body(null, 204);
   });
 
@@ -362,7 +362,7 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     const { id, session } = remote.sessions.create({ remember: found.session.remember, epoch: record.epoch, address, userAgent: userAgentOf(c) });
     setSessionCookie(c, id, found.session.remember);
     if (found.session.remember) setDeviceCookie(c, remote, record.epoch);
-    remote.log(`[grunt-server] password changed from ${address}; every other device is signed out`);
+    remote.log(`[otherbench-server] password changed from ${address}; every other device is signed out`);
     return c.json({ expiresAt: session.expiresAt });
   });
 

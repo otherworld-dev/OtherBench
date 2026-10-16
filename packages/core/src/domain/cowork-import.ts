@@ -11,15 +11,15 @@ import { CLAUDE_REPLY_NAME, type ImportedChat, type ImportProfile } from './clau
  * A transcript writes each piece of a turn as its own line (a reply comes a
  * content block at a time, a tool result as a "user" line), linked by
  * `parentUuid`. Here a prompt becomes a user message and everything up to the
- * next prompt becomes one assistant message, as Grunt records its own turns.
+ * next prompt becomes one assistant message, as OtherBench records its own turns.
  * Only the branch that ends at the transcript's last line is kept; retries
  * and resumes leave others behind.
  */
 
 export const UNTITLED_COWORK_SESSION = 'Untitled Cowork session';
-/** Longest title made from a session's first prompt, as for Grunt's own titles. */
+/** Longest title made from a session's first prompt, as for OtherBench's own titles. */
 const DERIVED_TITLE_MAX = 48;
-/** Images stored as attachments: the raster types Grunt serves (attachments.ts's allowlist). */
+/** Images stored as attachments: the raster types OtherBench serves (attachments.ts's allowlist). */
 const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /** One Cowork session as read from disk. */

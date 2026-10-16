@@ -39,7 +39,7 @@ export function AuthedImage({
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        console.error(`[grunt-web] failed to load image ${src}:`, err);
+        console.error(`[otherbench-web] failed to load image ${src}:`, err);
         failed.current?.();
       });
     return () => {

@@ -24,14 +24,14 @@ import { BASE_URL } from '../playwright.config.js';
  * forces the approval path this file exists to exercise), and a chat whose
  * `workspaceRoot` is a REAL temp directory containing a REAL file -- so a
  * successful approval reads genuine bytes off disk through the full
- * PermissionBroker -> GruntToolProvider -> fs-tools.readFileTool chain, not
+ * PermissionBroker -> OtherBenchToolProvider -> fs-tools.readFileTool chain, not
  * a mock standing in for any part of it.
  */
 
 let workspaceRoot: string;
 
 test.beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'grunt-e2e-tool-approval-'));
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'otherbench-e2e-tool-approval-'));
   writeFileSync(join(workspaceRoot, 'secrets.txt'), 'THE TREASURE IS BURIED UNDER THE OAK TREE');
 });
 

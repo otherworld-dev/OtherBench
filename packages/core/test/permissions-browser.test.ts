@@ -34,7 +34,7 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
     for (const host of ['ads.test', 'x.ads.test', 'localhost', 'printer.local', 'router', 'intranet', '192.168.1.1', '10.0.0.5', '::1', '169.254.169.254']) {
       expect(broker.decide(BROWSER(), open(host), always, ctx()), host).toMatchObject({ kind: 'deny' });
     }
-    expect(broker.decide(BROWSER(), { command: 'open', url: 'https://example.com/' }, always, ctx())).toEqual({ kind: 'deny', reason: "Grunt couldn't tell which website this is for." });
+    expect(broker.decide(BROWSER(), { command: 'open', url: 'https://example.com/' }, always, ctx())).toEqual({ kind: 'deny', reason: "OtherBench couldn't tell which website this is for." });
     expect(broker.pendingCount).toBe(0);
   });
 
@@ -122,7 +122,7 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
     expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
-  it('decides every shared host vector the way the rest of Grunt does (a refused address names no host)', () => {
+  it('decides every shared host vector the way the rest of OtherBench does (a refused address names no host)', () => {
     const always = policy({ approvalMode: 'always_ask' });
     for (const v of BROWSER_HOST_VECTORS) {
       // The broker knows no port, so a row about the loopback escape is the proxy's to judge.

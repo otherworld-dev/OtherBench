@@ -9,14 +9,14 @@ describe('claudeDesktopConfigPath', () => {
     expect(claudeDesktopConfigPath({ APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, 'win32', 'C:\\Users\\a')).toBe(join('C:\\Users\\a\\AppData\\Roaming', 'Claude', 'claude_desktop_config.json'));
     expect(claudeDesktopConfigPath({}, 'darwin', '/Users/a')).toBe(join('/Users/a', 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'));
     expect(claudeDesktopConfigPath({}, 'linux', '/home/a')).toBe(join('/home/a', '.config', 'Claude', 'claude_desktop_config.json'));
-    expect(claudeDesktopConfigPath({ GRUNT_CLAUDE_DESKTOP_CONFIG: '/x/c.json', APPDATA: 'C:\\x' }, 'win32', 'C:\\Users\\a')).toBe('/x/c.json');
+    expect(claudeDesktopConfigPath({ OTHERBENCH_CLAUDE_DESKTOP_CONFIG: '/x/c.json', APPDATA: 'C:\\x' }, 'win32', 'C:\\Users\\a')).toBe('/x/c.json');
   });
 });
 
 describe('readClaudeDesktopServers', () => {
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'grunt-desktop-config-'));
+    dir = mkdtempSync(join(tmpdir(), 'otherbench-desktop-config-'));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
   const write = (content: unknown): string => {

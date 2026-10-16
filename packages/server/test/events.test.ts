@@ -2,15 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
 import { AppEventBus, markUnreadOnFinish, withChatEvents } from '../src/stream/events.js';
@@ -48,7 +48,7 @@ function build(engine: ChatEngine): void {
   const secrets = new FakeSecretStore();
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager);
   const turnRunner = new TurnRunner(store, engine, { toolProvider });
   events.attach(turnRunner, store);
   markUnreadOnFinish(events, store);
@@ -74,7 +74,7 @@ function post(path: string, body: unknown) {
 }
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-events-test-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-events-test-'));
 });
 
 afterEach(() => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents } from './reducer.js';
 
 function baseMessage(overrides: Partial<CanonMessage> = {}): CanonMessage {

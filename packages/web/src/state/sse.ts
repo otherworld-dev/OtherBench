@@ -1,4 +1,4 @@
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { HelloBuffer, StreamConnectionStatus } from './store.js';
 import { authHeaders, reportUnauthorized } from './transport.js';
 
@@ -134,7 +134,7 @@ export interface SseClientOptions<H = HelloBuffer[], E = TurnEvent> {
  * drops the connection and schedules a fresh one after an exponentially
  * growing delay, so a server restart or a flaky network doesn't hammer the
  * endpoint. Every reconnect's `hello` event carries a fresh replay
- * snapshot, which `onHello` (wired to `useGruntStore.applyHello`) reconciles
+ * snapshot, which `onHello` (wired to `useOtherBenchStore.applyHello`) reconciles
  * without duplicating anything already applied live -- see reducer.ts.
  */
 export class SseClient<H = HelloBuffer[], E = TurnEvent> {
@@ -201,7 +201,7 @@ export class SseClient<H = HelloBuffer[], E = TurnEvent> {
     try {
       return JSON.parse(data) as T;
     } catch (err) {
-      console.error('[grunt-web] failed to parse SSE payload:', err);
+      console.error('[otherbench-web] failed to parse SSE payload:', err);
       return null;
     }
   }

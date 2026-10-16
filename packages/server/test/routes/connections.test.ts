@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { ConnectionTestResult, DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
-import type { Connection } from '@grunt/core/types/config.js';
-import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
-import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { ConnectionTestResult, DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
+import type { Connection } from '@otherbench/core/types/config.js';
+import { AiSdkChatEngine } from '@otherbench/engine-aisdk/engine.js';
+import { ProviderRegistry } from '@otherbench/engine-aisdk/registry.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -19,7 +19,7 @@ import { StreamRegistry } from '../../src/stream/registry.js';
  * `listModels` throw -- needed to exercise `discover-models`' error path,
  * which `FakeChatEngine` itself has no hook for (it always resolves with
  * `.models`). Kept local to this test file rather than added to
- * `@grunt/core`'s shared fakes since that file is out of scope for this fix.
+ * `@otherbench/core`'s shared fakes since that file is out of scope for this fix.
  */
 class ThrowingModelsEngine extends FakeChatEngine {
   listModelsError: unknown = null;
@@ -62,7 +62,7 @@ let dataDir: string;
 // mis-wired blobStore would 500 every DELETE test instead of exercising
 // anything real (task 32 fix round 1, Minor #8).
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-connections-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-connections-route-test-'));
   secrets = new FakeSecretStore();
   engine = new ThrowingModelsEngine([]);
   const store = new InMemoryStore();

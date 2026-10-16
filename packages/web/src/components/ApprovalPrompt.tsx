@@ -1,8 +1,8 @@
 import { useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
-import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
-import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
-import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import type { ApprovalChoice, ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import { classifyAgentTool } from '@otherbench/core/domain/agent-tools.js';
+import { normaliseHost } from '@otherbench/core/domain/browser-hosts.js';
+import { canonicalHost } from '@otherbench/core/domain/network-hosts.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
 import { ComputerApprovalPrompt } from './ComputerApprovalPrompt.js';
 import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
@@ -19,7 +19,7 @@ const RISK_LABEL: Record<ApprovalRequest['risk'], string> = {
   execute: 'executes a command',
 };
 
-/** A Claude Code shell-category tool (Bash, PowerShell, ...) -- grants are scoped like Grunt's own shell tool. */
+/** A Claude Code shell-category tool (Bash, PowerShell, ...) -- grants are scoped like OtherBench's own shell tool. */
 function isAgentShell(request: ApprovalRequest): boolean {
   return request.source === 'agent' && classifyAgentTool(request.toolName).category === 'shell';
 }
@@ -144,7 +144,7 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
       // need to reset `pending` here, and doing so risks a flash of
       // re-enabled buttons before that removal lands.
     } catch (err) {
-      console.error(`[grunt-web] failed to resolve approval ${request.id}:`, err);
+      console.error(`[otherbench-web] failed to resolve approval ${request.id}:`, err);
       setPending(false);
       setError(answerErrorText(err, 'Could not send that decision -- please try again.'));
     }

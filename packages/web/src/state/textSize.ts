@@ -3,7 +3,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 /** Selectable text sizes, as a percentage of the browser's base font size. */
 export const TEXT_SIZE_STEPS = [85, 100, 115, 130, 150] as const;
 export const DEFAULT_TEXT_SIZE = 100;
-export const TEXT_SIZE_STORAGE_KEY = 'grunt.textSize';
+export const TEXT_SIZE_STORAGE_KEY = 'otherbench.textSize';
 
 /** Reads the saved size; anything missing, unreadable or off-step falls back to 100. */
 export function loadTextSize(): number {

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
-import type { Attachment, AttachmentRepo } from '@grunt/core/ports/store.js';
+import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
+import type { Attachment, AttachmentRepo } from '@otherbench/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
 

@@ -1,6 +1,6 @@
 import writeXlsxFile, { type Cell as XlsxCell } from 'write-excel-file/node';
 import { OfficeRenderError } from './errors.js';
-import { formulaForFile, parseCellDate, xmlSafe, type Cell, type SpreadsheetSpec } from '@grunt/core/domain/office-spec.js';
+import { formulaForFile, parseCellDate, xmlSafe, type Cell, type SpreadsheetSpec } from '@otherbench/core/domain/office-spec.js';
 
 /**
  * A `spreadsheet` artifact as an .xlsx (spec 2026-10-12-office-files §4).

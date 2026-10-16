@@ -2,16 +2,16 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLAUDE_ROOT_PARENT, ClaudeExportError, type ClaudeExportFiles } from '@grunt/core/domain/claude-import.js';
-import type { CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
-import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { CLAUDE_ROOT_PARENT, ClaudeExportError, type ClaudeExportFiles } from '@otherbench/core/domain/claude-import.js';
+import type { CoworkSessionFiles } from '@otherbench/core/domain/cowork-import.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { openDatabase } from '@otherbench/store-sqlite/db.js';
+import { runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
+import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { ClaudeImportService, ImportBusyError, ImportInputError } from '../../src/import/claude-import.js';
 import { MemoryQueue } from '../../src/memory/shared.js';
 import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
@@ -92,7 +92,7 @@ async function runImport(service: ClaudeImportService, over: { memory?: boolean;
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'grunt-claude-import-'));
+  root = await mkdtemp(join(tmpdir(), 'otherbench-claude-import-'));
   const db = openDatabase(':memory:');
   runMigrations(db);
   bus = new AppEventBus();
@@ -237,16 +237,16 @@ describe('ClaudeImportService: projects and files', () => {
       { uuid: '019f3c80-aaaa', name: 'Home Stuff', description: 'House things', prompt_template: 'Be brief.', created_at: at(0), updated_at: at(1), docs: [{ filename: 'claude/shed-plan.md', content: '# Shed' }] },
       { uuid: '019c0000-bbbb', name: 'phd', description: 'Robots', prompt_template: 'Cite sources.', created_at: at(0), updated_at: at(1), docs: [] },
     ];
-    store.projects.create({ id: 'grunt-phd', name: 'PhD', description: '', instructions: 'Mine.', workspace: null, defaultProfileId: null });
+    store.projects.create({ id: 'otherbench-phd', name: 'PhD', description: '', instructions: 'Mine.', workspace: null, defaultProfileId: null });
   });
 
   it('creates new projects, merges into one with the same name without overwriting, and writes and attaches docs', async () => {
     const status = await runImport(makeService());
     expect(status.report!.projects).toMatchObject({ created: ['Home Stuff'], merged: ['PhD'], existing: [], failed: [] });
     expect(store.projects.get('019f3c80-aaaa')).toMatchObject({ name: 'Home Stuff', description: 'House things', instructions: 'Be brief.' });
-    expect(store.projects.get('grunt-phd')).toMatchObject({ description: 'Robots', instructions: 'Mine.' });
+    expect(store.projects.get('otherbench-phd')).toMatchObject({ description: 'Robots', instructions: 'Mine.' });
     expect(store.projects.list().map((p) => p.name)).toEqual(['PhD', 'Home Stuff']);
-    expect(store.projects.get('019f3c80-aaaa')!.sortOrder).toBeGreaterThan(store.projects.get('grunt-phd')!.sortOrder);
+    expect(store.projects.get('019f3c80-aaaa')!.sortOrder).toBeGreaterThan(store.projects.get('otherbench-phd')!.sortOrder);
 
     const folder = join(root, 'imported', 'claude', 'Home Stuff-019f3c80');
     expect(await readFile(join(folder, 'shed-plan.md'), 'utf8')).toBe('# Shed');
@@ -347,7 +347,7 @@ describe('ClaudeImportService: memory', () => {
     expect(store.globalMemory.get()).toMatchObject({ about: 'Written by me.', note: '' });
   });
 
-  it('never starts a memory call still queued when Grunt shuts down', async () => {
+  it('never starts a memory call still queued when OtherBench shuts down', async () => {
     const queue = new MemoryQueue();
     let release!: () => void;
     // A summariser call holds the queue while the import's calls wait behind it.
@@ -408,7 +408,7 @@ describe("ClaudeImportService: filing chats by claude.ai's chat list", () => {
       { uuid: 'p-home', name: 'Home Stuff', docs: [] },
       { uuid: 'p-phd', name: 'PhD', docs: [] },
     ];
-    store.projects.create({ id: 'grunt-phd', name: 'PhD', workspace: null, defaultProfileId: null });
+    store.projects.create({ id: 'otherbench-phd', name: 'PhD', workspace: null, defaultProfileId: null });
     exportFiles.conversations = [
       conversation('c1', 'Shed', [message('u1', 'human', CLAUDE_ROOT_PARENT, 1)]),
       conversation('c2', 'Thesis', [message('u2', 'human', CLAUDE_ROOT_PARENT, 2)]),
@@ -430,7 +430,7 @@ describe("ClaudeImportService: filing chats by claude.ai's chat list", () => {
     const status = await runImport(makeService());
     expect(status.report!.chats.filed).toBe(2);
     expect(store.chats.get('c1')!.projectId).toBe('p-home');
-    expect(store.chats.get('c2')!.projectId).toBe('grunt-phd');
+    expect(store.chats.get('c2')!.projectId).toBe('otherbench-phd');
     expect(store.chats.get('c3')!.projectId).toBeNull();
   });
 
@@ -478,7 +478,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
   const coworkService = (over: Partial<ConstructorParameters<typeof ClaudeImportService>[0]> = {}) =>
     makeService({ coworkRoot: ROOT, readCowork: async () => sessions, blobStore: createBlobStore(join(root, 'blobs')), ...over });
 
-  async function runCowork(service: ClaudeImportService, spaces: Record<string, string | null> = { 'space-1': 'grunt-phd' }) {
+  async function runCowork(service: ClaudeImportService, spaces: Record<string, string | null> = { 'space-1': 'otherbench-phd' }) {
     await service.start({ folder: root, profileId: 'claude', memory: false, cowork: true, spaces });
     await service.idle();
     return service.status();
@@ -487,7 +487,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
   beforeEach(() => {
     exportFiles.conversations = [];
     sessions = [session('local_s1', 'Finance Dept', 'space-1', true), session('local_s2', 'Fence install', null)];
-    store.projects.create({ id: 'grunt-phd', name: 'PhD', workspace: null, defaultProfileId: null });
+    store.projects.create({ id: 'otherbench-phd', name: 'PhD', workspace: null, defaultProfileId: null });
   });
 
   it("previews the sessions and their spaces, so the user can choose each space's project", async () => {
@@ -505,7 +505,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
   it("imports them when asked, filing each space's sessions where the user chose and storing pasted images as attachments", async () => {
     const status = await runCowork(coworkService());
     expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, filed: 1, messages: 4, images: 1, failed: [] });
-    expect(store.chats.get('local_s1')).toMatchObject({ title: 'Finance Dept', projectId: 'grunt-phd', headMessageId: 'local_s1-a' });
+    expect(store.chats.get('local_s1')).toMatchObject({ title: 'Finance Dept', projectId: 'otherbench-phd', headMessageId: 'local_s1-a' });
     expect(store.chats.get('local_s2')!.projectId).toBeNull();
     const [attachment] = store.attachments.list('local_s1');
     expect(attachment).toMatchObject({ id: 'local_s1-u:image:1', messageId: 'local_s1-u', mime: 'image/png', size: png.length });
@@ -519,7 +519,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
     expect(store.chats.get('local_s1')!.projectId).toBeNull();
     const again = await runCowork(coworkService());
     expect(again.report!.cowork).toMatchObject({ imported: 0, existing: 2, filed: 1 });
-    expect(store.chats.get('local_s1')!.projectId).toBe('grunt-phd');
+    expect(store.chats.get('local_s1')!.projectId).toBe('otherbench-phd');
   });
 
   it("leaves Cowork alone unless asked, and refuses a space mapped to a project that isn't there", async () => {

@@ -10,7 +10,7 @@ import type { ToolPolicy } from '../src/types/config.js';
 
 let ws: string;
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-sandbox-broker-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-sandbox-broker-'));
 });
 afterEach(() => rmSync(ws, { recursive: true, force: true }));
 

@@ -41,9 +41,9 @@ beforeEach(() => {
   store = new InMemoryStore();
   seq = 0;
   store.projects.create({ id: 'site', name: 'Website', workspaceRoot: null, defaultProfileId: null, description: 'The marketing site', instructions: 'Use British English.' });
-  store.projects.create({ id: 'grunt', name: 'Grunt', workspaceRoot: null, defaultProfileId: null });
+  store.projects.create({ id: 'otherbench', name: 'OtherBench', workspaceRoot: null, defaultProfileId: null });
   store.projectMemory.save('site', PROJECT_NOTE, 'summariser', null);
-  chat('asking', { projectId: 'grunt' });
+  chat('asking', { projectId: 'otherbench' });
   chat('other', { projectId: 'site', title: 'Pricing tiers' });
   chat('private', { memoryExcluded: true });
   chat('loose');

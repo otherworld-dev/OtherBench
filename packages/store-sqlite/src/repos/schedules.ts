@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@grunt/core/domain/schedule.js';
+import { parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type {
   NewSchedule,
   NewScheduleRun,
@@ -8,7 +8,7 @@ import type {
   ScheduleRepo,
   ScheduleRun,
   ScheduleRunPatch,
-} from '@grunt/core/ports/store.js';
+} from '@otherbench/core/ports/store.js';
 
 /** What a schedule whose stored rule can't be read shows instead; it is disabled and never runs. */
 const PLACEHOLDER_RULE: ScheduleRule = { cadence: 'daily', time: '00:00' };

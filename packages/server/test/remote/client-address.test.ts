@@ -53,7 +53,7 @@ describe('normalizeIp', () => {
     expect(normalizeIp(' 10.0.0.1 ')).toBe('10.0.0.1');
     expect(normalizeIp('[FD00::5]')).toBe('fd00::5');
     expect(normalizeIp('10.0.0.0/8')).toBeNull();
-    expect(normalizeIp('grunt.lan')).toBeNull();
+    expect(normalizeIp('otherbench.lan')).toBeNull();
     expect(normalizeIp(undefined)).toBeNull();
   });
 });

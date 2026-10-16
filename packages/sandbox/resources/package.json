@@ -1,8 +1,8 @@
 {
-  "name": "grunt-sandbox-agent",
+  "name": "otherbench-sandbox-agent",
   "private": true,
   "type": "module",
-  "description": "Installed by Grunt's sandbox setup into /opt/grunt-sandbox inside the grunt-sandbox WSL distro (npm ci --omit=dev).",
+  "description": "Installed by OtherBench's sandbox setup into /opt/otherbench-sandbox inside the otherbench-sandbox WSL distro (npm ci --omit=dev).",
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.79"
   }

@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyGlobalMemoryBody } from '@grunt/core/domain/global-memory.js';
-import type { MemoryFailure } from '@grunt/core/domain/memory.js';
-import type { Chat, GlobalMemory } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import { emptyGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
+import type { MemoryFailure } from '@otherbench/core/domain/memory.js';
+import type { Chat, GlobalMemory } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
@@ -18,7 +18,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
 });
 
 import { ApiError, api, type GlobalMemoryView } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { MEMORY_MODEL_HINT, MemoryPanel } from './MemoryPanel.js';
 
 const mockedGet = vi.mocked(api.settings.get);
@@ -51,8 +51,8 @@ function view(over: Partial<GlobalMemory> = {}, lastError: MemoryFailure | null 
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ profiles: [profile('p-cheap', 'Local Llama'), profile('p-big', 'Opus'), profile('p-old', 'Old', 5)], chats: [{ id: 'c1', title: 'Setup chat' } as Chat] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ profiles: [profile('p-cheap', 'Local Llama'), profile('p-big', 'Opus'), profile('p-old', 'Old', 5)], chats: [{ id: 'c1', title: 'Setup chat' } as Chat] });
   mockedGet.mockReset().mockResolvedValue({ memoryProfileId: null });
   mockedPatch.mockReset().mockImplementation(async (body) => ({ memoryProfileId: body.memoryProfileId ?? null }));
   for (const fn of Object.values(global)) fn.mockReset();

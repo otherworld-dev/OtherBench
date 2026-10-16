@@ -1,5 +1,5 @@
 /**
- * Text that reaches a card, a banner or a summary from somewhere Grunt doesn't
+ * Text that reaches a card, a banner or a summary from somewhere OtherBench doesn't
  * control (a web page, a window title, a program's path, what the model wants
  * to type). React escapes markup; these strip or spell out what escaping
  * can't: characters that hide, reorder or break up what is shown.
@@ -57,7 +57,7 @@ const ELLIPSIS = String.fromCodePoint(0x2026);
 const spell = (codePoint: number): string => `<U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}>`;
 
 /**
- * Lower case for A to Z only. Names Grunt compares (a program's file name, a
+ * Lower case for A to Z only. Names OtherBench compares (a program's file name, a
  * key's name, a signer) are folded with this and nothing else, so the result
  * never depends on a runtime's Unicode tables and never makes two different
  * names one (as full lower-casing does for the Kelvin sign and `k`).

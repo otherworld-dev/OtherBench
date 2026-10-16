@@ -19,7 +19,7 @@ function placeholderHtml(webDistDir: string): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Grunt</title>
+<title>OtherBench</title>
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #1a1d21; }
   code { background: #eef0f2; padding: 0.1em 0.4em; border-radius: 3px; }
@@ -27,17 +27,17 @@ function placeholderHtml(webDistDir: string): string {
 </style>
 </head>
 <body>
-  <h1>Grunt server is running</h1>
+  <h1>OtherBench server is running</h1>
   <p>The API is live at <code>/api/*</code> (try <code>/api/health</code>), but no built web bundle was found at:</p>
   <p><code>${webDistDir}</code></p>
-  <p>Run <code>npm run build</code> from the repo root to build <code>@grunt/web</code>, then restart <code>grunt serve</code>.</p>
+  <p>Run <code>npm run build</code> from the repo root to build <code>@otherbench/web</code>, then restart <code>otherbench serve</code>.</p>
 </body>
 </html>`;
 }
 
 /**
  * Mounts the built web app at `/` and every other non-`/api` path, so
- * `grunt serve` serves the whole product from one origin/port: the SPA at
+ * `otherbench serve` serves the whole product from one origin/port: the SPA at
  * `/`, the API at `/api/*`. Must be called AFTER the `/api` routes are
  * already mounted on `app` (see app.ts) -- not because Hono's router would
  * otherwise misroute a matched `/api/...` path (route specificity already
@@ -71,7 +71,7 @@ export function mountStatic(app: Hono, { webDistDir }: StaticOptions): void {
       await next();
       return;
     }
-    // No other site may frame Grunt's UI (spec 2026-10-12-remote-access §3):
+    // No other site may frame OtherBench's UI (spec 2026-10-12-remote-access §3):
     // that would let it trick a click on an approval button. Every mode. The
     // viewer's iframes load /view/, which sets its own headers.
     c.header('Content-Security-Policy', "frame-ancestors 'none'");

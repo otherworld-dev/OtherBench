@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Part } from '@grunt/core/types/messages.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import { cutOffParts, withEvent } from '../../src/peer/forward.js';
 
 describe('withEvent (a kept copy of a reply running on another machine)', () => {

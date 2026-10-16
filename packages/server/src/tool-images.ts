@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, type SaveToolImage } from '@grunt/core/domain/tool-images.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
-import { sha256Of, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, type SaveToolImage } from '@otherbench/core/domain/tool-images.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import { gcBlobIfOrphaned, withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
+import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
 
 /** The file name a stored tool image gets, by its type: fixed, and never made from anything a tool or a model said. */
 const TOOL_IMAGE_FILENAMES: ReadonlyMap<string, string> = new Map([
@@ -68,7 +68,7 @@ export function toolImageSaver(store: Store, blobStore: BlobStore): SaveToolImag
     } catch (err) {
       // The pin is gone by now, so the blob can be collected if nothing else refers to it.
       await gcBlobIfOrphaned(store, blobStore, sha256).catch((gcErr: unknown) => {
-        console.error(`[grunt-server] couldn't clear the blob of a tool image that was not kept (${sha256}):`, gcErr);
+        console.error(`[otherbench-server] couldn't clear the blob of a tool image that was not kept (${sha256}):`, gcErr);
       });
       throw err;
     }

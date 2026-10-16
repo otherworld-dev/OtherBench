@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { subscribeAutoTitle } from '../../src/routes/chats.js';
@@ -119,7 +119,7 @@ let hangAfterFinish = false;
 // tolerating one (task 32 fix round 1, Minor #8).
 beforeEach(async () => {
   hangAfterFinish = false;
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-chats-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-chats-route-test-'));
   const store = new InMemoryStore();
   const manual = manualEngine();
   push = manual.push;
@@ -555,7 +555,7 @@ describe('workspaceRoot validation', () => {
       const res = await app().request('/api/chats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: 'E:\\Git\\Grunt' }),
+        body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: 'E:\\Git\\OtherBench' }),
       });
       expect(res.status).toBe(400);
     }
@@ -598,7 +598,7 @@ describe('GET /api/chats/:id/export (#820)', () => {
     expect(res.headers.get('content-type')).toBe('application/json; charset=utf-8');
     expect(res.headers.get('content-disposition')).toContain('filename="Trip- plans-ideas.json"');
     const body = (await res.json()) as { format: string; shownPath: string[]; messages: { id: string }[]; chat: { id: string } };
-    expect(body.format).toBe('grunt-chat-export');
+    expect(body.format).toBe('otherbench-chat-export');
     expect(body.chat.id).toBe(chatId);
     expect(body.shownPath).toEqual(['u-1', 'a-1']);
     expect(body.messages.map((m) => m.id)).toEqual(['u-1', 'a-1']);

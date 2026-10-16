@@ -1,20 +1,20 @@
-import { cardLine } from '@grunt/core/domain/card-text.js';
-import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
+import { cardLine } from '@otherbench/core/domain/card-text.js';
+import { MAX_TOOL_IMAGE_BYTES } from '@otherbench/core/domain/tool-images.js';
 
 /**
  * The desktop shell's channel (spec 2026-10-12-computer-use-design section
  * 2; the wire in full is `.superpowers/sdd/2026-10-12-computer-use/
  * shell-wire-spec.md`). After the `{"port":N,"rpc":"<word>"}` announce line,
  * this server writes requests to its stdout and the shell answers on its
- * stdin: one JSON object per line, each starting `GRUNT-RPC `. Only the
+ * stdin: one JSON object per line, each starting `OTHERBENCH-RPC `. Only the
  * parent shell holds these pipes; there is no network surface. A server
  * started by hand has no channel.
  *
- *   server to shell   GRUNT-RPC <word> {"id":<n>,"method":"<m>","params":{...}}
- *                     GRUNT-RPC <word> {"method":"computer.close","params":{}}
- *   shell to server   GRUNT-RPC {"id":<n>,"result":<value>}
- *                     GRUNT-RPC {"id":<n>,"error":{"message":"...","code":"..."}}
- *                     GRUNT-RPC {"event":"<name>","params":{...}}
+ *   server to shell   OTHERBENCH-RPC <word> {"id":<n>,"method":"<m>","params":{...}}
+ *                     OTHERBENCH-RPC <word> {"method":"computer.close","params":{}}
+ *   shell to server   OTHERBENCH-RPC {"id":<n>,"result":<value>}
+ *                     OTHERBENCH-RPC {"id":<n>,"error":{"message":"...","code":"..."}}
+ *                     OTHERBENCH-RPC {"event":"<name>","params":{...}}
  *
  * `<word>` is a random word made for this launch and told to the shell in
  * the announce line. The shell acts on no line without it, so text that
@@ -54,7 +54,7 @@ import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
  * to one clean line, with its `code` when it is one of a few plain words.
  */
 
-export const RPC_PREFIX = 'GRUNT-RPC ';
+export const RPC_PREFIX = 'OTHERBENCH-RPC ';
 
 /** How long a call waits for its answer unless it brings its own limit. */
 export const DEFAULT_CALL_TIMEOUT_MS = 30_000;
@@ -204,7 +204,7 @@ export class DesktopChannel implements ShellChannel {
   private held = 0;
   /** How many of the line's first bytes have been checked against the prefix. */
   private checked = 0;
-  /** The rest of the line being read is thrown away as it arrives: it is not a GRUNT-RPC line. */
+  /** The rest of the line being read is thrown away as it arrives: it is not a OTHERBENCH-RPC line. */
   private skipping = false;
   /** Events counted in the second that began at `eventWindow`. */
   private eventWindow = 0;
@@ -232,7 +232,7 @@ export class DesktopChannel implements ShellChannel {
     // A write that fails later (EPIPE: the shell stopped reading) comes as an event. Unheard, it would take the process down.
     if (typeof output.on === 'function') {
       output.on('error', (err) => {
-        if (!this.ended) console.error('[grunt-server] the pipe to the desktop app failed:', err);
+        if (!this.ended) console.error('[otherbench-server] the pipe to the desktop app failed:', err);
         this.end();
       });
     }
@@ -292,7 +292,7 @@ export class DesktopChannel implements ShellChannel {
         this.output.write(line);
       } catch (err) {
         this.settle(id);
-        console.error('[grunt-server] writing to the desktop app failed:', err);
+        console.error('[otherbench-server] writing to the desktop app failed:', err);
         reject(new DesktopChannelError('not-sent', NOT_WRITTEN));
       }
     });
@@ -361,7 +361,7 @@ export class DesktopChannel implements ShellChannel {
       const piece = data.subarray(from, at === -1 ? data.length : at);
       if (!this.skipping && piece.length > 0) {
         if (!this.startsLikeOurs(piece)) {
-          // Not a GRUNT-RPC line: ignored as it arrives, without a word.
+          // Not a OTHERBENCH-RPC line: ignored as it arrives, without a word.
           this.skipping = true;
           this.parts = [];
           this.held = 0;
@@ -397,7 +397,7 @@ export class DesktopChannel implements ShellChannel {
   private receive(bytes: Buffer): void {
     const end = bytes.length > 0 && bytes[bytes.length - 1] === CARRIAGE_RETURN ? bytes.length - 1 : bytes.length;
     const line = bytes.toString('utf8', 0, end);
-    // Shorter than the prefix (`GRUNT-RPC` and nothing more): not one of the channel's lines.
+    // Shorter than the prefix (`OTHERBENCH-RPC` and nothing more): not one of the channel's lines.
     if (!line.startsWith(RPC_PREFIX)) return;
     let parsed: unknown;
     try {
@@ -433,7 +433,7 @@ export class DesktopChannel implements ShellChannel {
       try {
         note.answer(parsed['result']);
       } catch (err) {
-        console.error('[grunt-server] handling a late answer from the desktop app failed:', err);
+        console.error('[otherbench-server] handling a late answer from the desktop app failed:', err);
       }
       return;
     }
@@ -468,7 +468,7 @@ export class DesktopChannel implements ShellChannel {
       try {
         cb(message['params']);
       } catch (err) {
-        console.error(`[grunt-server] a desktop event listener for ${name} threw:`, err);
+        console.error(`[otherbench-server] a desktop event listener for ${name} threw:`, err);
       }
     }
   }
@@ -480,7 +480,7 @@ export class DesktopChannel implements ShellChannel {
    */
   private fail(why: string): void {
     if (this.ended) return;
-    console.error(`[grunt-server] closed the channel to the desktop app: ${why}.`);
+    console.error(`[otherbench-server] closed the channel to the desktop app: ${why}.`);
     try {
       this.output.write(`${this.requestPrefix}${JSON.stringify({ method: 'computer.close', params: {} })}\n`);
     } catch {
@@ -506,7 +506,7 @@ export class DesktopChannel implements ShellChannel {
     try {
       cb();
     } catch (err) {
-      console.error('[grunt-server] a desktop channel close listener threw:', err);
+      console.error('[otherbench-server] a desktop channel close listener threw:', err);
     }
   }
 }

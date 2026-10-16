@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EncryptedFileSecretStore, createSecretStore } from '../src/secret-store.js';
 
-const base = mkdtempSync(join(tmpdir(), 'grunt-secrets-'));
+const base = mkdtempSync(join(tmpdir(), 'otherbench-secrets-'));
 let counter = 0;
 function freshPath(): string {
   counter += 1;

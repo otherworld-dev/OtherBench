@@ -1,8 +1,8 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import { UsageView } from './UsageView.js';
 
 vi.mock('../state/api.js', () => ({

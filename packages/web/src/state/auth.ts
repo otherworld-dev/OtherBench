@@ -60,7 +60,7 @@ async function recheck(set: Setter, get: () => AuthState): Promise<void> {
 
 /**
  * Sign-in state (spec 2026-10-12-remote-access §5), kept apart from
- * `useGruntStore` so the desktop app, which never mounts the gate, never
+ * `useOtherBenchStore` so the desktop app, which never mounts the gate, never
  * touches it.
  */
 export const useAuthStore = create<AuthState>()((set, get) => ({

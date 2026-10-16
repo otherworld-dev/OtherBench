@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { UnauthorizedError, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { McpOAuthStore, oauthRefs } from '../../src/mcp/oauth-store.js';
 import {
   BACKGROUND_REDIRECT_URI,
-  GruntOAuthProvider,
+  OtherBenchOAuthProvider,
   McpOAuthMetadataError,
   McpSignInRequiredError,
   accountFromIdToken,
@@ -23,7 +23,7 @@ const ISSUER = 'https://auth.example.com';
 const OTHER_ISSUER = 'https://evil.example.net';
 
 /** What the SDK's discovery hands the provider before it asks for the client. */
-function discovered(provider: GruntOAuthProvider, issuer = ISSUER): GruntOAuthProvider {
+function discovered(provider: OtherBenchOAuthProvider, issuer = ISSUER): OtherBenchOAuthProvider {
   provider.saveDiscoveryState({ authorizationServerUrl: `${issuer}/`, authorizationServerMetadata: { issuer } } as unknown as OAuthDiscoveryState);
   return provider;
 }
@@ -64,15 +64,15 @@ function setup() {
   return { clock, store, secrets, oauth };
 }
 
-function signInProvider(oauth: McpOAuthStore, onAuthorizationUrl: (url: URL) => void = () => {}, held?: HeldRegistration): GruntOAuthProvider {
-  return discovered(new GruntOAuthProvider('srv-1', oauth, { kind: 'sign-in', redirectUri: REDIRECT, state: 'state-1', onAuthorizationUrl, held }));
+function signInProvider(oauth: McpOAuthStore, onAuthorizationUrl: (url: URL) => void = () => {}, held?: HeldRegistration): OtherBenchOAuthProvider {
+  return discovered(new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'sign-in', redirectUri: REDIRECT, state: 'state-1', onAuthorizationUrl, held }));
 }
 
-function backgroundProvider(oauth: McpOAuthStore, resource?: string): GruntOAuthProvider {
-  return discovered(new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource }));
+function backgroundProvider(oauth: McpOAuthStore, resource?: string): OtherBenchOAuthProvider {
+  return discovered(new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background', resource }));
 }
 
-describe('GruntOAuthProvider in sign-in mode', () => {
+describe('OtherBenchOAuthProvider in sign-in mode', () => {
   it('treats a stored client registered for another redirect address or issuer as absent, reuses one for the same pair, and prefers a hand-registered client', async () => {
     const { store, oauth } = setup();
 
@@ -145,15 +145,15 @@ describe('GruntOAuthProvider in sign-in mode', () => {
   });
 });
 
-describe('GruntOAuthProvider in background mode', () => {
+describe('OtherBenchOAuthProvider in background mode', () => {
   it('has a defined redirect address, so the SDK never takes its client-credentials path', () => {
     const { oauth } = setup();
-    expect(new GruntOAuthProvider('srv-1', oauth, { kind: 'background' }).redirectUrl).toBe(BACKGROUND_REDIRECT_URI);
+    expect(new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' }).redirectUrl).toBe(BACKGROUND_REDIRECT_URI);
   });
 
   it('never registers: with no client stored it asks for a sign-in, and refuses to save one', async () => {
     const { oauth } = setup();
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     await expect(provider.clientInformation()).rejects.toBeInstanceOf(McpSignInRequiredError);
     await expect(provider.saveClientInformation({ client_id: 'x' })).rejects.toBeInstanceOf(McpSignInRequiredError);
     expect(await oauth.registeredClient('srv-1')).toBeNull();
@@ -163,7 +163,7 @@ describe('GruntOAuthProvider in background mode', () => {
     const { oauth } = setup();
     await oauth.saveRegisteredClient('srv-1', registration('dcr-1', { redirectUri: 'http://127.0.0.1:9999/oauth/callback' }));
     expect(await backgroundProvider(oauth).clientInformation()).toMatchObject({ client_id: 'dcr-1' });
-    await expect(discovered(new GruntOAuthProvider('srv-1', oauth, { kind: 'background' }), OTHER_ISSUER).clientInformation()).rejects.toBeInstanceOf(McpSignInRequiredError);
+    await expect(discovered(new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' }), OTHER_ISSUER).clientInformation()).rejects.toBeInstanceOf(McpSignInRequiredError);
   });
 
   it('a provider built before a sign-out or a new sign-in can no longer save, forget or invalidate', async () => {
@@ -197,7 +197,7 @@ describe('GruntOAuthProvider in background mode', () => {
     await signInProvider(oauth).saveTokens({ ...TOKENS, id_token: idToken({ email: 'alice@example.com' }) });
     const signedInAt = clock.t;
     clock.t += 3_600_000;
-    await new GruntOAuthProvider('srv-1', oauth, { kind: 'background' }).saveTokens({ access_token: 'at-2', token_type: 'Bearer', refresh_token: 'rt-2' });
+    await new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' }).saveTokens({ access_token: 'at-2', token_type: 'Bearer', refresh_token: 'rt-2' });
     expect(await oauth.tokens('srv-1')).toMatchObject({ access_token: 'at-2' });
     expect(store.mcpServers.get('srv-1')!.oauth).toMatchObject({ account: 'alice@example.com', signedInAt });
   });
@@ -205,7 +205,7 @@ describe('GruntOAuthProvider in background mode', () => {
   it('redirectToAuthorization with a refresh token held is a transient error and keeps the tokens', async () => {
     const { oauth } = setup();
     await oauth.saveTokens('srv-1', TOKENS, { signIn: true });
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     const err = await provider.redirectToAuthorization(new URL('https://auth.example.com/authorize')).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(McpSignInRequiredError);
@@ -216,7 +216,7 @@ describe('GruntOAuthProvider in background mode', () => {
   it('redirectToAuthorization without a refresh token forgets the tokens and asks for a sign-in', async () => {
     const { store, oauth } = setup();
     await oauth.saveTokens('srv-1', { access_token: 'at-1', token_type: 'Bearer' }, { signIn: true });
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     await expect(provider.redirectToAuthorization(new URL('https://auth.example.com/authorize'))).rejects.toBeInstanceOf(McpSignInRequiredError);
     expect(await oauth.tokens('srv-1')).toBeUndefined();
     expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
@@ -224,7 +224,7 @@ describe('GruntOAuthProvider in background mode', () => {
 
   it("ignores a 'tokens' invalidation within 60 seconds of saving new tokens, and honours one after", async () => {
     const { oauth, clock } = setup();
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     await oauth.saveTokens('srv-1', TOKENS, { signIn: false });
 
     clock.t += 59_000;
@@ -241,7 +241,7 @@ describe('GruntOAuthProvider in background mode', () => {
     store.mcpServers.update('srv-1', { oauth: { clientId: 'manual-1', clientSecretRef: null, account: null, signedInAt: null } });
     await oauth.saveRegisteredClient('srv-1', registration('dcr-1'));
     await oauth.saveTokens('srv-1', TOKENS, { signIn: false });
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
 
     await provider.invalidateCredentials('client');
     expect(await oauth.registeredClient('srv-1')).toBeNull();
@@ -256,7 +256,7 @@ describe('GruntOAuthProvider in background mode', () => {
 
   it('refuses discovery whose issuer is not the address it was found at, or whose address has userinfo', () => {
     const { oauth } = setup();
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     const state = (authorizationServerUrl: string, issuer?: string) =>
       ({ authorizationServerUrl, ...(issuer !== undefined ? { authorizationServerMetadata: { issuer } } : {}) }) as unknown as OAuthDiscoveryState;
 
@@ -272,7 +272,7 @@ describe('GruntOAuthProvider in background mode', () => {
 
   it('validateResourceURL accepts metadata for this server or its root, and refuses a sibling path or another origin', async () => {
     const { oauth } = setup();
-    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' });
     const server = new URL('https://mcp.example.com/mcp');
     expect(await provider.validateResourceURL(server, undefined)).toBeUndefined();
     expect((await provider.validateResourceURL(server, 'https://mcp.example.com/mcp'))?.href).toBe('https://mcp.example.com/mcp');
@@ -284,7 +284,7 @@ describe('GruntOAuthProvider in background mode', () => {
 
   it('codeVerifier throws: no browser flow ever runs in the background', () => {
     const { oauth } = setup();
-    expect(() => new GruntOAuthProvider('srv-1', oauth, { kind: 'background' }).codeVerifier()).toThrow();
+    expect(() => new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background' }).codeVerifier()).toThrow();
   });
 });
 
@@ -351,7 +351,7 @@ describe('McpOAuthStore', () => {
       expect(await oauth.tokens('srv-1')).toBeUndefined();
       store.mcpServers.update('srv-1', { url: OLD_URL });
       // A connection built for /mcp-evil gets nothing even while the row says /mcp, and can't save for it.
-      const sibling = new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: 'https://mcp.example.com/mcp-evil' });
+      const sibling = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background', resource: 'https://mcp.example.com/mcp-evil' });
       expect(await sibling.tokens()).toBeUndefined();
       await sibling.saveTokens({ access_token: 'at-evil', token_type: 'Bearer' });
       expect(await oauth.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
@@ -378,7 +378,7 @@ describe('McpOAuthStore', () => {
 
     it('a background provider built for the old URL gets no tokens once the row has moved, and its late save is dropped', async () => {
       const { store, secrets, oauth } = setup();
-      const stale = new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: OLD_URL });
+      const stale = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background', resource: OLD_URL });
       await stale.saveTokens(TOKENS);
       store.mcpServers.update('srv-1', { url: NEW_URL });
       await oauth.forget('srv-1', { keepManualClient: true });
@@ -389,14 +389,14 @@ describe('McpOAuthStore', () => {
       expect(await oauth.tokens('srv-1')).toBeUndefined();
 
       // Tokens for the new URL are never offered to a provider built for the old one.
-      await new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).saveTokens({ access_token: 'at-new', token_type: 'Bearer' });
+      await new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).saveTokens({ access_token: 'at-new', token_type: 'Bearer' });
       expect(await stale.tokens()).toBeUndefined();
-      expect(await new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).tokens()).toMatchObject({ access_token: 'at-new' });
+      expect(await new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).tokens()).toMatchObject({ access_token: 'at-new' });
     });
 
     it('a sign-in binds its tokens to the URL it started against, not the row at completion', async () => {
       const { store, secrets, oauth } = setup();
-      const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'sign-in', redirectUri: REDIRECT, state: 's', onAuthorizationUrl: () => {}, resource: OLD_URL });
+      const provider = new OtherBenchOAuthProvider('srv-1', oauth, { kind: 'sign-in', redirectUri: REDIRECT, state: 's', onAuthorizationUrl: () => {}, resource: OLD_URL });
       store.mcpServers.update('srv-1', { url: NEW_URL });
       await provider.saveTokens(TOKENS);
       expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
@@ -464,7 +464,7 @@ describe('helpers', () => {
 
   it('clientMetadataFor is a public client for exactly one redirect address', () => {
     expect(clientMetadataFor(REDIRECT)).toEqual({
-      client_name: 'Grunt',
+      client_name: 'OtherBench',
       redirect_uris: [REDIRECT],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],

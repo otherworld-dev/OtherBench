@@ -1,5 +1,5 @@
-import { isAskTool, isPlanTool } from '@grunt/core/domain/thread-tools.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { isAskTool, isPlanTool } from '@otherbench/core/domain/thread-tools.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 
 /** Most recent characters of seeded history kept for a fresh session. */
 export const HISTORY_CHAR_LIMIT = 200_000;
@@ -43,7 +43,7 @@ function renderParts(parts: Part[], results: Map<string, ResultSeen>): string {
 }
 
 /**
- * Grunt's history for a branch, as context for a fresh Claude Code session
+ * OtherBench's history for a branch, as context for a fresh Claude Code session
  * (spec §2 rule 2): every message before the new user message, text verbatim,
  * tool calls as one-liners, reasoning and system prompts dropped. Keeps the
  * most recent HISTORY_CHAR_LIMIT characters.
@@ -59,5 +59,5 @@ export function renderHistory(history: CanonMessage[]): string {
   });
   let body = blocks.join('\n\n');
   if (body.length > HISTORY_CHAR_LIMIT) body = `[earlier messages omitted]\n${body.slice(body.length - HISTORY_CHAR_LIMIT)}`;
-  return `<grunt-history>\nThe conversation so far in Grunt, before you joined it:\n\n${body}\n</grunt-history>`;
+  return `<otherbench-history>\nThe conversation so far in OtherBench, before you joined it:\n\n${body}\n</otherbench-history>`;
 }

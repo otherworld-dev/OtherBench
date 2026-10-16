@@ -1,4 +1,4 @@
-import type { TurnInput, TurnResult } from '@grunt/core/domain/turn.js';
+import type { TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import type { Container } from './container.js';
 
 /** What starting a turn needs from the container. */

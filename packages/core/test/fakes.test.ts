@@ -154,7 +154,7 @@ describe('FakeSandbox', () => {
     chatId: 'c1',
     command: 'ls',
     timeoutMs: 120_000,
-    workspaceRoot: 'E:\\Git\\Grunt',
+    workspaceRoot: 'E:\\Git\\OtherBench',
     folders: [],
     fs: 'readwrite',
     allowedHosts: [],
@@ -170,7 +170,7 @@ describe('FakeSandbox', () => {
     await sandbox.setup();
     expect(sandbox.setupCalls).toBe(1);
     expect(await sandbox.status()).toMatchObject({ state: 'ready', machine: 'Gigabyte', versions: { runtime: '0.0.79' } });
-    expect(await sandbox.run(req())).toMatchObject({ command: 'ls', exitCode: 0, sandbox: true, cwd: '/mnt/e/Git/Grunt', timeoutMsUsed: 120_000 });
+    expect(await sandbox.run(req())).toMatchObject({ command: 'ls', exitCode: 0, sandbox: true, cwd: '/mnt/e/Git/OtherBench', timeoutMsUsed: 120_000 });
     expect(sandbox.requests).toHaveLength(2);
   });
 

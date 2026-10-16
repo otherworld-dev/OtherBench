@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
-import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { COMPUTER_LIMITS } from '@grunt/core/domain/computer-apps.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { FakeSandbox, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { COMPUTER_LIMITS } from '@otherbench/core/domain/computer-apps.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 import type { McpClient } from '../src/mcp/client.js';
 import type { McpServerManager } from '../src/mcp/manager.js';
 import { BrowserManager } from '../src/browser/manager.js';
@@ -67,7 +67,7 @@ const emptyMcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = {
 };
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-provider-test-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-provider-test-'));
 });
 
 afterEach(() => {
@@ -78,14 +78,14 @@ afterEach(() => {
   }
 });
 
-function makeProvider(): { provider: GruntToolProvider; store: InMemoryStore; broker: PermissionBroker } {
+function makeProvider(): { provider: OtherBenchToolProvider; store: InMemoryStore; broker: PermissionBroker } {
   const store = new InMemoryStore();
   const broker = new PermissionBroker(store);
-  const provider = new GruntToolProvider(store, broker, emptyMcp);
+  const provider = new OtherBenchToolProvider(store, broker, emptyMcp);
   return { provider, store, broker };
 }
 
-describe('GruntToolProvider.listTools', () => {
+describe('OtherBenchToolProvider.listTools', () => {
   it('includes fs tools when policy.fs is not off, excludes them when off', async () => {
     const { provider } = makeProvider();
     const withFs = await provider.listTools(policy({ fs: 'readwrite' }));
@@ -112,7 +112,7 @@ describe('GruntToolProvider.listTools', () => {
       { id: 'srv-1', name: 'One', tools: [{ name: 'search' }] },
       { id: 'srv-2', name: 'Two', tools: [{ name: 'search' }] },
     ]);
-    const provider = new GruntToolProvider(store, broker, mcp);
+    const provider = new OtherBenchToolProvider(store, broker, mcp);
     const tools = await provider.listTools(policy({ mcpServerIds: ['srv-1', 'srv-2'] }));
 
     expect(tools.find((t) => t.name === 'mcp__One__search')?.serverId).toBe('srv-1');
@@ -126,7 +126,7 @@ describe('GruntToolProvider.listTools', () => {
     const store = new InMemoryStore();
     const broker = new PermissionBroker(store);
     const mcp = fakeMcpManager([{ id: 'srv-1', name: 'My Server', tools: [{ name: 'search' }] }]);
-    const provider = new GruntToolProvider(store, broker, mcp);
+    const provider = new OtherBenchToolProvider(store, broker, mcp);
     const tools = await provider.listTools(policy({ mcpServerIds: ['srv-1'] }));
     expect(tools.map((t) => t.name)).toContain('mcp__My_Server__search');
   });
@@ -140,7 +140,7 @@ describe('GruntToolProvider.listTools', () => {
       { id: 'srv-1', name: 'Foo!', tools: [{ name: 'search' }] },
       { id: 'srv-2', name: 'Foo?', tools: [{ name: 'search' }] },
     ]);
-    const provider = new GruntToolProvider(store, broker, mcp);
+    const provider = new OtherBenchToolProvider(store, broker, mcp);
     const tools = await provider.listTools(policy({ mcpServerIds: ['srv-1', 'srv-2'] }));
     const names = tools.map((t) => t.name);
     expect(names.filter((n) => n === 'mcp__Foo___search')).toHaveLength(1);
@@ -149,7 +149,7 @@ describe('GruntToolProvider.listTools', () => {
   });
 });
 
-describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
+describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
   it('returns the allowlisted servers\' MCP specs as listTools names them, ungated: execute calls the server straight away', async () => {
     const store = new InMemoryStore();
     const broker = new PermissionBroker(store);
@@ -157,7 +157,7 @@ describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
       { id: 's1', name: 'nextcloud', tools: [{ name: 'deck_add' }] },
       { id: 's2', name: 'other', tools: [{ name: 'x' }] },
     ]);
-    const provider = new GruntToolProvider(store, broker, mcp);
+    const provider = new OtherBenchToolProvider(store, broker, mcp);
     const specs = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
     expect(specs.map((s) => [s.name, s.source, s.serverId])).toEqual([['mcp__nextcloud__deck_add', 'mcp', 's1']]);
     const pending: unknown[] = [];
@@ -176,14 +176,14 @@ describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
       { id: 's2', name: 'evil', tools: [{ name: 'browser' }, { name: 'run_command' }] },
     ]);
     const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcp, { sandbox: new FakeSandbox({ ready: true }), browser });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { sandbox: new FakeSandbox({ ready: true }), browser });
     const all = policy({ shell: true, shellRuns: 'sandbox', browser: true, mcpServerIds: ['s1', 's2'] });
     const shape = (specs: { name: string; source: string }[]) => specs.map((s) => [s.name, s.source]);
     const mcpOnly = [['mcp__nextcloud__deck_add', 'mcp'], ['mcp__evil__browser', 'mcp'], ['mcp__evil__run_command', 'mcp']];
     expect(shape(provider.relayTools(all))).toEqual([['run_command', 'sandbox'], ['browser', 'browser'], ...mcpOnly]);
     // What a live artifact's declaration may name: never the shell, never the browser.
     expect(shape(provider.relayMcpTools(all.mcpServerIds))).toEqual(mcpOnly);
-    expect(shape(provider.relayGruntTools(all))).toEqual([['browser', 'browser']]);
+    expect(shape(provider.relayOtherBenchTools(all))).toEqual([['browser', 'browser']]);
     // Each switch on its own.
     expect(shape(provider.relayTools({ ...all, browser: false }))).toEqual([['run_command', 'sandbox'], ...mcpOnly]);
     expect(shape(provider.relayTools({ ...all, shellRuns: 'host' }))).toEqual([['browser', 'browser'], ...mcpOnly]);
@@ -218,7 +218,7 @@ describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
       refresh: async () => {},
       shutdown: async () => {},
     };
-    const provider = new GruntToolProvider(store, broker, mcp);
+    const provider = new OtherBenchToolProvider(store, broker, mcp);
     const [spec] = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
 
     live = 2;
@@ -230,7 +230,7 @@ describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
   });
 });
 
-describe('GruntToolProvider gating', () => {
+describe('OtherBenchToolProvider gating', () => {
   it('fs:"off" and fs:"read" both keep write_file out of the returned tool list entirely', async () => {
     const { provider } = makeProvider();
     expect((await provider.listTools(policy({ fs: 'off' }))).some((t) => t.name === 'write_file')).toBe(false);
@@ -456,7 +456,7 @@ describe('requestApproval (external agent tools)', () => {
 
   it('auto-allows a read tool and audits it as delegated', async () => {
     const store = new InMemoryStore();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
     const out = await provider.requestApproval(agentSpec('Read', 'read'), { path: 'a.txt' }, policy(), ctx());
     expect(out).toEqual({ allowed: true, grantedBy: 'auto_read' });
     expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'Read', resultSummary: 'delegated to Claude Code', grantedBy: 'auto_read' });
@@ -464,7 +464,7 @@ describe('requestApproval (external agent tools)', () => {
 
   it('raises an approval card and returns the human decision', async () => {
     const store = new InMemoryStore();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
     const seen: ToolApprovalEvent[] = [];
     provider.onApprovalEvent((e) => { seen.push(e); if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'once' }); });
     const out = await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'npm test' }, policy(), ctx());
@@ -475,7 +475,7 @@ describe('requestApproval (external agent tools)', () => {
 
   it('returns a denial with a reason for policy and user denials', async () => {
     const store = new InMemoryStore();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
     expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx())).toMatchObject({ allowed: false, reason: expect.stringMatching(/disabled/) });
     provider.onApprovalEvent((e) => { if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'deny' }); });
     expect(await provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
@@ -483,7 +483,7 @@ describe('requestApproval (external agent tools)', () => {
 
   it('treats an abort while waiting as a denial', async () => {
     const store = new InMemoryStore();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
     const ac = new AbortController();
     const pending = provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx({ signal: ac.signal }));
     ac.abort();
@@ -549,9 +549,9 @@ describe('recordAgentDenial', () => {
 
   it("redacts the text typed in a relayed browser call, as the browser's own audit rows do", () => {
     const { provider, store } = makeProvider();
-    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__browser', { command: 'type', ref: 'e3', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__otherbench_0123456789abcdef__browser', { command: 'type', ref: 'e3', text: 'my password' }, 'Types a password');
     provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'browser', { command: 'type', ref: 'e3', text: 'my password' }, 'Types a password');
-    provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'mcp__grunt_0123456789abcdef__other__browser', { text: 'kept' }, 'Not the browser');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'mcp__otherbench_0123456789abcdef__other__browser', { text: 'kept' }, 'Not the browser');
     const rows = store.audit.list('chat-1');
     expect(rows.find((r) => r.messageId === 'msg-a')!.argsRedacted).toEqual({ command: 'type', ref: 'e3', text: '[redacted]' });
     expect(rows.find((r) => r.messageId === 'msg-b')!.argsRedacted).toEqual({ command: 'type', ref: 'e3', text: '[redacted]' });
@@ -560,7 +560,7 @@ describe('recordAgentDenial', () => {
 
   it("keeps a browser key that types a character out of the audit, as the computer tool's rule does, and keeps one that types nothing", async () => {
     const { provider, store } = makeProvider();
-    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__browser', { command: 'press', key: 'p' }, 'Presses p');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__otherbench_0123456789abcdef__browser', { command: 'press', key: 'p' }, 'Presses p');
     provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'browser', { command: 'press', key: 'Shift+KeyA' }, 'Presses A');
     provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'browser', { command: 'press', key: 'Enter' }, 'Submits');
     provider.recordAgentDenial(ctx({ messageId: 'msg-d' }), 'browser', { command: 'press', key: 'Control+A' }, 'Selects all');
@@ -573,10 +573,10 @@ describe('recordAgentDenial', () => {
 
   it('keeps the text typed in a relayed computer call out of the audit too, and keeps a key combination', () => {
     const { provider, store } = makeProvider();
-    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__computer', { action: 'type', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__otherbench_0123456789abcdef__computer', { action: 'type', text: 'my password' }, 'Types a password');
     provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'computer', { action: 'type', text: 'my password' }, 'Types a password');
     provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'computer', { action: 'key', text: 'ctrl+s' }, 'Saves the file');
-    provider.recordAgentDenial(ctx({ messageId: 'msg-d' }), 'mcp__grunt_0123456789abcdef__other__computer', { text: 'kept' }, 'Not the computer tool');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-d' }), 'mcp__otherbench_0123456789abcdef__other__computer', { text: 'kept' }, 'Not the computer tool');
     const rows = store.audit.list('chat-1');
     expect(rows.find((r) => r.messageId === 'msg-a')!.argsRedacted).toEqual({ action: 'type', text: '[redacted: 11 characters]' });
     expect(rows.find((r) => r.messageId === 'msg-b')!.argsRedacted).toEqual({ action: 'type', text: '[redacted: 11 characters]' });
@@ -698,7 +698,7 @@ describe('pending approvals end with their turn (approval cleanup)', () => {
   it('a request the broker backstop evicts is settled as a denial, never an allow, and the write does not happen', async () => {
     const store = new InMemoryStore();
     const broker = new PermissionBroker(store, { maxPending: 1 });
-    const provider = new GruntToolProvider(store, broker, emptyMcp);
+    const provider = new OtherBenchToolProvider(store, broker, emptyMcp);
     const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const second = new AbortController();
@@ -753,7 +753,7 @@ describe('non-user denials are honest (approval cleanup round 1)', () => {
   it('an eviction is audited deny:cancelled with its own message', async () => {
     const store = new InMemoryStore();
     const broker = new PermissionBroker(store, { maxPending: 1 });
-    const provider = new GruntToolProvider(store, broker, emptyMcp);
+    const provider = new OtherBenchToolProvider(store, broker, emptyMcp);
     const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const first = writeFile.execute({ path: 'a.txt', content: 'a' }, ctx({ messageId: 'old' }));
@@ -790,13 +790,13 @@ describe('non-user denials are honest (approval cleanup round 1)', () => {
   });
 });
 
-describe("GruntToolProvider: an answer the broker won't store as a grant", () => {
+describe("OtherBenchToolProvider: an answer the broker won't store as a grant", () => {
   /** A provider whose cards are answered with `choice`, recording every event. */
   function answering(choice: ApprovalChoice, withBrowser = false) {
     const store = new InMemoryStore();
     const broker = new PermissionBroker(store);
     const browser = withBrowser ? new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start }) : undefined;
-    const provider = new GruntToolProvider(store, broker, emptyMcp, browser ? { browser } : {});
+    const provider = new OtherBenchToolProvider(store, broker, emptyMcp, browser ? { browser } : {});
     const events: ToolApprovalEvent[] = [];
     provider.onApprovalEvent((e) => {
       events.push(e);
@@ -879,7 +879,7 @@ describe("GruntToolProvider: an answer the broker won't store as a grant", () =>
   });
 });
 
-describe('GruntToolProvider plan mode', () => {
+describe('OtherBenchToolProvider plan mode', () => {
   it('refuses a write while the reply is planning, raising no card, and audits it as deny:plan', async () => {
     const { provider, store } = makeProvider();
     const events: ToolApprovalEvent[] = [];
@@ -923,15 +923,15 @@ describe('unattended (scheduled) runs', () => {
 });
 
 describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
-  function browserProvider(): { provider: GruntToolProvider; store: InMemoryStore; factory: FakeFactory } {
+  function browserProvider(): { provider: OtherBenchToolProvider; store: InMemoryStore; factory: FakeFactory } {
     const store = new InMemoryStore();
     const factory = new FakeFactory();
     const browser = new BrowserManager({ factory, startProxy: fakeProxy().start });
-    return { provider: new GruntToolProvider(store, new PermissionBroker(store), emptyMcp, { browser }), store, factory };
+    return { provider: new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, { browser }), store, factory };
   }
   const on = (o: Partial<ToolPolicy> = {}) => policy({ browser: true, ...o });
   /** Answers every card with `choice` as it is raised; returns the cards seen. */
-  function answerAll(provider: GruntToolProvider, choice: ApprovalChoice = { choice: 'once' }): ApprovalRequest[] {
+  function answerAll(provider: OtherBenchToolProvider, choice: ApprovalChoice = { choice: 'once' }): ApprovalRequest[] {
     const seen: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
       if (e.type !== 'request') return;
@@ -940,7 +940,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     });
     return seen;
   }
-  const browserOf = async (provider: GruntToolProvider, p: ToolPolicy) => (await provider.listTools(p)).find((t) => t.name === 'browser');
+  const browserOf = async (provider: OtherBenchToolProvider, p: ToolPolicy) => (await provider.listTools(p)).find((t) => t.name === 'browser');
 
   it('offers the browser only to a profile that turns it on, and only when the server has one', async () => {
     const { provider } = browserProvider();
@@ -1009,7 +1009,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
   it('requestApproval describes the call first and hands back what it approved; the relay is ungated', async () => {
     const { provider, store } = browserProvider();
     answerAll(provider);
-    const [spec] = provider.relayGruntTools(on());
+    const [spec] = provider.relayOtherBenchTools(on());
     expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
     expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({
       allowed: true,
@@ -1018,8 +1018,8 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     });
     expect(await provider.requestApproval(spec!, { command: 'click', ref: 'e1' }, on(), ctx())).toEqual({ allowed: false, reason: NO_PAGE });
     expect(store.audit.list('chat-1').find((r) => r.grantedBy === 'deny:policy')).toMatchObject({ toolName: 'browser' });
-    expect(provider.relayGruntTools(policy())).toEqual([]);
-    expect(makeProvider().provider.relayGruntTools(on())).toEqual([]);
+    expect(provider.relayOtherBenchTools(policy())).toEqual([]);
+    expect(makeProvider().provider.relayOtherBenchTools(on())).toEqual([]);
   });
 
   describe('describing a call (security fix round 1)', () => {
@@ -1031,17 +1031,17 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
         describeCall: async (): Promise<never> => { throw new Error('boom'); },
         execute: async () => 'ran',
       };
-      expect(await provider.requestApproval(bad, {}, policy(), ctx())).toEqual({ allowed: false, reason: "Grunt couldn't check this call: boom" });
+      expect(await provider.requestApproval(bad, {}, policy(), ctx())).toEqual({ allowed: false, reason: "OtherBench couldn't check this call: boom" });
       expect(cards).toEqual([]);
       expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'odd', grantedBy: 'deny:policy' });
       // and through the gate, on the browser tool itself
       const store2 = new InMemoryStore();
       const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
       browser.peek = () => { throw new Error('boom'); };
-      const gated = new GruntToolProvider(store2, new PermissionBroker(store2), emptyMcp, { browser });
+      const gated = new OtherBenchToolProvider(store2, new PermissionBroker(store2), emptyMcp, { browser });
       const cards2 = answerAll(gated);
       const tool = (await browserOf(gated, on()))!;
-      expect(await tool.execute({ command: 'snapshot' }, ctx())).toEqual({ error: true, code: 'permission_denied', message: "Grunt couldn't check this call: boom" });
+      expect(await tool.execute({ command: 'snapshot' }, ctx())).toEqual({ error: true, code: 'permission_denied', message: "OtherBench couldn't check this call: boom" });
       expect(cards2).toEqual([]);
       expect(store2.audit.list('chat-1')[0]).toMatchObject({ toolName: 'browser', grantedBy: 'deny:policy' });
     });
@@ -1049,7 +1049,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     it('a denied requestApproval carries no args, so nothing described leaks out with a refusal', async () => {
       const { provider } = browserProvider();
       answerAll(provider, { choice: 'deny' });
-      const [spec] = provider.relayGruntTools(on());
+      const [spec] = provider.relayOtherBenchTools(on());
       expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
     });
 
@@ -1065,7 +1065,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       browser.peek = (chatId) => { turn.abort(); return peek(chatId); };
       // A snapshot is a read: the broker would let it through without a card.
       expect(await tool.execute({ command: 'snapshot' }, ctx({ signal: turn.signal }))).toMatchObject({ error: true, code: 'cancelled' });
-      const [spec] = provider.relayGruntTools(on());
+      const [spec] = provider.relayOtherBenchTools(on());
       expect(await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx({ signal: turn.signal }))).toMatchObject({ allowed: false });
       expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
       expect(store.audit.list('chat-1').filter((r) => r.grantedBy === 'deny:cancelled')).toHaveLength(2);
@@ -1094,7 +1094,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     it('refuses the relayed call too: the arguments the gate approved carry the page they were approved on', async () => {
       const { provider, factory } = browserProvider();
       answerAll(provider);
-      const [spec] = provider.relayGruntTools(on());
+      const [spec] = provider.relayOtherBenchTools(on());
       const opened = await provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, on(), ctx());
       if (!opened.allowed) throw new Error(opened.reason);
       await spec!.execute(opened.args, ctx());
@@ -1126,7 +1126,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       expect(hostile).toHaveLength(2048);
       const tool = (await browserOf(provider, on()))!;
       const gated = (await tool.execute({ command: 'open', url: hostile }, ctx())) as { code: string; message: string };
-      const [spec] = provider.relayGruntTools(on());
+      const [spec] = provider.relayOtherBenchTools(on());
       const relayed = (await provider.requestApproval(spec!, { command: 'open', url: hostile }, on(), ctx())) as { allowed: false; reason: string };
       expect(gated.code).toBe('permission_denied');
       expect(relayed.allowed).toBe(false);
@@ -1164,7 +1164,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       expect(gated).toEqual(expected);
       expect(Object.keys(gated as object)[0]).toBe('about');
       browser.peek = peek;
-      const [spec] = provider.relayGruntTools(on());
+      const [spec] = provider.relayOtherBenchTools(on());
       const approved = await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx());
       if (!approved.allowed) throw new Error(approved.reason);
       // Described already: only the run looks now.

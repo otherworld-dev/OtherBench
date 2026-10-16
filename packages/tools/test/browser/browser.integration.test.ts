@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import { browserAttempts, ChromiumSessions } from '../../src/browser/chromium.js';
 import { BrowserManager, type BrowserFrame } from '../../src/browser/manager.js';
 import { browserTool } from '../../src/browser/tool.js';
@@ -13,7 +13,7 @@ import { browserTool } from '../../src/browser/tool.js';
  * §8). Never the internet. Skipped, with the reason logged, when no Chromium
  * can be started; in CI (`CI` set, where a Chromium is installed with
  * `npx playwright install --only-shell chromium`) that fails instead, so a
- * broken install can't pass unseen. Set GRUNT_BROWSER_PATH to run it against
+ * broken install can't pass unseen. Set OTHERBENCH_BROWSER_PATH to run it against
  * another build (full Chromium, Chrome, Edge).
  */
 

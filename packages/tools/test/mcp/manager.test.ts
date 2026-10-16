@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { McpServerManager } from '../../src/mcp/manager.js';
 
 const FIXTURE_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'echo-server.js');

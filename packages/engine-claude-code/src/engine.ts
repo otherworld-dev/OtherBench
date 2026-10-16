@@ -2,26 +2,26 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
-import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
-import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
-import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
-import { PLAN_TOOL, runPlanCommand } from '@grunt/core/domain/thread-tools.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@grunt/core/domain/request-budget.js';
-import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { Connection, ToolPolicy } from '@grunt/core/types/config.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { PlanUsage } from '@grunt/core/types/usage.js';
-import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
-import { gruntArtifactTool, gruntMcpServer, gruntPlanTool, gruntRecallTool, gruntServerName, gruntToolName, type GruntServerTool } from './grunt-server.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
+import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
+import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
+import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
+import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
+import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
+import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
+import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchToolName, type OtherBenchServerTool } from './otherbench-server.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
+import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
 import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
@@ -37,7 +37,7 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
 
 export interface ClaudeCodeEngineDeps {
   query: QueryFn;
-  /** `askUser` answers Claude Code's AskUserQuestion and Grunt's propose_plan through cards; without it both are refused. */
+  /** `askUser` answers Claude Code's AskUserQuestion and OtherBench's propose_plan through cards; without it both are refused. */
   approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'> & Partial<Pick<ToolProvider, 'askUser'>>;
   /** Model listing for an endpoint backend (e.g. Ollama), supplied by the server. */
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
@@ -67,8 +67,8 @@ export interface ClaudeCodeEngineDeps {
    */
   scratchRoot?: string;
   /**
-   * What Grunt relays to Claude Code through its own server for this policy,
-   * as an API model gets it but ungated (GruntToolProvider.relayTools): the
+   * What OtherBench relays to Claude Code through its own server for this policy,
+   * as an API model gets it but ungated (OtherBenchToolProvider.relayTools): the
    * allowlisted MCP servers' tools (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2),
    * the sandboxed run_command when the shell runs in the sandbox (spec
    * 2026-10-12-sandbox-design), and the browser when the profile turns it on
@@ -77,8 +77,8 @@ export interface ClaudeCodeEngineDeps {
    * the arguments the gate approved. Without it, no relay.
    */
   relayTools?: (policy: ToolPolicy) => ToolSpec[];
-  /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
-  mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
+  /** Builds OtherBench's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
+  mcpServer?: (name: string, tools: OtherBenchServerTool[]) => McpServerConfig;
 }
 
 const PROBE_TIMEOUT_MS = 20_000;
@@ -139,9 +139,9 @@ function omittedImagesNotice(omitted: Omission[]): string | null {
 }
 
 /**
- * Runs Grunt turns through the local Claude Code install via the Agent SDK
+ * Runs OtherBench turns through the local Claude Code install via the Agent SDK
  * (spec: docs/superpowers/specs/2026-10-02-claude-code-engine-design.md).
- * Claude Code owns the agent loop and its tools; Grunt owns permission
+ * Claude Code owns the agent loop and its tools; OtherBench owns permission
  * (every call goes through `approvals.requestApproval`) and the transcript.
  */
 export class ClaudeCodeChatEngine implements ChatEngine {
@@ -196,7 +196,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean, images.blocks);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
-        yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
+        yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so OtherBench started a new Claude Code session with this chat's history." };
         yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean, images.blocks);
       }
     } finally {
@@ -241,7 +241,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const approvals = this.deps.approvals;
     const askUser = approvals.askUser ? (ctx: ToolContext, input: AskInput) => approvals.askUser!(ctx, input) : undefined;
     // Artifacts (Deck #896) and recall (spec 2026-10-09-recall-design): a
-    // process's Grunt server has each tool or not from its start, so the
+    // process's OtherBench server has each tool or not from its start, so the
     // switches are part of the process key.
     const { artifactTool, recallTool } = this.deps;
     // The profile's MCP servers, the sandboxed run_command when its shell
@@ -250,7 +250,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // in, so it gets no run_command; it does get the browser, which needs none.
     const relayed = this.deps.relayTools ? this.deps.relayTools(profile.toolPolicy).filter((s) => !(clean && s.source === 'sandbox')) : [];
     const relay = buildRelay(relayed);
-    const own: GruntServerSwitches = {
+    const own: OtherBenchServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
       recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
       plan: req.plan !== undefined && askUser !== undefined,
@@ -358,7 +358,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
   private scratchFolder(chatId: string): string {
-    this.privateScratch ??= this.deps.scratchRoot ?? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-'));
+    this.privateScratch ??= this.deps.scratchRoot ?? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-'));
     const folder = join(this.privateScratch, scratchFolderName(chatId));
     mkdirSync(folder, { recursive: true });
     return folder;
@@ -371,7 +371,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design
       // §1): none of the user's Claude Code settings, CLAUDE.md, skills, hooks
       // or MCP config, no coding-agent prompt, and of the built-in tools only
-      // web search and fetch, the checklist and questions. Its MCP tools are Grunt's own server's.
+      // web search and fetch, the checklist and questions. Its MCP tools are OtherBench's own server's.
       return {
         cwd,
         model: profile.modelId,
@@ -402,7 +402,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       settings: { disableSkillShellExecution: true },
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
-      // MCP off: load no MCP config but the servers passed here (only Grunt's
+      // MCP off: load no MCP config but the servers passed here (only OtherBench's
       // own, for artifacts and recall), so the model isn't offered the user's MCP tools
       // and none of their servers start. The gate still denies MCP calls.
       ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
@@ -422,46 +422,46 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntServerSwitches, relay: Relay): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: OtherBenchServerSwitches, relay: Relay): LiveProcess {
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();
     let live: LiveProcess | null = null;
-    // Grunt's own MCP server (Deck #896), under a name made for this process.
+    // OtherBench's own MCP server (Deck #896), under a name made for this process.
     // The gate passes its artifact and recall tools without a card, matching
     // those exact names, so no project MCP config can name a server to get
     // the same pass.
-    const server = own.artifacts || own.recall || own.plan || relay.tools.size > 0 ? gruntServerName() : null;
-    const ownArtifactTool = server && own.artifacts ? gruntToolName(server, ARTIFACT_TOOL) : null;
-    const ownRecallTool = server && own.recall ? gruntToolName(server, RECALL_TOOL) : null;
-    const ownPlanTool = server && own.plan ? gruntToolName(server, PLAN_TOOL) : null;
+    const server = own.artifacts || own.recall || own.plan || relay.tools.size > 0 ? otherBenchServerName() : null;
+    const ownArtifactTool = server && own.artifacts ? otherBenchToolName(server, ARTIFACT_TOOL) : null;
+    const ownRecallTool = server && own.recall ? otherBenchToolName(server, RECALL_TOOL) : null;
+    const ownPlanTool = server && own.plan ? otherBenchToolName(server, PLAN_TOOL) : null;
     // A relayed tool is matched by its exact name on this process's server, like artifact and recall.
-    const relayed = new Map<string, ToolSpec>(server ? [...relay.tools].map(([name, spec]) => [gruntToolName(server, name), spec] as const) : []);
-    const ownTool = (toolName: string): GruntTool | { relay: ToolSpec } | undefined => {
+    const relayed = new Map<string, ToolSpec>(server ? [...relay.tools].map(([name, spec]) => [otherBenchToolName(server, name), spec] as const) : []);
+    const ownTool = (toolName: string): OtherBenchTool | { relay: ToolSpec } | undefined => {
       if (toolName === ownArtifactTool) return 'artifact';
       if (toolName === ownRecallTool) return 'recall';
       if (toolName === ownPlanTool) return 'plan';
       const spec = relayed.get(toolName);
       return spec ? { relay: spec } : undefined;
     };
-    const tools: GruntServerTool[] = [
-      ...(own.artifacts ? [gruntArtifactTool(() => live?.binding?.artifact)] : []),
-      ...(own.recall ? [gruntRecallTool(() => live?.binding?.recall)] : []),
-      ...(own.plan ? [gruntPlanTool(() => live?.binding?.plan)] : []),
+    const tools: OtherBenchServerTool[] = [
+      ...(own.artifacts ? [otherBenchArtifactTool(() => live?.binding?.artifact)] : []),
+      ...(own.recall ? [otherBenchRecallTool(() => live?.binding?.recall)] : []),
+      ...(own.plan ? [otherBenchPlanTool(() => live?.binding?.plan)] : []),
       ...[...relay.tools].map(([name, spec]) => relayServerTool(name, spec, () => live?.binding?.relay)),
     ];
     const gate: Gate = (toolName, toolInput, signal, opts) => {
       const which = ownTool(toolName);
       return live?.binding
         ? live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) })
-        : Promise.resolve({ allow: false, reason: 'No Grunt reply is waiting on this tool call.' });
+        : Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) =>
       live?.binding?.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
     const full: Options = {
       ...options,
       // Its tool acts for whichever reply is running, like the hooks.
-      ...(server ? { mcpServers: { ...(options.mcpServers ?? {}), [server]: (this.deps.mcpServer ?? gruntMcpServer)(server, tools) } } : {}),
+      ...(server ? { mcpServers: { ...(options.mcpServers ?? {}), [server]: (this.deps.mcpServer ?? otherBenchMcpServer)(server, tools) } } : {}),
       abortController,
       stderr: (data: string) => {
         if (!live) return;
@@ -537,7 +537,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
     const skipped = skippedFiles(last);
-    const note = skipped.length > 0 ? `\n\n(Attached files not sent, because Claude Code turns in Grunt only receive images: ${skipped.join(', ')}.)` : '';
+    const note = skipped.length > 0 ? `\n\n(Attached files not sent, because Claude Code turns in OtherBench only receive images: ${skipped.join(', ')}.)` : '';
     const text = [history, textOf(last)].filter((s) => s.length > 0).join('\n\n') + note;
     return [{ type: 'text', text }, ...images];
   }

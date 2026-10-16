@@ -2,11 +2,11 @@ import { realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
-import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@grunt/core/domain/sandbox-paths.js';
-import { SandboxError, sandboxFileAccess, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
-import type { FsMode } from '@grunt/core/types/config.js';
-import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
+import { sandboxHostProblem } from '@otherbench/core/domain/network-hosts.js';
+import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@otherbench/core/domain/sandbox-paths.js';
+import { SandboxError, sandboxFileAccess, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@otherbench/core/ports/sandbox.js';
+import type { FsMode } from '@otherbench/core/types/config.js';
+import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 import { channelFromProcess } from './agent-channel.js';
 import { AgentClient, type AgentOutcome } from './agent-client.js';
 import { AgentPool, type AgentPoolOptions } from './agent-pool.js';
@@ -22,7 +22,7 @@ const MAX_LOG_LINES = 200;
 const MAX_HOST_CHARS = 253;
 const NOT_STARTED = 'The turn was cancelled before this command started, so it was not run.';
 const MIRRORED_WARNING =
-  "WSL's mirrored networking is on (networkingMode=mirrored in your .wslconfig), so a command that broke out of the inner sandbox could reach services on this machine that only listen locally, Grunt's own API among them.";
+  "WSL's mirrored networking is on (networkingMode=mirrored in your .wslconfig), so a command that broke out of the inner sandbox could reach services on this machine that only listen locally, OtherBench's own API among them.";
 
 /** Where the sandbox's state is kept: app_setting key `sandbox` (the server wires it). */
 export interface StateStore {
@@ -32,13 +32,13 @@ export interface StateStore {
 
 export interface WslSandboxOptions {
   runner: WslRunner;
-  /** Grunt's sandbox resource folder (resources.ts). Called by setup, so a missing folder fails setup rather than Grunt's start. */
+  /** OtherBench's sandbox resource folder (resources.ts). Called by setup, so a missing folder fails setup rather than OtherBench's start. */
   resourcesDir: () => string;
   state: StateStore;
   machineName: () => string;
-  /** The port Grunt serves on, for the self-test's "Grunt's own API is unreachable" check; null when not known. */
-  gruntPort: () => number | null;
-  /** A folder of Grunt's for the self-test's read-only and read-write folders. */
+  /** The port OtherBench serves on, for the self-test's "OtherBench's own API is unreachable" check; null when not known. */
+  otherBenchPort: () => number | null;
+  /** A folder of OtherBench's for the self-test's read-only and read-write folders. */
   selfTestDir: string;
   /** A folder's real path: its on-disk case, and a mapped drive as the UNC path it is. Defaults to realpathSync.native. */
   realpath?: (path: string) => string;
@@ -59,11 +59,11 @@ export function chatDirName(chatId: string): string {
 }
 
 export function chatHome(chatId: string): string {
-  return `/home/grunt/chats/${chatDirName(chatId)}`;
+  return `/home/otherbench/chats/${chatDirName(chatId)}`;
 }
 
 export function chatTmp(chatId: string): string {
-  return `/tmp/grunt-chats/${chatDirName(chatId)}`;
+  return `/tmp/otherbench-chats/${chatDirName(chatId)}`;
 }
 
 export function mirroredNetworking(wslconfig: string | null): boolean {
@@ -146,7 +146,7 @@ interface ChatState {
 type RunInput = Pick<SandboxRunRequest, 'command' | 'timeoutMs' | 'allowedHosts' | 'signal' | 'askHost'>;
 
 /**
- * The sandbox on Windows (spec 2026-10-12-sandbox-design §2): a Grunt-owned
+ * The sandbox on Windows (spec 2026-10-12-sandbox-design §2): an OtherBench-owned
  * WSL2 distro, one agent per active chat running each command under the
  * sandbox runtime, and only those chats' folders mounted. Setup, Repair and
  * a package install run as a background job whose progress status() reports.
@@ -175,7 +175,7 @@ export class WslSandbox implements Sandbox {
   private removal: Promise<void> | null = null;
   /** Setup or Remove is closing every agent: the distro restarts or goes, so mounts are forgotten, not taken down one by one. */
   private resetting = false;
-  /** close() has run: Grunt is stopping. */
+  /** close() has run: OtherBench is stopping. */
   private closed = false;
 
   constructor(private readonly opts: WslSandboxOptions) {
@@ -185,7 +185,7 @@ export class WslSandbox implements Sandbox {
       ...opts.pool,
       start:
         opts.startAgent ??
-        ((chatId) => new AgentClient(channelFromProcess(opts.runner.spawn('grunt', AGENT_ARGV)), { home: chatHome(chatId), tmpRoot: chatTmp(chatId), allowedHosts: [] })),
+        ((chatId) => new AgentClient(channelFromProcess(opts.runner.spawn('otherbench', AGENT_ARGV)), { home: chatHome(chatId), tmpRoot: chatTmp(chatId), allowedHosts: [] })),
       onClosed: (chatId) => this.agentGone(chatId),
       onDied: (chatId) => {
         // Whatever killed an agent (wsl --shutdown, sleep) may have dropped every mount.
@@ -221,7 +221,7 @@ export class WslSandbox implements Sandbox {
     if (this.job) return this.job;
     return this.startJob(async (log) => {
       await this.removal?.catch(() => undefined);
-      // Overwritten by the outcome; if Grunt stops first, the sandbox isn't left looking ready.
+      // Overwritten by the outcome; if OtherBench stops first, the sandbox isn't left looking ready.
       this.opts.state.set({ state: 'failed', detail: 'Setup was interrupted.', packages: this.stored().packages });
       await this.dropAgents();
       const packages = this.stored().packages;
@@ -309,7 +309,7 @@ export class WslSandbox implements Sandbox {
     return this.opts.state.get() ?? { state: 'not_set_up', packages: [] };
   }
 
-  /** Refuses a chat's command while Grunt is stopping, or the sandbox is being set up or removed. */
+  /** Refuses a chat's command while OtherBench is stopping, or the sandbox is being set up or removed. */
   private refuseIfBusy(): void {
     if (this.closed) throw new SandboxError('agent_failed', 'The sandbox is shutting down.');
     const machine = this.opts.machineName();
@@ -323,7 +323,7 @@ export class WslSandbox implements Sandbox {
    * the sandbox started being set up or removed. Without this it would start a fresh agent for it.
    */
   private refuseIfStale(chatId: string, mine: ChatState, selfTest: boolean): void {
-    // The self-test runs inside the setup job, so only Grunt stopping refuses it.
+    // The self-test runs inside the setup job, so only OtherBench stopping refuses it.
     if (!selfTest) this.refuseIfBusy();
     else if (this.closed) throw new SandboxError('agent_failed', 'The sandbox is shutting down.');
     if (this.chats.get(chatId) !== mine) throw new SandboxError('aborted', "The chat's sandbox was closed before this command started, so it was not run.");
@@ -416,10 +416,10 @@ export class WslSandbox implements Sandbox {
     await this.mounts.remove(chatId);
   }
 
-  /** Removes the chat's home and temp folders in the VM, as grunt (whose they are), never crossing into a mount. */
+  /** Removes the chat's home and temp folders in the VM, as otherbench (whose they are), never crossing into a mount. */
   private async removeChatFolders(chatId: string): Promise<void> {
     if (!/^[A-Za-z0-9_-]+$/.test(chatDirName(chatId))) return;
-    await this.opts.runner.exec('grunt', ['/bin/rm', '-rf', '--one-file-system', chatHome(chatId), chatTmp(chatId)], { timeoutMs: 60_000 });
+    await this.opts.runner.exec('otherbench', ['/bin/rm', '-rf', '--one-file-system', chatHome(chatId), chatTmp(chatId)], { timeoutMs: 60_000 });
   }
 
   /**
@@ -558,7 +558,7 @@ export class WslSandbox implements Sandbox {
     const ro = join(dir, 'ro');
     const rw = join(dir, 'rw');
     await mkdir(ro, { recursive: true });
-    await writeFile(join(ro, 'hello.txt'), 'hello from Grunt\n');
+    await writeFile(join(ro, 'hello.txt'), 'hello from OtherBench\n');
     // The folders of the protected files the self-test writes (so a write is refused by the sandbox, not by a
     // missing folder), with nothing an earlier self-test may have left in them, and the one that is there first.
     for (const rel of PROTECTED_PROBES) {
@@ -569,13 +569,13 @@ export class WslSandbox implements Sandbox {
     await rm(join(ro, 'nope.txt'), { force: true });
     const route = await this.opts.runner.exec('root', ['/usr/sbin/ip', 'route', 'show', 'default'], { timeoutMs: 30_000 });
     const gateway = /default via (\S+)/.exec(route.stdout)?.[1] ?? null;
-    const gruntPort = this.opts.gruntPort();
-    if (gateway === null || gruntPort === null) {
-      log(`(skipping the check on Grunt's own port: ${gateway === null ? 'the distro has no default route' : "Grunt's port isn't known"})`);
+    const otherBenchPort = this.opts.otherBenchPort();
+    if (gateway === null || otherBenchPort === null) {
+      log(`(skipping the check on OtherBench's own port: ${gateway === null ? 'the distro has no default route' : "OtherBench's port isn't known"})`);
     }
     const places = this.places(SELF_TEST_CHAT, 'readwrite', rw, [{ root: ro, access: 'read' }]);
     const [rwLinux, roLinux] = places.read as [string, string];
-    const cases = selfTestCases({ rwLinux, roLinux, gateway, gruntPort });
+    const cases = selfTestCases({ rwLinux, roLinux, gateway, otherBenchPort });
     try {
       await runSelfTest(
         cases,

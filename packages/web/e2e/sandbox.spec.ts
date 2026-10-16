@@ -7,7 +7,7 @@ import { BASE_URL } from '../playwright.config.js';
 
 /**
  * The sandboxed shell end to end (spec 2026-10-12-sandbox-design §6, "E2e"),
- * against the e2e server's FakeSandbox (GRUNT_SANDBOX=fake): set it up from
+ * against the e2e server's FakeSandbox (OTHERBENCH_SANDBOX=fake): set it up from
  * Settings, choose "in the sandbox" on a profile, and a mock #run turn comes
  * back tagged sandbox with no approval card under ask on mutate.
  */
@@ -54,7 +54,7 @@ test('chooses "in the sandbox" for a profile', async ({ page, request }) => {
 
 test('a sandboxed command runs with no card under ask on mutate, and its result is tagged sandbox', async ({ page, request }) => {
   expect((await request.post(`${BASE_URL}/api/sandbox/setup`)).status()).toBe(202);
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'grunt-e2e-sandbox-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'otherbench-e2e-sandbox-'));
   try {
     const profileId = await mockProfile(request, { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' });
     const title = `Sandbox run ${suffix()}`;

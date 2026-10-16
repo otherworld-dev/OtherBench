@@ -87,7 +87,7 @@ test('a live page gets data once allowed, refreshes, caches, closes when it leav
 
     // 5. A page that navigates its own frame is closed; Reopen brings it back.
     await frame().locator('#leave').click();
-    await expect(viewer.getByText('This page went to another address, so Grunt closed it.')).toBeVisible();
+    await expect(viewer.getByText('This page went to another address, so OtherBench closed it.')).toBeVisible();
     await viewer.getByRole('button', { name: 'Reopen' }).click();
     await expect(frame().locator('#out')).toHaveText('value-of-b');
 

@@ -6,11 +6,11 @@
 //! its stdout and the shell answers on the server's stdin, one JSON object per
 //! line:
 //!
-//!   server to shell   GRUNT-RPC <word> {"id":<n>,"method":"<m>","params":{...}}
-//!                     GRUNT-RPC <word> {"method":"computer.close","params":{}}
-//!   shell to server   GRUNT-RPC {"id":<n>,"result":<value>}
-//!                     GRUNT-RPC {"id":<n>,"error":{"message":"...","code":"..."}}
-//!                     GRUNT-RPC {"event":"<name>","params":{...}}
+//!   server to shell   OTHERBENCH-RPC <word> {"id":<n>,"method":"<m>","params":{...}}
+//!                     OTHERBENCH-RPC <word> {"method":"computer.close","params":{}}
+//!   shell to server   OTHERBENCH-RPC {"id":<n>,"result":<value>}
+//!                     OTHERBENCH-RPC {"id":<n>,"error":{"message":"...","code":"..."}}
+//!                     OTHERBENCH-RPC {"event":"<name>","params":{...}}
 //!
 //! `<word>` is new for every launch and only the announce line carries it, so
 //! nothing else that writes to the server's stdout can pass for a request.
@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-/// `GRUNT-RPC` and one space, exactly.
-pub const PREFIX: &str = "GRUNT-RPC ";
+/// `OTHERBENCH-RPC` and one space, exactly.
+pub const PREFIX: &str = "OTHERBENCH-RPC ";
 
 /// The longest line the shell reads from the server, before its line end. A
 /// longer one is thrown away as it arrives, without being held.
@@ -409,7 +409,7 @@ pub(crate) mod tests {
         pub fn lines(&self) -> Vec<String> {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap().lines().map(str::to_string).collect()
         }
-        /// Each line's JSON, after checking it is one `GRUNT-RPC ` line.
+        /// Each line's JSON, after checking it is one `OTHERBENCH-RPC ` line.
         pub fn messages(&self) -> Vec<Value> {
             self.lines()
                 .iter()
@@ -438,7 +438,7 @@ pub(crate) mod tests {
         for bad in ["0123456789ABCDEF0123456789ABCDEF", "0123", "", "0123456789abcdef0123456789abcdeg"] {
             assert_eq!(parse_announce(&format!("{{\"port\":1,\"rpc\":\"{bad}\"}}")).unwrap().word, None, "{bad}");
         }
-        assert!(parse_announce("Grunt server listening").is_err());
+        assert!(parse_announce("OtherBench server listening").is_err());
         assert!(parse_announce("{\"port\":0}").is_err());
         assert!(parse_announce("{\"port\":70000}").is_err());
         assert!(!format!("{a:?}").contains(WORD));
@@ -483,13 +483,13 @@ pub(crate) mod tests {
         let ok = "{\"id\":1,\"method\":\"computer.hello\",\"params\":{}}";
         assert!(parse_line(&line(ok), WORD).is_some());
         for bad in [
-            format!("GRUNT-RPC {ok}"),
-            format!("grunt-rpc {WORD} {ok}"),
-            format!("GRUNT-RPC  {WORD} {ok}"),
-            format!("GRUNT-RPC {WORD}{ok}"),
-            format!("GRUNT-RPC {} {ok}", WORD.to_uppercase()),
-            format!("GRUNT-RPC fedcba9876543210fedcba9876543210 {ok}"),
-            format!(" GRUNT-RPC {WORD} {ok}"),
+            format!("OTHERBENCH-RPC {ok}"),
+            format!("otherbench-rpc {WORD} {ok}"),
+            format!("OTHERBENCH-RPC  {WORD} {ok}"),
+            format!("OTHERBENCH-RPC {WORD}{ok}"),
+            format!("OTHERBENCH-RPC {} {ok}", WORD.to_uppercase()),
+            format!("OTHERBENCH-RPC fedcba9876543210fedcba9876543210 {ok}"),
+            format!(" OTHERBENCH-RPC {WORD} {ok}"),
             ok.to_string(),
         ] {
             assert_eq!(parse_line(bad.as_bytes(), WORD), None, "{bad}");
@@ -550,7 +550,7 @@ pub(crate) mod tests {
                 json!({ "event": "computer.stopped", "params": { "chatId": "c", "why": "hotkey" } }),
             ]
         );
-        assert!(sink.lines()[0].starts_with("GRUNT-RPC {\"id\":7,"));
+        assert!(sink.lines()[0].starts_with("OTHERBENCH-RPC {\"id\":7,"));
     }
 
     #[test]
@@ -644,7 +644,7 @@ pub(crate) mod tests {
         for l in [
             b"noise".to_vec(),
             line("{\"id\":1,\"method\":\"computer.hello\",\"params\":{}}"),
-            format!("GRUNT-RPC {{\"id\":2,\"method\":\"computer.hello\"}}").into_bytes(),
+            format!("OTHERBENCH-RPC {{\"id\":2,\"method\":\"computer.hello\"}}").into_bytes(),
             vec![0xff, 0xfe],
             line("not json"),
             line("{\"id\":3,\"method\":\"unknown\"}"),
@@ -675,7 +675,7 @@ pub(crate) mod tests {
 
     #[test]
     fn reads_the_announce_line_with_a_cap() {
-        let mut r = Cursor::new(b"{\"port\":5}\nGRUNT-RPC x\n".to_vec());
+        let mut r = Cursor::new(b"{\"port\":5}\nOTHERBENCH-RPC x\n".to_vec());
         assert_eq!(read_announce(&mut r).unwrap(), "{\"port\":5}");
         let mut long = vec![b'{'; 10_000];
         long.push(b'\n');

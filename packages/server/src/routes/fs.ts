@@ -48,7 +48,7 @@ export function fsRoutes(): Hono {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') throw new HTTPException(404, { message: `No folder at "${path}".` });
       if (code === 'ENOTDIR') throw new HTTPException(400, { message: `"${path}" is not a folder.` });
-      if (code === 'EACCES' || code === 'EPERM') throw new HTTPException(403, { message: `Grunt can't read "${path}".` });
+      if (code === 'EACCES' || code === 'EPERM') throw new HTTPException(403, { message: `OtherBench can't read "${path}".` });
       throw err;
     }
 

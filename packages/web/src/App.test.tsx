@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSidebarWidthForTests } from './state/sidebarWidth.js';
 import { useAuthStore } from './state/auth.js';
-import { useGruntStore } from './state/store.js';
+import { useOtherBenchStore } from './state/store.js';
 import { App } from './App.js';
 
 vi.mock('./state/api.js', () => ({
@@ -40,7 +40,7 @@ const mockedAuditList = vi.mocked(api.audit.list);
 function reset(): void {
   window.localStorage.clear();
   resetSidebarWidthForTests();
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useAuthStore.setState(useAuthStore.getInitialState(), true);
   mockedConnections.mockReset();
   mockedModels.mockReset();
@@ -90,7 +90,7 @@ describe('App bootstrap', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(useGruntStore.getState().projects.map((p) => p.id)).toEqual(['p-a']));
+    await waitFor(() => expect(useOtherBenchStore.getState().projects.map((p) => p.id)).toEqual(['p-a']));
   });
 
   it('has a Sign out button in sign-in mode only', async () => {
@@ -118,7 +118,7 @@ describe('App bootstrap', () => {
     render(<App />);
 
     const banner = await screen.findByRole('alert');
-    expect(banner).toHaveTextContent(/can.t reach the grunt server/i);
+    expect(banner).toHaveTextContent(/can.t reach the otherbench server/i);
     expect(banner).toHaveTextContent(/may not be running/i);
   });
 
@@ -222,7 +222,7 @@ describe('App view', () => {
     render(<App />);
     const strip = await screen.findByRole('button', { name: 'Expand inspector' });
     expect(strip).toHaveAttribute('aria-disabled', 'true');
-    expect(useGruntStore.getState().inspectorCollapsed).toBe(false);
+    expect(useOtherBenchStore.getState().inspectorCollapsed).toBe(false);
     expect(screen.queryByRole('complementary', { name: 'Inspector' })).toBeNull();
   });
 

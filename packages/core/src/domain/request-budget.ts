@@ -66,7 +66,7 @@ export function selectWithinBudget(picks: Pick[], limits: BudgetLimits): Map<str
 
 /**
  * Why an attachment of the user's is not in a request, in the words the note
- * uses. `'not-image'` is an image part whose bytes are not a raster Grunt
+ * uses. `'not-image'` is an image part whose bytes are not a raster OtherBench
  * sends; the rest are the selector's own verdicts. One table, so every engine
  * says the same thing to the model and to the user.
  */

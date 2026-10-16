@@ -34,7 +34,7 @@ export function IndicatorView(): JSX.Element {
     <div data-testid="computer-indicator" role="status" className="flex h-screen items-center gap-3 bg-[var(--bg-raised)] px-3 text-sm text-[var(--text)]">
       <span aria-hidden="true">{'\u{1F5B1}'}</span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <strong className="truncate">Grunt is controlling this computer</strong>
+        <strong className="truncate">OtherBench is controlling this computer</strong>
         <span className="truncate text-xs text-[var(--text-muted)]">
           <bdi data-testid="computer-indicator-title">{title}</bdi>
           {lastAction !== '' && (

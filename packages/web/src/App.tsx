@@ -10,7 +10,7 @@ import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useAuthStore } from './state/auth.js';
-import { useGruntStore } from './state/store.js';
+import { useOtherBenchStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
@@ -36,22 +36,22 @@ export function App(): JSX.Element {
 }
 
 function MainApp(): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
-  const profiles = useGruntStore((s) => s.profiles);
-  const activeChatId = useGruntStore((s) => s.activeChatId);
-  const inspectorCollapsed = useGruntStore((s) => s.inspectorCollapsed);
-  const setInspectorCollapsed = useGruntStore((s) => s.setInspectorCollapsed);
-  const projectPage = useGruntStore((s) => s.projectPage);
-  const closeProjectPage = useGruntStore((s) => s.closeProjectPage);
-  const schedulesPage = useGruntStore((s) => s.schedulesPage);
-  const openSchedules = useGruntStore((s) => s.openSchedules);
-  const closeSchedules = useGruntStore((s) => s.closeSchedules);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
+  const inspectorCollapsed = useOtherBenchStore((s) => s.inspectorCollapsed);
+  const setInspectorCollapsed = useOtherBenchStore((s) => s.setInspectorCollapsed);
+  const projectPage = useOtherBenchStore((s) => s.projectPage);
+  const closeProjectPage = useOtherBenchStore((s) => s.closeProjectPage);
+  const schedulesPage = useOtherBenchStore((s) => s.schedulesPage);
+  const openSchedules = useOtherBenchStore((s) => s.openSchedules);
+  const closeSchedules = useOtherBenchStore((s) => s.closeSchedules);
 
-  const setConnections = useGruntStore((s) => s.setConnections);
-  const setModels = useGruntStore((s) => s.setModels);
-  const setProfiles = useGruntStore((s) => s.setProfiles);
-  const setChats = useGruntStore((s) => s.setChats);
-  const setProjects = useGruntStore((s) => s.setProjects);
+  const setConnections = useOtherBenchStore((s) => s.setConnections);
+  const setModels = useOtherBenchStore((s) => s.setModels);
+  const setProfiles = useOtherBenchStore((s) => s.setProfiles);
+  const setChats = useOtherBenchStore((s) => s.setChats);
+  const setProjects = useOtherBenchStore((s) => s.setProjects);
 
   // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
   const signedInRemotely = useAuthStore((s) => s.mode === 'login');
@@ -63,8 +63,8 @@ function MainApp(): JSX.Element {
   // store so each pane's header can open it; ephemeral, and starts closed
   // regardless of the docked preference, or the inspector would pop over the
   // thread the instant the window narrows.
-  const narrowOverlayOpen = useGruntStore((s) => s.inspectorOverlayOpen);
-  const setNarrowOverlayOpen = useGruntStore((s) => s.setInspectorOverlayOpen);
+  const narrowOverlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
+  const setNarrowOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
   // Task 28: the global usage/pricing settings view -- a full-screen
   // overlay, ephemeral like the narrow inspector overlay above (there is no
   // "docked" mode for it, and no reason to remember it across reloads).
@@ -103,7 +103,7 @@ function MainApp(): JSX.Element {
       if (cancelled) return;
       const labels = ['connections', 'models', 'profiles', 'chats', 'projects'] as const;
       results.forEach((r, i) => {
-        if (r.status === 'rejected') console.error(`[grunt-web] failed to load ${labels[i]}:`, r.reason);
+        if (r.status === 'rejected') console.error(`[otherbench-web] failed to load ${labels[i]}:`, r.reason);
       });
       setUnreachable(results.every((r) => r.status === 'rejected'));
       setLoaded(true);
@@ -141,7 +141,7 @@ function MainApp(): JSX.Element {
           className="col-span-2 row-start-1 flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-3 py-2 text-sm text-[var(--danger)]"
         >
           <span>
-            Can&rsquo;t reach the Grunt server. It may not be running -- start <code>grunt serve</code> and reload this page.
+            Can&rsquo;t reach the OtherBench server. It may not be running -- start <code>otherbench serve</code> and reload this page.
           </span>
           <button
             type="button"

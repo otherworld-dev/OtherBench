@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { Hono } from 'hono';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
 import { refuseCrossSiteWrites } from '../src/cross-site.js';
@@ -91,16 +91,16 @@ describe('hostCheck', () => {
 
   it('also lets the public hosts through when given, and only then', async () => {
     const app = new Hono();
-    app.use('*', hostCheck(() => 4747, ['grunt.lan:4747', '[fd00::5]:4747']));
+    app.use('*', hostCheck(() => 4747, ['otherbench.lan:4747', '[fd00::5]:4747']));
     app.get('/x', (c) => c.text('ok'));
 
-    for (const host of ['grunt.lan:4747', 'GRUNT.LAN:4747', '[fd00::5]:4747', '127.0.0.1:4747']) {
+    for (const host of ['otherbench.lan:4747', 'OTHERBENCH.LAN:4747', '[fd00::5]:4747', '127.0.0.1:4747']) {
       expect((await app.request('/x', { headers: { Host: host } })).status, host).toBe(200);
     }
-    for (const host of ['grunt.lan', 'grunt.lan:4748', 'evil.example:4747']) {
+    for (const host of ['otherbench.lan', 'otherbench.lan:4748', 'evil.example:4747']) {
       expect((await app.request('/x', { headers: { Host: host } })).status, host).toBe(421);
     }
-    expect((await appWithHostCheck(4747).request('/api/ping', { headers: { Host: 'grunt.lan:4747' } })).status).toBe(421);
+    expect((await appWithHostCheck(4747).request('/api/ping', { headers: { Host: 'otherbench.lan:4747' } })).status).toBe(421);
   });
 });
 
@@ -222,7 +222,7 @@ describe('cross-site writes to the API (Deck #897)', () => {
     expect(container.store.connections.list()).toEqual([]);
   });
 
-  it('lets through the UI Grunt serves, the Vite dev proxy, the desktop webview, and clients that are no browser', async () => {
+  it('lets through the UI OtherBench serves, the Vite dev proxy, the desktop webview, and clients that are no browser', async () => {
     const app = createApp(makeContainer(), { corsOrigins: [APP_ORIGIN] });
     for (const headers of [
       { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin' },
@@ -235,11 +235,11 @@ describe('cross-site writes to the API (Deck #897)', () => {
     }
   });
 
-  it("refuses a write from a form, a page or a plugin, even from Grunt's own origin: a PDF isn't sandboxed and could submit one", async () => {
+  it("refuses a write from a form, a page or a plugin, even from OtherBench's own origin: a PDF isn't sandboxed and could submit one", async () => {
     const container = makeContainer();
     const app = createApp(container);
     // /view/ pages send no Referer (Referrer-Policy: no-referrer), so these
-    // go by what the browser says the request is for: Grunt's UI only writes
+    // go by what the browser says the request is for: OtherBench's UI only writes
     // with fetch (Sec-Fetch-Dest: empty), never a form, a page or a plugin.
     for (const headers of [
       { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' },
@@ -261,14 +261,14 @@ describe('cross-site writes to the API (Deck #897)', () => {
 
   it('treats an https own origin on a TLS request, and the public origins, as its own; still refuses others and null', async () => {
     const app = new Hono();
-    app.use('/api/*', refuseCrossSiteWrites(['https://grunt.lan:4747']));
+    app.use('/api/*', refuseCrossSiteWrites(['https://otherbench.lan:4747']));
     app.post('/api/x', (c) => c.body(null, 204));
     const write = (url: string, headers: Record<string, string>) => app.request(url, { method: 'POST', headers });
 
     // Safari before 16.4 sends Origin but no Sec-Fetch-Site.
     expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'https://box.tail.ts.net' })).status).toBe(204);
-    // Behind a TLS proxy the request reaches Grunt as http; the public origin still counts.
-    expect((await write('http://grunt.lan:4747/api/x', { Host: 'grunt.lan:4747', Origin: 'https://grunt.lan:4747' })).status).toBe(204);
+    // Behind a TLS proxy the request reaches OtherBench as http; the public origin still counts.
+    expect((await write('http://otherbench.lan:4747/api/x', { Host: 'otherbench.lan:4747', Origin: 'https://otherbench.lan:4747' })).status).toBe(204);
     expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'http://box.tail.ts.net' })).status).toBe(403);
     expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'https://evil.example' })).status).toBe(403);
     expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'null' })).status).toBe(403);

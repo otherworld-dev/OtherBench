@@ -88,7 +88,7 @@ describe('the host grant constraint, shared by the sandbox network and the brows
       // Every key must match: the host does, the other key has nothing in the call to match.
       grant({ toolName: tool.name, source: tool.source, constraint: { host: 'example.com', pathPrefix: '.' } });
       grant({ toolName: tool.name, source: tool.source, constraint: { host: 'example.com', commandPrefix: 'rm' } });
-      // A key Grunt doesn't know, and a host that isn't a string.
+      // A key OtherBench doesn't know, and a host that isn't a string.
       grant({ toolName: tool.name, source: tool.source, constraint: { host: 'example.com', extra: true } as unknown as Grant['constraint'] });
       grant({ toolName: tool.name, source: tool.source, constraint: { host: 42 } as unknown as Grant['constraint'] });
       expect(decide(tool, args()).kind).toBe('ask');

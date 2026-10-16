@@ -12,9 +12,9 @@ import {
   unattendedWarnings,
   type ScheduleRule,
   type ScheduleTarget,
-} from '@grunt/core/domain/schedule.js';
-import { projectDisplayName } from '@grunt/core/domain/projects.js';
-import type { Schedule, SchedulePatch, ScheduleView } from '@grunt/core/ports/store.js';
+} from '@otherbench/core/domain/schedule.js';
+import { projectDisplayName } from '@otherbench/core/domain/projects.js';
+import type { Schedule, SchedulePatch, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
 import { ScheduleBusyError } from '../schedule/service.js';
 
@@ -134,7 +134,7 @@ export function schedulesRoutes(container: Container): Hono {
     const rule = parseRuleBody(body.rule);
     const enabled = parseEnabled(body.enabled, true);
     if (container.store.schedules.list().length >= MAX_SCHEDULES) {
-      throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most Grunt keeps. Delete one first.` });
+      throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most OtherBench keeps. Delete one first.` });
     }
     const now = Date.now();
     const timezone = serverTimeZone();

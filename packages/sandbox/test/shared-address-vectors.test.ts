@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHARED_ADDRESS_VECTORS } from '@grunt/core/testing/shared-host-vectors.js';
+import { SHARED_ADDRESS_VECTORS } from '@otherbench/core/testing/shared-host-vectors.js';
 // Plain ESM that ships into the VM; vitest loads it as it is.
 import { isPrivateAddress } from '../resources/agent-core.mjs';
 

@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
-import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@otherbench/core/domain/computer-apps.js';
 
 /** What the gate needs to know about computer use on this machine. */
 export interface ComputerHold {
@@ -23,19 +23,19 @@ const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * can't set. Anything else is refused with 403 and
  * `COMPUTER_DESKTOP_ONLY_REASON` (or, when no chat holds the computer but an
  * end is unconfirmed, `COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`, which says
- * a restart clears it): a browser tab of Grunt (same origin, or a
+ * a restart clears it): a browser tab of OtherBench (same origin, or a
  * request with no `Origin` at all), and so a model holding a lasting grant
- * for that browser, which could otherwise open Grunt there and answer its own
+ * for that browser, which could otherwise open OtherBench there and answer its own
  * cards, or post a message to a chat whose grants would run it with no card.
  * Reads, and the two Stops, always pass.
  *
  * On the desktop server the per-launch API token is the real barrier against
  * a browser tab or any other program driving the API: a tab can't send it
- * (and `grunt serve` keeps it out of every child process's environment).
+ * (and `otherbench serve` keeps it out of every child process's environment).
  * This gate is defence in depth that stops a browser that somehow could, and
  * the first wall is that computer use refuses any window whose title carries
- * Grunt's marker (core's `classifyTarget`, and the shell before every step).
- * It doesn't cover another Grunt server the browser can reach, which has no
+ * OtherBench's marker (core's `classifyTarget`, and the shell before every step).
+ * It doesn't cover another OtherBench server the browser can reach, which has no
  * computer session of its own.
  *
  * `allowed`: the origins that count as the desktop app. Empty (the peer

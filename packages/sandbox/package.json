@@ -1,5 +1,5 @@
 {
-  "name": "@grunt/sandbox",
+  "name": "@otherbench/sandbox",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@grunt/core": "*"
+    "@otherbench/core": "*"
   },
   "devDependencies": {
     "vitest": "^2.1.0"

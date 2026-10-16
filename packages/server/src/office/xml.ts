@@ -60,7 +60,7 @@ function endOf(xml: string, from: number, terminator: string, what: string): num
 }
 
 export function scanXml(xml: string, handlers: XmlHandlers): void {
-  if (/<!DOCTYPE/i.test(xml)) throw new XmlError('This part has a DOCTYPE, which Grunt refuses to read.');
+  if (/<!DOCTYPE/i.test(xml)) throw new XmlError('This part has a DOCTYPE, which OtherBench refuses to read.');
   let i = 0;
   while (i < xml.length) {
     const lt = xml.indexOf('<', i);

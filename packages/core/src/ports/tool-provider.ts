@@ -74,7 +74,7 @@ export interface ToolContext {
    */
   unattended?: boolean;
   /**
-   * Set only by `GruntToolProvider.runLiveCall`, never by an engine or
+   * Set only by `OtherBenchToolProvider.runLiveCall`, never by an engine or
    * `toolContextFor`: this call is one a live artifact's page asked for (spec
    * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live
    * branch, which allows only a live grant for exactly this call.
@@ -127,9 +127,9 @@ export interface ToolSpec {
 
 /**
  * Raised by a gated `ToolSpec` (task 26's `ToolProvider` implementation,
- * `@grunt/tools`'s `provider.ts`) when `PermissionBroker.decide()` returns
+ * `@otherbench/tools`'s `provider.ts`) when `PermissionBroker.decide()` returns
  * `'ask'` for a call. Defined here, on the port, rather than alongside
- * `PermissionBroker` in `@grunt/core/domain/permissions.ts`, specifically so
+ * `PermissionBroker` in `@otherbench/core/domain/permissions.ts`, specifically so
  * this file can be depended on by BOTH the domain layer (which already
  * imports `RiskClass`/`ToolContext`/`ToolSpec` from here) and by anything
  * needing to reference the shape of an approval event without importing the
@@ -181,7 +181,7 @@ export type ApprovalOutcome =
   | { allowed: true; grantedBy: string; args?: unknown }
   /**
    * `about`: the line that says whose words `reason` may hold, when they may
-   * not be Grunt's (a computer call refused in the desktop app's words:
+   * not be OtherBench's (a computer call refused in the desktop app's words:
    * `COMPUTER_SCREEN_ABOUT`). Whoever passes the reason on to a model puts
    * this line first; it is not part of the reason a person is shown.
    */
@@ -192,11 +192,11 @@ export type ApprovalOutcome =
  * What a call is answered with when it comes to be run and no approval
  * stands behind it: on Claude Code's path, a relayed call with no ticket
  * (engine-claude-code `runRelayed`) and one the tool provider did not approve
- * for that chat and reply (`GruntToolProvider.runRelayedCall`); in the
+ * for that chat and reply (`OtherBenchToolProvider.runRelayedCall`); in the
  * browser tool, arguments that carry no approved site. One sentence for all
  * three, so the model reads the same thing whichever of them refused.
  */
-export const NO_APPROVAL_REASON = 'Grunt has no approval for this call.';
+export const NO_APPROVAL_REASON = 'OtherBench has no approval for this call.';
 
 /** Options for `ToolProvider.requestApproval`. */
 export interface ApprovalOptions {
@@ -274,7 +274,7 @@ export interface ToolProvider {
   /**
    * The permission gate for a tool call that something else will execute
    * (Claude Code's own tools, `source: 'agent'`). Same decide -> approval card
-   * -> resolve -> audit flow as a gated Grunt tool, minus the execution. This
+   * -> resolve -> audit flow as a gated OtherBench tool, minus the execution. This
    * is the only way an external agent's tool call may be authorised.
    */
   requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts?: ApprovalOptions): Promise<ApprovalOutcome>;

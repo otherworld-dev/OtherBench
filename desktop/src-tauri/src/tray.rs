@@ -1,4 +1,4 @@
-//! The tray icon: where Grunt lives while its window is closed.
+//! The tray icon: where OtherBench lives while its window is closed.
 
 use std::sync::Mutex;
 
@@ -23,13 +23,13 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-/// The tray tooltip: "Grunt", plus how many tool calls are waiting for
+/// The tray tooltip: "OtherBench", plus how many tool calls are waiting for
 /// approval, so a reply blocked on one shows while the window is hidden.
 pub fn tooltip_text(pending_approvals: u32) -> String {
     match pending_approvals {
-        0 => "Grunt".to_string(),
-        1 => "Grunt: 1 tool call waiting for approval".to_string(),
-        n => format!("Grunt: {n} tool calls waiting for approval"),
+        0 => "OtherBench".to_string(),
+        1 => "OtherBench: 1 tool call waiting for approval".to_string(),
+        n => format!("OtherBench: {n} tool calls waiting for approval"),
     }
 }
 
@@ -56,10 +56,10 @@ pub fn machine_lines(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Open Grunt, New chat, each paired machine's status (greyed out, for
+/// Open OtherBench, New chat, each paired machine's status (greyed out, for
 /// reading), Quit.
 fn menu(app: &AppHandle, machines: &[String]) -> tauri::Result<Menu<Wry>> {
-    let open = MenuItem::with_id(app, "open", "Open Grunt", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open OtherBench", true, None::<&str>)?;
     let new_chat = MenuItem::with_id(app, "new-chat", "New chat", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &new_chat])?;
     let lines = machine_lines(machines);
@@ -70,13 +70,13 @@ fn menu(app: &AppHandle, machines: &[String]) -> tauri::Result<Menu<Wry>> {
         }
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "Quit Grunt", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit OtherBench", true, None::<&str>)?)?;
     Ok(menu)
 }
 
 /// The tooltip while a chat controls the computer (the title is already one clean line).
 pub fn control_tooltip(title: &str) -> String {
-    let text = format!("Grunt is controlling this computer ({title})");
+    let text = format!("OtherBench is controlling this computer ({title})");
     // Windows shows at most 127 characters of a tray tooltip.
     if text.chars().count() > 127 {
         format!("{}…)", text.chars().take(125).collect::<String>())
@@ -86,7 +86,7 @@ pub fn control_tooltip(title: &str) -> String {
 }
 
 /// What the tooltip says when computer use has nothing to say.
-pub const COMPUTER_OFF_TOOLTIP: &str = "Grunt: computer use is off until Grunt restarts";
+pub const COMPUTER_OFF_TOOLTIP: &str = "OtherBench: computer use is off until OtherBench restarts";
 
 /// Computer use's own tooltip (a chat is controlling the computer, or the
 /// channel is gone), which the web app's status updates don't replace.
@@ -161,26 +161,26 @@ mod tests {
 
     #[test]
     fn tooltip_is_plain_with_nothing_pending() {
-        assert_eq!(tooltip_text(0), "Grunt");
+        assert_eq!(tooltip_text(0), "OtherBench");
     }
 
     #[test]
     fn tooltip_counts_pending_approvals() {
-        assert_eq!(tooltip_text(1), "Grunt: 1 tool call waiting for approval");
-        assert_eq!(tooltip_text(3), "Grunt: 3 tool calls waiting for approval");
+        assert_eq!(tooltip_text(1), "OtherBench: 1 tool call waiting for approval");
+        assert_eq!(tooltip_text(3), "OtherBench: 3 tool calls waiting for approval");
     }
 
     #[test]
     fn computer_uses_own_line_wins_over_the_approval_count_while_set() {
-        assert_eq!(tooltip_for(Some("Grunt is controlling this computer (Budget)"), 3), "Grunt is controlling this computer (Budget)");
+        assert_eq!(tooltip_for(Some("OtherBench is controlling this computer (Budget)"), 3), "OtherBench is controlling this computer (Budget)");
         assert_eq!(tooltip_for(Some(COMPUTER_OFF_TOOLTIP), 0), COMPUTER_OFF_TOOLTIP);
-        assert_eq!(tooltip_for(None, 3), "Grunt: 3 tool calls waiting for approval");
+        assert_eq!(tooltip_for(None, 3), "OtherBench: 3 tool calls waiting for approval");
         assert!(COMPUTER_OFF_TOOLTIP.chars().count() <= 127);
     }
 
     #[test]
     fn the_control_tooltip_names_the_chat_within_windows_limit() {
-        assert_eq!(control_tooltip("Budget"), "Grunt is controlling this computer (Budget)");
+        assert_eq!(control_tooltip("Budget"), "OtherBench is controlling this computer (Budget)");
         let long = control_tooltip(&"x".repeat(200));
         assert_eq!(long.chars().count(), 127);
         assert!(long.ends_with("…)"));

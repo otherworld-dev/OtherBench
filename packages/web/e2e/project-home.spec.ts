@@ -59,7 +59,7 @@ test("a project's name opens its page, and a chat started there opens in the pan
   await box.press('Enter');
 
   await expect(page.getByTestId('thread-scroll').getByText('Hello from the project page')).toBeVisible();
-  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
   await expect(page.getByTestId('tab-bar').getByRole('tab', { name: new RegExp(projectName) })).toBeVisible();
   await expect(group.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
 });

@@ -107,14 +107,14 @@ function readHidden(io: PasswordCommandIo, prompt: string): Promise<string> {
 }
 
 /**
- * `grunt password [--db <path>]` (spec §1): sets the sign-in password in
+ * `otherbench password [--db <path>]` (spec §1): sets the sign-in password in
  * `login.json`. Works while the server runs; the server sees the new epoch
  * within a second and every device is signed out.
  */
 export async function runPasswordCommand(loginPath: string, io: PasswordCommandIo, scrypt: ScryptParams = DEFAULT_SCRYPT): Promise<void> {
   let password: string;
   if (io.isTTY) {
-    const first = await readHidden(io, 'New password for signing in to Grunt: ');
+    const first = await readHidden(io, 'New password for signing in to OtherBench: ');
     const second = await readHidden(io, 'Again: ');
     if (first !== second) throw new PasswordCommandError("The passwords don't match. Nothing was changed.");
     password = first;

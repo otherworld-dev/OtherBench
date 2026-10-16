@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from 'react';
 import { autostart, setHotkey } from '../../desktop/bridge.js';
 import { DEFAULT_HOTKEY, loadHotkey, saveHotkey } from '../../desktop/hotkey.js';
 import { loadNotifyPrefs, saveNotifyPrefs, type NotifyPrefs } from '../../desktop/notify.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 /**
  * Settings that only exist in the desktop app. `SettingsView` only offers
@@ -13,8 +13,8 @@ export function DesktopPanel(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notify, setNotify] = useState<NotifyPrefs>(loadNotifyPrefs);
-  const hotkeyStatus = useGruntStore((s) => s.hotkeyStatus);
-  const setHotkeyStatus = useGruntStore((s) => s.setHotkeyStatus);
+  const hotkeyStatus = useOtherBenchStore((s) => s.hotkeyStatus);
+  const setHotkeyStatus = useOtherBenchStore((s) => s.setHotkeyStatus);
   const [hotkeyDraft, setHotkeyDraft] = useState(loadHotkey);
   const [hotkeySaving, setHotkeySaving] = useState(false);
 
@@ -85,10 +85,10 @@ export function DesktopPanel(): JSX.Element {
           disabled={startAtLogin === null || busy}
           onChange={(e) => void toggle(e.target.checked)}
         />
-        Start Grunt when I sign in
+        Start OtherBench when I sign in
       </label>
       <p className="text-[var(--text-muted)]">
-        Closing the window keeps Grunt running in the tray, so replies in progress carry on. Use{' '}
+        Closing the window keeps OtherBench running in the tray, so replies in progress carry on. Use{' '}
         <strong>Quit</strong> in the tray menu to stop it completely.
       </p>
       <div className="space-y-2">
@@ -135,7 +135,7 @@ export function DesktopPanel(): JSX.Element {
           <input type="checkbox" checked={notify.scheduled} onChange={(e) => setNotifyPref('scheduled', e.target.checked)} />
           Scheduled runs
         </label>
-        <p className="text-[var(--text-muted)]">Scheduled runs notify even while Grunt is focused, since nobody was watching them.</p>
+        <p className="text-[var(--text-muted)]">Scheduled runs notify even while OtherBench is focused, since nobody was watching them.</p>
         <p className="text-[var(--text-muted)]">Clicking the tray icon afterwards opens the chat you were last notified about.</p>
       </fieldset>
       {error && (

@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, isAbsolute, join } from 'node:path';
-import { ClaudeExportError, type ClaudeExportFiles } from '@grunt/core/domain/claude-import.js';
-import { containPath, PathEscapeError } from '@grunt/core/domain/paths.js';
+import { ClaudeExportError, type ClaudeExportFiles } from '@otherbench/core/domain/claude-import.js';
+import { containPath, PathEscapeError } from '@otherbench/core/domain/paths.js';
 import { listZipEntries, readZipEntry, ZipError } from './zip.js';
 
 /**

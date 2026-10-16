@@ -1,9 +1,9 @@
-import { PEER_PROTOCOL_VERSION } from '@grunt/core/domain/pairing.js';
-import { connectionSecretRef, isSha256, type ChangeBatch, type ChangeRow } from '@grunt/core/domain/sync.js';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import type { Store, SyncRepo } from '@grunt/core/ports/store.js';
-import type { PeerInfo } from '@grunt/core/types/peer.js';
-import { sha256Of, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { PEER_PROTOCOL_VERSION } from '@otherbench/core/domain/pairing.js';
+import { connectionSecretRef, isSha256, type ChangeBatch, type ChangeRow } from '@otherbench/core/domain/sync.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import type { Store, SyncRepo } from '@otherbench/core/ports/store.js';
+import type { PeerInfo } from '@otherbench/core/types/peer.js';
+import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
 
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
@@ -143,7 +143,7 @@ export class Syncer {
       if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
         const older = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION ? info.name : self.name;
         throw new PeerError(
-          `${info.name} runs a different version of Grunt (protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}). Update ${older} to sync.`,
+          `${info.name} runs a different version of OtherBench (protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}). Update ${older} to sync.`,
           409
         );
       }

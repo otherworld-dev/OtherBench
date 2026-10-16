@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatEngine, EngineEvent } from '@grunt/core/ports/chat-engine.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
+import type { ChatEngine, EngineEvent } from '@otherbench/core/ports/chat-engine.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Scheduler } from './scheduler.js';
 
 // What project memory and global memory's summarisers share: the one update

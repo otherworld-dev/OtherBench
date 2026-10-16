@@ -6,7 +6,7 @@
 // can't be bundled. The installer carries this folder and a Node runtime
 // (desktop/scripts/stage.mjs); the app starts `node server/cli.js serve`.
 //
-// Run after `npm run build`: `npm run bundle -w @grunt/server`.
+// Run after `npm run build`: `npm run bundle -w @otherbench/server`.
 
 import { build } from 'esbuild';
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -48,7 +48,7 @@ const shared = {
   external: EXTERNAL,
   // CommonJS dependencies call require(); an ES module has none of its own.
   // node:sqlite is loaded the same way (store-sqlite/src/db.ts), unchanged.
-  banner: { js: "import { createRequire as __gruntCreateRequire } from 'node:module'; globalThis.require ??= __gruntCreateRequire(import.meta.url);" },
+  banner: { js: "import { createRequire as __otherBenchCreateRequire } from 'node:module'; globalThis.require ??= __otherBenchCreateRequire(import.meta.url);" },
   logLevel: 'warning',
 };
 await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'cli.js')], outfile: join(out, 'cli.js') });
@@ -56,7 +56,7 @@ await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'cli.js')], outfi
 // `./render-worker.js` beside the module that starts it: in the bundle that
 // module is cli.js, so the worker goes next to it.
 await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'office', 'render-worker.js')], outfile: join(out, 'render-worker.js') });
-await writeFile(join(out, 'package.json'), JSON.stringify({ name: 'grunt-server', private: true, type: 'module' }, null, 2) + '\n');
+await writeFile(join(out, 'package.json'), JSON.stringify({ name: 'otherbench-server', private: true, type: 'module' }, null, 2) + '\n');
 
 const copies = [...EXTERNAL, NATIVE_CLAUDE];
 for (const pkg of copies) {
@@ -71,14 +71,14 @@ for (const pkg of copies) {
   await cp(from, join(out, 'node_modules', ...pkg.split('/')), { recursive: true });
 }
 
-// Grunt's copy of Mermaid for artifact diagrams (Deck #896): served from assets/ beside cli.js.
+// OtherBench's copy of Mermaid for artifact diagrams (Deck #896): served from assets/ beside cli.js.
 const require_ = createRequire(join(serverDir, 'package.json'));
 await mkdir(join(out, 'assets'), { recursive: true });
 await cp(require_.resolve('mermaid/dist/mermaid.min.js'), join(out, 'assets', 'mermaid.min.js'));
 
 // The sandbox's in-VM files (spec 2026-10-12-sandbox-design): sandbox/ beside
-// cli.js, where @grunt/sandbox's sandboxResourcesDir() looks first.
+// cli.js, where @otherbench/sandbox's sandboxResourcesDir() looks first.
 await cp(join(repoRoot, 'packages', 'sandbox', 'resources'), join(out, 'sandbox'), { recursive: true });
 
 const { version } = JSON.parse(await readFile(join(serverDir, 'package.json'), 'utf8'));
-console.log(`[bundle] grunt-server ${version} -> ${out} (${copies.join(', ')} alongside)`);
+console.log(`[bundle] otherbench-server ${version} -> ${out} (${copies.join(', ')} alongside)`);

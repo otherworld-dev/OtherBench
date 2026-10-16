@@ -9,7 +9,7 @@ import type { ToolPolicy } from '../src/types/config.js';
 import { classifyAgentTool } from '../src/domain/agent-tools.js';
 
 let ws: string;
-beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-agent-')); });
+beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-agent-')); });
 afterEach(() => rmSync(ws, { recursive: true, force: true }));
 
 const spec = (name: string): ToolSpec => ({ name, description: '', parameters: {}, risk: classifyAgentTool(name).risk, source: 'agent', execute: async () => undefined });
@@ -60,7 +60,7 @@ describe('PermissionBroker with source "agent"', () => {
     if (d.kind !== 'ask') throw new Error('expected ask');
     expect(() => b.resolve(d.request.id, { choice: 'always', constraint: null })).toThrow(/unconstrained/);
   });
-  it('never lets an agent grant satisfy a Grunt fs tool of the same name, or vice versa', () => {
+  it('never lets an agent grant satisfy an OtherBench fs tool of the same name, or vice versa', () => {
     const store = new InMemoryStore();
     store.grants.create({ id: 'g1', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
     const b = new PermissionBroker(store);
@@ -201,7 +201,7 @@ describe('isDeferrableInAutoMode', () => {
   it('never defers an unrecognised Claude Code tool', () => {
     expect(isDeferrableInAutoMode(spec('SomeNewTool'), {})).toBe(false);
   });
-  it("never defers Grunt's own tools", () => {
+  it("never defers OtherBench's own tools", () => {
     expect(isDeferrableInAutoMode({ ...spec('run_command'), source: 'shell' }, { command: 'ls' })).toBe(false);
     expect(isDeferrableInAutoMode({ ...spec('write_file'), source: 'fs' }, { path: 'a.txt' })).toBe(false);
   });

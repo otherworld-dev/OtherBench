@@ -1,8 +1,8 @@
 import { constants as fsConstants, lstatSync, statSync, type Dirent } from 'node:fs';
 import { mkdir, open, readdir, unlink, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
-import { containPath, containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { containPath, containPathIn, PathEscapeError } from '@otherbench/core/domain/paths.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 
 // ---------------------------------------------------------------------------
 // Shared result / error shapes

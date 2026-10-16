@@ -1,6 +1,6 @@
 /**
  * Approval tickets (spec 2026-10-12-model-browser-design §4). In Claude Code
- * the PreToolUse hook approves a call and Grunt's MCP server runs it later,
+ * the PreToolUse hook approves a call and OtherBench's MCP server runs it later,
  * and a web page can move in between. For a relayed spec with `describeCall`,
  * the gate keeps the arguments the broker approved here, keyed by the tool
  * and Claude Code's raw input, and the server runs only those. Each ticket

@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
 import { ApiError, api, type ClaudeDesktopImportResult, type ClaudeDesktopListing, type ClaudeDesktopServerView } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 /** What a server would run as, for the list: its command and arguments, or its URL. */
 function summary(s: ClaudeDesktopServerView): string {
@@ -18,8 +18,8 @@ function flip(set: Set<string>, key: string): Set<string> {
 
 /** Why a server can't be ticked, or null when it can. */
 function blocked(s: ClaudeDesktopServerView): string | null {
-  if (s.exists) return 'Grunt already has it.';
-  if (!s.supported) return s.reason ?? "Grunt can't use it.";
+  if (s.exists) return 'OtherBench already has it.';
+  if (!s.supported) return s.reason ?? "OtherBench can't use it.";
   return null;
 }
 
@@ -38,8 +38,8 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ClaudeDesktopImportResult | null>(null);
-  const allProfiles = useGruntStore((s) => s.profiles);
-  const upsertProfile = useGruntStore((s) => s.upsertProfile);
+  const allProfiles = useOtherBenchStore((s) => s.profiles);
+  const upsertProfile = useOtherBenchStore((s) => s.upsertProfile);
   const profiles = allProfiles.filter((p) => p.archivedAt === null);
   const [forProfiles, setForProfiles] = useState<Set<string>>(new Set());
 
@@ -72,7 +72,7 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
       setChosen(new Set());
       setForProfiles(new Set());
       onImported();
-      // Show the imported ones as Grunt's now.
+      // Show the imported ones as OtherBench's now.
       setListing(await api.mcpServers.claudeDesktop().catch(() => listing));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't import the servers -- please try again.");
@@ -99,7 +99,7 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
       {listing?.found && (
         <>
           <p className="text-xs text-[var(--text-muted)]">
-            From {listing.path}. Values of environment variables and headers go straight into Grunt&rsquo;s encrypted secret store.
+            From {listing.path}. Values of environment variables and headers go straight into OtherBench&rsquo;s encrypted secret store.
           </p>
           {listing.servers.length === 0 ? (
             <p className="text-sm text-[var(--text-faint)]">Claude Desktop has no MCP servers set up.</p>

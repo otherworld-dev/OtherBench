@@ -3,11 +3,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { McpClient } from '../../src/mcp/client.js';
 import { McpServerManager } from '../../src/mcp/manager.js';
-import { GruntOAuthProvider } from '../../src/mcp/oauth-provider.js';
+import { OtherBenchOAuthProvider } from '../../src/mcp/oauth-provider.js';
 import { McpOAuthStore } from '../../src/mcp/oauth-store.js';
 import { serveHttp } from '../fixtures/echo-server.js';
 import { startOAuthEchoServer } from '../fixtures/oauth-echo-server.js';
@@ -185,7 +185,7 @@ describe('connections that need sign-in', { timeout: 20_000 }, () => {
     const fixture = await oauthFixture();
     const store = new InMemoryStore();
     store.mcpServers.create(row({ url: fixture.url }));
-    const provider = new GruntOAuthProvider('srv-1', new McpOAuthStore(store, new FakeSecretStore()), { kind: 'background' });
+    const provider = new OtherBenchOAuthProvider('srv-1', new McpOAuthStore(store, new FakeSecretStore()), { kind: 'background' });
     const client = new McpClient('srv-1', { transport: 'http', url: fixture.url, headers: {}, authProvider: provider });
     cleanups.push(() => client.disconnect());
 

@@ -543,7 +543,7 @@ export class LoginLimiter {
     const after = slowDownMs(before + 1);
     if (after > slowDownMs(before)) {
       this.log(
-        `[grunt-server] SIGN-IN IS SLOWED DOWN FOR EVERYONE: ${before + 1} wrong passwords in the last hour, so every attempt now waits ${after / 1000} s. Someone may be guessing.`
+        `[otherbench-server] SIGN-IN IS SLOWED DOWN FOR EVERYONE: ${before + 1} wrong passwords in the last hour, so every attempt now waits ${after / 1000} s. Someone may be guessing.`
       );
     }
   }
@@ -577,7 +577,7 @@ export class LoginLimiter {
    */
   note(reason: LogReason, address: string): void {
     if (reason === 'wrong' && this.delayMs() === 0 && !this.summary) {
-      this.log(`[grunt-server] wrong password from ${address}`);
+      this.log(`[otherbench-server] wrong password from ${address}`);
       return;
     }
     const minute = Math.floor(this.now() / GLOBAL_BUCKET_MS);
@@ -599,7 +599,7 @@ export class LoginLimiter {
     const n = s.addresses.size;
     const from = n >= MAX_SUMMARY_ADDRESSES ? `at least ${n} addresses` : n === 1 ? '1 address' : `${n} addresses`;
     const parts = [...s.counts].map(([reason, count]) => `${count} ${REASON_TEXT[reason][count === 1 ? 0 : 1]}`);
-    this.log(`[grunt-server] sign-in in the last minute: ${parts.join(', ')}, from ${from}`);
+    this.log(`[otherbench-server] sign-in in the last minute: ${parts.join(', ')}, from ${from}`);
   }
 
   /** Writes out a pending log summary and stops its timer. */

@@ -28,7 +28,7 @@ instance.server.setRequestHandler(CallToolRequestSchema, async (req) => {
   return { content: [{ type: 'text', text: `${text.toUpperCase()}-RAW` }] };
 });
 
-const cwd = mkdtempSync(join(tmpdir(), 'grunt-raw-probe-'));
+const cwd = mkdtempSync(join(tmpdir(), 'otherbench-raw-probe-'));
 const q = query({
   prompt: "Call the echo_raw tool with text 'ping', then reply with exactly what it returned and nothing else.",
   options: {

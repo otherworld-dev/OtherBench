@@ -1,6 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Locator, type Page } from 'playwright-core';
-import { siteOf } from '@grunt/core/domain/browser-hosts.js';
-import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
+import { siteOf } from '@otherbench/core/domain/browser-hosts.js';
+import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { pageText } from './snapshot.js';
 import { BrowserUnavailableError, PageMovedError, StaleRefError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from './session.js';
 
@@ -25,13 +25,13 @@ export const WEBRTC_SWITCHES = ['--force-webrtc-ip-handling-policy=disable_non_p
  */
 export const CHROMIUM_ARGS: readonly string[] = [...WEBRTC_SWITCHES, '--disable-quic'];
 
-const INSTALL_HINT = 'Install one with "npx playwright install --only-shell chromium", or set GRUNT_BROWSER_PATH to a Chromium, Chrome or Edge.';
+const INSTALL_HINT = 'Install one with "npx playwright install --only-shell chromium", or set OTHERBENCH_BROWSER_PATH to a Chromium, Chrome or Edge.';
 /** The longest page-sourced text (a dialog's message, a popup's address) put in a note. */
 const NOTE_TEXT_CHARS = 300;
 
-/** Which browsers to try, in order (spec §2): GRUNT_BROWSER_PATH alone, else Playwright's Chromium, Chrome, Edge. */
+/** Which browsers to try, in order (spec §2): OTHERBENCH_BROWSER_PATH alone, else Playwright's Chromium, Chrome, Edge. */
 export function browserAttempts(env: NodeJS.ProcessEnv): { name: string; options: LaunchOptions }[] {
-  const path = env['GRUNT_BROWSER_PATH']?.trim();
+  const path = env['OTHERBENCH_BROWSER_PATH']?.trim();
   if (path) return [{ name: path, options: { executablePath: path } }];
   return [
     { name: "Playwright's Chromium", options: {} },
@@ -75,7 +75,7 @@ export interface ChromiumSessionsOptions {
  * Headless Chromium through Playwright (spec 2026-10-12-model-browser-design
  * §2): one process per server, started on the first session, with Chromium's
  * own sandbox on and no `--no-sandbox` fallback. Each session is a fresh
- * in-memory context whose traffic goes through Grunt's proxy as its own user.
+ * in-memory context whose traffic goes through OtherBench's proxy as its own user.
  */
 export class ChromiumSessions implements SessionFactory {
   private browser: Promise<Browser> | null = null;
@@ -150,7 +150,7 @@ export class ChromiumSessions implements SessionFactory {
       // Browser-level requests carry no proxy credentials, so the proxy refuses them.
       proxy: { server: proxyServer, bypass: '<-loopback>' },
       args: [...CHROMIUM_ARGS],
-      // Grunt decides how it stops (see `grunt serve`); Playwright's own SIGINT/SIGTERM/SIGHUP handlers would
+      // OtherBench decides how it stops (see `otherbench serve`); Playwright's own SIGINT/SIGTERM/SIGHUP handlers would
       // change that once a browser had launched. Its `exit` handler stays (always installed): when the server's
       // process exits, it kills Chromium's process tree (taskkill /T /F on Windows, the process group elsewhere).
       handleSIGINT: false,
@@ -182,7 +182,7 @@ export class ChromiumSessions implements SessionFactory {
         failures.push(`${attempt.name}: ${firstLine(err)}`);
       }
     }
-    throw new BrowserUnavailableError(`Grunt couldn't start a browser. ${INSTALL_HINT} (${failures.join('; ')})`);
+    throw new BrowserUnavailableError(`OtherBench couldn't start a browser. ${INSTALL_HINT} (${failures.join('; ')})`);
   }
 
   /** Asks Chromium for its own process id (best effort: without it a hung close just can't be ended). */
@@ -219,7 +219,7 @@ class PageSession implements BrowserSession {
     context.on('page', (other) => {
       if (other !== page) void this.closePopup(other);
     });
-    // Everything the page says is quoted and cleaned: it reaches the model as page content, not as Grunt's words.
+    // Everything the page says is quoted and cleaned: it reaches the model as page content, not as OtherBench's words.
     page.on('dialog', (dialog) => {
       this.notes.push(`The page showed a dialog (${dialog.type()}): ${quoted(dialog.message())}. It was dismissed.`);
       void dialog.dismiss().catch(() => undefined);

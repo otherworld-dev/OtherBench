@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { HISTORY_CHAR_LIMIT, renderHistory } from '../src/history.js';
 
 const m = (id: string, role: CanonMessage['role'], parts: Part[], producedBy: CanonMessage['producedBy'] = null): CanonMessage => ({ id, chatId: 'c', parentId: null, role, parts, status: 'complete', error: null, producedBy, createdAt: 0 });
@@ -34,7 +34,7 @@ describe('renderHistory', () => {
       ], { profileId: 'p', profileName: 'Qwen', connectionId: 'c', modelId: 'qwen3-coder:30b' }),
       m('u2', 'user', [{ type: 'text', text: 'now test it' }]),
     ]);
-    expect(out).toContain('<grunt-history>');
+    expect(out).toContain('<otherbench-history>');
     expect(out).toContain('[user] fix the bug');
     expect(out).toContain('[assistant: Qwen · qwen3-coder:30b]');
     expect(out).toContain('[tool edit_file src/a.ts -> ok]');

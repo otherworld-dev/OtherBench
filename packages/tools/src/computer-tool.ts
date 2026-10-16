@@ -17,10 +17,10 @@ import {
   type ComputerLook,
   type ParsedAction,
   type ScreenContentError,
-} from '@grunt/core/domain/computer-apps.js';
-import type { ComputerAction, ComputerAnswer, ComputerDriver, ComputerExpectation } from '@grunt/core/ports/computer.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+} from '@otherbench/core/domain/computer-apps.js';
+import type { ComputerAction, ComputerAnswer, ComputerDriver, ComputerExpectation } from '@otherbench/core/ports/computer.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { DescribedCall, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 
 /**
  * The `computer` tool (spec 2026-10-12-computer-use-design section 4). The
@@ -57,7 +57,7 @@ import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/too
  * NOTHING may call this spec's `execute` directly. It trusts the described
  * app fields it is handed, so the tool provider is the only caller: its gate
  * for an API model, and for Claude Code a spec whose `execute` runs only the
- * arguments `requestApproval` approved (`GruntToolProvider.relayGruntTools`).
+ * arguments `requestApproval` approved (`OtherBenchToolProvider.relayOtherBenchTools`).
  */
 
 export const COMPUTER_TOOL_DESCRIPTION = [
@@ -104,11 +104,11 @@ export const COMPUTER_TOOL_PARAMETERS: Record<string, unknown> = {
 /** What an action with a coordinate is refused with before its chat has taken a screenshot. */
 export const COMPUTER_NO_SCREENSHOT_REASON = "Take a screenshot first: a point is in the last screenshot's pixels, and this chat has not taken one yet.";
 
-const NOT_STARTED_REASON = "The user didn't let Grunt control the computer.";
+const NOT_STARTED_REASON = "The user didn't let OtherBench control the computer.";
 const STOPPED_REASON = 'The reply was stopped, so nothing was done.';
-const NO_EXPECTATION_REASON = 'Grunt has no approved app and window for this action, so it did nothing.';
+const NO_EXPECTATION_REASON = 'OtherBench has no approved app and window for this action, so it did nothing.';
 const LOOK_AGAIN = 'Take a screenshot to see the screen as it is now before you try again.';
-const UNKNOWN_OUTCOME = "Grunt can't tell whether the action was carried out.";
+const UNKNOWN_OUTCOME = "OtherBench can't tell whether the action was carried out.";
 
 /** Actions the model is shown the result of: a screenshot follows them. */
 const FOLLOW_UP: ReadonlySet<string> = new Set(['left_click', 'right_click', 'double_click', 'triple_click', 'scroll', 'type', 'key']);
@@ -120,9 +120,9 @@ interface ToolError {
   message: string;
 }
 
-/** An error made of Grunt's own fixed words and nothing else: it needs no line saying whose words it holds. */
+/** An error made of OtherBench's own fixed words and nothing else: it needs no line saying whose words it holds. */
 const fail = (code: string, message: string): ToolError => ({ error: true, code, message });
-/** An error whose message holds anything Grunt did not write (the desktop app's words, an error's, a shortcut's name): core puts the line first. */
+/** An error whose message holds anything OtherBench did not write (the desktop app's words, an error's, a shortcut's name): core puts the line first. */
 const failFromScreen = (code: string, message: string): ScreenContentError => screenContentError(code, message);
 const line = (text: string): { type: 'text'; text: string } => ({ type: 'text', text });
 /** A result that holds something from the screen: core puts the line that says so first. */
@@ -301,7 +301,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
       return fromScreen(line('Done.'), ...(await shoot(ctx.chatId)));
     } catch (err) {
       // The action WAS carried out: say so, or the model would do it again.
-      return fromScreen(line('Done.'), line(`Grunt couldn't take a screenshot afterwards (${errorText(err)}). Take one before the next action.`));
+      return fromScreen(line('Done.'), line(`OtherBench couldn't take a screenshot afterwards (${errorText(err)}). Take one before the next action.`));
     }
   };
 
@@ -318,7 +318,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
         parsed = parse(withoutAppFields(raw), ctx.chatId);
       } catch (err) {
         // Only the driver can throw here (asked for the shell's shortcuts): its words, as one bounded clean line.
-        return { refuse: `Grunt couldn't read the desktop app's shortcuts: ${errorText(err)}` };
+        return { refuse: `OtherBench couldn't read the desktop app's shortcuts: ${errorText(err)}` };
       }
       if (!parsed.ok) return { refuse: parsed.reason };
       const action = parsed.action;
@@ -336,7 +336,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
       try {
         notStarted = await startSession(ctx);
       } catch (err) {
-        return { refuse: `Grunt couldn't start controlling the computer: ${errorText(err)}` };
+        return { refuse: `OtherBench couldn't start controlling the computer: ${errorText(err)}` };
       }
       if (notStarted !== null) return { refuse: notStarted };
       // The dialog can wait on a person for a long time; a reply stopped meanwhile reads nothing.
@@ -345,7 +345,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
       try {
         target = await driver.target(ctx.chatId, 'coordinate' in action ? { x: action.coordinate[0], y: action.coordinate[1] } : 'foreground');
       } catch (err) {
-        return { refuse: `Grunt couldn't tell which app that is: ${errorText(err)}` };
+        return { refuse: `OtherBench couldn't tell which app that is: ${errorText(err)}` };
       }
       const described = classifyTarget(target);
       if (described.kind === 'refuse') return { refuse: described.reason };
@@ -358,7 +358,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
         // The broker has refused this already; nothing here may run in a run nobody is watching, whoever calls it.
         if (isUnattendedRun(ctx)) return fail('computer_not_allowed', COMPUTER_UNATTENDED_REASON);
         const parsed = parse(args, ctx.chatId);
-        // Why an action can't be built may quote the call or one of the shell's shortcuts: not Grunt's own words alone.
+        // Why an action can't be built may quote the call or one of the shell's shortcuts: not OtherBench's own words alone.
         if (!parsed.ok) return failFromScreen('computer_bad_action', parsed.reason);
         const action = parsed.action;
         // No acting without an expectation: the app, the file-view fact, the window and the run the card was about.

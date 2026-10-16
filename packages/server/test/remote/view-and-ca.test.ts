@@ -12,7 +12,7 @@ let ws: string;
 let container: Container;
 
 beforeEach(async () => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-remote-view-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-remote-view-'));
   container = makeContainer();
   container.store.chats.create({ id: 'c1', title: 'c1', profileId: 'p', headMessageId: null, workspace: { kind: 'machine', nodeId: 'node-self', root: ws }, pinned: false, archivedAt: null } as never);
 });
@@ -52,23 +52,23 @@ describe('/view/ links in sign-in mode', () => {
   });
 });
 
-describe('GET /grunt-ca.crt', () => {
+describe('GET /otherbench-ca.crt', () => {
   it("serves the CA as DER with --tls auto, and isn't there otherwise", async () => {
     const caDer = Buffer.from([0x30, 0x03, 0x02, 0x01, 0x07]);
-    fx = await remoteFixture({ tls: { mode: 'auto', caDer, caFingerprint: 'AA', notAfter: 1, names: ['grunt.test'] } });
+    fx = await remoteFixture({ tls: { mode: 'auto', caDer, caFingerprint: 'AA', notAfter: 1, names: ['otherbench.test'] } });
     const app = createApp(container, { remote: fx.remote });
 
-    const res = await app.request('/grunt-ca.crt');
+    const res = await app.request('/otherbench-ca.crt');
     expect(res.status).toBe(200);
     expect(Buffer.from(await res.arrayBuffer())).toEqual(caDer);
     expect(res.headers.get('Content-Type')).toBe('application/x-x509-ca-cert');
-    expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="grunt-ca.crt"');
+    expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="otherbench-ca.crt"');
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
 
     const other = await remoteFixture();
     try {
       const proxied = createApp(container, { remote: other.remote });
-      expect((await proxied.request('/grunt-ca.crt')).status).toBe(404);
+      expect((await proxied.request('/otherbench-ca.crt')).status).toBe(404);
     } finally {
       other.cleanup();
     }

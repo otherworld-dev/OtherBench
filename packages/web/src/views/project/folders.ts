@@ -1,4 +1,4 @@
-import type { Project } from '@grunt/core/ports/store.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 
 /**
  * Where a project's main folder is when it isn't on this machine (another

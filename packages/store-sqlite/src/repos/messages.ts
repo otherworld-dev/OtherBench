@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { MessageRepo } from '@grunt/core/ports/store.js';
+import type { MessageRepo } from '@otherbench/core/ports/store.js';
 import type {
   CanonMessage,
   EngineMeta,
@@ -8,7 +8,7 @@ import type {
   ProducedBy,
   Role,
   SerializedError,
-} from '@grunt/core/types/messages.js';
+} from '@otherbench/core/types/messages.js';
 import { atomic, fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';

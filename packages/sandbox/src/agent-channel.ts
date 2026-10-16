@@ -11,7 +11,7 @@ const DETAIL_CHARS = 2000;
 
 export interface AgentExit {
   code: number | null;
-  /** Why it stopped: the end of its stderr, or what Grunt saw. */
+  /** Why it stopped: the end of its stderr, or what OtherBench saw. */
   detail: string;
 }
 
@@ -60,7 +60,7 @@ export function channelFromProcess(child: ChildProcessWithoutNullStreams): Agent
     }
     if (buffered.length > MAX_LINE_CHARS) {
       buffered = '';
-      detail = 'The sandbox agent sent a line longer than 1 MB, so Grunt stopped it.';
+      detail = 'The sandbox agent sent a line longer than 1 MB, so OtherBench stopped it.';
       child.kill();
     }
   });

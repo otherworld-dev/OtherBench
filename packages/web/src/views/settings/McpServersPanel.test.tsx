@@ -1,10 +1,10 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { McpServer } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
-import { useGruntStore } from '../../state/store.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { McpServersPanel } from './McpServersPanel.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -551,7 +551,7 @@ describe('McpServersPanel', () => {
   });
 });
 describe('McpServersPanel import from Claude Desktop', () => {
-  beforeEach(() => useGruntStore.setState({ profiles: [] }));
+  beforeEach(() => useOtherBenchStore.setState({ profiles: [] }));
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -574,7 +574,7 @@ describe('McpServersPanel import from Claude Desktop', () => {
     };
   }
 
-  it("lists Claude Desktop's servers, greys out ones Grunt has or can't use with why, and imports the chosen ones", async () => {
+  it("lists Claude Desktop's servers, greys out ones OtherBench has or can't use with why, and imports the chosen ones", async () => {
     mockedList.mockResolvedValue([]);
     mockedDesktop.mockResolvedValue({
       path: 'C:\\Users\\a\\AppData\\Roaming\\Claude\\claude_desktop_config.json',
@@ -593,7 +593,7 @@ describe('McpServersPanel import from Claude Desktop', () => {
     const nextcloud = await screen.findByRole('checkbox', { name: /nextcloud/ });
     expect(screen.getByText(/NC_CONFIG/)).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /blender/ })).toBeDisabled();
-    expect(screen.getByText(/Grunt already has it/)).toBeInTheDocument();
+    expect(screen.getByText(/OtherBench already has it/)).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /legacy/ })).toBeDisabled();
     expect(screen.getByText("SSE servers aren't supported.")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
@@ -607,7 +607,7 @@ describe('McpServersPanel import from Claude Desktop', () => {
   });
 
   it('turns the imported servers on for the profiles ticked under "Turn on for", and says so', async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       profiles: [makeProfile({ id: 'p1', name: 'Claude Opus 5.5' }), makeProfile({ id: 'p2', name: 'Haiku' }), makeProfile({ id: 'p3', name: 'Old', archivedAt: 5 })],
     });
     mockedList.mockResolvedValue([]);
@@ -634,7 +634,7 @@ describe('McpServersPanel import from Claude Desktop', () => {
     const report = await screen.findByRole('status');
     expect(report).toHaveTextContent('Imported nextcloud. Turned on for Claude Opus 5.5.');
     expect(report).not.toHaveTextContent('Turn them on');
-    expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['new-id']);
+    expect(useOtherBenchStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['new-id']);
   });
 
   it("says when Claude Desktop's config wasn't found", async () => {

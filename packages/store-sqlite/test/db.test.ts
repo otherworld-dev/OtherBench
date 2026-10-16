@@ -13,7 +13,7 @@ import {
   isNetworkFsType,
 } from '../src/db.js';
 
-const base = mkdtempSync(join(tmpdir(), 'grunt-db-'));
+const base = mkdtempSync(join(tmpdir(), 'otherbench-db-'));
 afterAll(() => {
   try {
     rmSync(base, { recursive: true, force: true });

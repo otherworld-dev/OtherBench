@@ -1,4 +1,4 @@
-import { SandboxError } from '@grunt/core/ports/sandbox.js';
+import { SandboxError } from '@otherbench/core/ports/sandbox.js';
 import type { AgentClient, AgentOutcome, AgentRun } from './agent-client.js';
 
 export const MAX_AGENTS = 6;
@@ -57,7 +57,7 @@ export class AgentPool {
   /** Agents being closed, by chat, until their close has finished and `onClosed` has run. */
   private readonly closing = new Map<string, Promise<void>>();
   private readonly waiters = new Set<() => void>();
-  /** Set by closeAll (Grunt is stopping): nothing may start an agent that would outlive it. closeAgents leaves it alone. */
+  /** Set by closeAll (OtherBench is stopping): nothing may start an agent that would outlive it. closeAgents leaves it alone. */
   private shutDown = false;
   private readonly maxAgents: number;
   private readonly idleMs: number;
@@ -106,7 +106,7 @@ export class AgentPool {
     await this.closing.get(chatId);
   }
 
-  /** Grunt is stopping: closes every agent, and refuses every command from now on. */
+  /** OtherBench is stopping: closes every agent, and refuses every command from now on. */
   async closeAll(): Promise<void> {
     this.shutDown = true;
     await this.closeAgents();

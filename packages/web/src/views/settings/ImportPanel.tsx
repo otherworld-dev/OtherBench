@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
-import type { Project } from '@grunt/core/ports/store.js';
-import type { Connection, Profile } from '@grunt/core/types/config.js';
+import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@otherbench/core/types/claude-import.js';
+import type { Project } from '@otherbench/core/ports/store.js';
+import type { Connection, Profile } from '@otherbench/core/types/config.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
 import { ApiError, api } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 const HEADING = 'text-sm font-semibold';
 const HINT = 'text-xs text-[var(--text-muted)]';
@@ -43,13 +43,13 @@ function hasMemory(preview: ImportPreview): boolean {
 
 /** The server doesn't announce projects as it makes them, so the sidebar's are fetched again once an import ends; chats come too. */
 function refreshAfterImport(): void {
-  const { setProjects, setChats } = useGruntStore.getState();
+  const { setProjects, setChats } = useOtherBenchStore.getState();
   Promise.all([api.projects.list(), api.chats.list()])
     .then(([projects, chats]) => {
       setProjects(projects);
       setChats(chats);
     })
-    .catch((err: unknown) => console.error('[grunt-web] failed to reload after the import:', err));
+    .catch((err: unknown) => console.error('[otherbench-web] failed to reload after the import:', err));
 }
 
 /**
@@ -59,9 +59,9 @@ function refreshAfterImport(): void {
  * through the app-wide events.
  */
 export function ImportPanel(): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
-  const connections = useGruntStore((s) => s.connections);
-  const projects = useGruntStore((s) => s.projects);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const projects = useOtherBenchStore((s) => s.projects);
   const [folder, setFolder] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [checking, setChecking] = useState(false);
@@ -86,7 +86,7 @@ export function ImportPanel(): JSX.Element {
       .then((s) => {
         if (!cancelled) setStatus(s);
       })
-      .catch((err: unknown) => console.error('[grunt-web] failed to load the import status:', err));
+      .catch((err: unknown) => console.error('[otherbench-web] failed to load the import status:', err));
     return () => {
       cancelled = true;
     };
@@ -98,7 +98,7 @@ export function ImportPanel(): JSX.Element {
       api.claudeImport
         .status()
         .then(setStatus)
-        .catch((err: unknown) => console.error('[grunt-web] failed to load the import status:', err));
+        .catch((err: unknown) => console.error('[otherbench-web] failed to load the import status:', err));
     }, IMPORT_POLL_MS);
     return () => clearInterval(timer);
   }, [running]);
@@ -156,7 +156,7 @@ export function ImportPanel(): JSX.Element {
       <div className="space-y-2">
         <h3 className={HEADING}>Import from claude.ai</h3>
         <p className={HINT}>
-          Brings your claude.ai chats, projects, published artifacts and memory into Grunt, and if you like the Cowork sessions Claude Desktop keeps on this
+          Brings your claude.ai chats, projects, published artifacts and memory into OtherBench, and if you like the Cowork sessions Claude Desktop keeps on this
           machine. On claude.ai, open Settings &rarr; Privacy and choose Export data. When
           the email arrives, download every file into one folder (the ZIPs, or what&rsquo;s in them) and choose that folder here. Importing the same export again
           skips what&rsquo;s already here.
@@ -351,7 +351,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
         <div className="space-y-1">
           <label className="flex items-center gap-2">
             <input type="checkbox" aria-label="Condense memory" checked={memory} disabled={preview.memoryModel === null} onChange={(e) => onMemory(e.target.checked)} />
-            {preview.memoryModel === null ? "Condense claude.ai's memory into Grunt's" : `Condense claude.ai's memory into Grunt's with ${preview.memoryModel}`}
+            {preview.memoryModel === null ? "Condense claude.ai's memory into OtherBench's" : `Condense claude.ai's memory into OtherBench's with ${preview.memoryModel}`}
           </label>
           <p className={HINT}>
             {preview.memoryModel === null
@@ -431,7 +431,7 @@ function AboutDraft({ text }: { text: string }): JSX.Element {
     <div data-testid="about-draft" className="space-y-2 rounded border border-[var(--border)] p-3">
       <h4 className="text-sm font-semibold">About you, drafted from claude.ai&rsquo;s notes</h4>
       <p className={HINT}>
-        Grunt adds About you to every chat as your own words, so read it first. Saving it replaces what Settings &rarr; Memory &rarr; About you holds now; you can
+        OtherBench adds About you to every chat as your own words, so read it first. Saving it replaces what Settings &rarr; Memory &rarr; About you holds now; you can
         edit it there afterwards.
       </p>
       <pre className="whitespace-pre-wrap rounded bg-[var(--bg-sunken)] p-2 text-xs">{text}</pre>

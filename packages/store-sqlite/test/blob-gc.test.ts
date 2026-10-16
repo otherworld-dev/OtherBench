@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Store } from '@grunt/core/ports/store.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { gcBlobIfOrphaned, isPinned, sweepOrphanedBlobs, withPinnedSha } from '../src/blob-gc.js';
 import { createBlobStore, sha256Of, type BlobStore } from '../src/blob-store.js';
 
@@ -40,7 +40,7 @@ let root: string;
 let blobStore: BlobStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-blob-gc-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-blob-gc-test-'));
   root = join(dir, 'attachments');
   blobStore = createBlobStore(root);
 });

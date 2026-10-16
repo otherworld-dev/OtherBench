@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { defaultAvailability } from '@grunt/core/domain/availability.js';
-import { connectionSecretRef } from '@grunt/core/domain/sync.js';
-import type { DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
-import type { Connection, ConnectionKind, ModelInfo } from '@grunt/core/types/config.js';
-import { classifyProviderError } from '@grunt/core/types/errors.js';
-import type { ErrorKind } from '@grunt/core/types/messages.js';
-import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
+import { defaultAvailability } from '@otherbench/core/domain/availability.js';
+import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
+import type { DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
+import type { Connection, ConnectionKind, ModelInfo } from '@otherbench/core/types/config.js';
+import { classifyProviderError } from '@otherbench/core/types/errors.js';
+import type { ErrorKind } from '@otherbench/core/types/messages.js';
+import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
@@ -82,7 +82,7 @@ function requireBaseUrlIfOpenaiCompatible(kind: ConnectionKind, baseUrl: string 
  * retry-with-backoff. Everything else (network failures, upstream 5xxs, and
  * kinds that don't really apply to a bare "list models" call --
  * content_filter/context_overflow/capability are turn-completion concepts --
- * but are still handled defensively) is reported as 502: Grunt is acting as
+ * but are still handled defensively) is reported as 502: OtherBench is acting as
  * a gateway to the provider here, and it is the provider's response that
  * failed, not this request.
  */
@@ -243,7 +243,7 @@ export function connectionsRoutes(container: Container): Hono {
     container.store.connections.delete(id);
     // Best effort, and before the sweep below, which can fail the request on purpose.
     for (const chatId of chatIds) {
-      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[otherbench-server] couldn't release the sandbox of chat ${chatId}:`, err));
     }
     // Its profiles and their chats went with it, inside the database. One of those chats may be in
     // control of the computer: its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).

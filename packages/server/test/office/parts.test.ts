@@ -13,7 +13,7 @@ describe('OfficeParts', () => {
   it('skips a part over the per-part cap with a note', () => {
     const parts = new OfficeParts(makeZip([{ name: 'word/document.xml', content: 'x'.repeat(2000) }]), { ...OFFICE_LIMITS, maxPartBytes: 1000 });
     expect(parts.text('word/document.xml')).toBeNull();
-    expect(parts.notes[0]).toMatch(/^\[Grunt skipped word\/document\.xml:/);
+    expect(parts.notes[0]).toMatch(/^\[OtherBench skipped word\/document\.xml:/);
   });
 
   it('stops reading once the parts come to more than the total cap', () => {
@@ -53,7 +53,7 @@ describe('OfficeParts', () => {
     const parts = new OfficeParts(makeZip([{ name: 'word/Document.xml', content: 'x'.repeat(2000) }]), { ...OFFICE_LIMITS, maxPartBytes: 1000 });
     for (const name of ['word/document.xml', 'WORD/DOCUMENT.XML', 'word/Document.xml', 'word/document.xml']) expect(parts.text(name)).toBeNull();
     expect(parts.notes).toHaveLength(1);
-    expect(parts.notes[0]).toMatch(/^\[Grunt skipped word\/Document\.xml:/);
+    expect(parts.notes[0]).toMatch(/^\[OtherBench skipped word\/Document\.xml:/);
   });
 
   it('keeps ten distinct notes and counts the rest, each note cut to a bounded length', () => {
@@ -68,7 +68,7 @@ describe('OfficeParts', () => {
     parts.text(`${'long/'.repeat(1000)}name.xml`);
     const notes = parts.notes;
     expect(notes).toHaveLength(11);
-    expect(notes[10]).toBe('[Grunt skipped 31 more parts as well.]');
+    expect(notes[10]).toBe('[OtherBench skipped 31 more parts as well.]');
     expect(notes.every((n) => n.length <= 310)).toBe(true);
   });
 

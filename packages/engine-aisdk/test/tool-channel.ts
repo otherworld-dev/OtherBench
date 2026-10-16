@@ -1,12 +1,12 @@
 import { expect } from 'vitest';
-import { COMPUTER_ACTIONS } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_ACTIONS } from '@otherbench/core/domain/computer-apps.js';
 
 /**
  * Where tool output may be in a request, per wire format. What a tool
  * returned (a screenshot, the words with it, an error from the desktop app) is
  * content from outside: it may only ever reach a model INSIDE a tool result.
  * As text or an image of the user's turn it would read as the person's own
- * words; in the system prompt, as Grunt's; in the assistant's turn, as
+ * words; in the system prompt, as OtherBench's; in the assistant's turn, as
  * something the model said.
  *
  * Each `zones*` function splits one outgoing request into what is inside a

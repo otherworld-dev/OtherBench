@@ -1,13 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Chat, ChatRepo, NewChat } from '@grunt/core/ports/store.js';
-import { toStoredWorkspace } from '@grunt/core/domain/workspace.js';
+import type { Chat, ChatRepo, NewChat } from '@otherbench/core/ports/store.js';
+import { toStoredWorkspace } from '@otherbench/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, toBool } from './util.js';
 import { WORKSPACE_COLUMNS, foldersFromRow, foldersToRow, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
-import { CHAT_FIELDS } from '@grunt/core/domain/sync.js';
-import { isClaudeEffort } from '@grunt/core/types/config.js';
+import { CHAT_FIELDS } from '@otherbench/core/domain/sync.js';
+import { isClaudeEffort } from '@otherbench/core/types/config.js';
 
 function chatMapping(selfId: () => string): CrudMapping<Chat> {
   return {

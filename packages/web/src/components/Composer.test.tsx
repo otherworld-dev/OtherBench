@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { Connection, Profile } from '@grunt/core/types/config.js';
-import { useGruntStore } from '../state/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { Connection, Profile } from '@otherbench/core/types/config.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { Composer } from './Composer.js';
 
 vi.mock('../state/api.js', () => ({
@@ -115,7 +115,7 @@ function makeAttachment(overrides: Partial<Awaited<ReturnType<typeof api.attachm
 }
 
 function reset(): void {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   mockedCreate.mockReset();
   mockedCancel.mockReset();
   mockedSetHead.mockReset();
@@ -127,7 +127,7 @@ function reset(): void {
 describe('Composer', () => {
   beforeEach(() => {
     reset();
-    useGruntStore.getState().setProfiles([makeProfile()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
   });
   afterEach(() => {
     cleanup();
@@ -307,7 +307,7 @@ describe('Composer', () => {
   });
 
   it('Enter sends nothing while a reply is still running, and keeps what was typed', async () => {
-    useGruntStore.getState().registerMessage(streamingMessage('a1'));
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
     const user = userEvent.setup();
     render(<Composer chat={makeChat()} />);
     const box = screen.getByRole('textbox', { name: /message/i });
@@ -329,10 +329,10 @@ describe('Composer', () => {
 
   it('shows a stop button while a variant is streaming, and it cancels every in-flight variant', async () => {
     const chat = makeChat();
-    useGruntStore.getState().registerMessage(streamingMessage('a1'));
-    useGruntStore.getState().registerMessage(streamingMessage('a2', { parentId: 'user-1' }));
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a2', { parentId: 'user-1' }));
     // A completed message in the same chat must NOT be cancelled.
-    useGruntStore.getState().registerMessage(streamingMessage('a3', { status: 'complete' }));
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a3', { status: 'complete' }));
     mockedCancel.mockResolvedValue(undefined);
     const user = userEvent.setup();
 
@@ -657,8 +657,8 @@ describe('Composer', () => {
       statusMessage: null,
       checkedAt: null,
     });
-    useGruntStore.getState().setConnections([conn('cc', 'claude_code'), conn('oll', 'ollama')]);
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setConnections([conn('cc', 'claude_code'), conn('oll', 'ollama')]);
+    useOtherBenchStore.getState().setProfiles([
       makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
       makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
     ]);
@@ -667,7 +667,7 @@ describe('Composer', () => {
     render(<Composer chat={makeChat({ profileId: 'sonnet', workspaceRoot: null })} />);
     await user.click(screen.getByRole('button', { name: /Sonnet/ }));
     expect(screen.getByRole('option', { name: /Sonnet.*CC tools/ })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Qwen.*Grunt tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Qwen.*OtherBench tools/ })).toBeInTheDocument();
 
     mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
     mockedSetHead.mockResolvedValue(makeChat({ profileId: 'sonnet', workspaceRoot: null }));
@@ -687,8 +687,8 @@ describe('Composer auto mode toggle', () => {
 
   beforeEach(() => {
     reset();
-    useGruntStore.getState().setConnections([conn('cc', 'claude_code'), conn('cc-endpoint', 'claude_code', 'http://localhost:11434'), conn('oll', 'ollama')]);
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setConnections([conn('cc', 'claude_code'), conn('cc-endpoint', 'claude_code', 'http://localhost:11434'), conn('oll', 'ollama')]);
+    useOtherBenchStore.getState().setProfiles([
       makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
       makeProfile({ id: 'local-cc', name: 'Local CC', connectionId: 'cc-endpoint', modelId: 'qwen3', isDefault: false }),
       makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
@@ -698,7 +698,7 @@ describe('Composer auto mode toggle', () => {
 
   function renderWith(overrides: Partial<Chat>): Chat {
     const chat = makeChat({ workspaceRoot: '/ws', ...overrides });
-    useGruntStore.getState().setChats([chat]);
+    useOtherBenchStore.getState().setChats([chat]);
     render(<Composer chat={chat} />);
     return chat;
   }
@@ -730,7 +730,7 @@ describe('Composer auto mode toggle', () => {
     const chat = renderWith({ profileId: 'sonnet' });
     await userEvent.setup().click(toggle());
     expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { autoMode: true });
-    expect(useGruntStore.getState().chats[0]!.autoMode).toBe(true);
+    expect(useOtherBenchStore.getState().chats[0]!.autoMode).toBe(true);
     expect(toggle()).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText(HINT)).not.toBeInTheDocument();
     expect(toggle()).toHaveAttribute('title', 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.');
@@ -752,14 +752,14 @@ describe('Composer auto mode toggle', () => {
   it('reverts only autoMode and shows the error when saving fails', async () => {
     mockedChatsPatch.mockImplementation(async () => {
       // Another change lands while the save is in flight; the revert must keep it.
-      useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats[0]!, title: 'Renamed meanwhile' });
+      useOtherBenchStore.getState().upsertChat({ ...useOtherBenchStore.getState().chats[0]!, title: 'Renamed meanwhile' });
       throw new ApiError(500, 'Database is locked.');
     });
     renderWith({ profileId: 'sonnet' });
     await userEvent.setup().click(toggle());
     expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
     expect(toggle()).toHaveAttribute('aria-pressed', 'false');
-    expect(useGruntStore.getState().chats[0]).toMatchObject({ autoMode: false, title: 'Renamed meanwhile' });
+    expect(useOtherBenchStore.getState().chats[0]).toMatchObject({ autoMode: false, title: 'Renamed meanwhile' });
   });
 
   it('is disabled, with the reason, when every selected Claude Code profile uses an endpoint', () => {
@@ -781,13 +781,13 @@ describe('Composer auto mode toggle', () => {
 
   it('does not re-insert a chat removed from the store during a failed save', async () => {
     mockedChatsPatch.mockImplementation(async () => {
-      useGruntStore.getState().setChats([]);
+      useOtherBenchStore.getState().setChats([]);
       throw new ApiError(500, 'Gone.');
     });
     renderWith({ profileId: 'sonnet' });
     await userEvent.setup().click(toggle());
     expect(await screen.findByRole('alert')).toHaveTextContent('Gone.');
-    expect(useGruntStore.getState().chats).toEqual([]);
+    expect(useOtherBenchStore.getState().chats).toEqual([]);
   });
 
   describe('effort', () => {
@@ -807,13 +807,13 @@ describe('Composer auto mode toggle', () => {
     });
 
     it("changes the chat's effort from the next message, and back to the default", async () => {
-      mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...useGruntStore.getState().chats[0]!, ...body }) as Chat);
+      mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...useOtherBenchStore.getState().chats[0]!, ...body }) as Chat);
       renderWith({ profileId: 'sonnet' });
       const user = userEvent.setup();
 
       await user.selectOptions(effort(), 'high');
       expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { effort: 'high' });
-      await waitFor(() => expect(useGruntStore.getState().chats[0]!.effort).toBe('high'));
+      await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.effort).toBe('high'));
       expect(effort()).toHaveValue('high');
 
       await user.selectOptions(effort(), 'default');
@@ -827,7 +827,7 @@ describe('Composer auto mode toggle', () => {
       await userEvent.setup().selectOptions(effort(), 'max');
       expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
       expect(effort()).toHaveValue('medium');
-      expect(useGruntStore.getState().chats[0]!.effort).toBe('medium');
+      expect(useOtherBenchStore.getState().chats[0]!.effort).toBe('medium');
     });
   });
 
@@ -847,14 +847,14 @@ describe('Composer auto mode toggle', () => {
 describe('Composer plan mode pill', () => {
   beforeEach(() => {
     reset();
-    useGruntStore.getState().setProfiles([makeProfile()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
   });
   afterEach(cleanup);
   const pill = () => screen.getByRole('button', { name: 'Plan mode' });
 
   it('shows for every profile, off by default, saying what it does', () => {
     const chat = makeChat();
-    useGruntStore.getState().setChats([chat]);
+    useOtherBenchStore.getState().setChats([chat]);
     render(<Composer chat={chat} />);
     expect(pill()).toHaveAttribute('aria-pressed', 'false');
     expect(pill()).toHaveAttribute('title', 'Plan first: the model sets out a plan and waits for your approval before it changes anything (from the next message)');
@@ -864,7 +864,7 @@ describe('Composer plan mode pill', () => {
     let resolvePatch!: (c: Chat) => void;
     mockedChatsPatch.mockReturnValue(new Promise<Chat>((r) => { resolvePatch = r; }));
     const chat = makeChat();
-    useGruntStore.getState().setChats([chat]);
+    useOtherBenchStore.getState().setChats([chat]);
     render(<Composer chat={chat} />);
     await userEvent.setup().click(pill());
     expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { planMode: true });
@@ -876,7 +876,7 @@ describe('Composer plan mode pill', () => {
   it('reverts only planMode and shows the error when saving fails', async () => {
     mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
     const chat = makeChat();
-    useGruntStore.getState().setChats([chat]);
+    useOtherBenchStore.getState().setChats([chat]);
     render(<Composer chat={chat} />);
     await userEvent.setup().click(pill());
     expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
@@ -892,9 +892,9 @@ describe('Composer message history (Up and Down)', () => {
 
   beforeEach(() => {
     reset();
-    useGruntStore.getState().setProfiles([makeProfile()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
     for (const m of [said('u1', null, 'user', 'first'), said('a1', 'u1', 'assistant', 'ok'), said('u2', 'a1', 'user', 'second'), said('a2', 'u2', 'assistant', 'ok')]) {
-      useGruntStore.getState().registerMessage(m);
+      useOtherBenchStore.getState().registerMessage(m);
     }
   });
   afterEach(() => {

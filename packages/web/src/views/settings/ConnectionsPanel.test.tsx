@@ -1,9 +1,9 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
-import { useGruntStore } from '../../state/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { ConnectionsPanel } from './ConnectionsPanel.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -109,7 +109,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
 }
 
 function reset(): void {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   mockedCreate.mockReset();
   mockedPatch.mockReset();
   mockedDelete.mockReset();
@@ -122,7 +122,7 @@ describe('ConnectionsPanel', () => {
   afterEach(cleanup);
 
   it('never populates the API key field from an existing connection, only shows whether one is set', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Has a key', secretRef: 'conn:conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Has a key', secretRef: 'conn:conn-1' })]);
     const user = userEvent.setup();
 
     render(<ConnectionsPanel />);
@@ -135,7 +135,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('shows "no key set" for a connection with no secretRef, and still never pre-fills the input', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: null })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: null })]);
     const user = userEvent.setup();
 
     render(<ConnectionsPanel />);
@@ -198,7 +198,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('a failed Test renders its message instead of throwing', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
     mockedTest.mockResolvedValue({ ok: false, message: 'Connection refused', latencyMs: 4 });
     const user = userEvent.setup();
 
@@ -210,7 +210,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('a Test call that rejects also renders a message instead of throwing/crashing', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
     mockedTest.mockRejectedValue(new ApiError(502, 'Bad gateway from provider'));
     const user = userEvent.setup();
 
@@ -222,7 +222,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('Discover models saves results into the shared models store', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
     mockedDiscover.mockResolvedValue([
       {
         id: 'm1',
@@ -248,12 +248,12 @@ describe('ConnectionsPanel', () => {
     await user.click(screen.getByRole('button', { name: /discover models/i }));
 
     expect(await screen.findByTestId('discover-result')).toHaveTextContent('Discovered 1 model');
-    expect(useGruntStore.getState().models).toHaveLength(1);
-    expect(useGruntStore.getState().models[0]?.modelId).toBe('llama3.2');
+    expect(useOtherBenchStore.getState().models).toHaveLength(1);
+    expect(useOtherBenchStore.getState().models[0]?.modelId).toBe('llama3.2');
   });
 
   it('replacing the API key on an existing connection sends the new value; leaving it blank omits it entirely', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: 'conn:conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: 'conn:conn-1' })]);
     mockedPatch.mockResolvedValue(makeConnection({ id: 'conn-1', secretRef: 'conn:conn-1' }));
     const user = userEvent.setup();
 
@@ -271,7 +271,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('clearing the API key sends apiKey: null', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: 'conn:conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', secretRef: 'conn:conn-1' })]);
     mockedPatch.mockResolvedValue(makeConnection({ id: 'conn-1', secretRef: null }));
     const user = userEvent.setup();
 
@@ -284,7 +284,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('deleting a connection asks for confirmation and, once confirmed, removes it from the list', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Doomed' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Doomed' })]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -307,16 +307,16 @@ describe('ConnectionsPanel', () => {
   // their head. The store already has the exact counts (removeConnection,
   // state/store.ts); this asserts they actually appear.
   it('the delete confirmation states the REAL dependent model/profile/chat counts, not a vague blanket warning', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Doomed' })]);
-    useGruntStore.getState().setModels([
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Doomed' })]);
+    useOtherBenchStore.getState().setModels([
       makeModel({ id: 'm1', connectionId: 'conn-1' }),
       makeModel({ id: 'm2', connectionId: 'conn-1' }),
     ]);
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setProfiles([
       makeProfile({ id: 'p1', connectionId: 'conn-1' }),
       makeProfile({ id: 'p2', connectionId: 'conn-1' }),
     ]);
-    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' })]);
+    useOtherBenchStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' })]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -335,9 +335,9 @@ describe('ConnectionsPanel', () => {
   });
 
   it('the delete confirmation omits the chat clause entirely when no chat depends on it', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Lonely' })]);
-    useGruntStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1' })]);
-    useGruntStore.getState().setProfiles([]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Lonely' })]);
+    useOtherBenchStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1' })]);
+    useOtherBenchStore.getState().setProfiles([]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
@@ -356,7 +356,7 @@ describe('ConnectionsPanel', () => {
   });
 
   it('does not delete when the confirmation is declined', async () => {
-    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
 

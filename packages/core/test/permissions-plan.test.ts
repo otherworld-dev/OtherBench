@@ -156,7 +156,7 @@ describe('plan mode in the broker', () => {
       { command: 'select', ref: 'e3', values: ['Red'], gen: 1, ...page },
       { command: 'press', key: 'Enter', ...page },
       { command: 'back', ...page },
-      // No command, and one Grunt doesn't know: refused too.
+      // No command, and one OtherBench doesn't know: refused too.
       { ...page },
       { command: 'download', ...page },
     ];

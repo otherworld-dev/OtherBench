@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
 import { HTTPException } from 'hono/http-exception';
-import { classifyPath, MAX_EXTRA_FOLDERS, mergeFolders, parseFolders, resolveWorkspace, sameWorkspace } from '@grunt/core/domain/workspace.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import type { ExtraFolder, FolderView, Workspace, WorkspaceStatus } from '@grunt/core/types/workspace.js';
+import { classifyPath, MAX_EXTRA_FOLDERS, mergeFolders, parseFolders, resolveWorkspace, sameWorkspace } from '@otherbench/core/domain/workspace.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import type { ExtraFolder, FolderView, Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import type { Container } from './container.js';
 import { optionalWorkspaceRoot } from './validation.js';
 

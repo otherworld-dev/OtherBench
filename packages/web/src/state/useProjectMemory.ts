@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ProjectMemoryView } from '@grunt/core/domain/memory.js';
+import type { ProjectMemoryView } from '@otherbench/core/domain/memory.js';
 import { api } from './api.js';
 
 /** How often a project's memory is re-read: the summariser changes it in the background. */
@@ -23,7 +23,7 @@ export function useProjectMemory(projectId: string): { view: ProjectMemoryView |
           setLoadFailed(false);
         }
       } catch (err) {
-        console.error(`[grunt-web] failed to load memory for project ${projectId}:`, err);
+        console.error(`[otherbench-web] failed to load memory for project ${projectId}:`, err);
         if (!cancelled) setLoadFailed(true);
       }
       if (!cancelled) timer = setTimeout(() => void tick(), MEMORY_POLL_MS);

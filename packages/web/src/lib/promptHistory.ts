@@ -1,4 +1,4 @@
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 /**
  * What Up in the message box steps through: the user's own messages on the

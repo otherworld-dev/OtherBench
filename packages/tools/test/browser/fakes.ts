@@ -1,5 +1,5 @@
 import type { EgressProxy, EgressProxyOptions } from '../../src/browser/proxy.js';
-import { siteOf } from '@grunt/core/domain/browser-hosts.js';
+import { siteOf } from '@otherbench/core/domain/browser-hosts.js';
 import { PageMovedError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from '../../src/browser/session.js';
 
 /** Like the real sessions: every navigation takes the next number, across sessions. */

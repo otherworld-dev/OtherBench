@@ -13,7 +13,7 @@ interface PendingAsk {
 
 /**
  * The questions and plans waiting for the user (spec
- * 2026-10-12-thread-cards-design §2), shared by `GruntToolProvider` and
+ * 2026-10-12-thread-cards-design §2), shared by `OtherBenchToolProvider` and
  * `FakeToolProvider`. Kept in memory like approval cards: a page reload
  * shows them again from the turn's buffered events, and a server restart
  * ends the turn anyway. Imports `node:crypto`, so the web never imports it.

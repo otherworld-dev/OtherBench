@@ -2,8 +2,8 @@ import type { IncomingMessage } from 'node:http';
 import type { TLSSocket } from 'node:tls';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { fingerprintOf } from '@grunt/core/domain/pairing.js';
-import type { Peer } from '@grunt/core/types/peer.js';
+import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
+import type { Peer } from '@otherbench/core/types/peer.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { PeerError, type PairRequest, type PeerService } from './service.js';
 
@@ -44,7 +44,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
 
   app.onError((err, c) => {
     if (err instanceof PeerError) return c.json({ error: err.message }, err.status);
-    console.error('[grunt-server] peer listener error:', err);
+    console.error('[otherbench-server] peer listener error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
   });
 

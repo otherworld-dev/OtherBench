@@ -1,5 +1,5 @@
-import { actionSummary, chatTitleForDialog, desktopTextForResult } from '@grunt/core/domain/computer-apps.js';
-import type { TurnRunner } from '@grunt/core/domain/turn.js';
+import { actionSummary, chatTitleForDialog, desktopTextForResult } from '@otherbench/core/domain/computer-apps.js';
+import type { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type {
   ComputerAction,
   ComputerAnswer,
@@ -9,8 +9,8 @@ import type {
   ComputerScreenshot,
   ComputerStopReason,
   ComputerTarget,
-} from '@grunt/core/ports/computer.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+} from '@otherbench/core/ports/computer.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { AppEventBus } from '../stream/events.js';
 
 type SessionEvent = Extract<AppEvent, { type: 'computer-session' }>;
@@ -24,16 +24,16 @@ function driverSaid(err: unknown): string {
 /** What a second chat is told while another one is in control, or is being asked about. */
 export const COMPUTER_OTHER_CHAT_REASON = 'Another chat is controlling this computer. Stop it first.';
 /** What every call but `ensureSession` answers (or rejects with) for a chat this server has no control session for. */
-export const COMPUTER_NO_SESSION_REASON = 'Grunt is not controlling this computer for this chat.';
+export const COMPUTER_NO_SESSION_REASON = 'OtherBench is not controlling this computer for this chat.';
 /** What a start answers when it was stopped, or its reply ended, before the person said OK. */
-export const COMPUTER_START_STOPPED_REASON = 'Control was stopped before it started, so Grunt is not controlling this computer.';
+export const COMPUTER_START_STOPPED_REASON = 'Control was stopped before it started, so OtherBench is not controlling this computer.';
 /** What a start answers once the server is shutting down. */
-export const COMPUTER_SHUTTING_DOWN_REASON = 'Grunt is shutting down, so it is not controlling this computer.';
+export const COMPUTER_SHUTTING_DOWN_REASON = 'OtherBench is shutting down, so it is not controlling this computer.';
 /** What a start answers while the desktop app has not confirmed that an earlier session ended. It says what to do: the same start is refused again until the desktop app answers. */
 export const COMPUTER_END_UNCONFIRMED_REASON =
-  "Grunt couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart Grunt.";
+  "OtherBench couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart OtherBench.";
 /** What another chat is told while a start is still waiting for an earlier end to be confirmed: no chat is in control then, so "stop it first" would be wrong. */
-export const COMPUTER_CONFIRMING_REASON = 'Grunt is still confirming that the last control session was stopped. Try again in a moment.';
+export const COMPUTER_CONFIRMING_REASON = 'OtherBench is still confirming that the last control session was stopped. Try again in a moment.';
 
 /** How long the driver is given to answer an end of session before the end counts as unconfirmed. */
 export const COMPUTER_END_TIMEOUT_MS = 5000;
@@ -224,7 +224,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       return this.driver.available() === true;
     } catch (err) {
-      console.error(`[grunt-server] the desktop app couldn't say whether computer use is available: ${driverSaid(err)}`);
+      console.error(`[otherbench-server] the desktop app couldn't say whether computer use is available: ${driverSaid(err)}`);
       return false;
     }
   }
@@ -269,7 +269,7 @@ export class ComputerSessions implements ComputerDriver {
     const start: Start = { chatId, abandoned: false, confirming: false, answer };
     this.starting = start;
     // The title goes into the shell's native dialog. Whoever asks, the driver gets core's one clean line of it
-    // (the computer tool passes it that way already; this is the last thing of Grunt's between a title and the shell).
+    // (the computer tool passes it that way already; this is the last thing of OtherBench's between a title and the shell).
     this.begin(start, chatTitleForDialog(chatTitle)).then(settle, fail);
     return answer;
   }
@@ -496,7 +496,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       return !this.deps.chatExists(chatId);
     } catch (err) {
-      console.error(`[grunt-server] couldn't check whether chat ${chatId} still exists (computer use):`, err);
+      console.error(`[otherbench-server] couldn't check whether chat ${chatId} still exists (computer use):`, err);
       return false;
     }
   }
@@ -563,7 +563,7 @@ export class ComputerSessions implements ComputerDriver {
       this.tellDriverToEnd(chatId).then(
         () => true,
         (err: unknown) => {
-          console.error(`[grunt-server] couldn't confirm that the desktop app ended computer use for chat ${chatId}: ${driverSaid(err)}`);
+          console.error(`[otherbench-server] couldn't confirm that the desktop app ended computer use for chat ${chatId}: ${driverSaid(err)}`);
           return false;
         }
       )
@@ -600,7 +600,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       this.deps.emit(event);
     } catch (err) {
-      console.error('[grunt-server] a computer-session event could not be sent:', err);
+      console.error('[otherbench-server] a computer-session event could not be sent:', err);
     }
   }
 
@@ -609,7 +609,7 @@ export class ComputerSessions implements ComputerDriver {
       try {
         cb(chatId, why);
       } catch (err) {
-        console.error('[grunt-server] a computer-use stopped listener failed:', err);
+        console.error('[otherbench-server] a computer-use stopped listener failed:', err);
       }
     }
   }
@@ -618,7 +618,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       this.deps.cancelChat(chatId);
     } catch (err) {
-      console.error(`[grunt-server] couldn't cancel the replies of chat ${chatId}:`, err);
+      console.error(`[otherbench-server] couldn't cancel the replies of chat ${chatId}:`, err);
     }
   }
 }

@@ -1,11 +1,11 @@
 import { PassThrough } from 'node:stream';
 import { crc32 } from 'node:zlib';
-import { FAKE_COMPUTER_APP, FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import { FAKE_COMPUTER_APP, FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { DesktopChannel, RPC_PREFIX, type DesktopChannelOptions } from '../../src/computer/desktop-channel.js';
 import { DesktopComputerDriver, type DesktopComputerDriverOptions } from '../../src/computer/desktop-driver.js';
 
 /**
- * A stand-in for the desktop shell, in memory: it reads the `GRUNT-RPC`
+ * A stand-in for the desktop shell, in memory: it reads the `OTHERBENCH-RPC`
  * lines this server would write to its stdout and answers on what would be
  * its stdin. It touches nothing: no window, no key, no screen. Tests for the
  * channel's other end (`DesktopComputerDriver`, the container, the CLI) use
@@ -21,7 +21,7 @@ import { DesktopComputerDriver, type DesktopComputerDriverOptions } from '../../
  */
 
 /** What the stand-in says to a chat that has no session, or names one that is not its live one. */
-export const SHELL_NO_SESSION = 'Grunt is not controlling this computer for that chat.';
+export const SHELL_NO_SESSION = 'OtherBench is not controlling this computer for that chat.';
 
 let minted = 0;
 /** A fresh session token, as the shell mints one: never reused. */
@@ -103,10 +103,10 @@ export class FakeShell {
     },
     write: (line: string): boolean => {
       this.lines.push(line);
-      if (!line.startsWith(RPC_PREFIX) || !line.endsWith('\n')) throw new Error(`not a GRUNT-RPC line: ${line}`);
+      if (!line.startsWith(RPC_PREFIX) || !line.endsWith('\n')) throw new Error(`not a OTHERBENCH-RPC line: ${line}`);
       let body = line.slice(RPC_PREFIX.length);
       if (this.nonce !== null) {
-        if (!body.startsWith(`${this.nonce} `)) throw new Error(`a GRUNT-RPC line without this launch's word: ${line}`);
+        if (!body.startsWith(`${this.nonce} `)) throw new Error(`a OTHERBENCH-RPC line without this launch's word: ${line}`);
         body = body.slice(this.nonce.length + 1);
       }
       const request = JSON.parse(body) as ShellRequest;

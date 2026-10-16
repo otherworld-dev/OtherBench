@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { isDesktop, onDesktopEvent, setHotkey } from './bridge.js';
 import { loadHotkey } from './hotkey.js';
 
@@ -14,12 +14,12 @@ export function useDesktopShell(): void {
     if (!isDesktop()) return;
     const accelerator = loadHotkey();
     setHotkey(accelerator)
-      .then(() => useGruntStore.getState().setHotkeyStatus({ accelerator, error: null }))
-      .catch((err: unknown) => useGruntStore.getState().setHotkeyStatus({ accelerator, error: String(err) }));
+      .then(() => useOtherBenchStore.getState().setHotkeyStatus({ accelerator, error: null }))
+      .catch((err: unknown) => useOtherBenchStore.getState().setHotkeyStatus({ accelerator, error: String(err) }));
 
     let off: (() => void) | null = null;
     let disposed = false;
-    void onDesktopEvent<string>('open-chat', (chatId) => useGruntStore.getState().setActiveChatId(chatId)).then((unlisten) => {
+    void onDesktopEvent<string>('open-chat', (chatId) => useOtherBenchStore.getState().setActiveChatId(chatId)).then((unlisten) => {
       if (disposed) unlisten();
       else off = unlisten;
     });

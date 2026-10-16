@@ -38,12 +38,12 @@ describe('resolveExecutable', () => {
     let originalPath: string | undefined;
 
     beforeEach(() => {
-      dir = mkdtempSync(join(tmpdir(), 'grunt-spawn-test-'));
-      writeFileSync(join(dir, 'grunt-fixture-cmd.cmd'), '@echo off\r\necho hi\r\n');
-      writeFileSync(join(dir, 'grunt-fixture-exe.exe'), Buffer.from([0x4d, 0x5a])); // MZ header stub -- never executed, only resolved
+      dir = mkdtempSync(join(tmpdir(), 'otherbench-spawn-test-'));
+      writeFileSync(join(dir, 'otherbench-fixture-cmd.cmd'), '@echo off\r\necho hi\r\n');
+      writeFileSync(join(dir, 'otherbench-fixture-exe.exe'), Buffer.from([0x4d, 0x5a])); // MZ header stub -- never executed, only resolved
       try {
-        chmodSync(join(dir, 'grunt-fixture-cmd.cmd'), 0o755);
-        chmodSync(join(dir, 'grunt-fixture-exe.exe'), 0o755);
+        chmodSync(join(dir, 'otherbench-fixture-cmd.cmd'), 0o755);
+        chmodSync(join(dir, 'otherbench-fixture-exe.exe'), 0o755);
       } catch {
         /* mode bits are a no-op on Windows anyway */
       }
@@ -57,19 +57,19 @@ describe('resolveExecutable', () => {
     });
 
     it('resolves an npm-style launcher (bare name -> real .cmd shim), exactly the npx case', () => {
-      const resolved = resolveExecutable('grunt-fixture-cmd');
-      expect(resolved.toLowerCase()).toContain('grunt-fixture-cmd.cmd');
+      const resolved = resolveExecutable('otherbench-fixture-cmd');
+      expect(resolved.toLowerCase()).toContain('otherbench-fixture-cmd.cmd');
       expect(resolved).toMatch(/^[A-Za-z]:[\\/]/); // absolute -- the whole point, so a later shell:false spawn can find it
     });
 
     it('resolves a uv-style launcher (bare name -> real .exe binary), exactly the uvx case', () => {
-      const resolved = resolveExecutable('grunt-fixture-exe');
-      expect(resolved.toLowerCase()).toContain('grunt-fixture-exe.exe');
+      const resolved = resolveExecutable('otherbench-fixture-exe');
+      expect(resolved.toLowerCase()).toContain('otherbench-fixture-exe.exe');
       expect(resolved).toMatch(/^[A-Za-z]:[\\/]/);
     });
 
     it('throws ExecutableNotFoundError (not ENOENT from a downstream spawn) for a command missing from PATH', () => {
-      expect(() => resolveExecutable('grunt-fixture-does-not-exist-anywhere')).toThrow(ExecutableNotFoundError);
+      expect(() => resolveExecutable('otherbench-fixture-does-not-exist-anywhere')).toThrow(ExecutableNotFoundError);
     });
   });
 });

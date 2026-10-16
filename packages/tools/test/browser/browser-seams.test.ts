@@ -1,20 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
-import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Grant } from '@grunt/core/ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Grant } from '@otherbench/core/ports/store.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { BrowserManager } from '../../src/browser/manager.js';
-import { GruntToolProvider } from '../../src/provider.js';
+import { OtherBenchToolProvider } from '../../src/provider.js';
 import { FakeFactory, fakeProxy } from './fakes.js';
 
 // The integration seams between the model's browser and Plan mode (thread
 // cards), scheduled runs (unattended) and API sub-agents, through the real
-// GruntToolProvider, PermissionBroker, BrowserManager, TurnRunner and
+// OtherBenchToolProvider, PermissionBroker, BrowserManager, TurnRunner and
 // SubagentRunner. Only Chromium and the proxy are fakes.
 
 const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
@@ -32,7 +32,7 @@ function setup(o: { answer?: ApprovalChoice['choice']; grants?: Grant[] } = {}) 
   const proxy = fakeProxy();
   const manager = new BrowserManager({ factory, startProxy: proxy.start });
   const broker = new PermissionBroker(store);
-  const provider = new GruntToolProvider(store, broker, emptyMcp, { browser: manager });
+  const provider = new OtherBenchToolProvider(store, broker, emptyMcp, { browser: manager });
   const cards: ApprovalRequest[] = [];
   provider.onApprovalEvent((e: ToolApprovalEvent) => {
     if (e.type !== 'request') return;
@@ -178,7 +178,7 @@ describe('the browser in a scheduled run', () => {
     const [spec] = s.provider.relayTools(policy());
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ unattended: true }), { deferAsk: true });
     expect(outcome).toEqual({ allowed: false, reason: UNATTENDED_REASON });
-    // With someone watching, auto mode still doesn't get it: the card is Grunt's.
+    // With someone watching, auto mode still doesn't get it: the card is OtherBench's.
     const watched = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx(), { deferAsk: true });
     expect(watched).toMatchObject({ allowed: true, grantedBy: 'ask:once', args: { command: 'open', url: 'https://example.com/', host: 'example.com' } });
     expect(s.cards).toHaveLength(1);
@@ -217,7 +217,7 @@ async function turn(o: TurnOptions = {}) {
   const proxy = fakeProxy();
   const manager = new BrowserManager({ factory, startProxy: proxy.start });
   const broker = new PermissionBroker(store);
-  const provider = new GruntToolProvider(store, broker, emptyMcp, { browser: manager });
+  const provider = new OtherBenchToolProvider(store, broker, emptyMcp, { browser: manager });
   const cards: ApprovalRequest[] = [];
   provider.onApprovalEvent((e: ToolApprovalEvent) => {
     if (e.type !== 'request') return;

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { McpServerManager } from '../../src/mcp/manager.js';
 import { oauthRefs } from '../../src/mcp/oauth-store.js';
 import { SignInError, checkAuthorizationUrl, redactMessage, sanitiseErrorCode } from '../../src/mcp/sign-in.js';
@@ -44,7 +44,7 @@ async function setup(fixtureOpts: Record<string, unknown> = {}, rowOver: Partial
   return { fixture, store, secrets, clock, manager };
 }
 
-/** Follows the authorization URL the way a browser would, stopping at the redirect back to Grunt. */
+/** Follows the authorization URL the way a browser would, stopping at the redirect back to OtherBench. */
 async function followAuthorization(authorizationUrl: string): Promise<{ state: string; code?: string; error?: string }> {
   const res = await fetch(authorizationUrl, { redirect: 'manual' });
   const location = res.headers.get('location');
@@ -75,7 +75,7 @@ describe('signing in', { timeout: 20_000 }, () => {
     expect(url.searchParams.get('resource')).toBe(fixture.url);
     expect(fixture.registrations).toHaveLength(1);
     expect(fixture.registrations[0]!.metadata).toMatchObject({
-      client_name: 'Grunt',
+      client_name: 'OtherBench',
       redirect_uris: [REDIRECT],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
@@ -161,7 +161,7 @@ describe('signing in', { timeout: 20_000 }, () => {
     expect(fixture.registrations).toHaveLength(1);
 
     const stale = await followAuthorization(first.authorizationUrl);
-    await expect(manager.completeSignIn(stale)).rejects.toMatchObject({ status: 400, message: 'This sign-in has expired or was already used. Start it again from Grunt.' });
+    await expect(manager.completeSignIn(stale)).rejects.toMatchObject({ status: 400, message: 'This sign-in has expired or was already used. Start it again from OtherBench.' });
     expect(new URL(second.authorizationUrl).searchParams.get('state')).not.toBe(stale.state);
 
     await manager.startSignIn('srv-1', OTHER_REDIRECT);
@@ -224,11 +224,11 @@ describe('signing in', { timeout: 20_000 }, () => {
     await expect(manager.startSignIn('plain', REDIRECT)).rejects.toMatchObject({ status: 409, message: "This server didn't ask for a sign-in." });
   });
 
-  it('with no dynamic registration, start explains how to register Grunt by hand', async () => {
+  it('with no dynamic registration, start explains how to register OtherBench by hand', async () => {
     const { manager } = await setup({ dcr: false });
     await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({
       status: 502,
-      message: `This server's sign-in provider doesn't let apps register themselves. Register Grunt with it (redirect address: ${REDIRECT}) and enter the client ID under Sign-in app.`,
+      message: `This server's sign-in provider doesn't let apps register themselves. Register OtherBench with it (redirect address: ${REDIRECT}) and enter the client ID under Sign-in app.`,
     });
   });
 
@@ -476,11 +476,11 @@ describe('one sign-in per server', { timeout: 20_000 }, () => {
   });
 
   it('with no dynamic registration, a hand-registered client ID and secret sign in (the secret checked by the provider)', async () => {
-    const { fixture, store, secrets, manager } = await setup({ dcr: false, staticClients: { 'grunt-manual': 'manual-secret' } });
+    const { fixture, store, secrets, manager } = await setup({ dcr: false, staticClients: { 'otherbench-manual': 'manual-secret' } });
     await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({ status: 502 });
 
-    expect(await manager.setSignInApp('srv-1', 'grunt-manual', 'manual-secret')).toBe(true);
-    expect(store.mcpServers.get('srv-1')!.oauth).toEqual({ clientId: 'grunt-manual', clientSecretRef: oauthRefs('srv-1').clientSecret, account: null, signedInAt: null });
+    expect(await manager.setSignInApp('srv-1', 'otherbench-manual', 'manual-secret')).toBe(true);
+    expect(store.mcpServers.get('srv-1')!.oauth).toEqual({ clientId: 'otherbench-manual', clientSecretRef: oauthRefs('srv-1').clientSecret, account: null, signedInAt: null });
     expect(await secrets.get(oauthRefs('srv-1').clientSecret)).toBe('manual-secret');
 
     await signIn(manager);
@@ -489,12 +489,12 @@ describe('one sign-in per server', { timeout: 20_000 }, () => {
   });
 
   it('a wrong hand-registered secret fails to finish, and changing the client ID forgets the sign-in', async () => {
-    const { secrets, manager } = await setup({ dcr: false, staticClients: { 'grunt-manual': 'manual-secret', 'other-app': null } });
-    await manager.setSignInApp('srv-1', 'grunt-manual', 'wrong-secret');
+    const { secrets, manager } = await setup({ dcr: false, staticClients: { 'otherbench-manual': 'manual-secret', 'other-app': null } });
+    await manager.setSignInApp('srv-1', 'otherbench-manual', 'wrong-secret');
     const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
     await expect(manager.completeSignIn(await followAuthorization(authorizationUrl))).rejects.toMatchObject({ status: 502 });
 
-    await manager.setSignInApp('srv-1', 'grunt-manual', 'manual-secret');
+    await manager.setSignInApp('srv-1', 'otherbench-manual', 'manual-secret');
     await signIn(manager);
     expect(await secrets.get(oauthRefs('srv-1').tokens)).not.toBeNull();
 

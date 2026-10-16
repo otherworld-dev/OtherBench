@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 /**
  * Live artifacts, Task 1 (spec 2026-10-12-live-artifacts §9): what Chromium
  * does with a page served under the live CSP in a sandboxed frame. It runs
- * against its own tiny server, not Grunt's, and pins the browser behaviour
+ * against its own tiny server, not OtherBench's, and pins the browser behaviour
  * the viewer's bridge relies on.
  *
  * Result (2026-10-12, Chromium): SOURCE_CHECK=pass
@@ -16,7 +16,7 @@ import { expect, test } from '@playwright/test';
 // A copy of the server's livePolicy (packages/server/src/routes/view-serve.ts);
 // live-exfil.spec.ts checks the real one.
 function livePolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
+  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}otherbench-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
 }
 
 const APP = `<!doctype html><meta charset="utf-8"><title>probe app</title>
@@ -25,10 +25,10 @@ window.requests = [];
 window.loads = 0;
 window.addEventListener('message', (e) => {
   const d = e.data;
-  if (!d || d.grunt !== 'live-call') return;
+  if (!d || d.otherbench !== 'live-call') return;
   const frame = document.getElementById('f');
   window.requests.push({ sourceIsFrame: e.source === frame.contentWindow, origin: e.origin, call: d.call });
-  frame.contentWindow.postMessage({ grunt: 'live-result', v: 1, requestId: d.requestId, ok: true, text: 'pong', cached: false, at: 1 }, '*');
+  frame.contentWindow.postMessage({ otherbench: 'live-result', v: 1, requestId: d.requestId, ok: true, text: 'pong', cached: false, at: 1 }, '*');
 });
 </script>
 <iframe id="f" sandbox="allow-scripts allow-forms" src="/frame/page.html" onload="window.loads += 1"></iframe>`;
@@ -39,7 +39,7 @@ const HELPER = `(function () {
   window.addEventListener('message', function (e) {
     if (e.source !== parent) return;
     var d = e.data;
-    if (!d || d.grunt !== 'live-result' || d.v !== 1) return;
+    if (!d || d.otherbench !== 'live-result' || d.v !== 1) return;
     var p = pending[d.requestId];
     if (!p) return;
     delete pending[d.requestId];
@@ -49,13 +49,13 @@ const HELPER = `(function () {
     return new Promise(function (resolve) {
       var id = 'r' + (++n);
       pending[id] = resolve;
-      parent.postMessage({ grunt: 'live-call', v: 1, requestId: id, call: call, params: {} }, '*');
+      parent.postMessage({ otherbench: 'live-call', v: 1, requestId: id, call: call, params: {} }, '*');
     });
   };
 })();`;
 
 const FRAME = `<!doctype html><meta charset="utf-8">
-<script src="grunt-live.js"></script>
+<script src="otherbench-live.js"></script>
 <pre id="csp"></pre><pre id="out">waiting</pre><pre id="submitted"></pre>
 <form id="form" action="https://example.invalid/collect"><input name="q" value="secret"><button id="go">Send</button></form>
 <button id="leave" type="button">Leave</button>
@@ -75,7 +75,7 @@ test.beforeAll(async () => {
     const live = { 'Content-Security-Policy': livePolicy(`${origin}/frame/`), 'X-DNS-Prefetch-Control': 'off', 'Cache-Control': 'no-store' };
     if (req.url === '/app.html') return void res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(APP);
     if (req.url === '/frame/page.html') return void res.writeHead(200, { ...live, 'Content-Type': 'text/html; charset=utf-8' }).end(FRAME);
-    if (req.url === '/frame/grunt-live.js') return void res.writeHead(200, { ...live, 'Content-Type': 'text/javascript; charset=utf-8' }).end(HELPER);
+    if (req.url === '/frame/otherbench-live.js') return void res.writeHead(200, { ...live, 'Content-Type': 'text/javascript; charset=utf-8' }).end(HELPER);
     res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -10,7 +10,7 @@
 // with optional rotation, client secrets by Basic or POST).
 //
 // Manual testing: `node test/fixtures/oauth-echo-server.js --port 4800`
-// prints `LISTENING <mcp url>`; add it to Grunt as an http server.
+// prints `LISTENING <mcp url>`; add it to OtherBench as an http server.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';

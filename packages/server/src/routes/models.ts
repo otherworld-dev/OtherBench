@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNumber, requireNonEmptyString } from '../validation.js';
 

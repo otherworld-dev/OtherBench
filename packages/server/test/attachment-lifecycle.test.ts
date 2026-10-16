@@ -19,9 +19,9 @@ let dir: string;
 let container: Container;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-attachment-lifecycle-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-attachment-lifecycle-test-'));
   container = await createContainer({
-    dbPath: join(dir, 'grunt.db'),
+    dbPath: join(dir, 'otherbench.db'),
     secretsPath: join(dir, 'secrets.json'),
   });
 });
@@ -68,11 +68,11 @@ async function createChat(profileId: string, id: string): Promise<void> {
   });
 }
 
-// dbPath is join(dir, 'grunt.db'), so its derived per-database write root
-// (resolveAttachmentsRoots, blob-store.ts) is join(dir, 'grunt.db.attachments')
+// dbPath is join(dir, 'otherbench.db'), so its derived per-database write root
+// (resolveAttachmentsRoots, blob-store.ts) is join(dir, 'otherbench.db.attachments')
 // -- the full basename, extension included (task 32 fix round 2, Critical #1).
 function blobPathFor(sha256: string): string {
-  return join(dir, 'grunt.db.attachments', sha256.slice(0, 2), sha256);
+  return join(dir, 'otherbench.db.attachments', sha256.slice(0, 2), sha256);
 }
 
 describe('deleting a chat with attachments leaves no orphan blobs afterwards', () => {
@@ -162,7 +162,7 @@ describe('deleting a connection cascades its profiles/chats\' attachments and GC
  * untouched into `TurnRunner.run`, which hands it to
  * `store.attachments.get(id)`. Against `InMemoryStore` that's harmless
  * (a `Map` lookup with a weird key just misses), but against the REAL
- * SqliteStore -- what every actual `grunt serve` process uses -- SQLite's
+ * SqliteStore -- what every actual `otherbench serve` process uses -- SQLite's
  * own parameter binding rejects a non-string/number/null value outright:
  * confirmed empirically, `db.prepare(...).get(undefined)` throws
  * `TypeError: Provided value cannot be bound to SQLite parameter 1.` and

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import { checkOfficeContent } from '@grunt/core/domain/office-spec.js';
-import { createPlanGate, PLAN_APPROVED, PLAN_REFUSAL, planChangesText, UNATTENDED_PLAN } from '@grunt/core/domain/thread-tools.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import { checkOfficeContent } from '@otherbench/core/domain/office-spec.js';
+import { createPlanGate, PLAN_APPROVED, PLAN_REFUSAL, planChangesText, UNATTENDED_PLAN } from '@otherbench/core/domain/thread-tools.js';
 import { LISTS_REPLY, MockChatEngine, OFFICE_SAMPLES } from '../src/mock-provider.js';
 
 function makeResolvedProfile(): ResolvedProfile {
@@ -239,8 +239,8 @@ describe('MockChatEngine', () => {
       const args = execute.mock.calls[0]![0] as Record<string, unknown>;
       expect(args).toMatchObject({ command: 'create', id: 'dash', kind: 'html', title: 'Live dashboard' });
       expect(JSON.parse(args['live'] as string)).toEqual({ calls: [{ id: 'value', tool: 'mcp__Live__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] });
-      expect(args['content']).toContain('<script src="grunt-live.js"></script>');
-      expect(args['content']).toContain("grunt.live('value', { key: 'b' })");
+      expect(args['content']).toContain('<script src="otherbench-live.js"></script>');
+      expect(args['content']).toContain("otherbench.live('value', { key: 'b' })");
       expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'artifact', isError: false }));
       expect(events.at(-1)).toMatchObject({ type: 'finish' });
     });
@@ -746,8 +746,8 @@ describe('#office trigger', () => {
 describe('#echo-user trigger', () => {
   it("replies with the latest user message's text as the request carries it, an attached file's text included", async () => {
     const req = makeRequest('#echo-user');
-    req.messages[0]!.parts.push({ type: 'text', text: '<attached-file name="memo.docx">\nGrunt reads this memo\n</attached-file>' });
+    req.messages[0]!.parts.push({ type: 'text', text: '<attached-file name="memo.docx">\nOtherBench reads this memo\n</attached-file>' });
     const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(req));
-    expect(replyText(events)).toContain('Grunt reads this memo');
+    expect(replyText(events)).toContain('OtherBench reads this memo');
   });
 });

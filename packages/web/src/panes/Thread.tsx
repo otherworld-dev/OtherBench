@@ -1,8 +1,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@grunt/core/domain/tree.js';
-import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
+import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
@@ -11,7 +11,7 @@ import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
 import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
 import { ViewerPanel } from '../viewer/ViewerPanel.js';
@@ -48,14 +48,14 @@ const NEAR_BOTTOM_PX = 80;
  * never the raw `messages` map.
  */
 export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
-  const messages = useGruntStore((s) => s.messages);
-  const extras = useGruntStore((s) => s.extras);
-  const models = useGruntStore((s) => s.models);
-  const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
-  const markKept = useGruntStore((s) => s.markKept);
-  const registerMessage = useGruntStore((s) => s.registerMessage);
-  const profiles = useGruntStore((s) => s.profiles);
-  const resetMessageForRetry = useGruntStore((s) => s.resetMessageForRetry);
+  const messages = useOtherBenchStore((s) => s.messages);
+  const extras = useOtherBenchStore((s) => s.extras);
+  const models = useOtherBenchStore((s) => s.models);
+  const setHeadMessageId = useOtherBenchStore((s) => s.setHeadMessageId);
+  const markKept = useOtherBenchStore((s) => s.markKept);
+  const registerMessage = useOtherBenchStore((s) => s.registerMessage);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const resetMessageForRetry = useOtherBenchStore((s) => s.resetMessageForRetry);
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat?.id ?? ''));
   const setViewerOpen = useViewerStore((s) => s.setOpen);
   const setViewerShare = useViewerStore((s) => s.setShare);
@@ -175,7 +175,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     try {
       await api.turns.setHead(chat!.id, messageId);
     } catch (err) {
-      console.error('[grunt-web] failed to move head:', err);
+      console.error('[otherbench-web] failed to move head:', err);
       if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
       setSwitchError(failure);
       return false;
@@ -213,7 +213,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       // The server already moved its head; mirror that here.
       setHeadMessageId(chat!.id, result.assistantMessageId);
     } catch (err) {
-      console.error('[grunt-web] failed to regenerate:', err);
+      console.error('[otherbench-web] failed to regenerate:', err);
       setSwitchError("Couldn't regenerate that reply. Please try again.");
     }
   }
@@ -250,10 +250,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       // Same head rule as Composer: head lands on the new USER message and the
       // thread walks into its lone reply.
       setHeadMessageId(chat!.id, result.userMessageId);
-      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
+      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
       setEditingId(null);
     } catch (err) {
-      console.error('[grunt-web] failed to send edited message:', err);
+      console.error('[otherbench-web] failed to send edited message:', err);
       setSwitchError("Couldn't send the edited message. Please try again.");
     } finally {
       setEditBusy(false);
@@ -285,7 +285,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       // cancelled or the server restarted). Retrying can never work, so drop
       // the dead card instead of leaving it up with a retry error.
       if (err instanceof ApiError && err.status === 404) {
-        useGruntStore.getState().dropApproval(requestId);
+        useOtherBenchStore.getState().dropApproval(requestId);
         return;
       }
       throw err;
@@ -298,7 +298,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       await api.asks.answer(askId, reply);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        useGruntStore.getState().dropAsk(askId);
+        useOtherBenchStore.getState().dropAsk(askId);
         return;
       }
       throw err;
@@ -315,7 +315,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     try {
       await api.turns.retry(variant.id);
     } catch (err) {
-      console.error(`[grunt-web] failed to retry ${variant.id}:`, err);
+      console.error(`[otherbench-web] failed to retry ${variant.id}:`, err);
     } finally {
       setRetryingIds((s) => {
         const next = new Set(s);

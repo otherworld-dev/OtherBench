@@ -5,7 +5,7 @@
 //   - "lookup" (readOnlyHint): returns { key, value: "value-of-<key>", n } as
 //     JSON text and as structuredContent; n counts lookups in this process, so
 //     a test can tell a fresh call from a cached one.
-//   - "set_value" (no hints): Grunt treats it as able to change things.
+//   - "set_value" (no hints): OtherBench treats it as able to change things.
 //   - "wait" (readOnlyHint): sleeps `ms` milliseconds, for timeouts.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -13,7 +13,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 let n = 0;
-const server = new McpServer({ name: 'grunt-live-fixture', version: '1.0.0' });
+const server = new McpServer({ name: 'otherbench-live-fixture', version: '1.0.0' });
 
 server.registerTool(
   'lookup',
@@ -35,7 +35,7 @@ server.registerTool(
   'set_value',
   {
     title: 'Set value',
-    description: 'Sets a value. Declares no hints, so Grunt treats it as able to change things.',
+    description: 'Sets a value. Declares no hints, so OtherBench treats it as able to change things.',
     inputSchema: { key: z.string(), value: z.string() },
   },
   async ({ key, value }) => ({ content: [{ type: 'text', text: `set ${key}=${value}` }] })

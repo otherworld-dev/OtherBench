@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import { runCommandTool } from '../src/shell-tool.js';
 
 const execFileAsync = promisify(execFile);
@@ -24,7 +24,7 @@ function ctx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-shell-tool-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-shell-tool-'));
 });
 
 afterEach(() => {
@@ -79,7 +79,7 @@ describe('commandLineStillRunning (positive control)', () => {
   // (exactly what happened with the first `wmic`-based version of this
   // helper, silently) would make every "was it killed" test pass vacuously.
   it('detects a live marked process, then stops detecting it once killed', async () => {
-    const marker = `grunt-shell-tool-positive-control-${randomUUID()}`;
+    const marker = `otherbench-shell-tool-positive-control-${randomUUID()}`;
     const child = spawn('node', ['-e', `/*${marker}*/ setTimeout(()=>{}, 30000)`], { windowsHide: true });
     try {
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -97,26 +97,26 @@ describe('commandLineStillRunning (positive control)', () => {
 
 describe('run_command', () => {
   it('echoing a value succeeds', async () => {
-    const result = (await runCommandTool.execute({ command: 'echo hello-grunt' }, ctx())) as Record<string, unknown>;
+    const result = (await runCommandTool.execute({ command: 'echo hello-otherbench' }, ctx())) as Record<string, unknown>;
     expect(result.error).toBeUndefined();
     expect(result.exitCode).toBe(0);
-    expect(result.output).toContain('hello-grunt');
+    expect(result.output).toContain('hello-otherbench');
   });
 
   it("never lets a command see the server's API token", async () => {
-    const before = process.env['GRUNT_TOKEN'];
-    process.env['GRUNT_TOKEN'] = 'leaked-token-value';
+    const before = process.env['OTHERBENCH_TOKEN'];
+    process.env['OTHERBENCH_TOKEN'] = 'leaked-token-value';
     try {
       const result = (await runCommandTool.execute(
-        { command: `node -e "process.stdout.write('[' + (process.env.GRUNT_TOKEN ?? 'none') + ']')"` },
+        { command: `node -e "process.stdout.write('[' + (process.env.OTHERBENCH_TOKEN ?? 'none') + ']')"` },
         ctx()
       )) as Record<string, unknown>;
       expect(result.exitCode).toBe(0);
       expect(result.output).toContain('[none]');
       expect(result.output).not.toContain('leaked-token-value');
     } finally {
-      if (before === undefined) delete process.env['GRUNT_TOKEN'];
-      else process.env['GRUNT_TOKEN'] = before;
+      if (before === undefined) delete process.env['OTHERBENCH_TOKEN'];
+      else process.env['OTHERBENCH_TOKEN'] = before;
     }
   });
 
@@ -151,7 +151,7 @@ describe('run_command', () => {
   it(
     'kills a sleeping command (and its child process) once the timeout elapses',
     async () => {
-      const marker = `grunt-shell-tool-test-${randomUUID()}`;
+      const marker = `otherbench-shell-tool-test-${randomUUID()}`;
       const result = (await runCommandTool.execute(
         { command: `node -e "/*${marker}*/ setTimeout(()=>{}, 30000)"`, timeoutMs: 200 },
         ctx()
@@ -174,7 +174,7 @@ describe('run_command', () => {
   it(
     'kills the running command when the tool context signal aborts',
     async () => {
-      const marker = `grunt-shell-tool-abort-test-${randomUUID()}`;
+      const marker = `otherbench-shell-tool-abort-test-${randomUUID()}`;
       const controller = new AbortController();
       const promise = runCommandTool.execute(
         { command: `node -e "/*${marker}*/ setTimeout(()=>{}, 30000)"` },

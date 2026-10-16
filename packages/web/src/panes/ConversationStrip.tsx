@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState, type JSX } from 'react';
-import { activePath, childrenOf, extendToTip } from '@grunt/core/domain/tree.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { activePath, childrenOf, extendToTip } from '@otherbench/core/domain/tree.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { PinIcon } from '../components/icons.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { streamStatusText } from '../state/machines.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 const OUTLINE_USER_CHARS = 60;
 const OUTLINE_REPLY_CHARS = 80;
-export const OUTLINE_OPEN_KEY = 'grunt.outlineOpen';
+export const OUTLINE_OPEN_KEY = 'otherbench.outlineOpen';
 
 /** Text parts only, whitespace collapsed to one line, cut to `max` chars with an ellipsis. */
 function oneLine(message: CanonMessage, max: number): string {
@@ -54,11 +54,11 @@ export interface ConversationStripProps {
 }
 
 export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX.Element {
-  const messages = useGruntStore((s) => s.messages);
-  const streamStatus = useGruntStore((s) => s.streamStatus);
-  const machines = useGruntStore((s) => s.machines);
-  const overlayOpen = useGruntStore((s) => s.inspectorOverlayOpen);
-  const setOverlayOpen = useGruntStore((s) => s.setInspectorOverlayOpen);
+  const messages = useOtherBenchStore((s) => s.messages);
+  const streamStatus = useOtherBenchStore((s) => s.streamStatus);
+  const machines = useOtherBenchStore((s) => s.machines);
+  const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
+  const setOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const [open, setOpen] = useState(readOpen);
   const [pinError, setPinError] = useState<string | null>(null);
@@ -102,7 +102,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
     try {
       await setChatPinned(chat.id, pinned);
     } catch (err) {
-      console.error(`[grunt-web] failed to ${pinned ? 'pin' : 'unpin'} chat ${chat.id}:`, err);
+      console.error(`[otherbench-web] failed to ${pinned ? 'pin' : 'unpin'} chat ${chat.id}:`, err);
       setPinError(pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat");
     }
   }

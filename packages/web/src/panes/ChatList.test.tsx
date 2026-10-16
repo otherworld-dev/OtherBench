@@ -1,8 +1,8 @@
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 const desktopListeners = new Map<string, () => void>();
 const unlisten = vi.fn();
@@ -33,7 +33,7 @@ import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api } from '../state/api.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed } from '../state/sidebarGroups.js';
 import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ChatList } from './ChatList.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { PROJECT_DRAG_MIME } from './sidebar/ProjectGroup.js';
@@ -117,8 +117,8 @@ function dataTransfer(chatId: string | null) {
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ profiles: [profile] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ profiles: [profile] });
   desktopListeners.clear();
   window.localStorage.clear();
   resetSidebarGroupsForTests();
@@ -126,9 +126,9 @@ beforeEach(() => {
   mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'linux' });
   // Like the server: PATCH returns the stored row with the body applied.
   // (These tests never patch folders, whose entries a server would store in another shape.)
-  mockedPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().chats.find((c) => c.id === id)!, ...body }) as Chat);
-  mockedProjectPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().projects.find((p) => p.id === id)!, ...body }) as Project);
-  mockedProjectList.mockImplementation(async () => useGruntStore.getState().projects);
+  mockedPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().chats.find((c) => c.id === id)!, ...body }) as Chat);
+  mockedProjectPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().projects.find((p) => p.id === id)!, ...body }) as Project);
+  mockedProjectList.mockImplementation(async () => useOtherBenchStore.getState().projects);
 });
 
 afterEach(() => {
@@ -144,12 +144,12 @@ describe('ChatList desktop integration', () => {
 
     desktopListeners.get('tray-new-chat')!();
 
-    await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('chat-new'));
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('chat-new'));
     expect(mockedCreate).toHaveBeenCalledWith({ profileId: 'profile-1' });
   });
 
   it('skips archived profiles when picking the app default profile', async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       profiles: [
         { ...profile, id: 'old-default', isDefault: true, archivedAt: 9 },
         { ...profile, id: 'live', isDefault: false },
@@ -174,7 +174,7 @@ describe('ChatList desktop integration', () => {
 
 describe('ChatList groups', () => {
   it('shows Pinned, then projects by sortOrder and name, then No project; pinned chats only under Pinned; archived nowhere', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 }), makeProject({ id: 'p-a', name: 'alpha', sortOrder: 1 }), makeProject({ id: 'p-z', name: 'Zed' })],
       chats: [
         makeChat({ id: 'c1', projectId: 'p-a' }),
@@ -198,7 +198,7 @@ describe('ChatList groups', () => {
   });
 
   it("names a pinned chat's project in Pinned only, and none for a chat with no project", () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
         makeChat({ id: 'c1', projectId: 'p-a', pinned: true }),
@@ -216,7 +216,7 @@ describe('ChatList groups', () => {
 
   it('collapses a group from its arrow, remembers it across a remount, and keeps aria-expanded in step', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
     const { unmount } = render(<ChatList />);
 
     const arrow = screen.getByRole('button', { name: 'Collapse Alpha' });
@@ -235,20 +235,20 @@ describe('ChatList groups', () => {
 
   it("opens a project's page as a tab from its name, leaving the group as it was", async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
     render(<ChatList />);
 
     await user.click(screen.getByRole('button', { name: /^Alpha/ }));
 
-    expect(useGruntStore.getState().paneState.tabs).toContain('project:p-a');
-    expect(useGruntStore.getState().activeChatId).toBe('project:p-a');
+    expect(useOtherBenchStore.getState().paneState.tabs).toContain('project:p-a');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('project:p-a');
     expect(screen.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
   });
 
   it("a project's + creates a chat with only its projectId, opens it, and expands the group if it was collapsed (review focus 1)", async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha', workspace: null, workspaceRoot: '/w' })] });
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha', workspace: null, workspaceRoot: '/w' })] });
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-a']));
     mockedCreate.mockResolvedValue(makeChat({ id: 'c-new', projectId: 'p-a', workspaceRoot: '/w' }));
     render(<ChatList />);
@@ -256,7 +256,7 @@ describe('ChatList groups', () => {
     await user.click(screen.getByRole('button', { name: 'New chat in Alpha' }));
 
     expect(mockedCreate).toHaveBeenCalledWith({ projectId: 'p-a' });
-    await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c-new'));
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c-new'));
     expect(screen.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
     expect(rowIds('group-p-a')).toEqual(['c-new']);
   });
@@ -275,7 +275,7 @@ describe('ChatList groups', () => {
 
   it('searching filters every group, hides groups without a match, and shows collapsed groups expanded', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' }), makeProject({ id: 'p-b', name: 'Beta' })],
       chats: [makeChat({ id: 'c1', projectId: 'p-a' }), makeChat({ id: 'c2', projectId: 'p-b' }), makeChat({ id: 'c3' })],
     });
@@ -297,7 +297,7 @@ describe('ChatList groups', () => {
 
   it('clearing the search while a search is in flight shows the full list (review focus 2)', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'c2' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'c2' })] });
     let resolveSearch!: (results: { chatId: string }[]) => void;
     mockedSearch.mockImplementation(() => new Promise((resolve) => (resolveSearch = resolve)));
     render(<ChatList />);
@@ -314,7 +314,7 @@ describe('ChatList groups', () => {
     const user = userEvent.setup();
     render(<ChatList />);
     await user.click(screen.getByRole('button', { name: 'New project' }));
-    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'create' });
+    expect(useOtherBenchStore.getState().projectPage).toEqual({ mode: 'create' });
     expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull();
     expect(mockedProjectCreate).not.toHaveBeenCalled();
   });
@@ -323,7 +323,7 @@ describe('ChatList groups', () => {
 
 describe('ChatList status dots', () => {
   it('marks chats with a reply ready, replying or waiting for an approval, and each group heading by its most urgent chat', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
         makeChat({ id: 'ready', unread: true }),
@@ -348,8 +348,8 @@ describe('ChatList status dots', () => {
 
   it('shows no ready dot on a chat that is on screen in a focused window: it is being read', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
-    useGruntStore.setState({ chats: [makeChat({ id: 'open', unread: true }), makeChat({ id: 'other', unread: true })] });
-    useGruntStore.getState().setActiveChatId('open');
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'open', unread: true }), makeChat({ id: 'other', unread: true })] });
+    useOtherBenchStore.getState().setActiveChatId('open');
     render(<ChatList />);
 
     expect(screen.queryByTestId('chat-status-open')).toBeNull();
@@ -360,7 +360,7 @@ describe('ChatList status dots', () => {
 
 describe('ChatList pin button', () => {
   it('pins from the row, moving the chat under Pinned, with no marker there', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
     expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: true });
@@ -370,7 +370,7 @@ describe('ChatList pin button', () => {
   });
 
   it('refocuses the moved row without scrolling the list to it', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
@@ -380,7 +380,7 @@ describe('ChatList pin button', () => {
   });
 
   it('says so when pinning fails', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     mockedPatch.mockRejectedValueOnce(new ApiError(500, 'disk full'));
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
@@ -388,8 +388,8 @@ describe('ChatList pin button', () => {
   });
 
   it('archived rows have no pin button, and show the marker when they were pinned', () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Old', archivedAt: 5, pinned: true })] });
-    window.localStorage.setItem('grunt.showArchived', 'true');
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'Old', archivedAt: 5, pinned: true })] });
+    window.localStorage.setItem('otherbench.showArchived', 'true');
     render(<ChatList />);
     const row = screen.getByTestId('chat-row-c1');
     expect(within(row).queryByRole('button', { name: /pin chat/i })).toBeNull();
@@ -399,7 +399,7 @@ describe('ChatList pin button', () => {
 
 describe('ChatList drag and drop', () => {
   beforeEach(() => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [makeChat({ id: 'c1' }), makeChat({ id: 'c2', projectId: 'p-a' })],
     });
@@ -475,7 +475,7 @@ describe('ChatList drag and drop', () => {
   });
 
   it('has no drop zone while something is already pinned', () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'p', pinned: true })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'p', pinned: true })] });
     render(<ChatList />);
     fireEvent.dragStart(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
     expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
@@ -491,7 +491,7 @@ describe('ChatList drag and drop', () => {
   });
 
   it('a pinned chat dropped on a project joins it but stays under Pinned, and the project count goes up', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', pinned: true })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', pinned: true })] });
     render(<ChatList />);
     expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('0');
 
@@ -505,7 +505,7 @@ describe('ChatList drag and drop', () => {
 
 describe('ChatList chat menu', () => {
   function setup() {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }), makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 })],
       chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' }), makeChat({ id: 'c2', title: 'Second' })],
       activeChatId: 'c1',
@@ -598,7 +598,7 @@ describe('ChatList chat menu', () => {
     await user.clear(input);
     await user.type(input, 'Mine');
 
-    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, title: 'Auto title' }));
+    act(() => useOtherBenchStore.getState().upsertChat({ ...useOtherBenchStore.getState().chats.find((c) => c.id === 'c1')!, title: 'Auto title' }));
 
     expect(input).toHaveValue('Mine');
     await user.keyboard('{Enter}');
@@ -609,14 +609,14 @@ describe('ChatList chat menu', () => {
     setup();
     fireEvent.contextMenu(row('First'));
 
-    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
+    act(() => useOtherBenchStore.getState().upsertChat({ ...useOtherBenchStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
 
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
   });
 
   it('Pin in project keeps the chat at the top of its project, marked, and the menu then offers Unpin from project', async () => {
     const user = setup();
-    act(() => useGruntStore.setState({ chats: [...useGruntStore.getState().chats, makeChat({ id: 'c3', title: 'Third', projectId: 'p-a', sortOrder: 50 })] }));
+    act(() => useOtherBenchStore.setState({ chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'c3', title: 'Third', projectId: 'p-a', sortOrder: 50 })] }));
     expect(rowIds('group-p-a')).toEqual(['c3', 'c1']);
     fireEvent.contextMenu(row('First'));
     await user.click(screen.getByRole('menuitem', { name: 'Pin in project' }));
@@ -674,15 +674,15 @@ describe('ChatList chat menu', () => {
 
     expect(mockedPatch).toHaveBeenCalledWith('c1', expect.objectContaining({ projectId: 'p-b' }));
     await waitFor(() => expect(rowIds('group-p-b')).toEqual(['c1']));
-    expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
+    expect(useOtherBenchStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
   });
 
   it('Open in new tab adds the chat as a tab and shows it; once open the item reads Go to tab (#824)', async () => {
     const user = setup();
     fireEvent.contextMenu(row('First'));
     await user.click(screen.getByRole('menuitem', { name: 'Open in new tab' }));
-    expect(useGruntStore.getState().paneState.tabs).toEqual(['c1']);
-    expect(useGruntStore.getState().activeChatId).toBe('c1');
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c1']);
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
 
     fireEvent.contextMenu(row('First'));
     expect(screen.getByRole('menuitem', { name: 'Go to tab' })).toBeInTheDocument();
@@ -701,7 +701,7 @@ describe('ChatList chat menu', () => {
   });
 
   it('a chat whose project no longer exists shows under No project; its menu marks No project, and choosing it cleans up (review focus 5)', async () => {
-    useGruntStore.setState({ projects: [], chats: [makeChat({ id: 'c9', title: 'Orphan', projectId: 'gone' })] });
+    useOtherBenchStore.setState({ projects: [], chats: [makeChat({ id: 'c9', title: 'Orphan', projectId: 'gone' })] });
     render(<ChatList />);
     const user = userEvent.setup();
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c9']);
@@ -722,7 +722,7 @@ describe('ChatList chat menu', () => {
 
     expect(mockedPatch).toHaveBeenCalledWith('c1', { archivedAt: expect.any(Number) });
     await waitFor(() => expect(screen.queryByTestId('chat-row-c1')).toBeNull());
-    expect(useGruntStore.getState().activeChatId).toBeNull();
+    expect(useOtherBenchStore.getState().activeChatId).toBeNull();
   });
 
   it('Delete… asks first: Cancel keeps the chat and refocuses its row, Delete removes it', async () => {
@@ -745,13 +745,13 @@ describe('ChatList chat menu', () => {
     expect(mockedDelete).toHaveBeenCalledWith('c1');
     await waitFor(() => expect(screen.queryByTestId('chat-row-c1')).toBeNull());
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(useGruntStore.getState().activeChatId).toBeNull();
+    expect(useOtherBenchStore.getState().activeChatId).toBeNull();
   });
 });
 
 describe('ChatList chat menu focus and unarchive (R4)', () => {
   it('Esc with the opener row hidden (its group collapsed) falls back to the chat list', async () => {
-    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' })] });
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' })] });
     render(<ChatList />);
     const user = userEvent.setup();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
@@ -763,19 +763,19 @@ describe('ChatList chat menu focus and unarchive (R4)', () => {
   });
 
   it('a chat deleted elsewhere closes its open menu and leaves focus in the list', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     render(<ChatList />);
     fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
 
-    act(() => useGruntStore.getState().removeChat('c1'));
+    act(() => useOtherBenchStore.getState().removeChat('c1'));
 
     expect(screen.queryByRole('menu')).toBeNull();
     await waitFor(() => expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveFocus());
   });
 
   it('after Delete, focus lands on a neighbouring row', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' }), makeChat({ id: 'c2', title: 'Second' })], activeChatId: null });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' }), makeChat({ id: 'c2', title: 'Second' })], activeChatId: null });
     mockedDelete.mockResolvedValue(undefined);
     render(<ChatList />);
     const user = userEvent.setup();
@@ -787,11 +787,11 @@ describe('ChatList chat menu focus and unarchive (R4)', () => {
   });
 
   it('Unpin sends pinned: false even if the chat was pinned after the menu opened', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     render(<ChatList />);
     const user = userEvent.setup();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
-    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
+    act(() => useOtherBenchStore.getState().upsertChat({ ...useOtherBenchStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
     await user.click(screen.getByRole('menuitem', { name: 'Unpin' }));
     expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: false });
   });
@@ -819,7 +819,7 @@ describe('ChatList + New project focus (Task 9 carry-over)', () => {
 
 describe('ChatList project menu', () => {
   function setup() {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       profiles: [profile, { ...profile, id: 'profile-2', name: 'Coder', isDefault: false }, { ...profile, id: 'profile-old', name: 'Old', isDefault: false, archivedAt: 9 }],
       projects: [makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }), makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 })],
       chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' })],
@@ -879,7 +879,7 @@ describe('ChatList project menu', () => {
     const user = setup();
     await user.click(actions('p-a'));
     await user.click(screen.getByRole('menuitem', { name: 'Project settings…' }));
-    expect(useGruntStore.getState().projectPage).toEqual({
+    expect(useOtherBenchStore.getState().projectPage).toEqual({
       mode: 'edit',
       projectId: 'p-a',
       returnFocus: '[data-testid="group-heading-p-a"] [data-heading-main]',
@@ -934,7 +934,7 @@ describe('ChatList project menu', () => {
 
 describe('ChatList archived section', () => {
   function setup() {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
         makeChat({ id: 'c1', title: 'Live', projectId: 'p-a', updatedAt: 10 }),
@@ -952,7 +952,7 @@ describe('ChatList archived section', () => {
       .map((el) => el.getAttribute('data-testid')!.slice('chat-row-'.length));
 
   it('has no toggle when nothing is archived', () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1' })] });
     render(<ChatList />);
     expect(screen.queryByRole('button', { name: /archived/ })).toBeNull();
   });
@@ -975,7 +975,7 @@ describe('ChatList archived section', () => {
   it('remembers the open state per device', async () => {
     const user = setup();
     await user.click(toggle());
-    expect(window.localStorage.getItem('grunt.showArchived')).toBe('true');
+    expect(window.localStorage.getItem('otherbench.showArchived')).toBe('true');
 
     cleanup();
     render(<ChatList />);
@@ -987,7 +987,7 @@ describe('ChatList archived section', () => {
     const user = setup();
     await user.click(toggle());
     await user.click(screen.getByRole('button', { name: 'Old one' }));
-    expect(useGruntStore.getState().activeChatId).toBe('c2');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c2');
 
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Old one' }));
     expect(screen.getByRole('menuitem', { name: 'Unarchive' })).toBeInTheDocument();
@@ -1023,7 +1023,7 @@ describe('ChatList reordering (#823)', () => {
   beforeEach(() => {
     // No project starts sorted by recent activity, where rows don't reorder.
     setGroupSort(NO_PROJECT_KEY, 'manual');
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
         makeChat({ id: 'a', sortOrder: 30 }),
@@ -1082,8 +1082,8 @@ describe('ChatList reordering (#823)', () => {
   });
 
   it("dropping a chat among a project's pinned chats pins it there, and dropping it back among the rest unpins it", async () => {
-    useGruntStore.setState({
-      chats: [...useGruntStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 }), makeChat({ id: 'y', projectId: 'p-a', sortOrder: 8 })],
+    useOtherBenchStore.setState({
+      chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 }), makeChat({ id: 'y', projectId: 'p-a', sortOrder: 8 })],
     });
     render(<ChatList />);
     expect(rowIds('group-p-a')).toEqual(['kept', 'y', 'x']);
@@ -1098,7 +1098,7 @@ describe('ChatList reordering (#823)', () => {
   });
 
   it('dropping a chat from another group among a project\'s pinned chats moves and pins it in one PATCH', async () => {
-    useGruntStore.setState({ chats: [...useGruntStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 })] });
+    useOtherBenchStore.setState({ chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 })] });
     render(<ChatList />);
     dropOnRow('a', 'kept', 'top');
     expect(mockedPatch).toHaveBeenLastCalledWith('a', { sortOrder: 3, projectPinned: true, projectId: 'p-a' });
@@ -1138,7 +1138,7 @@ describe('ChatList reordering (#823)', () => {
 
   it('a failed reorder says so and reloads the server order', async () => {
     mockedPatch.mockRejectedValueOnce(new Error('down'));
-    mockedChatList.mockResolvedValue(useGruntStore.getState().chats);
+    mockedChatList.mockResolvedValue(useOtherBenchStore.getState().chats);
     render(<ChatList />);
     dropOnRow('c', 'a', 'top');
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't move the chat");
@@ -1148,7 +1148,7 @@ describe('ChatList reordering (#823)', () => {
 
 describe('ChatList export (#820)', () => {
   beforeEach(() => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Trip: plans' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'Trip: plans' })] });
     mockedSaveFile.mockReset();
   });
 
@@ -1199,7 +1199,7 @@ describe('ChatList footer row', () => {
 describe('ChatList long groups', () => {
   /** Twelve chats in project Alpha, c0 at the top by hand. */
   function seedAlpha(extra: Partial<Chat> = {}): void {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: Array.from({ length: 12 }, (_, i) => makeChat({ id: `c${i}`, projectId: 'p-a', sortOrder: 100 - i, ...extra })),
     });
@@ -1223,7 +1223,7 @@ describe('ChatList long groups', () => {
 
   it('keeps the open chat in view past the cap', () => {
     seedAlpha();
-    useGruntStore.setState({ activeChatId: 'c11' });
+    useOtherBenchStore.setState({ activeChatId: 'c11' });
     render(<ChatList />);
     expect(rowIds('group-p-a')).toEqual([...Array.from({ length: 10 }, (_, i) => `c${i}`), 'c11']);
     expect(screen.getByRole('button', { name: 'Show 1 more' })).toBeInTheDocument();
@@ -1244,7 +1244,7 @@ describe('ChatList sorting by recent activity', () => {
 
   beforeEach(() => {
     const now = Date.now();
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
         makeChat({ id: 'old', projectId: 'p-a', sortOrder: 30, updatedAt: now - 40 * 24 * hour }),
@@ -1270,7 +1270,7 @@ describe('ChatList sorting by recent activity', () => {
     await user.click(within(screen.getByTestId('group-heading-p-a')).getByRole('button', { name: 'Project actions' }));
     await user.click(screen.getByRole('menuitem', { name: 'Sort by recent activity' }));
     expect(rowIds('group-p-a')).toEqual(['new', 'old']);
-    expect(window.localStorage.getItem('grunt.groupSort')).toBe(JSON.stringify({ 'p-a': 'recent' }));
+    expect(window.localStorage.getItem('otherbench.groupSort')).toBe(JSON.stringify({ 'p-a': 'recent' }));
 
     await user.click(within(screen.getByTestId('group-heading-p-a')).getByRole('button', { name: 'Project actions' }));
     await user.click(screen.getByRole('menuitem', { name: 'Sort manually' }));
@@ -1307,7 +1307,7 @@ describe('ChatList search and filter chips', () => {
   it('finds a chat by its title at once, and adds message-text hits when the server answers', async () => {
     let resolveSearch!: (results: { chatId: string }[]) => void;
     mockedSearch.mockImplementation(() => new Promise((resolve) => (resolveSearch = resolve)));
-    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Sidebar overflow' }), makeChat({ id: 'c2', title: 'Other' }), makeChat({ id: 'c3', title: 'Third' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'Sidebar overflow' }), makeChat({ id: 'c2', title: 'Other' }), makeChat({ id: 'c3', title: 'Third' })] });
     render(<ChatList />);
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'OVERFLOW side' } });
@@ -1320,7 +1320,7 @@ describe('ChatList search and filter chips', () => {
 
   it('Unread / working keeps only chats with a status, and the open chat', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       chats: [makeChat({ id: 'ready', unread: true }), makeChat({ id: 'quiet' }), makeChat({ id: 'open' })],
       activeChatId: 'open',
     });
@@ -1337,7 +1337,7 @@ describe('ChatList search and filter chips', () => {
   });
 
   it('says so when the chips match nothing', async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'quiet' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'quiet' })] });
     render(<ChatList />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Unread / working' }));
     expect(screen.getByText('No chats match these filters.')).toBeInTheDocument();
@@ -1345,17 +1345,17 @@ describe('ChatList search and filter chips', () => {
 
   it('offers the Machine chip only with a paired machine, and keeps the chats that run on the one picked', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ chats: [makeChat({ id: 'here', runsOn: 'node-self' }), makeChat({ id: 'there', runsOn: 'node-lap' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'here', runsOn: 'node-self' }), makeChat({ id: 'there', runsOn: 'node-lap' })] });
     render(<ChatList />);
     expect(screen.queryByRole('combobox', { name: 'Machine' })).toBeNull();
 
     act(() =>
-      useGruntStore.setState({
+      useOtherBenchStore.setState({
         machines: {
           self: { id: 'node-self', name: 'Desk', fingerprint: 'f' },
           listening: { running: true, addresses: [] },
           peers: [{ nodeId: 'node-lap', name: 'Laptop', status: 'reachable' }],
-        } as unknown as NonNullable<ReturnType<typeof useGruntStore.getState>['machines']>,
+        } as unknown as NonNullable<ReturnType<typeof useOtherBenchStore.getState>['machines']>,
       })
     );
     const select = screen.getByRole('combobox', { name: 'Machine' });
@@ -1370,9 +1370,9 @@ describe('ChatList search and filter chips', () => {
 
 describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', () => {
   beforeEach(() => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [
-        makeProject({ id: 'p-g', name: 'Grunt', sortOrder: 0 }),
+        makeProject({ id: 'p-g', name: 'OtherBench', sortOrder: 0 }),
         makeProject({ id: 'p-d', name: 'Desktop', parentId: 'p-g', sortOrder: 0 }),
         makeProject({ id: 'p-s', name: 'Sync', parentId: 'p-g', sortOrder: 1 }),
         makeProject({ id: 'p-x', name: 'PhD', sortOrder: 1 }),
@@ -1396,7 +1396,7 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
 
   it('collapsing the parent hides its sub-projects too', async () => {
     render(<ChatList />);
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Collapse Grunt' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Collapse OtherBench' }));
     expect(screen.queryByTestId('group-p-d')).toBeNull();
     expect(screen.getByTestId('group-count-p-g')).toHaveTextContent('3');
   });
@@ -1413,7 +1413,7 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     render(<ChatList />);
     await user.click(within(screen.getByTestId('group-heading-p-g')).getByRole('button', { name: 'Project actions' }));
     await user.click(screen.getByRole('menuitem', { name: 'New sub-project…' }));
-    expect(useGruntStore.getState().projectPage).toMatchObject({ mode: 'create', parentId: 'p-g' });
+    expect(useOtherBenchStore.getState().projectPage).toMatchObject({ mode: 'create', parentId: 'p-g' });
 
     await user.click(within(screen.getByTestId('group-heading-p-d')).getByRole('button', { name: 'Project actions' }));
     expect(screen.queryByRole('menuitem', { name: 'New sub-project…' })).toBeNull();
@@ -1454,14 +1454,14 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
   });
 
   it("names a pinned chat's sub-project after its parent, and lists sub-projects indented in Move to project…", async () => {
-    useGruntStore.setState({ chats: [makeChat({ id: 'pin', projectId: 'p-d', pinned: true })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'pin', projectId: 'p-d', pinned: true })] });
     render(<ChatList />);
-    expect(within(screen.getByTestId('chat-row-pin')).getByTestId('row-project-name')).toHaveTextContent('Grunt / Desktop');
+    expect(within(screen.getByTestId('chat-row-pin')).getByTestId('row-project-name')).toHaveTextContent('OtherBench / Desktop');
 
     fireEvent.contextMenu(screen.getByTestId('chat-row-pin').querySelector('[data-row-main]')!);
     await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Move to project…' }));
     const items = screen.getAllByRole('menuitemradio');
-    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['Grunt', 'Desktop', 'Sync', 'PhD', 'No project']);
+    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['OtherBench', 'Desktop', 'Sync', 'PhD', 'No project']);
     // Sub-projects sit one step in.
     expect(items.map((i) => i.querySelector('.pl-3') !== null)).toEqual([false, true, true, false, false]);
   });
@@ -1469,7 +1469,7 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
 
 describe('ChatList dragging project headings', () => {
   beforeEach(() => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [
         makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }),
         makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 }),
@@ -1530,7 +1530,7 @@ describe('ChatList dragging project headings', () => {
 
     expect(nameOf('p-a')).toHaveAttribute('draggable', 'true');
     // A search hides groups without a match, so give Alpha one.
-    act(() => useGruntStore.setState({ chats: [makeChat({ id: 'c-alpha', title: 'Alpha notes', projectId: 'p-a' })] }));
+    act(() => useOtherBenchStore.setState({ chats: [makeChat({ id: 'c-alpha', title: 'Alpha notes', projectId: 'p-a' })] }));
     mockedSearch.mockResolvedValue([]);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'Alpha' } });
     await waitFor(() => expect(nameOf('p-a')).toHaveAttribute('draggable', 'false'));

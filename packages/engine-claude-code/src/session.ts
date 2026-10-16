@@ -1,4 +1,4 @@
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 export type SessionPlan = { mode: 'continue'; sessionId: string } | { mode: 'fresh' };
 
@@ -32,14 +32,14 @@ export function samePath(a: string, b: string): boolean {
  * message directly above the new user message (spec §2, as amended by R12):
  *  - same backend + workspace, and that message is the session's tip and not
  *    claimed by an in-flight turn -> continue in place;
- *  - anything else -> a fresh session seeded with Grunt's history.
+ *  - anything else -> a fresh session seeded with OtherBench's history.
  *
  * There is deliberately no "resume with fork" mode. Sessions are continued in
  * place, so once a message stops being its session's tip the session also
  * holds turns from other branches (a retried errored reply, the reply an edit
  * replaced, a compare sibling's turn). `forkSession` copies the WHOLE session,
  * so a fork would hand the model that other branch's history. A fresh session
- * seeded from Grunt's own branch history is always correct.
+ * seeded from OtherBench's own branch history is always correct.
  */
 export function pickSession(input: {
   history: CanonMessage[];

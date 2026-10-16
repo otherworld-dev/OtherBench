@@ -1,5 +1,5 @@
 {
-  "name": "@grunt/tools",
+  "name": "@otherbench/tools",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@grunt/core": "*",
+    "@otherbench/core": "*",
     "@modelcontextprotocol/sdk": "1.30.0",
     "playwright-core": "1.62.1",
     "zod": "^4.4.3"

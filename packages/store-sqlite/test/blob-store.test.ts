@@ -10,7 +10,7 @@ let root: string;
 let store: BlobStore;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-blob-store-test-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-blob-store-test-'));
   root = join(dir, 'attachments');
   store = createBlobStore(root);
 });
@@ -233,7 +233,7 @@ describe('resolveAttachmentsRoots', () => {
   // `:memory:` calls create a REAL temp directory on disk (mkdtempSync) --
   // tracked and removed here so this suite doesn't itself leave orphans
   // under %TEMP%/$TMPDIR (task 32 fix round 2, Minor #2: this is exactly
-  // how the reported 28 stray `grunt-attachments-*` directories accumulated
+  // how the reported 28 stray `otherbench-attachments-*` directories accumulated
   // in the first place).
   const createdTempRoots: string[] = [];
   function trackMemoryRoots(roots: { writeRoot: string; isTemporary: boolean }): typeof roots {
@@ -246,12 +246,12 @@ describe('resolveAttachmentsRoots', () => {
   });
 
   it('derives <dir>/<full-basename>.attachments/ for a file database, from the database\'s ENTIRE basename (extension included)', () => {
-    const dbPath = join(dir, 'grunt.db');
+    const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');
 
     const roots = resolveAttachmentsRoots(dbPath, secretsPath);
 
-    expect(roots.writeRoot).toBe(join(dir, 'grunt.db.attachments'));
+    expect(roots.writeRoot).toBe(join(dir, 'otherbench.db.attachments'));
     expect(roots.isTemporary).toBe(false);
   });
 
@@ -268,7 +268,7 @@ describe('resolveAttachmentsRoots', () => {
 
   // Task 32 fix round 2, Critical #1: an earlier version stripped the
   // extension before appending ".attachments", so `main.db` and
-  // `main.bak` (or `grunt` and `grunt.db`) collided on the exact same
+  // `main.bak` (or `otherbench` and `otherbench.db`) collided on the exact same
   // `<stem>.attachments/` -- reproduced live: two such databases opened
   // side by side, each one's sweep deleted the other's blobs. The full
   // basename never collides between two distinct filenames, because the
@@ -278,15 +278,15 @@ describe('resolveAttachmentsRoots', () => {
 
     const withBak = resolveAttachmentsRoots(join(dir, 'main.bak'), secretsPath);
     const withDb = resolveAttachmentsRoots(join(dir, 'main.db'), secretsPath);
-    const noExt = resolveAttachmentsRoots(join(dir, 'grunt'), secretsPath);
-    const withExt = resolveAttachmentsRoots(join(dir, 'grunt.db'), secretsPath);
+    const noExt = resolveAttachmentsRoots(join(dir, 'otherbench'), secretsPath);
+    const withExt = resolveAttachmentsRoots(join(dir, 'otherbench.db'), secretsPath);
 
     expect(withBak.writeRoot).not.toBe(withDb.writeRoot);
     expect(noExt.writeRoot).not.toBe(withExt.writeRoot);
     expect(withBak.writeRoot).toBe(join(dir, 'main.bak.attachments'));
     expect(withDb.writeRoot).toBe(join(dir, 'main.db.attachments'));
-    expect(noExt.writeRoot).toBe(join(dir, 'grunt.attachments'));
-    expect(withExt.writeRoot).toBe(join(dir, 'grunt.db.attachments'));
+    expect(noExt.writeRoot).toBe(join(dir, 'otherbench.attachments'));
+    expect(withExt.writeRoot).toBe(join(dir, 'otherbench.db.attachments'));
   });
 
   // Minor #5: a database literally named `foo.attachments` used to get a
@@ -347,8 +347,8 @@ describe('resolveAttachmentsRoots', () => {
   it('handles a database file with no extension', () => {
     const secretsPath = join(dir, 'secrets.json');
 
-    const roots = resolveAttachmentsRoots(join(dir, 'grunt'), secretsPath);
+    const roots = resolveAttachmentsRoots(join(dir, 'otherbench'), secretsPath);
 
-    expect(roots.writeRoot).toBe(join(dir, 'grunt.attachments'));
+    expect(roots.writeRoot).toBe(join(dir, 'otherbench.attachments'));
   });
 });

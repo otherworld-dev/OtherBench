@@ -14,7 +14,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-password-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-password-'));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });

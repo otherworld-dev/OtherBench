@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { openSite } from '../desktop/bridge.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { FileTree } from './FileTree.js';
 import { ItemView } from './ItemView.js';
 import { itemKey, viewTabId } from './items.js';
@@ -20,7 +20,7 @@ const BAR_BUTTON = 'rounded px-1.5 py-0.5 text-xs text-[var(--text-muted)] hover
 export function ViewerPanel({ chat, browserUsed = false }: { chat: Chat; browserUsed?: boolean }): JSX.Element {
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat.id));
   const { openItem, setOpen, setMode, step } = useViewerStore.getState();
-  const openTab = useGruntStore((s) => s.openTab);
+  const openTab = useOtherBenchStore((s) => s.openTab);
   const [address, setAddress] = useState('');
   const current = viewer.index >= 0 ? viewer.history[viewer.index] : undefined;
   const showingItem = viewer.mode === 'item' && current !== undefined;

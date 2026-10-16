@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { SignInError } from '@grunt/tools/mcp/sign-in.js';
+import { SignInError } from '@otherbench/tools/mcp/sign-in.js';
 import type { Container } from '../container.js';
 
 /** The redirect host: always loopback (spec 2026-10-12-mcp-oauth-design, "Redirect address"). If real providers refuse the IP literal, this one constant becomes 'localhost'. */
@@ -22,8 +22,8 @@ export function rethrowSignInError(err: unknown): never {
  */
 function rethrowSafely(serverId: string, err: unknown): never {
   if (err instanceof SignInError) return rethrowSignInError(err);
-  console.error(`[grunt-server] MCP sign-in for ${serverId} failed: ${err instanceof Error ? err.name : 'unknown error'}`);
-  throw new HTTPException(502, { message: "Couldn't sign in: something went wrong in Grunt. Start it again." });
+  console.error(`[otherbench-server] MCP sign-in for ${serverId} failed: ${err instanceof Error ? err.name : 'unknown error'}`);
+  throw new HTTPException(502, { message: "Couldn't sign in: something went wrong in OtherBench. Start it again." });
 }
 
 function requireServer(container: Container, id: string): void {
@@ -46,7 +46,7 @@ export function mcpSignInRoutes(container: Container, redirectUri: () => string 
     const id = c.req.param('id');
     requireServer(container, id);
     const uri = redirectUri();
-    if (!uri) throw new HTTPException(503, { message: "Grunt doesn't know which port it's on yet, so it can't sign in." });
+    if (!uri) throw new HTTPException(503, { message: "OtherBench doesn't know which port it's on yet, so it can't sign in." });
     try {
       return c.json(await container.mcpManager.startSignIn(id, uri));
     } catch (err) {

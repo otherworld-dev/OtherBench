@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { NodeRepo } from '@grunt/core/ports/store.js';
-import type { NodeInfo } from '@grunt/core/types/workspace.js';
+import type { NodeRepo } from '@otherbench/core/ports/store.js';
+import type { NodeInfo } from '@otherbench/core/types/workspace.js';
 
 /** This machine's identity (`node_self`, created once by migration 011). */
 export class SqliteNodeRepo implements NodeRepo {

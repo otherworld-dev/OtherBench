@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { latestTodos } from '@grunt/core/domain/thread-tools.js';
-import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import { pathForCard } from '@grunt/core/domain/computer-apps.js';
-import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { latestTodos } from '@otherbench/core/domain/thread-tools.js';
+import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import { pathForCard } from '@otherbench/core/domain/computer-apps.js';
+import type { AuditEntry, Chat, Grant } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { usePolled } from '../lib/usePolled.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
 import { alsoActive } from '../state/machines.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
@@ -34,7 +34,7 @@ function EmptyState({ children }: { children: ReactNode }): JSX.Element {
 
 /** Running replies' checklists (spec 2026-10-12-thread-cards-design §7); the section exists only while one is running with a checklist. */
 function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const messages = useGruntStore((s) => s.messages);
+  const messages = useOtherBenchStore((s) => s.messages);
   const running = useMemo(
     () =>
       Object.values(messages)
@@ -110,8 +110,8 @@ function folderName(path: string): string {
 
 /** Where this chat's turns run (v2 spec §5): this machine or a paired one, atop the Workspace section. Hidden until a machine is paired. */
 function RunsOn({ chat }: { chat: Chat }): JSX.Element | null {
-  const machines = useGruntStore((s) => s.machines);
-  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const machines = useOtherBenchStore((s) => s.machines);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
   const [error, setError] = useState<string | null>(null);
   if (!machines || machines.peers.length === 0) return null;
   const known = chat.runsOn === machines.self.id || machines.peers.some((p) => p.nodeId === chat.runsOn);
@@ -160,10 +160,10 @@ function RunsOn({ chat }: { chat: Chat }): JSX.Element | null {
  * read-only or read & write, within the profile's own file policy.
  */
 function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
-  const upsertChat = useGruntStore((s) => s.upsertChat);
-  const upsertProject = useGruntStore((s) => s.upsertProject);
-  const project = useGruntStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
-  const machines = useGruntStore((s) => s.machines);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
+  const upsertProject = useOtherBenchStore((s) => s.upsertProject);
+  const project = useOtherBenchStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
+  const machines = useOtherBenchStore((s) => s.machines);
   // The native picker chooses a folder on this machine: only offered when that's where the chat runs.
   const runsHere = !machines || chat.runsOn === machines.self.id;
   const views = [...(project?.folderViews ?? []), ...(chat.folderViews ?? [])];
@@ -200,10 +200,10 @@ function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
 }
 
 function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
-  const upsertChat = useGruntStore((s) => s.upsertChat);
-  const connections = useGruntStore((s) => s.connections);
-  const machines = useGruntStore((s) => s.machines);
-  const chats = useGruntStore((s) => s.chats);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const machines = useOtherBenchStore((s) => s.machines);
+  const chats = useOtherBenchStore((s) => s.chats);
   const activeElsewhere = alsoActive(machines, chats, chat);
   const serverPlatform = useServerPlatform();
   const [editing, setEditing] = useState(false);
@@ -260,7 +260,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
       setEditing(false);
       setDraft(updated.workspaceRoot ?? '');
     } catch (err) {
-      console.error(`[grunt-web] failed to update workspace root for chat ${chat.id}:`, err);
+      console.error(`[otherbench-web] failed to update workspace root for chat ${chat.id}:`, err);
       setError(err instanceof ApiError ? err.message : 'Save failed -- please try again.');
     } finally {
       setSaving(false);
@@ -290,7 +290,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
             setDraft(e.target.value);
             setError(null);
           }}
-          placeholder={serverPlatform === 'win32' ? 'E:\\Git\\Grunt' : '/home/user/project'}
+          placeholder={serverPlatform === 'win32' ? 'E:\\Git\\OtherBench' : '/home/user/project'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 font-mono text-sm"
         />
         {isDesktop() && (
@@ -472,7 +472,7 @@ function mcpSummary(servers: McpServerHealth[] | null, failed: boolean, onIds: s
 function McpServersSection({ profile }: { profile: Profile | null }): JSX.Element {
   const { data: servers, failed } = usePolled(() => api.mcpServers.list(), []);
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
-  const upsertProfile = useGruntStore((s) => s.upsertProfile);
+  const upsertProfile = useOtherBenchStore((s) => s.upsertProfile);
   const profileIds = profile?.toolPolicy.mcpServerIds ?? [];
   // The list as last saved from here, until the profile prop catches up.
   const [localIds, setLocalIds] = useState<string[] | null>(null);
@@ -509,7 +509,7 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
     try {
       await api.mcpServers.refresh(id);
     } catch (err) {
-      console.error(`[grunt-web] failed to refresh MCP server ${id}:`, err);
+      console.error(`[otherbench-web] failed to refresh MCP server ${id}:`, err);
     } finally {
       setRefreshingIds((s) => {
         const next = new Set(s);
@@ -609,7 +609,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
       // immediate, not eventually-consistent-looking.
       setLocalGrants((shown ?? []).filter((g) => g.id !== id));
     } catch (err) {
-      console.error(`[grunt-web] failed to revoke grant ${id}:`, err);
+      console.error(`[otherbench-web] failed to revoke grant ${id}:`, err);
     } finally {
       setRevoking((s) => {
         const next = new Set(s);
@@ -701,7 +701,7 @@ function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; li
   );
 }
 
-/** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see GruntToolProvider), and duration. Newest first. */
+/** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see OtherBenchToolProvider), and duration. Newest first. */
 function AuditSection({ chatId }: { chatId: string }): JSX.Element {
   const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
   const [expanded, setExpanded] = useState(false);
@@ -763,7 +763,7 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
   const [rollup, setRollup] = useState<UsageRollup | null>(null);
   const [failed, setFailed] = useState(false);
 
-  const statusSignal = useGruntStore((s) =>
+  const statusSignal = useOtherBenchStore((s) =>
     Object.values(s.messages)
       .filter((m) => m.chatId === chatId && m.role === 'assistant')
       .map((m) => `${m.id}:${m.status}`)
@@ -791,7 +791,7 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
         }
       })
       .catch((err: unknown) => {
-        console.error(`[grunt-web] failed to load usage for chat ${chatId}:`, err);
+        console.error(`[otherbench-web] failed to load usage for chat ${chatId}:`, err);
         if (!cancelled) setFailed(true);
       });
     return () => {
@@ -877,7 +877,7 @@ function ProfileSection({ profile }: { profile: Profile | null }): JSX.Element {
 }
 
 function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const hasSession = useGruntStore((s) => Object.values(s.messages).some((m) => m.chatId === chatId && !!m.engineMeta));
+  const hasSession = useOtherBenchStore((s) => Object.values(s.messages).some((m) => m.chatId === chatId && !!m.engineMeta));
   if (!hasSession) return null;
   return (
     <Section title="Claude Code session">
@@ -896,7 +896,7 @@ function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element
  */
 export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disabled = false }: InspectorProps): JSX.Element {
   // The chat's project, when it's loaded: the memory section needs both.
-  const memoryProject = useGruntStore((s) => (chat?.projectId ? (s.projects.find((p) => p.id === chat.projectId) ?? null) : null));
+  const memoryProject = useOtherBenchStore((s) => (chat?.projectId ? (s.projects.find((p) => p.id === chat.projectId) ?? null) : null));
   if (collapsed) {
     return (
       <button

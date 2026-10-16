@@ -1,4 +1,4 @@
-import type { PlanUsage } from '@grunt/core/types/usage.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import type { Container } from './container.js';
 
 /** How long a plan-usage reading is served before a request reads it again (Deck #825). */
@@ -36,7 +36,7 @@ export class PlanUsageCache {
     try {
       this.last = await this.read();
     } catch (err) {
-      console.error('[grunt-server] reading the Claude plan usage failed:', err);
+      console.error('[otherbench-server] reading the Claude plan usage failed:', err);
     }
     this.readAt = this.now();
     return this.last;

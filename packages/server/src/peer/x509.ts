@@ -2,9 +2,9 @@ import { createHash, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { isIPv4, isIPv6 } from 'node:net';
 
 /**
- * A minimal DER encoder for the certificates Grunt makes itself: the node's
+ * A minimal DER encoder for the certificates OtherBench makes itself: the node's
  * self-signed identity on the peer listener (v2 spec §3), whose SHA-256 is
- * what peers pin, and, for `grunt serve --tls auto` (spec
+ * what peers pin, and, for `otherbench serve --tls auto` (spec
  * 2026-10-12-remote-access §4), a one-off local CA and the server
  * certificate it signs. Hand-written (rather than a certificate library)
  * because Node can parse and sign but not build certificates, and these

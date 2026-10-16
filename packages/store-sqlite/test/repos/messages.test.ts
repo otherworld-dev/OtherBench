@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Part } from '@grunt/core/types/messages.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import { freshDb, seedChatChain } from '../helpers.js';
 import { SqliteMessageRepo } from '../../src/repos/messages.js';
 

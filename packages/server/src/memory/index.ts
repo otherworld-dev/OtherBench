@@ -1,5 +1,5 @@
-import type { MemoryFailure, MemoryUpdateOutcome } from '@grunt/core/domain/memory.js';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
+import type { MemoryFailure, MemoryUpdateOutcome } from '@otherbench/core/domain/memory.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { GlobalMemoryService } from './global.js';
 import type { ProjectMemoryService } from './service.js';
 

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { useViewerStore, viewerFor } from './state.js';
 import { browserCalls, useBrowserAutoOpen } from './useBrowserAutoOpen.js';
 

@@ -3,7 +3,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const refused = (c: Context): Response =>
-  c.json({ error: "Refused: this request came from another site's page, or from a form, page or plugin. Grunt's API only takes changes from its own window." }, 403);
+  c.json({ error: "Refused: this request came from another site's page, or from a form, page or plugin. OtherBench's API only takes changes from its own window." }, 403);
 
 /**
  * Refuses API writes sent by a page on another site (Deck #897). In browser
@@ -24,7 +24,7 @@ export function refuseCrossSiteWrites(allowedOrigins: readonly string[]): Middle
   const allowed = new Set(allowedOrigins);
   return async (c, next) => {
     if (WRITES.has(c.req.method)) {
-      // Grunt's UI writes only with fetch (Sec-Fetch-Dest: empty), never a
+      // OtherBench's UI writes only with fetch (Sec-Fetch-Dest: empty), never a
       // form, a page load or a plugin: those are refused even from this
       // origin, which serves PDFs unsandboxed (Deck #901). Not the Referer:
       // /view/ pages send none (Referrer-Policy: no-referrer).
