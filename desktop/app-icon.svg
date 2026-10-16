@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- OtherBench: two interlocking rings, for comparing models side by side. app-icon.png is rendered from this. -->
+  <rect width="1024" height="1024" rx="230" fill="#21252f"/>
+  <circle cx="400" cy="512" r="215" fill="none" stroke="#f39c12" stroke-width="100"/>
+  <circle cx="624" cy="512" r="215" fill="none" stroke="#f6f1e7" stroke-width="100"/>
+  <!-- The amber ring passes over the cream one at the top crossing, under it at the bottom. -->
+  <path d="M 437.3 300.3 A 215 215 0 0 1 569.4 379.6" fill="none" stroke="#f39c12" stroke-width="100"/>
+</svg>
