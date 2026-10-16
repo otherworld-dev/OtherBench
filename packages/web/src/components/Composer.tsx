@@ -117,6 +117,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [autoError, setAutoError] = useState<string | null>(null);
   const [effortSaving, setEffortSaving] = useState(false);
   const [effortError, setEffortError] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const [planSaving, setPlanSaving] = useState(false);
@@ -223,6 +224,29 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       setPlanError(err instanceof ApiError ? err.message : "Couldn't change plan mode. Please try again.");
     } finally {
       setPlanSaving(false);
+    }
+  }
+
+  /**
+   * Makes `profileId` the chat's profile: the selector shows it at once, and
+   * the chat keeps it, so it's still chosen after switching away and back. A
+   * failed save puts the chat's profile back and shows why; the selector keeps
+   * the choice for this message.
+   */
+  async function choosePrimaryProfile(profileId: string): Promise<void> {
+    setSelectedProfileIds((ids) => [profileId, ...ids.slice(1).filter((id) => id !== profileId)]);
+    setPickerOpen(false);
+    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    const previous = latest().profileId;
+    if (previous === profileId) return;
+    setProfileError(null);
+    upsertChat({ ...latest(), profileId });
+    try {
+      upsertChat(await api.chats.patch(chat.id, { profileId }));
+    } catch (err) {
+      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
+      if (current) upsertChat({ ...current, profileId: previous });
+      setProfileError(err instanceof ApiError ? err.message : "Couldn't keep the profile for this chat. Please try again.");
     }
   }
 
@@ -464,6 +488,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         </div>
       )}
 
+      {profileError && (
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
+          {profileError}
+        </div>
+      )}
+
       {effortError && (
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {effortError}
@@ -571,10 +601,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                       type="button"
                       role="option"
                       aria-selected={p.id === selectedProfileIds[0]}
-                      onClick={() => {
-                        setSelectedProfileIds([p.id, ...selectedProfileIds.slice(1).filter((id) => id !== p.id)]);
-                        setPickerOpen(false);
-                      }}
+                      onClick={() => void choosePrimaryProfile(p.id)}
                       className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
                     >
                       {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
