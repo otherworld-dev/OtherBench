@@ -6,6 +6,7 @@ import { DECLINED_QUESTION, UNATTENDED_QUESTION } from '@otherbench/core/domain/
 import type { AskInput, AskOutcome, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { canUseToolFor, createGate, denialText, isDriveLetterPosixPath, normaliseAgentArgs, permissionDeniedHook, preToolUseHook } from '../src/approval.js';
+import { HelperRegistry } from '../src/helpers.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-cc-')); mkdirSync(join(ws, 'src')); });
@@ -670,5 +671,22 @@ describe('a check that throws', () => {
     const reason = denied.message.slice(ABOUT.length + 2);
     expect(reason.startsWith(UNCHECKED)).toBe(true);
     expectClean(reason);
+  });
+});
+
+describe('createGate and the helpers of a reply', () => {
+  it("names the helper that made a call on its approval request, leaving the reply's own calls unnamed", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ allowed: true });
+    const helpers = new HelperRegistry();
+    helpers.start('task-1', 'Find the bug');
+    helpers.own('grep-1', 'task-1');
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), helpers });
+
+    await gate('Grep', { pattern: 'x' }, undefined, { toolUseId: 'grep-1' });
+    await gate('Grep', { pattern: 'y' }, undefined, { toolUseId: 'grep-main' });
+
+    expect(requestApproval.mock.calls[0]![3]).toMatchObject({ shownSubagent: { callId: 'task-1', label: 'Find the bug', parentProfileId: 'p' } });
+    expect(requestApproval.mock.calls[0]![3].subagent).toBeUndefined();
+    expect(requestApproval.mock.calls[1]![3].shownSubagent).toBeUndefined();
   });
 });

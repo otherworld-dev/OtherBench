@@ -20,6 +20,7 @@ import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherB
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
+import { HelperRegistry } from './helpers.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
@@ -257,12 +258,15 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       relay: relay.hash,
     };
     const tickets = new ApprovalTickets();
+    // The helpers this reply's agent starts: the mapper records them, the gate names them on approval cards.
+    const helpers = new HelperRegistry();
     const binding: TurnBinding = {
       gate: createGate({
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
         autoMode,
+        helpers,
         onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
       }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
@@ -299,7 +303,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
     if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
     for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
-    const mapper = new SdkEventMapper(renames.size > 0 ? renames : undefined);
+    const mapper = new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: profile.id, modelId: profile.modelId });
     let sawInit = false;
     let finished = false;
     let rateLimitResetsAt: number | null = null;

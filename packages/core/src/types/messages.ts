@@ -40,8 +40,9 @@ export type Part =
    */
   | { type: 'notice'; text: string }
   /**
-   * A sub-agent this reply started with the `subagent` tool (API profiles
-   * only), with its own transcript in `parts`: text, reasoning, tool-call,
+   * A sub-agent this reply started: one an API profile started with the
+   * `subagent` tool, or a helper Claude Code started with its Task or Agent
+   * tool (`callId` is that tool call's id). Its own transcript is in `parts`: text, reasoning, tool-call,
    * tool-result and notice parts, never another `subagent` part. Tool results
    * in it are a cut copy (the sub-agent's model saw them whole). Added when
    * the call starts and updated as it runs (domain/parts.ts folds it). The
@@ -62,6 +63,9 @@ export type Part =
       error?: string;
       /** What its model reported when it finished. Absent when it never finished. */
       usage?: Usage;
+      /** When it started working and when it finished (ms), for its running time. Absent on cards made before these were kept. */
+      startedAt?: number;
+      finishedAt?: number;
     };
 
 export type Role = 'system' | 'user' | 'assistant';

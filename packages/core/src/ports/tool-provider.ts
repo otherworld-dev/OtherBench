@@ -87,6 +87,13 @@ export interface ToolContext {
   subagents?: SubagentHost;
   /** Set on every call a sub-agent makes: whose call it is. */
   subagent?: SubagentTag;
+  /**
+   * The helper an engine's own agent started that made this call (Claude
+   * Code's Task or Agent tool), shown on its approval card. Unlike
+   * `subagent`, it changes no decision: the call is the reply's own as far
+   * as policy and grants go.
+   */
+  shownSubagent?: SubagentTag;
 }
 
 /**

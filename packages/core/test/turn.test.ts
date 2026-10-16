@@ -2434,3 +2434,69 @@ describe('unattended turns (scheduled runs)', () => {
     expect(engine.requests.map((r) => r.unattended)).toEqual([undefined, undefined, undefined]);
   });
 });
+
+describe("TurnRunner and an engine's own helpers (Claude Code's Task tool)", () => {
+  const ZERO = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
+  function chat(store: InMemoryStore): void {
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+  }
+  const start = { type: 'start', label: 'Find the bug', prompt: 'Look in Composer.tsx', profileId: 'profile-1', profileName: 'Explore', modelId: 'haiku' } as const;
+
+  it('keeps the helper as a card on the reply, with its tool calls, report and times, and sends each step to clients', async () => {
+    const store = new InMemoryStore();
+    chat(store);
+    const engine = new FakeChatEngine([
+      { type: 'tool-call', id: 'task-1', name: 'Task', args: { description: 'Find the bug' } },
+      { type: 'subagent', callId: 'task-1', event: start },
+      { type: 'subagent', callId: 'task-1', event: { type: 'running', at: 1000 } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'tool-call', id: 'grep-1', name: 'Grep', args: { pattern: 'profileId' } } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'tool-result', id: 'grep-1', name: 'Grep', result: 'Composer.tsx:112', isError: false } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'text-delta', text: 'It is line 112.' } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'end', status: 'complete', at: 4000 } },
+      { type: 'tool-result', id: 'task-1', name: 'Task', result: 'It is line 112.', isError: false },
+      { type: 'finish', usage: ZERO, finishReason: 'stop' },
+    ]);
+    const runner = new TurnRunner(store, engine);
+    const sent: string[] = [];
+    runner.on((e) => {
+      if (e.type === 'subagent') sent.push(e.event.type);
+    });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+
+    const card = store.messages.get(id)!.parts.find((p) => p.type === 'subagent');
+    expect(card).toMatchObject({
+      callId: 'task-1',
+      label: 'Find the bug',
+      profileName: 'Explore',
+      status: 'complete',
+      startedAt: 1000,
+      finishedAt: 4000,
+      parts: [
+        { type: 'tool-call', id: 'grep-1', name: 'Grep' },
+        { type: 'tool-result', id: 'grep-1', result: 'Composer.tsx:112' },
+        { type: 'text', text: 'It is line 112.' },
+      ],
+    });
+    expect(sent).toEqual(['start', 'running', 'tool-call', 'tool-result', 'text-delta', 'end']);
+  });
+
+  it('ends a helper the engine never finished as stopped', async () => {
+    const store = new InMemoryStore();
+    chat(store);
+    const engine = new FakeChatEngine([
+      { type: 'subagent', callId: 'task-1', event: start },
+      { type: 'subagent', callId: 'task-1', event: { type: 'running', at: 1000 } },
+      { type: 'finish', usage: ZERO, finishReason: 'stop' },
+    ]);
+    const runner = new TurnRunner(store, engine, { now: () => 9000 });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+
+    expect(store.messages.get(id)!.parts.find((p) => p.type === 'subagent')).toMatchObject({ status: 'cancelled', finishedAt: 9000 });
+  });
+});

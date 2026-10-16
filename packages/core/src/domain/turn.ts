@@ -21,7 +21,7 @@ import { sandboxPrompt } from './sandbox-paths.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { canReachFolders, extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
-import { appendDelta } from './parts.js';
+import { appendDelta, applySubagentEvent } from './parts.js';
 import type { SubagentEvent } from './parts.js';
 import { SubagentRunner } from './subagent.js';
 
@@ -846,6 +846,11 @@ export class TurnRunner {
             ];
             checkpoint(true);
             break;
+          case 'subagent':
+            parts = applySubagentEvent(parts, out.callId, out.event);
+            // A start, a tool call or result and the end are kept straight away; text can wait for the next checkpoint.
+            checkpoint(out.event.type !== 'text-delta' && out.event.type !== 'reasoning-delta');
+            break;
           case 'finish':
             usage = out.usage;
             break;
@@ -879,6 +884,16 @@ export class TurnRunner {
     // usage, so the stored parts never keep a running sub-agent and every
     // `end` goes out before this reply's terminal status.
     if (subagents) await subagents.settled();
+
+    // A helper the engine started and never said had finished (the reply was
+    // stopped, or the engine went away) can't finish now: it ends here as
+    // stopped, so the stored card never shows it working.
+    for (const part of parts) {
+      if (part.type !== 'subagent' || (part.status !== 'queued' && part.status !== 'running')) continue;
+      const end: SubagentEvent = { type: 'end', status: 'cancelled', at: this.now() };
+      parts = applySubagentEvent(parts, part.callId, end);
+      this.emit({ messageId, type: 'subagent', callId: part.callId, event: end });
+    }
 
     // The engine can end a stream cleanly on abort (no `error` event at
     // all -- MockChatEngine and this package's own `FakeChatEngine` both

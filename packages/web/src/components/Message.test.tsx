@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
@@ -651,6 +651,41 @@ describe('Message sub-agent cards', () => {
     expect(screen.getByTestId('subagent-card')).toHaveTextContent('stopped');
     rerender(<Message message={base({ status: 'streaming', parts: [card({ status: 'queued', usage: undefined })] })} />);
     expect(screen.getByTestId('subagent-card')).toHaveTextContent('waiting to start');
+  });
+
+  it("shows a Claude Code helper's card in place of its Task call, with its tool count, running time and last tool while it works", () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      vi.setSystemTime(10_000);
+      const taskCall: Part = { type: 'tool-call', id: 'call-1', name: 'Task', args: { description: 'Check the logs', subagent_type: 'Explore' } };
+      const helper = card({
+        status: 'running', usage: undefined, profileName: 'Explore', startedAt: 2_000,
+        parts: [
+          { type: 'tool-call', id: 't1', name: 'Glob', args: { pattern: 'logs/*.log' } },
+          { type: 'tool-result', id: 't1', name: 'Glob', result: 'logs/a.log', isError: false },
+          { type: 'tool-call', id: 't2', name: 'Grep', args: { pattern: 'ERROR', path: 'logs' } },
+        ],
+      });
+      render(<Message message={base({ status: 'streaming', parts: [taskCall, helper] })} />);
+      const el = screen.getByTestId('subagent-card');
+      expect(screen.queryByText(/Used 1 tool: Task/)).not.toBeInTheDocument();
+      expect(el).toHaveTextContent('Explore');
+      expect(screen.getByTestId('subagent-tools')).toHaveTextContent('2 tools');
+      expect(screen.getByTestId('subagent-elapsed')).toHaveTextContent('8s');
+      expect(screen.getByTestId('subagent-last-tool')).toHaveTextContent('last: Grep "ERROR"');
+      act(() => {
+        vi.advanceTimersByTime(65_000);
+      });
+      expect(screen.getByTestId('subagent-elapsed')).toHaveTextContent('1m 13s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows how long a finished helper took, and no last tool', () => {
+    render(<Message message={base({ parts: [card({ startedAt: 1_000, finishedAt: 93_000 })] })} />);
+    expect(screen.getByTestId('subagent-elapsed')).toHaveTextContent('1m 32s');
+    expect(screen.queryByTestId('subagent-last-tool')).not.toBeInTheDocument();
   });
 
   it('says it needs your approval while one of its calls waits on a card', () => {

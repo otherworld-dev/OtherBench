@@ -188,6 +188,18 @@ describe('PermissionBroker with source "agent"', () => {
   });
 });
 
+describe("a helper's call (Claude Code's Task tool)", () => {
+  it('is named on its approval card and changes nothing else about the decision', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    const helper = { callId: 'task-1', label: 'Find the bug', parentProfileId: 'p1' };
+    const d = b.decide(spec('Bash'), { command: 'ls' }, policy(), ctx({ shownSubagent: helper }));
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    expect(d.request.subagent).toEqual(helper);
+    // Unlike an API sub-agent's call, it isn't refused what the reply may do: internal tools still run.
+    expect(b.decide(spec('TodoWrite'), {}, policy(), ctx({ shownSubagent: helper })).kind).toBe('allow');
+  });
+});
+
 describe('isDeferrableInAutoMode', () => {
   it('defers routine Claude Code calls', () => {
     expect(isDeferrableInAutoMode(spec('Bash'), { command: 'npm test' })).toBe(true);
