@@ -293,3 +293,32 @@ test("a sub-project made from its parent's menu nests in the sidebar, its chats 
   await expect(topLevel).toBeVisible();
   await expect(topLevel.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
 });
+
+test('dragging a project heading onto the top half of another puts it above, and the order survives a reload', async ({ page, request }) => {
+  const tag = randomUUID().slice(0, 8);
+  const names = [`E2E Drag first ${tag}`, `E2E Drag second ${tag}`];
+  const ids: string[] = [];
+  for (const name of names) {
+    const res = await request.post(`${BASE_URL}/api/projects`, { data: { name } });
+    expect(res.ok()).toBeTruthy();
+    ids.push(((await res.json()) as { id: string }).id);
+  }
+  const [first, second] = ids as [string, string];
+
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  const order = () =>
+    nav.locator('[data-testid^="group-heading-"]').evaluateAll(
+      (els, mine) => els.map((el) => el.getAttribute('data-testid')!.slice('group-heading-'.length)).filter((id) => mine.includes(id)),
+      ids
+    );
+  await expect.poll(order).toEqual([first, second]);
+
+  const source = nav.getByTestId(`group-heading-${second}`).locator('[data-heading-main]');
+  const target = nav.getByTestId(`group-heading-${first}`);
+  await source.dragTo(target, { targetPosition: { x: 40, y: 2 } });
+  await expect.poll(order).toEqual([second, first]);
+
+  await page.reload();
+  await expect.poll(order).toEqual([second, first]);
+});

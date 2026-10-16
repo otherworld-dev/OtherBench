@@ -4,7 +4,28 @@ import { InlineNameInput } from '../../components/InlineNameInput.js';
 import { STATUS_LABELS, StatusDot } from '../../components/StatusDot.js';
 import type { ChatStatus } from '../../state/chatStatus.js';
 import { groupDomId } from '../../state/sidebarGroups.js';
-import { CHAT_DRAG_MIME, isContextMenuKey, type MenuSource } from './ChatRow.js';
+import { CHAT_DRAG_MIME, isContextMenuKey, positionIn, type DropPosition, type MenuSource } from './ChatRow.js';
+
+/** `dataTransfer` type a dragged project heading carries; its value is the project id. */
+export const PROJECT_DRAG_MIME = 'application/x-grunt-project';
+
+/**
+ * Reordering projects by dragging their headings: this heading can be dragged,
+ * and is a drop target while a sibling project is dragged (`target`).
+ */
+export interface ProjectReorder {
+  /** Off while searching or filtering, as for chats. */
+  draggable: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  /** A sibling project is being dragged, so a drop here places it above or below this one. */
+  target: boolean;
+  /** The line shown while a sibling is dragged over this heading, or null. */
+  indicator: DropPosition | null;
+  onOver: (position: DropPosition) => void;
+  onLeave: () => void;
+  onDrop: (position: DropPosition) => void;
+}
 
 export interface ProjectGroupProps {
   groupKey: string;
@@ -37,17 +58,23 @@ export interface ProjectGroupProps {
   onOpen?: () => void;
   /** The project's page is the focused tab. */
   active?: boolean;
+  /** Projects only: drag this heading to reorder it among its siblings. */
+  reorder?: ProjectReorder;
 }
 
 function carriesChat(e: DragEvent): boolean {
   return Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME);
 }
 
+function carriesProject(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes(PROJECT_DRAG_MIME);
+}
+
 /** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, onOpen, active = false } = props;
-  const { menuLabel = 'Project actions' } = props;
+  const { menuLabel = 'Project actions', reorder } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -55,7 +82,17 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
       <div
         data-testid={`group-heading-${groupKey}`}
         data-drop-active={dropActive ? 'true' : undefined}
+        data-drop-position={reorder?.indicator ?? undefined}
         onDragOver={(e) => {
+          if (carriesProject(e)) {
+            // A project only lands among its siblings; anywhere else the drop does nothing.
+            if (!reorder?.target) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const position = positionIn(e);
+            if (position !== reorder.indicator) reorder.onOver(position);
+            return;
+          }
           if (!carriesChat(e)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
@@ -64,15 +101,25 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         onDragLeave={(e) => {
           if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
           onDragTarget(false);
+          reorder?.onLeave();
         }}
         onDrop={(e) => {
+          if (carriesProject(e)) {
+            reorder?.onLeave();
+            if (!reorder?.target) return;
+            e.preventDefault();
+            reorder.onDrop(positionIn(e));
+            return;
+          }
           const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
           onDragTarget(false);
           if (!chatId) return;
           e.preventDefault();
           onDropChat(chatId);
         }}
-        className={`flex items-center gap-0.5 rounded ${dropActive ? 'bg-[var(--bg-sunken)] ring-2 ring-[var(--accent)]' : ''}`}
+        className={`flex items-center gap-0.5 rounded ${dropActive ? 'bg-[var(--bg-sunken)] ring-2 ring-[var(--accent)]' : ''} ${
+          reorder?.indicator === 'before' ? 'shadow-[inset_0_2px_0_var(--accent)]' : reorder?.indicator === 'after' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''
+        }`}
       >
         {renaming && onRename && onRenameCancel ? (
           <InlineNameInput initial={name} label="Project name" maxLength={PROJECT_NAME_MAX} onCommit={onRename} onCancel={onRenameCancel} />
@@ -95,6 +142,17 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           <button
             type="button"
             data-heading-main=""
+            draggable={reorder?.draggable === true}
+            onDragStart={
+              reorder?.draggable
+                ? (e) => {
+                    e.dataTransfer.setData(PROJECT_DRAG_MIME, groupKey);
+                    e.dataTransfer.effectAllowed = 'move';
+                    reorder.onDragStart();
+                  }
+                : undefined
+            }
+            onDragEnd={reorder ? () => reorder.onDragEnd() : undefined}
             // With a page to open, the arrow controls the list and this opens the page.
             aria-expanded={onOpen ? undefined : !collapsed}
             aria-controls={onOpen || collapsed || empty ? undefined : listId}

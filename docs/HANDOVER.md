@@ -113,9 +113,13 @@ of work landed after that plan closed out:
   row shows its age ("3h", "2w"). Search matches titles and message text
   (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
   keep only chats with a status dot, or that run on one machine (shown only
-  with a peer paired). The desktop window sets
+  with a peer paired). Projects reorder by dragging a heading's name onto the
+  top or bottom half of a sibling's heading (top-level with top-level, a
+  parent's sub-projects with each other; `placeProjectPatches`), or with Move
+  up / Move down in the project menu. The desktop window sets
   `dragDropEnabled: false`, without which WebView2 on Windows swallows HTML5
-  drag-and-drop (chat rows and files dropped on the composer alike).
+  drag-and-drop (chat rows, project headings and files dropped on the
+  composer alike).
   Deleting a project moves its chats to No project. Archive is reversible:
   archived chats sit in a "Show archived (N)" section at the bottom of the
   sidebar, where their menu offers Unarchive. See "Projects" below.

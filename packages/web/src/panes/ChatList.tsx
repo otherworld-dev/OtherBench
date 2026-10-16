@@ -28,6 +28,7 @@ import {
   moveProjectPatches,
   moveTarget,
   placeChatPatches,
+  placeProjectPatches,
   projectSiblings,
   titleMatches,
   type SidebarGroup,
@@ -148,6 +149,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // box's place. Not a new section in the list, which would push every row down under the pointer mid-drag.
   const [draggingChatId, setDraggingChatId] = useState<string | null>(null);
   const [pinZoneActive, setPinZoneActive] = useState(false);
+  // The project heading being dragged, and the sibling heading it's over: where a drop would place it.
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
+  const [projectDrop, setProjectDrop] = useState<{ projectId: string; position: DropPosition } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -476,23 +480,38 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     focusLater(headingSelector(projectId), LIST_SELECTOR);
   }
 
-  async function moveProject(projectId: string, dir: -1 | 1): Promise<void> {
+  /** Sends project order PATCHes one by one; on a failure says so and shows the server's order, since part may have landed. */
+  async function sendProjectOrder(patches: { id: string; sortOrder: number }[], focusId: string): Promise<void> {
     setError(null);
     try {
-      for (const { id, sortOrder } of moveProjectPatches(projectSiblings(projects, projectId), projectId, dir)) {
-        upsertProject(await api.projects.patch(id, { sortOrder }));
-      }
+      for (const { id, sortOrder } of patches) upsertProject(await api.projects.patch(id, { sortOrder }));
     } catch (err) {
       console.error('[grunt-web] failed to reorder projects:', err);
       setError(errorText(err, "Couldn't reorder the projects"));
-      // Part of the reorder may have landed: show the server's order, not a guess.
       try {
         setProjects(await api.projects.list());
       } catch {
         // the error line above already says something went wrong.
       }
     }
-    focusLater(headingSelector(projectId), LIST_SELECTOR);
+    focusLater(headingSelector(focusId), LIST_SELECTOR);
+  }
+
+  /** Puts a dragged project above or below sibling `targetId` (a drop on its heading). */
+  async function placeProject(movingId: string, targetId: string, position: DropPosition): Promise<void> {
+    const siblings = projectSiblings(projects, movingId);
+    if (movingId === targetId || !siblings.some((p) => p.id === targetId)) return;
+    let beforeId: string | null = targetId;
+    if (position === 'after') {
+      const rest = siblings.filter((p) => p.id !== movingId);
+      beforeId = rest[rest.findIndex((p) => p.id === targetId) + 1]?.id ?? null;
+    }
+    const patches = placeProjectPatches(siblings, movingId, beforeId);
+    if (patches.length > 0) await sendProjectOrder(patches, movingId);
+  }
+
+  async function moveProject(projectId: string, dir: -1 | 1): Promise<void> {
+    await sendProjectOrder(moveProjectPatches(projectSiblings(projects, projectId), projectId, dir), projectId);
   }
 
   function openNoProjectMenu(position: { x: number; y: number }, source: MenuSource): void {
@@ -542,7 +561,27 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** The project-only props of a group heading. */
   function projectGroupProps(project: Project): Partial<ProjectGroupProps> {
+    // A heading takes a dragged project only from its own siblings (top level, or the same parent's sub-projects).
+    const target = draggingProjectId !== null && draggingProjectId !== project.id && projectSiblings(projects, project.id).some((p) => p.id === draggingProjectId);
     return {
+      reorder: {
+        draggable: !searching,
+        onDragStart: () => setDraggingProjectId(project.id),
+        onDragEnd: () => {
+          setDraggingProjectId(null);
+          setProjectDrop(null);
+        },
+        target,
+        indicator: target && projectDrop?.projectId === project.id ? projectDrop.position : null,
+        onOver: (position) => setProjectDrop({ projectId: project.id, position }),
+        onLeave: () => setProjectDrop((current) => (current?.projectId === project.id ? null : current)),
+        onDrop: (position) => {
+          const moving = draggingProjectId;
+          setDraggingProjectId(null);
+          setProjectDrop(null);
+          if (moving) void placeProject(moving, project.id, position);
+        },
+      },
       onNewChat: () => void createChat(project.id),
       onOpen: () => openTab(projectTabId(project.id)),
       active: activeChatId === projectTabId(project.id),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -321,6 +321,45 @@ describe('buildSidebar with sub-projects (spec 2026-10-15-sub-projects-design §
     expect(moveProjectPatches(projectSiblings(projects, 'd'), 'd', -1)).toEqual([
       { id: 'd', sortOrder: 0 },
       { id: 's', sortOrder: 1 },
+    ]);
+  });
+});
+
+describe('placeProjectPatches', () => {
+  const four = [project('a', 'A', 0), project('b', 'B', 1), project('c', 'C', 2), project('d', 'D', 3)];
+
+  it('moves a project above another, renumbering only the ones that change', () => {
+    expect(placeProjectPatches(four, 'd', 'b')).toEqual([
+      { id: 'd', sortOrder: 1 },
+      { id: 'b', sortOrder: 2 },
+      { id: 'c', sortOrder: 3 },
+    ]);
+    expect(placeProjectPatches(four, 'a', 'c')).toEqual([
+      { id: 'b', sortOrder: 0 },
+      { id: 'a', sortOrder: 1 },
+    ]);
+  });
+
+  it('moves a project to the end with a null beforeId', () => {
+    expect(placeProjectPatches(four, 'b', null)).toEqual([
+      { id: 'c', sortOrder: 1 },
+      { id: 'd', sortOrder: 2 },
+      { id: 'b', sortOrder: 3 },
+    ]);
+  });
+
+  it('sends nothing for a drop where it already is, or for an unknown project or target', () => {
+    expect(placeProjectPatches(four, 'b', 'c')).toEqual([]);
+    expect(placeProjectPatches(four, 'd', null)).toEqual([]);
+    expect(placeProjectPatches(four, 'x', 'a')).toEqual([]);
+    expect(placeProjectPatches(four, 'a', 'x')).toEqual([]);
+  });
+
+  it('orders by compareProjects first, so tied sortOrders still land where dropped', () => {
+    const tied = [project('a', 'Alpha', 0), project('b', 'Beta', 0), project('c', 'Gamma', 0)];
+    expect(placeProjectPatches(tied, 'c', 'a')).toEqual([
+      { id: 'a', sortOrder: 1 },
+      { id: 'b', sortOrder: 2 },
     ]);
   });
 });
