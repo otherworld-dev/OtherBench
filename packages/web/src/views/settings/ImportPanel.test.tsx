@@ -52,7 +52,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     folder: '/exports/claude',
     export: true,
     sources: ['conversations-000.zip: conversations.json'],
-    chats: { total: 442, existing: 2, newer: 1, filed: 0, messages: 6267, branched: 24 },
+    chats: { total: 442, existing: 2, updates: 0, newer: 1, filed: 0, messages: 6267, branched: 24 },
     chatList: { found: false, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' },
     cowork: null,
     emptyChats: 44,
@@ -74,7 +74,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
 
 function report(over: Partial<ImportReport> = {}): ImportReport {
   return {
-    chats: { imported: 440, existing: 2, newer: 0, filed: 0, messages: 6200, failed: [] },
+    chats: { imported: 440, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, failed: [] },
     cowork: null,
     emptyChats: 44,
     artifacts: { imported: 1, existing: 0, failed: [] },
@@ -127,8 +127,8 @@ describe('ImportPanel', () => {
 
     expect(claudeImport.preview).toHaveBeenCalledWith('/exports/claude', 'opus');
     const panel = await screen.findByTestId('import-preview');
-    expect(panel).toHaveTextContent('442 chats (6,267 messages, 24 with more than one branch); 2 already imported, which will be skipped');
-    expect(panel).toHaveTextContent('1 imported chat has newer messages on claude.ai, which a second import doesn’t add');
+    expect(panel).toHaveTextContent('442 chats (6,267 messages, 24 with more than one branch); 2 already imported');
+    expect(panel).toHaveTextContent('1 imported chat was carried on here, so its newer messages on claude.ai aren’t added');
     expect(panel).toHaveTextContent("About you is drafted from claude.ai's notes for you to read and accept.");
     expect(panel).toHaveTextContent('44 empty conversations left out');
     expect(panel).toHaveTextContent('1 published artifact, each in a chat of its own');
@@ -182,7 +182,7 @@ describe('ImportPanel', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Importing chats… 10 of 451');
     expect(screen.queryByLabelText('Export folder')).toBeNull();
 
-    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, newer: 0, filed: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
+    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
     const reportView = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(reportView).toHaveTextContent('Import finished');
     expect(reportView).toHaveTextContent('Imported 439 chats (6,200 messages); 2 were already here');
@@ -232,11 +232,19 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     return user;
   }
 
+  it('says which imported chats get new messages, and counts them on the button', async () => {
+    await checkFolder({ chats: { total: 442, existing: 442, updates: 3, newer: 0, filed: 0, messages: 6267, branched: 24 } });
+    const panel = screen.getByTestId('import-preview');
+    expect(panel).toHaveTextContent('3 imported chats get the messages added on claude.ai since');
+    expect(panel).not.toHaveTextContent('carried on here');
+    expect(screen.getByRole('button', { name: 'Update 3 chats' })).toBeEnabled();
+  });
+
   it('says how to get the chat list when the folder has none, and how many chats it files when it has', async () => {
     await checkFolder({});
     expect(screen.getByTestId('chat-list-hint')).toHaveTextContent('open https://claude.ai/api/organizations/org-1/chat_conversations in a browser');
     cleanup();
-    await checkFolder({ chatList: { found: true, url: null }, chats: { total: 442, existing: 0, newer: 0, filed: 300, messages: 6267, branched: 24 } });
+    await checkFolder({ chatList: { found: true, url: null }, chats: { total: 442, existing: 0, updates: 0, newer: 0, filed: 300, messages: 6267, branched: 24 } });
     expect(screen.queryByTestId('chat-list-hint')).toBeNull();
     expect(screen.getByTestId('import-preview')).toHaveTextContent('300 chats filed into their projects, from claude.ai’s chat list');
   });
@@ -245,11 +253,12 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     useOtherBenchStore.setState({ projects: [{ id: 'proj-phd', name: 'PhD' } as Project, { id: 'proj-personal', name: 'Personal' } as Project] });
     claudeImport.start.mockResolvedValue({ ...IDLE, state: 'running', phase: 'projects', total: 10 });
     const user = await checkFolder({
-      chats: { total: 2, existing: 0, newer: 0, filed: 0, messages: 4, branched: 0 },
+      chats: { total: 2, existing: 0, updates: 0, newer: 0, filed: 0, messages: 4, branched: 0 },
       cowork: {
         sources: [{ path: 'C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions', sessions: 29 }],
         sessions: 29,
         existing: 0,
+        updates: 0,
         messages: 728,
         images: 73,
         spaces: [
@@ -279,11 +288,12 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
       ],
       sessions: 40,
       existing: 29,
+      updates: 0,
       messages: 900,
       images: 80,
       spaces: [],
     };
-    claudeImport.preview.mockResolvedValue(preview({ folder: '', export: false, chats: { total: 0, existing: 0, newer: 0, filed: 0, messages: 0, branched: 0 }, cowork, artifacts: [], projects: [], memoryChat: null, memory: { about: false, aboutTaken: false, note: false, projectNotes: 0, files: 0 } }));
+    claudeImport.preview.mockResolvedValue(preview({ folder: '', export: false, chats: { total: 0, existing: 0, updates: 0, newer: 0, filed: 0, messages: 0, branched: 0 }, cowork, artifacts: [], projects: [], memoryChat: null, memory: { about: false, aboutTaken: false, note: false, projectNotes: 0, files: 0 } }));
     claudeImport.start.mockResolvedValue({ ...IDLE, state: 'running', phase: 'cowork', total: 40 });
     const user = userEvent.setup();
     render(<ImportPanel />);
@@ -312,7 +322,7 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     render(<ImportPanel />);
     await screen.findByRole('status');
     expect(api.projects.list).not.toHaveBeenCalled();
-    status = { ...status, state: 'done', phase: null, done: 10, report: report({ chats: { imported: 2, existing: 0, newer: 0, filed: 1, messages: 4, failed: [] }, cowork: { imported: 29, existing: 0, filed: 12, messages: 728, images: 73, failed: [] } }) };
+    status = { ...status, state: 'done', phase: null, done: 10, report: report({ chats: { imported: 2, existing: 0, updated: 0, newer: 0, filed: 1, messages: 4, failed: [] }, cowork: { imported: 29, existing: 0, updated: 0, filed: 12, messages: 728, images: 73, failed: [] } }) };
     const view = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(view).toHaveTextContent('Filed 1 chat into its project');
     expect(view).toHaveTextContent('Imported 29 Cowork sessions (728 messages, 73 images); 12 filed into projects');

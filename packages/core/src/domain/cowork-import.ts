@@ -1,6 +1,7 @@
 import type { CanonMessage, Part, ProducedBy } from '../types/messages.js';
 import { isAttachmentId } from './attachment-binding.js';
 import { CLAUDE_REPLY_NAME, type ImportedChat, type ImportProfile } from './claude-import.js';
+import { MAX_TOOL_IMAGE_BYTES, MAX_TOOL_IMAGES_PER_MESSAGE } from './tool-images.js';
 
 /**
  * Import from Cowork (spec 2026-10-09-claude-import-design, Cowork addendum):
@@ -21,6 +22,9 @@ export const UNTITLED_COWORK_SESSION = 'Untitled Cowork session';
 const DERIVED_TITLE_MAX = 48;
 /** Images stored as attachments: the raster types OtherBench serves (attachments.ts's allowlist). */
 const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+/** The longest base64 that decodes to at most `MAX_TOOL_IMAGE_BYTES`, the most a tool image may hold. */
+const MAX_TOOL_IMAGE_BASE64 = Math.ceil(MAX_TOOL_IMAGE_BYTES / 3) * 4;
+const NOT_IMPORTED = '[An image, not imported]';
 
 /** One Cowork session as read from disk. */
 export interface CoworkSessionFiles {
@@ -32,7 +36,11 @@ export interface CoworkSessionFiles {
   spaceId: string | null;
 }
 
-/** An image pasted into a session: its bytes go to the blob store, its part names `attachmentId`. */
+/**
+ * An image pasted into a session, or one a tool returned: its bytes go to the
+ * blob store, and the part that shows it names `attachmentId` (a tool's is a
+ * reference in its result, on the reply, as OtherBench keeps its own).
+ */
 export interface ImportedImage {
   attachmentId: string;
   messageId: string;
@@ -125,10 +133,22 @@ function toolResultText(content: unknown): string {
     if (!isObj(item)) continue;
     const type = str(item['type']);
     if (type === 'text') parts.push(str(item['text']) ?? '');
-    else if (type === 'image') parts.push('[An image, not imported]');
+    else if (type === 'image') parts.push(NOT_IMPORTED);
     else if (type) parts.push(`[${type}]`);
   }
   return parts.join('\n');
+}
+
+/** A transcript image's type and base64 bytes, when it holds them inline in a type OtherBench keeps. */
+function inlineImage(block: Obj): { mime: string; data: string } | null {
+  const source = isObj(block['source']) ? block['source'] : null;
+  const mime = str(source?.['media_type'])?.toLowerCase() ?? '';
+  const data = str(source?.['data']);
+  return source?.['type'] === 'base64' && data && IMAGE_TYPES.has(mime) ? { mime, data } : null;
+}
+
+function extension(mime: string): string {
+  return mime === 'image/jpeg' ? 'jpg' : mime.slice('image/'.length);
 }
 
 /** Builds one Cowork session's chat, or null when there's nothing in it (counted). */
@@ -149,6 +169,8 @@ export function planCoworkSession(files: CoworkSessionFiles, profile: ImportProf
   const images: ImportedImage[] = [];
   /** Tool calls by id, with the message holding them, so a result lands next to its call. */
   const calls = new Map<string, { message: CanonMessage; name: string; answered: boolean }>();
+  /** Tool images kept so far on each reply, held to `MAX_TOOL_IMAGES_PER_MESSAGE`. */
+  const toolImages = new Map<string, number>();
   let content = false;
 
   const last = (): CanonMessage | undefined => messages.at(-1);
@@ -203,21 +225,42 @@ export function planCoworkSession(files: CoworkSessionFiles, profile: ImportProf
         const call = calls.get(str(b['tool_use_id']) ?? '');
         if (!call || call.answered) continue;
         call.answered = true;
-        call.message.parts.push({ type: 'tool-result', id: str(b['tool_use_id'])!, name: call.name, result: toolResultText(b['content']), isError: b['is_error'] === true });
+        // Images a tool returned are kept on the reply, as references in the result, under the limits OtherBench keeps its own to.
+        const items: unknown[] = [];
+        let kept = 0;
+        for (const item of list(b['content'])) {
+          if (!isObj(item)) continue;
+          const type = str(item['type']);
+          if (type === 'text') items.push({ type: 'text', text: str(item['text']) ?? '' });
+          else if (type === 'image') {
+            const image = inlineImage(item);
+            const attachmentId = `${line.uuid}:image:${n + 1}`;
+            const onReply = toolImages.get(call.message.id) ?? 0;
+            if (image && image.data.length <= MAX_TOOL_IMAGE_BASE64 && onReply < MAX_TOOL_IMAGES_PER_MESSAGE && isAttachmentId(attachmentId)) {
+              n++;
+              kept++;
+              toolImages.set(call.message.id, onReply + 1);
+              images.push({ attachmentId, messageId: call.message.id, mime: image.mime, data: image.data, filename: `tool-image.${extension(image.mime)}` });
+              items.push({ type: 'image', attachmentId, mimeType: image.mime });
+            } else {
+              items.push({ type: 'text', text: NOT_IMPORTED });
+            }
+          } else if (type) items.push({ type: 'text', text: `[${type}]` });
+        }
+        const result = kept > 0 ? items : toolResultText(b['content']);
+        call.message.parts.push({ type: 'tool-result', id: str(b['tool_use_id'])!, name: call.name, result, isError: b['is_error'] === true });
       } else if (type === 'text' && str(b['text'])?.trim()) {
         prompt.push({ type: 'text', text: str(b['text'])! });
       } else if (type === 'image') {
-        const source = isObj(b['source']) ? b['source'] : null;
-        const mime = str(source?.['media_type'])?.toLowerCase() ?? '';
-        const data = str(source?.['data']);
+        const image = inlineImage(b);
         // The id is checked against the one rule every reader applies, so an image is never stored under an id that replay and sync would then refuse.
         const attachmentId = `${line.uuid}:image:${n + 1}`;
-        if (source?.['type'] === 'base64' && data && IMAGE_TYPES.has(mime) && isAttachmentId(attachmentId)) {
+        if (image && isAttachmentId(attachmentId)) {
           n++;
-          pasted.push({ attachmentId, mime, data, filename: `image-${n}.${mime === 'image/jpeg' ? 'jpg' : mime.slice('image/'.length)}` });
-          prompt.push({ type: 'image', attachmentId, mime });
+          pasted.push({ attachmentId, mime: image.mime, data: image.data, filename: `image-${n}.${extension(image.mime)}` });
+          prompt.push({ type: 'image', attachmentId, mime: image.mime });
         } else {
-          prompt.push({ type: 'text', text: '[An image, not imported]' });
+          prompt.push({ type: 'text', text: NOT_IMPORTED });
         }
       } else if (type === 'document') {
         prompt.push({ type: 'text', text: `[A document, not imported${str(b['title']) ? `: ${str(b['title'])}` : ''}]` });
