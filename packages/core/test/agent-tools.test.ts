@@ -11,7 +11,7 @@ describe('classifyAgentTool', () => {
     ['Bash', 'shell', 'execute'], ['BashOutput', 'shell', 'execute'], ['KillShell', 'shell', 'execute'],
     ['WebFetch', 'web', 'mutate'], ['WebSearch', 'web', 'mutate'],
     ['mcp__nextcloud__deck_add_card', 'mcp', 'mutate'],
-    ['TodoWrite', 'internal', 'read'], ['Task', 'internal', 'read'], ['Agent', 'internal', 'read'], ['AskUserQuestion', 'internal', 'read'],
+    ['TodoWrite', 'internal', 'read'], ['Task', 'internal', 'read'], ['Agent', 'internal', 'read'], ['AskUserQuestion', 'internal', 'read'], ['SubagentHandback', 'internal', 'read'],
     ['ExitPlanMode', 'other', 'mutate'], ['EnterPlanMode', 'other', 'mutate'],
     ['SomethingNew', 'other', 'mutate'],
   ])('%s -> %s/%s', (name, category, risk) => {

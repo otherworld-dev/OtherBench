@@ -679,6 +679,52 @@ describe('Composer', () => {
   });
 });
 
+describe('Composer profile picker', () => {
+  beforeEach(() => {
+    reset();
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ id: 'p1', name: 'Default', modelId: 'mock-standard' }),
+      makeProfile({ id: 'p2', name: 'Opus', modelId: 'opus', isDefault: false }),
+    ]);
+  });
+  afterEach(cleanup);
+
+  it("keeps the chosen profile on the chat, so it's still chosen after switching away and back", async () => {
+    const chat = makeChat({ profileId: 'p1' });
+    useOtherBenchStore.getState().setChats([chat]);
+    mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...chat, ...(body as Partial<Chat>) }));
+    const user = userEvent.setup();
+    const { unmount } = render(<Composer chat={chat} />);
+
+    await user.click(screen.getByRole('button', { name: 'Default · mock-standard' }));
+    await user.click(screen.getByRole('option', { name: /Opus/ }));
+
+    expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { profileId: 'p2' });
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.profileId).toBe('p2'));
+    // Switching chats remounts the composer with the chat as the store now has it.
+    unmount();
+    render(<Composer chat={useOtherBenchStore.getState().chats[0]!} />);
+    expect(screen.getByRole('button', { name: 'Opus · opus' })).toBeInTheDocument();
+  });
+
+  it("doesn't save when the profile already chosen is picked again, and puts the chat's profile back when saving fails", async () => {
+    const chat = makeChat({ profileId: 'p1' });
+    useOtherBenchStore.getState().setChats([chat]);
+    const user = userEvent.setup();
+    render(<Composer chat={chat} />);
+
+    await user.click(screen.getByRole('button', { name: 'Default · mock-standard' }));
+    await user.click(screen.getByRole('option', { name: /Default/ }));
+    expect(mockedChatsPatch).not.toHaveBeenCalled();
+
+    mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
+    await user.click(screen.getByRole('button', { name: 'Default · mock-standard' }));
+    await user.click(screen.getByRole('option', { name: /Opus/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
+    expect(useOtherBenchStore.getState().chats[0]!.profileId).toBe('p1');
+  });
+});
+
 describe('Composer auto mode toggle', () => {
   const HINT = 'Auto mode: Claude Code decides routine tool calls; your profile limits still apply.';
   const conn = (id: string, kind: Connection['kind'], baseUrl: string | null = null): Connection => ({

@@ -121,6 +121,9 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
   // meaningless (and hidden) otherwise.
   const [allowAnyArgs, setAllowAnyArgs] = useState(false);
   const isShellCommand = isShellCommandRequest(request);
+  // A Claude Code tool OtherBench doesn't know is never pre-authorised (PermissionBroker.resolve keeps no grant for
+  // it), so only a one-off answer is offered rather than choices that would quietly act like "Allow once".
+  const unknownAgentTool = request.source === 'agent' && classifyAgentTool(request.toolName).category === 'other';
   const network = networkTarget(request);
   // A browser card names the site (`args.host`, which the server takes from the page's committed address). Everything else
   // it shows from the page (`target`, the address in the summary) is untrusted text, so it is shown as plain, labelled lines.
@@ -239,25 +242,30 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
         >
           {labels.once}
         </button>
-        <button
-          type="button"
-          data-testid="approval-chat"
-          disabled={pending}
-          onClick={() => void choose({ choice: 'chat' })}
-          className="btn px-2 py-1"
-        >
-          {labels.chat}
-        </button>
-        <button
-          type="button"
-          data-testid="approval-always"
-          disabled={pending}
-          onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
-          className="btn px-2 py-1"
-        >
-          {labels.always}
-        </button>
+        {!unknownAgentTool && (
+          <>
+            <button
+              type="button"
+              data-testid="approval-chat"
+              disabled={pending}
+              onClick={() => void choose({ choice: 'chat' })}
+              className="btn px-2 py-1"
+            >
+              {labels.chat}
+            </button>
+            <button
+              type="button"
+              data-testid="approval-always"
+              disabled={pending}
+              onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
+              className="btn px-2 py-1"
+            >
+              {labels.always}
+            </button>
+          </>
+        )}
       </div>
+      {unknownAgentTool && <p className="text-xs text-[var(--text-muted)]">OtherBench doesn&rsquo;t know this Claude Code tool, so it asks each time.</p>}
       <DesktopOnlyNote />
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
