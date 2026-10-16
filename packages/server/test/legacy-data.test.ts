@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adoptLegacyData, claudeProjectKey, LegacyDataError } from '../src/legacy-data.js';
+import { createRequire } from 'node:module';
+import { adoptLegacyData, claudeProjectKey, LegacyDataError, rewriteLegacyPaths } from '../src/legacy-data.js';
 
 let home: string;
 const dead = (): boolean => false;
@@ -15,15 +16,33 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Grunt's folder as it last left it. */
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+
+/** The imported project's folder, as Grunt stored it. */
+function importedFolder(dataDir: string, db: string): string {
+  return join(dataDir, `${db}.imported`, 'claude', 'Personal-1');
+}
+
+/** The one project's stored folders, read back from the database at `path`. */
+function storedFolders(path: string): unknown {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return JSON.parse((db.prepare('SELECT folders FROM project').get() as { folders: string }).folders);
+  } finally {
+    db.close();
+  }
+}
+
+/** Grunt's folder as it last left it, with a database holding one imported project. */
 function gruntData(): string {
   const dir = join(home, '.grunt');
   mkdirSync(join(dir, 'grunt.db.attachments', 'ab'), { recursive: true });
   mkdirSync(join(dir, 'grunt.db.imported'));
   mkdirSync(join(dir, 'claude-scratch', 'chat-1'), { recursive: true });
-  writeFileSync(join(dir, 'grunt.db'), 'db');
-  writeFileSync(join(dir, 'grunt.db-wal'), 'wal');
-  writeFileSync(join(dir, 'grunt.db-shm'), 'shm');
+  const db = new DatabaseSync(join(dir, 'grunt.db'));
+  db.exec('CREATE TABLE project (id TEXT, folders TEXT)');
+  db.prepare('INSERT INTO project VALUES (?, ?)').run('p1', JSON.stringify([{ root: importedFolder(dir, 'grunt.db') }]));
+  db.close();
   writeFileSync(join(dir, 'grunt.db.lock'), JSON.stringify({ pid: 4242, startedAt: 1 }));
   writeFileSync(join(dir, 'grunt.db.attachments', 'ab', 'abcd'), 'blob');
   writeFileSync(join(dir, 'secrets.json'), '{}');
@@ -44,8 +63,6 @@ describe('adoptLegacyData', () => {
       [
         'claude-scratch',
         'otherbench.db',
-        'otherbench.db-shm',
-        'otherbench.db-wal',
         'otherbench.db.attachments',
         'otherbench.db.imported',
         'otherbench.db.lock',
@@ -53,7 +70,7 @@ describe('adoptLegacyData', () => {
         'secrets.json.key',
       ].sort()
     );
-    expect(readFileSync(join(dir, 'otherbench.db'), 'utf8')).toBe('db');
+    expect(storedFolders(join(dir, 'otherbench.db'))).toEqual([{ root: importedFolder(dir, 'otherbench.db') }]);
     expect(readFileSync(join(dir, 'otherbench.db.attachments', 'ab', 'abcd'), 'utf8')).toBe('blob');
     expect(readFileSync(join(dir, 'secrets.json.key'), 'utf8')).toBe('key');
   });
@@ -84,13 +101,13 @@ describe('adoptLegacyData', () => {
   it('finishes a move that stopped after renaming some of the files', () => {
     const dir = gruntData();
     // An earlier start renamed the database itself, then failed.
-    rmSync(join(dir, 'grunt.db'));
-    writeFileSync(join(dir, 'otherbench.db'), 'db');
+    renameSync(join(dir, 'grunt.db'), join(dir, 'otherbench.db'));
 
     adoptLegacyData(home, { isAlive: dead });
 
-    expect(readFileSync(join(home, '.otherbench', 'otherbench.db'), 'utf8')).toBe('db');
-    expect(existsSync(join(home, '.otherbench', 'otherbench.db-wal'))).toBe(true);
+    const newDir = join(home, '.otherbench');
+    expect(storedFolders(join(newDir, 'otherbench.db'))).toEqual([{ root: importedFolder(newDir, 'otherbench.db') }]);
+    expect(existsSync(join(newDir, 'otherbench.db.lock'))).toBe(true);
   });
 
   it("renames Claude Code's projects for the scratch folders, so those sessions resume", () => {
@@ -114,6 +131,51 @@ describe('adoptLegacyData', () => {
     gruntData();
 
     expect(adoptLegacyData(home, { isAlive: dead, claudeConfigDir: join(home, 'nowhere') })).not.toBeNull();
+    expect(existsSync(join(home, '.otherbench', 'otherbench.db'))).toBe(true);
+  });
+});
+
+describe('rewriteLegacyPaths', () => {
+  it('points stored paths at the new folder, plain or inside JSON, and leaves message text alone', () => {
+    const oldDir = join(home, '.grunt');
+    const newDir = join(home, '.otherbench');
+    const dbPath = join(home, 'test.db');
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE project (id TEXT, workspace_root TEXT, folders TEXT);
+      CREATE TABLE message (id TEXT, parts TEXT, engine_meta TEXT);
+      CREATE TABLE attachment (id TEXT, storage_path TEXT);
+    `);
+    const imported = join(oldDir, 'grunt.db.imported', 'claude', 'Personal-1');
+    const scratch = join(oldDir, 'claude-scratch', 'chat-1');
+    const blob = join(oldDir, 'grunt.db.attachments', 'ab', 'abcd');
+    const elsewhere = join(home, 'code', 'app');
+    db.prepare('INSERT INTO project VALUES (?, ?, ?)').run('p1', elsewhere, JSON.stringify([{ workspace: { root: imported } }]));
+    db.prepare('INSERT INTO message VALUES (?, ?, ?)').run('m1', JSON.stringify([{ text: `read ${blob}` }]), JSON.stringify({ cwd: scratch }));
+    db.prepare('INSERT INTO attachment VALUES (?, ?)').run('a1', blob);
+    db.close();
+
+    // chat and location_path don't exist in this database: skipped, not an error.
+    expect(rewriteLegacyPaths(dbPath, oldDir, newDir)).toBe(3);
+
+    const after = new DatabaseSync(dbPath, { readOnly: true });
+    const project = after.prepare('SELECT workspace_root, folders FROM project').get() as { workspace_root: string; folders: string };
+    const message = after.prepare('SELECT parts, engine_meta FROM message').get() as { parts: string; engine_meta: string };
+    const attachment = after.prepare('SELECT storage_path FROM attachment').get() as { storage_path: string };
+    after.close();
+    expect(project.workspace_root).toBe(elsewhere);
+    expect(JSON.parse(project.folders)).toEqual([{ workspace: { root: join(newDir, 'otherbench.db.imported', 'claude', 'Personal-1') } }]);
+    expect(JSON.parse(message.engine_meta)).toEqual({ cwd: join(newDir, 'claude-scratch', 'chat-1') });
+    expect(JSON.parse(message.parts)).toEqual([{ text: `read ${blob}` }]);
+    expect(attachment.storage_path).toBe(join(newDir, 'otherbench.db.attachments', 'ab', 'abcd'));
+  });
+
+  it('is run by the move, which still succeeds when the database cannot be opened', () => {
+    writeFileSync(join(gruntData(), 'grunt.db'), 'not a database');
+
+    const moved = adoptLegacyData(home, { isAlive: dead });
+
+    expect(moved).toContain("Couldn't update the folder paths");
     expect(existsSync(join(home, '.otherbench', 'otherbench.db'))).toBe(true);
   });
 });

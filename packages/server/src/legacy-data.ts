@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { join, sep as nodeSep } from 'node:path';
 import { liveLockHolder } from './db-lock.js';
 
 /**
@@ -72,7 +73,77 @@ export function adoptLegacyData(home: string, deps: LegacyDataDeps = {}): string
   }
 
   moveClaudeProjects(join(oldDir, 'claude-scratch'), join(newDir, 'claude-scratch'), deps.claudeConfigDir ?? join(home, '.claude'));
-  return `Moved Grunt's data from "${oldDir}" to "${newDir}".`;
+  const moved = `Moved Grunt's data from "${oldDir}" to "${newDir}".`;
+  const dbPath = join(newDir, DB_NAME);
+  if (!existsSync(dbPath)) return moved;
+  try {
+    rewriteLegacyPaths(dbPath, oldDir, newDir);
+    return moved;
+  } catch (err) {
+    // The data is moved and the database opens as before; only the stored paths still name the old folder.
+    return `${moved} Couldn't update the folder paths stored in the database (${(err as Error).message}).`;
+  }
+}
+
+/**
+ * The columns that can hold a path inside the data folder: imported Cowork
+ * projects' folders (`<db>.imported/...`), a Claude Code session's scratch
+ * folder (`claude-scratch/<chat>`, which a session only resumes from when it
+ * matches), and each attachment's blob. Message text is history, and left as
+ * it was written.
+ */
+const PATH_COLUMNS: readonly (readonly [string, string])[] = [
+  ['chat', 'workspace_root'],
+  ['chat', 'folders'],
+  ['project', 'workspace_root'],
+  ['project', 'folders'],
+  ['location_path', 'path'],
+  ['message', 'engine_meta'],
+  ['attachment', 'storage_path'],
+];
+
+/**
+ * Rewrites paths under `oldDir` to `newDir` in the database at `dbPath`,
+ * whether stored plain or inside JSON (where each backslash is doubled), and
+ * returns how many values changed. A row's `hlc` is left alone: a path names
+ * a folder on this machine, so there is nothing for a peer to learn.
+ */
+export function rewriteLegacyPaths(dbPath: string, oldDir: string, newDir: string): number {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  try {
+    const pairs: [string, string][] = [];
+    for (const sep of new Set([nodeSep, '/', '\\'])) {
+      // The database's own siblings first, so `.grunt/grunt.db.imported` becomes `.otherbench/otherbench.db.imported`.
+      pairs.push([oldDir + sep + LEGACY_DB, newDir + sep + DB_NAME], [oldDir + sep, newDir + sep]);
+    }
+    const all = [...pairs, ...pairs.map(([from, to]): [string, string] => [jsonInner(from), jsonInner(to)])].filter(([from], i, list) => list.findIndex(([f]) => f === from) === i);
+
+    let changed = 0;
+    db.exec('BEGIN');
+    try {
+      for (const [table, column] of PATH_COLUMNS) {
+        const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[];
+        if (!columns.some((c) => c.name === column)) continue;
+        for (const [from, to] of all) {
+          const result = db.prepare(`UPDATE "${table}" SET "${column}" = replace("${column}", ?, ?) WHERE instr("${column}", ?) > 0`).run(from, to, from);
+          changed += Number(result.changes);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return changed;
+  } finally {
+    db.close();
+  }
+}
+
+/** `s` as it appears inside a JSON string. */
+function jsonInner(s: string): string {
+  return JSON.stringify(s).slice(1, -1);
 }
 
 /**
