@@ -40,6 +40,20 @@ describe('ApprovalPrompt', () => {
     expect(screen.queryByText(/Sub-agent:/)).not.toBeInTheDocument();
   });
 
+  it("offers only a one-off answer for a Claude Code tool OtherBench doesn't know, whose grants aren't kept", () => {
+    render(<ApprovalPrompt request={request({ source: 'agent', toolName: 'SomethingNew', args: {}, summary: 'SomethingNew' })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-once')).toBeInTheDocument();
+    expect(screen.queryByTestId('approval-chat')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('approval-always')).not.toBeInTheDocument();
+    expect(screen.getByText(/asks each time/)).toBeInTheDocument();
+  });
+
+  it('still offers every choice for a Claude Code tool it knows', () => {
+    render(<ApprovalPrompt request={request({ source: 'agent', toolName: 'Edit', args: { file_path: 'a.ts' }, summary: 'Edit(a.ts)' })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-always')).toBeInTheDocument();
+  });
+
   it('renders the tool name, risk, and summary', () => {
     render(<ApprovalPrompt request={request()} onResolve={vi.fn()} />);
     expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('write_file');
@@ -135,7 +149,6 @@ describe('ApprovalPrompt', () => {
   it.each([
     ['mcp__gh__get_file', 'mutate'],
     ['WebFetch', 'mutate'],
-    ['CronCreate', 'mutate'],
   ] as const)('gives a non-file agent tool (%s) an unconstrained "always", even when it has a path arg', async (toolName, risk) => {
     const agentRequest = request({ toolName, source: 'agent', risk, args: { path: '/README.md' }, summary: `${toolName}(/README.md)` });
     const onResolve = vi.fn().mockResolvedValue(undefined);

@@ -16,8 +16,10 @@ const MCP_RESOURCE = ['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpRes
 const WEB = ['WebFetch', 'WebSearch'];
 // No side effects of their own; a Task/Agent subagent's own tool calls are gated
 // individually. AskUserQuestion is answered through OtherBench's question card (the
-// engine's gate, spec 2026-10-12-thread-cards-design section 6).
-const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ToolSearch', 'Skill', 'AskUserQuestion'];
+// engine's gate, spec 2026-10-12-thread-cards-design section 6). SubagentHandback is
+// how a subagent hands its final report back to the agent that started it (Claude
+// Code gives subagents it in auto mode): it carries text and touches nothing else.
+const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ToolSearch', 'Skill', 'AskUserQuestion', 'SubagentHandback'];
 // Claude Code's own plan mode writes its plan outside the workspace and switches
 // the session's permission mode, which OtherBench doesn't track; OtherBench's Plan mode
 // (propose_plan) replaces it. Out of INTERNAL too, so a call that somehow

@@ -36,6 +36,8 @@ describe('PermissionBroker with source "agent"', () => {
   it('allows internal tools without asking, in either mode', () => {
     const b = new PermissionBroker(new InMemoryStore());
     expect(b.decide(spec('TodoWrite'), {}, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'policy' });
+    // A subagent handing its report back: it used to fall through to an unknown tool's card on every call.
+    expect(b.decide(spec('SubagentHandback'), { message: 'done' }, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'policy' });
   });
   it('asks for Edit and Bash, and applies the policy ceiling', () => {
     const b = new PermissionBroker(new InMemoryStore());
