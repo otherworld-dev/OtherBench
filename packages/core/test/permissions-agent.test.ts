@@ -108,6 +108,14 @@ describe('PermissionBroker with source "agent"', () => {
     }
     expect(b.decide(spec('CronCreate'), { a: 1 }, policy(), ctx()).kind).toBe('ask');
   });
+  it("keeps a chat or Always grant for SendMessage, a Claude Code tool it knows but doesn't wave through", () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const d = b.decide(spec('SendMessage'), { to: 'helper', message: 'carry on' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    b.resolve(d.request.id, { choice: 'always', constraint: null });
+    expect(b.decide(spec('SendMessage'), { to: 'helper', message: 'and this' }, policy(), ctx()).kind).toBe('allow');
+  });
   it('denies Edit and Bash without a workspace', () => {
     const b = new PermissionBroker(new InMemoryStore());
     for (const n of ['Edit', 'Bash']) expect(b.decide(spec(n), {}, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
@@ -187,6 +195,7 @@ describe('isDeferrableInAutoMode', () => {
     expect(isDeferrableInAutoMode(spec('Edit'), { path: 'src/a.ts' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('WebFetch'), { url: 'https://example.com' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('mcp__nextcloud__deck_add_card'), {})).toBe(true);
+    expect(isDeferrableInAutoMode(spec('SendMessage'), { to: 'helper', message: 'carry on' })).toBe(true);
   });
   it('never defers a write to Claude Code config, or a write with no usable path', () => {
     for (const path of ['.claude/settings.local.json', 'sub/CLAUDE.md', '.mcp.json', 'CLAUDE~1/settings.json']) {

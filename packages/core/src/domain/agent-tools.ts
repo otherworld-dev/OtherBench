@@ -7,7 +7,7 @@ import type { ToolPolicy } from '../types/config.js';
  * `source: 'agent'`). Anything unrecognised is `other`/`mutate` so a new
  * Claude Code tool fails closed into an approval card.
  */
-export type AgentToolCategory = 'file-read' | 'file-write' | 'shell' | 'web' | 'mcp' | 'internal' | 'other';
+export type AgentToolCategory = 'file-read' | 'file-write' | 'shell' | 'web' | 'mcp' | 'agent-message' | 'internal' | 'other';
 
 const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const FILE_WRITE = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
@@ -20,6 +20,11 @@ const WEB = ['WebFetch', 'WebSearch'];
 // how a subagent hands its final report back to the agent that started it (Claude
 // Code gives subagents it in auto mode): it carries text and touches nothing else.
 const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ToolSearch', 'Skill', 'AskUserQuestion', 'SubagentHandback'];
+// SendMessage carries text to another agent: usually a helper this reply
+// started, but it can also reach other Claude sessions on the machine, so it
+// isn't INTERNAL. It is a known tool, though: auto mode may hand it to Claude
+// Code's classifier, and a chat or Always grant for it is kept.
+const AGENT_MESSAGE = ['SendMessage'];
 // Claude Code's own plan mode writes its plan outside the workspace and switches
 // the session's permission mode, which OtherBench doesn't track; OtherBench's Plan mode
 // (propose_plan) replaces it. Out of INTERNAL too, so a call that somehow
@@ -77,6 +82,7 @@ export function classifyAgentTool(name: string): { category: AgentToolCategory; 
   if (WEB.includes(name)) return { category: 'web', risk: 'mutate' };
   if (name.startsWith('mcp__') || MCP_RESOURCE.includes(name)) return { category: 'mcp', risk: 'mutate' };
   if (INTERNAL.includes(name)) return { category: 'internal', risk: 'read' };
+  if (AGENT_MESSAGE.includes(name)) return { category: 'agent-message', risk: 'mutate' };
   return { category: 'other', risk: 'mutate' };
 }
 
@@ -94,6 +100,7 @@ export function agentPolicyDenial(name: string, policy: ToolPolicy): string | nu
       return policy.agentWeb === false ? 'Web tools are disabled by policy.' : null;
     case 'mcp':
       return policy.agentMcp === false ? 'MCP tools are disabled by policy.' : null;
+    case 'agent-message':
     case 'internal':
     case 'other':
       return null;
