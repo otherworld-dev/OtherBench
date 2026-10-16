@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { useViewerStore } from './state.js';
 
 /** The `browser` tool calls in `messages`, with whether their reply is still running. */

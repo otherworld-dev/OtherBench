@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { ClaudeExportError } from '@grunt/core/domain/claude-import.js';
+import { ClaudeExportError } from '@otherbench/core/domain/claude-import.js';
 import type { Container } from '../container.js';
 import { ImportBusyError, ImportInputError, type ClaudeImportService } from '../import/claude-import.js';
 import { optionalBoolean, optionalNullableString, requireNonEmptyString } from '../validation.js';

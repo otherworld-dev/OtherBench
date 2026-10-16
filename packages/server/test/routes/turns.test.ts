@@ -1,7 +1,7 @@
 ﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';

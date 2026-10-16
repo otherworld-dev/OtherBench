@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { MEMORY_VERSIONS_KEPT } from '@grunt/core/domain/memory.js';
-import type { GlobalMemory, GlobalMemoryRepo, GlobalMemoryVersion, MemoryAuthor } from '@grunt/core/ports/store.js';
+import { MEMORY_VERSIONS_KEPT } from '@otherbench/core/domain/memory.js';
+import type { GlobalMemory, GlobalMemoryRepo, GlobalMemoryVersion, MemoryAuthor } from '@otherbench/core/ports/store.js';
 import { clockOf, type SyncClock } from './clock.js';
 
 type Key = 'about' | 'note';

@@ -12,6 +12,6 @@ import { fileURLToPath } from 'node:url';
 export function sandboxResourcesDir(here: string = dirname(fileURLToPath(import.meta.url))): string {
   const candidates = [join(here, 'sandbox'), join(here, '..', 'resources')];
   const found = candidates.find((c) => existsSync(join(c, 'agent.mjs')));
-  if (!found) throw new Error(`Grunt's sandbox files (agent.mjs) weren't found in ${candidates.join(' or ')}.`);
+  if (!found) throw new Error(`OtherBench's sandbox files (agent.mjs) weren't found in ${candidates.join(' or ')}.`);
   return found;
 }

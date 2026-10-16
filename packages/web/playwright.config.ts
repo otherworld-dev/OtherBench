@@ -3,21 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
-const PORT = Number(process.env.GRUNT_E2E_PORT ?? 4756);
+const PORT = Number(process.env.OTHERBENCH_E2E_PORT ?? 4756);
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
 /** The fixture site browser.spec.ts opens (e2e/fixtures/site-server.mjs). */
-export const SITE_PORT = Number(process.env.GRUNT_E2E_SITE_PORT ?? 4797);
+export const SITE_PORT = Number(process.env.OTHERBENCH_E2E_SITE_PORT ?? 4797);
 export const SITE_URL = `http://127.0.0.1:${SITE_PORT}`;
 /** The one Cowork session the e2e server finds (claude-import.spec.ts imports it). */
 export const COWORK_SESSION = { id: 'local_e2e_cowork', title: 'Cowork e2e session' };
 
 // A fresh scratch dir per run -- keeps the e2e run from ever touching a
-// real ~/.grunt (which resolveSecretsPassphrase falls back to for `--db
+// real ~/.otherbench (which resolveSecretsPassphrase falls back to for `--db
 // :memory:`), and guarantees each run starts from an empty database.
-const dbDir = mkdtempSync(join(tmpdir(), 'grunt-e2e-'));
+const dbDir = mkdtempSync(join(tmpdir(), 'otherbench-e2e-'));
 
 // A Cowork folder laid out as Claude Desktop keeps one, so the server never
-// reads the real one on the machine running the tests (GRUNT_COWORK_ROOT).
+// reads the real one on the machine running the tests (OTHERBENCH_COWORK_ROOT).
 const coworkDir = join(dbDir, 'cowork');
 const org = join(coworkDir, 'account', 'organisation');
 mkdirSync(join(org, COWORK_SESSION.id, '.claude', 'projects', 'folder'), { recursive: true });
@@ -33,11 +33,11 @@ writeFileSync(
 );
 
 // A Claude Desktop config the server reads instead of the real one
-// (GRUNT_CLAUDE_DESKTOP_CONFIG), for mcp-import.spec.ts. The commands don't
+// (OTHERBENCH_CLAUDE_DESKTOP_CONFIG), for mcp-import.spec.ts. The commands don't
 // exist anywhere, so importing a server never starts anything.
-// GRUNT_SANDBOX=fake gives the server a FakeSandbox (sandbox.spec.ts): setting
+// OTHERBENCH_SANDBOX=fake gives the server a FakeSandbox (sandbox.spec.ts): setting
 // it up and running in it touch no VM.
-export const DESKTOP_SERVERS = { secret: 'e2e-desktop-secret-value', command: 'grunt-e2e-no-such-command' };
+export const DESKTOP_SERVERS = { secret: 'e2e-desktop-secret-value', command: 'otherbench-e2e-no-such-command' };
 const desktopConfig = join(dbDir, 'claude_desktop_config.json');
 writeFileSync(
   desktopConfig,
@@ -61,28 +61,28 @@ export default defineConfig({
     baseURL: BASE_URL,
     trace: 'retain-on-failure',
   },
-  // Requires `npm run build` (root or `-w @grunt/server -w @grunt/web`) to
+  // Requires `npm run build` (root or `-w @otherbench/server -w @otherbench/web`) to
   // have already produced packages/{server,web}/dist -- this only starts
   // the already-built server, it doesn't build it.
   webServer: [
     {
       // `--cors-origin` with the server's own address: this same-origin test browser counts as the desktop app's
       // window, the one place that may change anything while computer use is in control (computer.spec.ts checks that
-      // a request with no Origin is refused). It is NOT what a real Grunt tab looks like to the desktop server: the
+      // a request with no Origin is refused). It is NOT what a real OtherBench tab looks like to the desktop server: the
       // refusal of a same-origin tab is covered by the server's unit tests (test/routes/computer.test.ts).
-      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}" --cors-origin ${BASE_URL}`,
+      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'otherbench.db')}" --cors-origin ${BASE_URL}`,
       url: `${BASE_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 15_000,
       env: {
         ...(process.env as Record<string, string>),
-        GRUNT_COWORK_ROOT: coworkDir,
-        GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig,
-        GRUNT_SANDBOX: 'fake',
+        OTHERBENCH_COWORK_ROOT: coworkDir,
+        OTHERBENCH_CLAUDE_DESKTOP_CONFIG: desktopConfig,
+        OTHERBENCH_SANDBOX: 'fake',
         // The model's browser may reach the fixture site on 127.0.0.1 (tests only).
-        GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
+        OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
         // Computer use is carried out by core's FakeComputerDriver, which touches nothing on this machine (computer.spec.ts).
-        GRUNT_COMPUTER_FAKE_DRIVER: '1',
+        OTHERBENCH_COMPUTER_FAKE_DRIVER: '1',
       },
     },
     {

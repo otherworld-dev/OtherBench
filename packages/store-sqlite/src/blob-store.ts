@@ -55,7 +55,7 @@ export interface AttachmentsRoots {
  * shared by every database that happened to sit next to the same
  * `secrets.json` -- so opening a SECOND database in that same directory
  * (or the default `:memory:` config, which resolves its secrets path to
- * `~/.grunt/secrets.json` same as the default file database) made the
+ * `~/.otherbench/secrets.json` same as the default file database) made the
  * startup/cascade-delete sweep see the FIRST database's still-in-use blobs
  * as "nothing in MY table references this" and delete them.
  *
@@ -63,7 +63,7 @@ export interface AttachmentsRoots {
  *   `<dir>/<full-basename>.attachments/` -- unique to that one file,
  *   derived from its ENTIRE basename, extension included. (Fix round 2,
  *   Critical 1: an earlier version stripped the extension first, so
- *   `main.db` and `main.bak`, or `grunt` and `grunt.db`, collided on the
+ *   `main.db` and `main.bak`, or `otherbench` and `otherbench.db`, collided on the
  *   exact same `<stem>.attachments/` -- reproduced live: two such
  *   databases opened side by side, each one's sweep deleted the other's
  *   blobs. The full basename can never collide between two distinct
@@ -86,7 +86,7 @@ export function resolveAttachmentsRoots(dbPath: string, secretsPath: string): At
   const legacyRoot = join(dirname(secretsPath), 'attachments');
 
   if (dbPath === ':memory:') {
-    const writeRoot = mkdtempSync(join(tmpdir(), 'grunt-attachments-'));
+    const writeRoot = mkdtempSync(join(tmpdir(), 'otherbench-attachments-'));
     return { writeRoot, legacyRoot, isTemporary: true };
   }
 
@@ -252,7 +252,7 @@ export class BlobStore {
    * `unlink`. `gcBlobIfOrphaned` passes a callback that re-checks
    * `isPinned`/`isReferenced` right at that point, catching exactly that
    * window. `BlobStore` itself has no notion of "referenced" or "pinned"
-   * (that's `blob-gc.ts`'s domain over `@grunt/core`'s `Store`), so this
+   * (that's `blob-gc.ts`'s domain over `@otherbench/core`'s `Store`), so this
    * takes the check as an opaque predicate instead of depending on either.
    */
   async remove(sha256: string, shouldStillRemove?: () => boolean): Promise<void> {

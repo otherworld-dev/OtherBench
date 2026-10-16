@@ -41,7 +41,7 @@ describe('chatToMarkdown', () => {
   it('writes a title, the export line, and each shown message under who wrote it', () => {
     const ms = [msg({ id: 'u1', createdAt: 1, parts: [{ type: 'text', text: 'Hello?' }] }), msg({ id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('Claude'), parts: [{ type: 'text', text: 'Hi.' }] })];
     expect(chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT)).toBe(
-      ['# Plans', '', '*Exported from Grunt on 2026-10-04T12:00:00.000Z. 2 messages.*', '', '## You', '', 'Hello?', '', '## Claude (Claude-model)', '', 'Hi.', ''].join('\n')
+      ['# Plans', '', '*Exported from OtherBench on 2026-10-04T12:00:00.000Z. 2 messages.*', '', '## You', '', 'Hello?', '', '## Claude (Claude-model)', '', 'Hi.', ''].join('\n')
     );
   });
 
@@ -152,7 +152,7 @@ describe('computer calls in the Markdown export', () => {
       parts: [
         { type: 'tool-call', id: 't1', name: 'computer', args: { action: 'type', text: secret } },
         { type: 'tool-result', id: 't1', name: 'computer', result: [{ type: 'text', text: 'Done.' }], isError: false },
-        { type: 'tool-call', id: 't2', name: 'mcp__grunt_0123456789abcdef__computer', args: { action: 'type', text: `${secret}\nsecond line` } },
+        { type: 'tool-call', id: 't2', name: 'mcp__otherbench_0123456789abcdef__computer', args: { action: 'type', text: `${secret}\nsecond line` } },
         { type: 'tool-call', id: 't3', name: 'computer', args: { action: 'left_click', coordinate: [10, 20] } },
         { type: 'tool-call', id: 't4', name: 'computer', args: { action: 'type', text: `${secret}\u0000` } },
       ],
@@ -163,7 +163,7 @@ describe('computer calls in the Markdown export', () => {
     const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
     expect(md).not.toContain('hunter2');
     expect(md).toContain('**Tool call:** `computer`: type 26 characters');
-    expect(md).toContain('**Tool call:** `mcp__grunt_0123456789abcdef__computer`: type 38 characters (2 lines)');
+    expect(md).toContain('**Tool call:** `mcp__otherbench_0123456789abcdef__computer`: type 38 characters (2 lines)');
     expect(md).toContain('**Tool call:** `computer`: click at 10, 20');
     // Text that would not be typed at all has no count, and is still not shown.
     expect(md).toContain('**Tool call:** `computer`: type ?');

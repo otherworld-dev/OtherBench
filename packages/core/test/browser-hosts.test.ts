@@ -62,7 +62,7 @@ describe('normaliseHost', () => {
   });
 });
 
-describe('the shared host vectors (also run through the egress proxy in @grunt/tools)', () => {
+describe('the shared host vectors (also run through the egress proxy in @otherbench/tools)', () => {
   it.each(BROWSER_HOST_VECTORS.map((v) => [v.note, v] as const))('%s', (_note, v) => {
     const check = browserUrlCheck(v.input, { browserBlockedHosts: v.blockedHosts }, { allowLoopbackPorts: v.allowLoopbackPorts });
     expect(check.site, JSON.stringify(v.input)).toBe(v.site);
@@ -208,8 +208,8 @@ describe('browserHostDenial', () => {
     expect(browserHostDenial('2606:4700:4700::1111', {})).toBeNull();
     expect(browserHostDenial('192.168.1.1', {})).toBe("192.168.1.1 is a local or private address. The model's browser can't reach it.");
     expect(browserHostDenial('::1', {})).toMatch(/local or private address/);
-    expect(browserHostDenial(null, {})).toBe("Grunt couldn't tell which website this is for.");
-    expect(browserHostDenial('', {})).toBe("Grunt couldn't tell which website this is for.");
+    expect(browserHostDenial(null, {})).toBe("OtherBench couldn't tell which website this is for.");
+    expect(browserHostDenial('', {})).toBe("OtherBench couldn't tell which website this is for.");
     expect(browserHostDenial('8.8.8.8', {})).toBeNull();
     expect(browserHostDenial('example.com', {})).toBeNull();
   });

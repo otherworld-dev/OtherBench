@@ -1,5 +1,5 @@
 /**
- * Every reason `grunt serve` refuses to start with sign-in (spec
+ * Every reason `otherbench serve` refuses to start with sign-in (spec
  * 2026-10-12-remote-access §1). `main()` prints any `RemoteStartError` as
  * `Error: <message>` and exits 1, like the other start-up refusals.
  */
@@ -44,13 +44,13 @@ export class InvalidTrustProxyError extends RemoteStartError {
 
 export class NoPasswordError extends RemoteStartError {
   constructor(loginPath: string) {
-    super(`Refusing to start: no sign-in password is set (looked for ${loginPath}). Run "grunt password" on this machine first.`);
+    super(`Refusing to start: no sign-in password is set (looked for ${loginPath}). Run "otherbench password" on this machine first.`);
   }
 }
 
 export class LoginFileError extends RemoteStartError {
   constructor(path: string, reason: string) {
-    super(`${path} is not a usable password file (${reason}). Run "grunt password" again.`);
+    super(`${path} is not a usable password file (${reason}). Run "otherbench password" again.`);
   }
 }
 

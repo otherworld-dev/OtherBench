@@ -10,15 +10,15 @@ import { api } from '../state/api.js';
  */
 
 export const WORKSPACE_ROOT_HELP =
-  'Must be a native absolute path on the SERVER machine -- e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" ' +
-  'on Linux/macOS. Not a relative path, and not a Git-Bash-style "/e/Git/Grunt": that form resolves to a path ' +
+  'Must be a native absolute path on the SERVER machine -- e.g. "E:\\Git\\OtherBench" on Windows, "/home/user/project" ' +
+  'on Linux/macOS. Not a relative path, and not a Git-Bash-style "/e/Git/OtherBench": that form resolves to a path ' +
   'Windows has no notion of, which fails with a confusing ENOENT at tool-call time instead of a clear error here.';
 
 function looksWindowsAbsolute(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
 }
 
-/** Matches the shape Git Bash/MSYS translates a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. */
+/** Matches the shape Git Bash/MSYS translates a Windows drive path into (e.g. `E:\Git\OtherBench` -> `/e/Git/OtherBench`) -- capture group 1 is the drive letter. */
 function gitBashMangledMatch(value: string): RegExpMatchArray | null {
   return value.match(/^\/([a-zA-Z])(\/|$)/);
 }
@@ -47,7 +47,7 @@ export function validateWorkspaceRoot(raw: string, serverPlatform: string | null
       const drive = gitBashMangled[1]!.toUpperCase();
       return `That is a Git-Bash-style path -- the server (running Windows) needs the native form, e.g. "${drive}:\\..." instead of "${value}".`;
     }
-    return 'Enter a native absolute Windows path, e.g. "E:\\Git\\Grunt".';
+    return 'Enter a native absolute Windows path, e.g. "E:\\Git\\OtherBench".';
   }
 
   if (serverPlatform !== null) {
@@ -60,7 +60,7 @@ export function validateWorkspaceRoot(raw: string, serverPlatform: string | null
     const drive = gitBashMangled[1]!.toUpperCase();
     return `That looks like a Git-Bash-style path. If the server runs on Windows, use "${drive}:\\..." instead of "${value}".`;
   }
-  return 'Enter a native absolute path (e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" on Linux/macOS).';
+  return 'Enter a native absolute path (e.g. "E:\\Git\\OtherBench" on Windows, "/home/user/project" on Linux/macOS).';
 }
 
 /** The server's `process.platform` from `GET /api/health` (null until it loads, or if it fails). */
@@ -73,7 +73,7 @@ export function useServerPlatform(): string | null {
       .then((h) => {
         if (!cancelled) setPlatform(h.platform);
       })
-      .catch((err: unknown) => console.error('[grunt-web] failed to fetch server platform for workspace validation:', err));
+      .catch((err: unknown) => console.error('[otherbench-web] failed to fetch server platform for workspace validation:', err));
     return () => {
       cancelled = true;
     };

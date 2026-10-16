@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import {
   readFileTool,
   listDirTool,
@@ -44,7 +44,7 @@ function ctx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), 'grunt-fs-tools-'));
+  base = mkdtempSync(join(tmpdir(), 'otherbench-fs-tools-'));
   ws = join(base, 'ws');
   outside = join(base, 'outside');
   mkdirSync(ws);

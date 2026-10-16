@@ -55,7 +55,7 @@ async function record(name, text, decide, extra = {}) {
 
 mkdirSync(fixtures, { recursive: true });
 const s1 = await record('text-turn', 'Reply with exactly: pong', () => true);
-await record('tool-turn', 'Read hello.txt, then use Bash to run: echo grunt-probe. Then append the line "world" to hello.txt with Edit.', () => true);
+await record('tool-turn', 'Read hello.txt, then use Bash to run: echo otherbench-probe. Then append the line "world" to hello.txt with Edit.', () => true);
 await record('denied-tool-turn', 'Use Bash to run: echo should-be-denied', (n) => n !== 'Bash');
 // §6 item 5: resume the first session with a different model, in place.
 await record('resume-other-model', 'What did I ask you to reply with before?', () => true, { resume: s1, model: 'sonnet' });

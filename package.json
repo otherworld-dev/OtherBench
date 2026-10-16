@@ -1,5 +1,5 @@
 {
-  "name": "grunt",
+  "name": "otherbench",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24.0.0" },
@@ -10,7 +10,7 @@
     "typecheck:tests": "tsc -b && node scripts/typecheck-tests.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev": "npm run dev -w @grunt/server",
+    "dev": "npm run dev -w @otherbench/server",
     "serve": "node packages/server/dist/cli.js serve"
   },
   "devDependencies": {

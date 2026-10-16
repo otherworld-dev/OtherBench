@@ -29,7 +29,7 @@ function login(opts: { password?: string; remember?: boolean; address?: string; 
 }
 
 /** The session's Set-Cookie line (a sign-in also sets the remembered-device cookie). */
-const sessionSetCookie = (res: Response): string | undefined => res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_session='));
+const sessionSetCookie = (res: Response): string | undefined => res.headers.getSetCookie().find((c) => c.startsWith('__Host-otherbench_session='));
 const cookieOf = (res: Response): string => sessionSetCookie(res)!.split(';')[0]!;
 
 /** Fake timers held by waiting sign-in attempts: all of them but the log summary's. */
@@ -48,11 +48,11 @@ const post = (path: string, cookie: string | null, body?: unknown, address = '10
   app.request(path, { method: 'POST', headers: { ...json, ...(cookie ? { Cookie: cookie } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, from(address));
 
 describe('sign-in mode', () => {
-  it('answers the API with 401 "Sign in to Grunt." without a cookie', async () => {
+  it('answers the API with 401 "Sign in to OtherBench." without a cookie', async () => {
     const res = await get('/api/chats');
 
     expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: 'Sign in to Grunt.' });
+    expect(await res.json()).toEqual({ error: 'Sign in to OtherBench.' });
   });
 
   it('signs in with the password and sets a __Host- cookie, with Max-Age only when remembered', async () => {
@@ -60,7 +60,7 @@ describe('sign-in mode', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ expiresAt: fx.clock.now + SESSION_MS });
     const cookie = sessionSetCookie(res)!;
-    expect(cookie).toMatch(/^__Host-grunt_session=[A-Za-z0-9_-]{43}; /);
+    expect(cookie).toMatch(/^__Host-otherbench_session=[A-Za-z0-9_-]{43}; /);
     for (const part of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=Strict']) expect(cookie).toContain(part);
     expect(cookie).not.toContain('Max-Age');
 
@@ -97,7 +97,7 @@ describe('sign-in mode', () => {
 
     const out = await post('/api/auth/logout', a);
     expect(out.status).toBe(204);
-    expect(out.headers.get('set-cookie')).toMatch(/^__Host-grunt_session=; Max-Age=0/);
+    expect(out.headers.get('set-cookie')).toMatch(/^__Host-otherbench_session=; Max-Age=0/);
     expect((await get('/api/chats', a)).status).toBe(401);
     expect((await get('/api/chats', b)).status).toBe(200);
 
@@ -235,7 +235,7 @@ describe('the global limits', () => {
   }
 
   const rawDeviceCookie = (res: Response): string => {
-    const found = res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_device='));
+    const found = res.headers.getSetCookie().find((c) => c.startsWith('__Host-otherbench_device='));
     expect(found).toBeDefined();
     return found as string;
   };
@@ -273,7 +273,7 @@ describe('the global limits', () => {
   });
 
   it('sets a remembered-device cookie only with "Keep me signed in", and it lets this browser skip the budget and the delay', async () => {
-    expect((await login()).headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device='))).toBe(false);
+    expect((await login()).headers.getSetCookie().some((c) => c.startsWith('__Host-otherbench_device='))).toBe(false);
     const first = await login({ remember: true });
     const device = deviceCookieOf(first);
     for (const part of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=Strict', 'Max-Age=7776000']) expect(rawDeviceCookie(first)).toContain(part);
@@ -318,7 +318,7 @@ describe('the global limits', () => {
     const out = await post('/api/auth/logout', `${cookieOf(signedIn)}; ${deviceCookieOf(signedIn)}`);
 
     expect(out.status).toBe(204);
-    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device=;') && c.includes('Max-Age=0'))).toBe(true);
+    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-otherbench_device=;') && c.includes('Max-Age=0'))).toBe(true);
   });
 
   it('forgets every remembered device on a password change and on "Sign out everywhere"', async () => {
@@ -337,7 +337,7 @@ describe('the global limits', () => {
     const out = await post('/api/auth/logout-all', cookieOf(changed));
     expect(out.status).toBe(204);
     expect(deviceValid(renewed)).toBe(false);
-    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device=;') && c.includes('Max-Age=0'))).toBe(true);
+    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-otherbench_device=;') && c.includes('Max-Age=0'))).toBe(true);
   });
 
   it("frees a waiting attempt's place and timer when its client disconnects", async () => {
@@ -449,7 +449,7 @@ describe('every way to a password check, and whose address it counts', () => {
   }
 
   const budget = () => fx.remote.limiter.stats().budget;
-  const deviceCookieOf = (res: Response): string => res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_device='))!.split(';')[0]!;
+  const deviceCookieOf = (res: Response): string => res.headers.getSetCookie().find((c) => c.startsWith('__Host-otherbench_device='))!.split(';')[0]!;
 
   /** Spends the 15 tokens any address may take, from addresses that have guessed wrong, leaving the 5 kept for clean ones. */
   function floodFromGuessers(): void {
@@ -522,7 +522,7 @@ describe('every way to a password check, and whose address it counts', () => {
     const forged = device.slice(0, -2) + (device.endsWith('AA') ? 'BB' : 'AA');
 
     expect((await login({ address: '10.7.0.29', headers: { Cookie: forged } })).status).toBe(429);
-    expect((await login({ address: '10.7.0.29', headers: { Cookie: '__Host-grunt_device=made.up.value' } })).status).toBe(429);
+    expect((await login({ address: '10.7.0.29', headers: { Cookie: '__Host-otherbench_device=made.up.value' } })).status).toBe(429);
     expect((await login({ address: '10.7.0.29', headers: { Cookie: device } })).status).toBe(200);
 
     // 90 days on the cookie has expired; the same flood again, and it counts for nothing.
@@ -595,13 +595,13 @@ describe('a stream whose session ends while it is still opening', () => {
     const res = await pending;
 
     expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: 'Sign in to Grunt.' });
+    expect(await res.json()).toEqual({ error: 'Sign in to OtherBench.' });
     expect(cancelled).toBe(true);
   });
 });
 
 describe('sign-in mode when the password file changes under the server', () => {
-  it('ends every session within a second of "grunt password", and open streams at the next sweep', async () => {
+  it('ends every session within a second of "otherbench password", and open streams at the next sweep', async () => {
     const cookie = await signIn();
     const stream = (await get('/api/events', cookie)).body!.getReader();
     await stream.read();
@@ -626,7 +626,7 @@ describe('sign-in mode when the password file changes under the server', () => {
     expect((await get('/api/chats', cookie)).status).toBe(401);
     const res = await login();
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: 'No password is set on this server. Run "grunt password" on it.' });
+    expect(await res.json()).toEqual({ error: 'No password is set on this server. Run "otherbench password" on it.' });
 
     writeFileSync(fx.loginPath, 'not json');
     fx.clock.now += 1001;
@@ -663,7 +663,7 @@ describe('GET /api/auth/status', () => {
       signedIn: true,
       caDownload: false,
       session: { expiresAt: expect.any(Number), remember: true },
-      remote: { publicUrls: ['https://grunt.test:4747'], tls: { mode: 'proxy' }, trustProxies: [] },
+      remote: { publicUrls: ['https://otherbench.test:4747'], tls: { mode: 'proxy' }, trustProxies: [] },
     });
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
+import type { Connection, ConnectionKind } from '@otherbench/core/types/config.js';
 import { ApiError, api, type CreateConnectionBody } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
 
@@ -89,10 +89,10 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
     };
   }, []);
 
-  const upsertModels = useGruntStore((s) => s.upsertModels);
-  const models = useGruntStore((s) => s.models);
-  const profiles = useGruntStore((s) => s.profiles);
-  const chats = useGruntStore((s) => s.chats);
+  const upsertModels = useOtherBenchStore((s) => s.upsertModels);
+  const models = useOtherBenchStore((s) => s.models);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const chats = useOtherBenchStore((s) => s.chats);
 
   function validate(): string | null {
     if (name.trim().length === 0) return '"Name" is required.';
@@ -132,7 +132,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       setClearApiKey(false);
       onSaved(saved);
     } catch (err) {
-      console.error('[grunt-web] failed to save connection:', err);
+      console.error('[otherbench-web] failed to save connection:', err);
       setError(errorMessage(err, 'Save failed -- please try again.'));
     } finally {
       setSaving(false);
@@ -147,7 +147,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       const result = await api.connections.test(connection.id);
       setTestResult(result);
     } catch (err) {
-      console.error(`[grunt-web] failed to test connection ${connection.id}:`, err);
+      console.error(`[otherbench-web] failed to test connection ${connection.id}:`, err);
       setTestResult({ ok: false, message: errorMessage(err, 'Test failed -- please try again.'), latencyMs: 0 });
     } finally {
       setTesting(false);
@@ -163,7 +163,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       upsertModels(models);
       setDiscoverMessage({ ok: true, text: `Discovered ${models.length} model${models.length === 1 ? '' : 's'} -- see the Models tab.` });
     } catch (err) {
-      console.error(`[grunt-web] failed to discover models for connection ${connection.id}:`, err);
+      console.error(`[otherbench-web] failed to discover models for connection ${connection.id}:`, err);
       setDiscoverMessage({ ok: false, text: errorMessage(err, 'Discovery failed -- please try again.') });
     } finally {
       setDiscovering(false);
@@ -199,7 +199,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       await api.connections.delete(connection.id);
       onDeleted(connection.id);
     } catch (err) {
-      console.error(`[grunt-web] failed to delete connection ${connection.id}:`, err);
+      console.error(`[otherbench-web] failed to delete connection ${connection.id}:`, err);
       setError(errorMessage(err, 'Delete failed -- please try again.'));
     } finally {
       setDeleting(false);
@@ -448,9 +448,9 @@ function ConnectionRow({ connection, active, onSelect }: { connection: Connectio
  * required hand-rolled `curl` against the REST API.
  */
 export function ConnectionsPanel(): JSX.Element {
-  const connections = useGruntStore((s) => s.connections);
-  const upsertConnection = useGruntStore((s) => s.upsertConnection);
-  const removeConnection = useGruntStore((s) => s.removeConnection);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const upsertConnection = useOtherBenchStore((s) => s.upsertConnection);
+  const removeConnection = useOtherBenchStore((s) => s.removeConnection);
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
 

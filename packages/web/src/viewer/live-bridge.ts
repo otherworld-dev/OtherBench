@@ -33,7 +33,7 @@ export interface LiveRequest {
 export function parseLiveRequest(data: unknown): LiveRequest | null {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
   const d = data as Record<string, unknown>;
-  if (d['grunt'] !== 'live-call' || d['v'] !== 1) return null;
+  if (d['otherbench'] !== 'live-call' || d['v'] !== 1) return null;
   const requestId = d['requestId'];
   const call = d['call'];
   if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) return null;
@@ -65,7 +65,7 @@ export interface LiveBridgeOptions {
   onOutcome: (callId: string, outcome: LiveOutcome) => void;
 }
 
-const NOT_APPROVED: LiveOutcome = { ok: false, code: 'not_approved', message: "Live data isn't allowed for this page yet: allow it in Grunt's viewer." };
+const NOT_APPROVED: LiveOutcome = { ok: false, code: 'not_approved', message: "Live data isn't allowed for this page yet: allow it in OtherBench's viewer." };
 const BUSY: LiveOutcome = { ok: false, code: 'busy', message: 'The page has too many live requests waiting.' };
 
 export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { source: unknown; data: unknown }): void } {
@@ -93,7 +93,7 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
   };
   const reply = (frame: HTMLIFrameElement, loadsAtAsk: number, requestId: string, outcome: LiveOutcome): void => {
     if (!current(frame, loadsAtAsk)) return;
-    frame.contentWindow?.postMessage({ ...outcome, grunt: 'live-result', v: 1, requestId }, '*');
+    frame.contentWindow?.postMessage({ ...outcome, otherbench: 'live-result', v: 1, requestId }, '*');
   };
   const send = ({ frame, loadsAtAsk, req }: Pending): void => {
     const key = `${req.call}|${JSON.stringify(req.params)}`;
@@ -105,7 +105,7 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
     inFlight += 1;
     void opts
       .call(req.call, req.params, fresh)
-      .catch((err: unknown): LiveOutcome => ({ ok: false, code: 'failed', message: err instanceof Error ? err.message : "Couldn't reach Grunt." }))
+      .catch((err: unknown): LiveOutcome => ({ ok: false, code: 'failed', message: err instanceof Error ? err.message : "Couldn't reach OtherBench." }))
       .then((outcome) => {
         inFlight -= 1;
         outstanding -= 1;

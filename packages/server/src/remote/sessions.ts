@@ -123,7 +123,7 @@ export class SessionStore {
       try {
         cb();
       } catch (err) {
-        console.error('[grunt-server] a session-end listener failed:', err);
+        console.error('[otherbench-server] a session-end listener failed:', err);
       }
     }
   }

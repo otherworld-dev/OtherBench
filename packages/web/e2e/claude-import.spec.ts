@@ -18,7 +18,7 @@ const projectId = randomUUID();
 const LAPTOP_SESSION = 'local_e2e_laptop';
 
 test.beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-e2e-claude-export-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-e2e-claude-export-'));
 });
 
 // The sidebar is shared by the specs after this one, and some of them need its rows to fit on screen.

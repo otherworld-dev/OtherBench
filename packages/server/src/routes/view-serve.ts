@@ -2,10 +2,10 @@ import { constants as fsConstants } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono, type Context } from 'hono';
-import { versionFileName } from '@grunt/core/domain/artifacts.js';
-import { containPath } from '@grunt/core/domain/paths.js';
-import type { ArtifactRepo } from '@grunt/core/ports/store.js';
-import { openVerified } from '@grunt/tools/fs-tools.js';
+import { versionFileName } from '@otherbench/core/domain/artifacts.js';
+import { containPath } from '@otherbench/core/domain/paths.js';
+import type { ArtifactRepo } from '@otherbench/core/ports/store.js';
+import { openVerified } from '@otherbench/tools/fs-tools.js';
 import { servedType } from '../view/kinds.js';
 import type { ViewLink, ViewLinks } from '../view/links.js';
 import { LIVE_CLIENT_FILE, LIVE_CLIENT_JS } from '../view/live-client.js';
@@ -17,13 +17,13 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
 /**
  * The sandbox for everything a link serves but a PDF (spec 2026-10-07-viewer):
  * scripts run, but in an opaque origin; loads from https, data:, blob: and the
- * link's own folder; network to https and wss only. With Grunt itself on
- * HTTPS (sign-in mode) that no longer keeps a page off Grunt's API; what does
+ * link's own folder; network to https and wss only. With OtherBench itself on
+ * HTTPS (sign-in mode) that no longer keeps a page off OtherBench's API; what does
  * is the sandbox's opaque origin: its requests carry no cookie,
  * `Sec-Fetch-Site: cross-site` and `Origin: null`, which the auth gate and the
  * cross-site check refuse. Forms too: `form-action`
  * doesn't fall back to `default-src`, and without it a page could post a
- * form to Grunt's API, which takes a text/plain body as JSON.
+ * form to OtherBench's API, which takes a text/plain body as JSON.
  */
 export function sandboxPolicy(folderUrl: string): string {
   return `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
@@ -36,7 +36,7 @@ export function sandboxPolicy(folderUrl: string): string {
  * link get refuse()'s `default-src 'none'; sandbox`, stricter still.
  *
  * - `sandbox allow-scripts allow-forms`: an opaque origin, so nothing of
- *   Grunt's (cookies, storage, the API) is in reach; no popups, no top-level
+ *   OtherBench's (cookies, storage, the API) is in reach; no popups, no top-level
  *   navigation, no same-origin. allow-forms only so submit handlers fire.
  * - `default-src 'none'` closes whatever isn't named below, and each fetch
  *   directive is also set to 'none' outright rather than left to the
@@ -145,7 +145,7 @@ export function viewServeRoutes(
     if (rel === null) return refuse(c, 404, 'Not found.');
 
     // An artifact version (Deck #896): its own file name only, or a Mermaid
-    // diagram's page and Grunt's copy of Mermaid; all in the sandbox.
+    // diagram's page and OtherBench's copy of Mermaid; all in the sandbox.
     if (link.scope === 'artifact') {
       const version = artifacts?.getVersion(link.versionId);
       const artifact = version ? artifacts?.get(version.artifactId) : null;

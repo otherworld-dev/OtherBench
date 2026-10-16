@@ -92,12 +92,12 @@ describe('reading Word files', () => {
 describe('reading hostile Word files', () => {
   const FAST_MS = 5000;
   const cell = (text: string) => `<w:tc>${p(r(text))}</w:tc>`;
-  /** Runs `fn`, checks it was fast, and reports the time when GRUNT_TIMINGS is set. */
+  /** Runs `fn`, checks it was fast, and reports the time when OTHERBENCH_TIMINGS is set. */
   function timed<T>(label: string, fn: () => T): T {
     const start = performance.now();
     const result = fn();
     const ms = performance.now() - start;
-    if (process.env['GRUNT_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
+    if (process.env['OTHERBENCH_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
     expect(ms).toBeLessThan(FAST_MS);
     return result;
   }
@@ -112,7 +112,7 @@ describe('reading hostile Word files', () => {
   it('reads 300 thousand empty paragraphs and a wide run of spaces in linear time', () => {
     const file = docx('<w:p/>'.repeat(300_000) + p(r('End')) + `<w:p><w:r><w:t xml:space="preserve">${' '.repeat(2_000_000)}</w:t></w:r></w:p>`);
     // Whitespace past the cap is still dropped as text that didn't fit, so the reading stops with a note.
-    expect(timed('300k empty paragraphs', () => extractOfficeText(file))).toMatch(/^End\n\n\[Grunt stopped reading here/);
+    expect(timed('300k empty paragraphs', () => extractOfficeText(file))).toMatch(/^End\n\n\[OtherBench stopped reading here/);
   });
 
   it('reads a table of 200 thousand rows in linear time and cuts it at the cap', () => {

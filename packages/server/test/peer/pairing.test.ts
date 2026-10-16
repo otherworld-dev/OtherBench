@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { PAIRING_CODE_TTL_MS, hashPeerToken } from '@grunt/core/domain/pairing.js';
+import { PAIRING_CODE_TTL_MS, hashPeerToken } from '@otherbench/core/domain/pairing.js';
 import { PeerClient } from '../../src/peer/client.js';
 import { IdentityStore } from '../../src/peer/identity.js';
 import { PeerError } from '../../src/peer/service.js';

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SCHEDULE_CHECK_MAX_MS } from '@grunt/core/domain/schedule.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { resolveWorkspace } from '@grunt/core/domain/workspace.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { NewSchedule } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import { SCHEDULE_CHECK_MAX_MS } from '@otherbench/core/domain/schedule.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { resolveWorkspace } from '@otherbench/core/domain/workspace.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { NewSchedule } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { collectMessageTree } from '../../src/routes/chats.js';
 import { ScheduleBusyError, ScheduleService, type ScheduleServiceDeps } from '../../src/schedule/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
@@ -211,7 +211,7 @@ describe('ScheduleService: when runs start', () => {
     addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
     store.schedules.addRun({ id: 'r-old', scheduleId: 's1', trigger: 'scheduled', dueAt: NINE - 24 * HOUR, startedAt: NINE - 24 * HOUR, status: 'running' });
     service.start();
-    expect(store.schedules.runs('s1')[0]).toMatchObject({ id: 'r-old', status: 'error', detail: 'Grunt stopped before this run finished.', finishedAt: T0 });
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ id: 'r-old', status: 'error', detail: 'OtherBench stopped before this run finished.', finishedAt: T0 });
   });
 
   it('runs at most two at once; a third waits, oldest due first, and starts when one ends', async () => {
@@ -586,7 +586,7 @@ describe('ScheduleService: deleted chats and store errors', () => {
 
       expect(() => clock.advance(30 * 60_000)).not.toThrow();
       expect(logged).toHaveBeenCalledWith(expect.stringContaining('run '), expect.objectContaining({ message: 'database is locked' }));
-      expect(store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: "Grunt couldn't stop this run: database is locked" });
+      expect(store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: "OtherBench couldn't stop this run: database is locked" });
       expect(scheduleEvents().at(-1)).toMatchObject({ type: 'schedule-run-finished', status: 'error', messageId });
       await expectLaterScheduleStarts();
     });

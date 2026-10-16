@@ -1,12 +1,12 @@
 import { constants as fsConstants, existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { HTTPException } from 'hono/http-exception';
-import { containPath, containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
-import { projectParentOf } from '@grunt/core/domain/projects.js';
-import { mergeFolders, resolveFolders, resolveWorkspace } from '@grunt/core/domain/workspace.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
-import { HardLinkError, openVerified, readdirVerified, ToctouGuardError } from '@grunt/tools/fs-tools.js';
+import { containPath, containPathIn, PathEscapeError } from '@otherbench/core/domain/paths.js';
+import { projectParentOf } from '@otherbench/core/domain/projects.js';
+import { mergeFolders, resolveFolders, resolveWorkspace } from '@otherbench/core/domain/workspace.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
+import { HardLinkError, openVerified, readdirVerified, ToctouGuardError } from '@otherbench/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import type { ViewLink } from './links.js';
 

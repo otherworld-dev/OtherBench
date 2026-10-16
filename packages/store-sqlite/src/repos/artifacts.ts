@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, LiveSpec, NewArtifactVersion } from '@grunt/core/ports/store.js';
-import { parseLiveSpec } from '@grunt/core/domain/live-artifacts.js';
+import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, LiveSpec, NewArtifactVersion } from '@otherbench/core/ports/store.js';
+import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
 import type { SyncClock } from './clock.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 

@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react';
-import type { LiveParam } from '@grunt/core/ports/store.js';
+import type { LiveParam } from '@otherbench/core/ports/store.js';
 import type { LiveOutcome, LiveStatus } from '../state/api.js';
 
 const BUTTON = 'btn px-2 py-0.5';

@@ -6,7 +6,7 @@ import {
 } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 
 const SCRYPT_KEY_LENGTH = 32; // AES-256
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 }; // interactive-strength scrypt cost
@@ -73,7 +73,7 @@ function decryptValue(entry: EncryptedEntry, key: Buffer): string {
  * rename/replace, and is a documented no-op on Windows (whose ACL model
  * `fs.chmod` cannot express) rather than a silent skip.
  *
- * This is the real, working default secret store for Grunt -- see
+ * This is the real, working default secret store for OtherBench -- see
  * `createSecretStore` for why it is used unconditionally rather than behind
  * an OS-keychain-with-fallback factory.
  */
@@ -183,7 +183,7 @@ export class EncryptedFileSecretStore implements SecretStore {
 }
 
 const KEYCHAIN_UNAVAILABLE_WARNING =
-  '[@grunt/store-sqlite] OS keychain storage is not available: there is no ' +
+  '[@otherbench/store-sqlite] OS keychain storage is not available: there is no ' +
   'non-native OS tool on this platform that can both store AND read back a ' +
   'secret over a CLI (Windows\' `cmdkey`, for example, can set a Credential ' +
   'Manager entry but the OS deliberately refuses to hand its password back ' +
@@ -192,7 +192,7 @@ const KEYCHAIN_UNAVAILABLE_WARNING =
   'AES-256-GCM-encrypted file instead.';
 
 /**
- * Builds the `SecretStore` Grunt actually uses. There is deliberately no
+ * Builds the `SecretStore` OtherBench actually uses. There is deliberately no
  * "try the OS keychain, silently fall back to a file" branch here: the
  * obvious keychain-via-shelling-out options were evaluated and rejected --
  * see {@link KEYCHAIN_UNAVAILABLE_WARNING} -- so this always returns the

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
-import { omissionNote, selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
+import { omissionNote, selectWithinBudget, withinAfterLoad } from '@otherbench/core/domain/request-budget.js';
 import {
   ATTACHMENT_BUDGET_NOTE,
   ATTACHMENT_REPEAT_NOTE,

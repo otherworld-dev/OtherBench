@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Container } from '../../src/container.js';
 import { createRemoteAccess, type RemoteAccess, type RemoteTls } from '../../src/remote/index.js';
 import { type Granted, LoginLimiter } from '../../src/remote/limiter.js';
@@ -45,12 +45,12 @@ export interface RemoteFixture {
 
 /** A sign-in setup in a temp folder, with `PASSWORD` already set. */
 export async function remoteFixture(opts: { tls?: RemoteTls; trustProxies?: string[]; publicUrls?: string[] } = {}): Promise<RemoteFixture> {
-  const dir = mkdtempSync(join(tmpdir(), 'grunt-remote-'));
+  const dir = mkdtempSync(join(tmpdir(), 'otherbench-remote-'));
   const loginPath = join(dir, 'login.json');
   const clock = { now: 1_800_000_000_000 };
   await new PasswordFile(loginPath, () => clock.now, FAST).write(PASSWORD);
   const remote = createRemoteAccess({
-    publicUrls: opts.publicUrls ?? ['https://grunt.test:4747'],
+    publicUrls: opts.publicUrls ?? ['https://otherbench.test:4747'],
     trustProxies: opts.trustProxies ?? [],
     loginPath,
     tls: opts.tls ?? { mode: 'proxy' },

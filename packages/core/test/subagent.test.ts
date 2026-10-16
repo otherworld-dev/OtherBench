@@ -443,7 +443,7 @@ describe('subagentResult and cutToolResultForCopy', () => {
     // What can't be written as JSON is stored as text, so the stored part stays serialisable.
     expect(typeof cutToolResultForCopy(circular)).toBe('string');
     expect(typeof cutToolResultForCopy(10n)).toBe('string');
-    expect(cutToolResultForCopy(nullCircular)).toBe("[a result Grunt couldn't show]");
+    expect(cutToolResultForCopy(nullCircular)).toBe("[a result OtherBench couldn't show]");
     expect(cutToolResultForCopy(Object.create(null))).toEqual({});
     // A BigInt inside an otherwise normal object keeps the rest of the content, with the BigInt as a string.
     expect(cutToolResultForCopy({ n: 1n, name: 'x' })).toEqual({ n: '1', name: 'x' });

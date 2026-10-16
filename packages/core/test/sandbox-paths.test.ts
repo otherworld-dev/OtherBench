@@ -3,8 +3,8 @@ import { normaliseWindowsPath, planMounts, SANDBOX_NO_FILES_PROMPT, SandboxPathE
 
 describe('toSandboxPath', () => {
   it.each([
-    ['E:\\Git\\Grunt', '/mnt/e/Git/Grunt'],
-    ['e:\\Git\\Grunt', '/mnt/e/Git/Grunt'],
+    ['E:\\Git\\OtherBench', '/mnt/e/Git/OtherBench'],
+    ['e:\\Git\\OtherBench', '/mnt/e/Git/OtherBench'],
     ['C:\\', '/mnt/c'],
     ["C:\\Users\\Zoë O'Brien\\My Project (old)", "/mnt/c/Users/Zoë O'Brien/My Project (old)"],
   ])('%s -> %s', (win, linux) => {
@@ -12,9 +12,9 @@ describe('toSandboxPath', () => {
   });
 
   it.each([
-    ['a trailing separator', 'e:\\Git\\Grunt\\', /empty segment or a trailing/],
-    ['forward slashes', 'E:/Git/Grunt', /drive letter/],
-    ['a repeated separator', 'E:\\Git\\\\Grunt', /empty segment/],
+    ['a trailing separator', 'e:\\Git\\OtherBench\\', /empty segment or a trailing/],
+    ['forward slashes', 'E:/Git/OtherBench', /drive letter/],
+    ['a repeated separator', 'E:\\Git\\\\OtherBench', /empty segment/],
     ['a colon in a name', 'E:\\a:b', /character Windows does not allow/],
     ['a < in a name', 'E:\\a<b', /character Windows does not allow/],
     ['a > in a name', 'E:\\a>b', /character Windows does not allow/],
@@ -63,13 +63,13 @@ describe('toSandboxPath', () => {
     ['//nas/share/project', /network/],
     ['\\\\?\\C:\\Git', /device/],
     ['\\\\.\\PhysicalDrive0', /device/],
-    ['Git\\Grunt', /drive letter/],
+    ['Git\\OtherBench', /drive letter/],
     ['/home/adam/project', /drive letter/],
     ['E:', /drive letter/],
     ['E:Git', /drive letter/],
     ['-E:\\a', /drive letter/],
     ['E:\\Git\\..\\Windows', /\.\./],
-    ['E:\\Git\nGrunt', /control/],
+    ['E:\\Git\nOtherBench', /control/],
   ])('refuses %s', (win, reason) => {
     expect(() => toSandboxPath(win)).toThrow(SandboxPathError);
     expect(() => toSandboxPath(win)).toThrow(reason);
@@ -78,14 +78,14 @@ describe('toSandboxPath', () => {
 
 describe('normaliseWindowsPath', () => {
   it('upper-cases the drive, uses backslashes and drops trailing and repeated separators', () => {
-    expect(normaliseWindowsPath('e:/Git//Grunt/')).toBe('E:\\Git\\Grunt');
+    expect(normaliseWindowsPath('e:/Git//OtherBench/')).toBe('E:\\Git\\OtherBench');
     expect(normaliseWindowsPath('c:\\')).toBe('C:\\');
     expect(normaliseWindowsPath('C:/')).toBe('C:\\');
   });
 
   it('checks the tidied path by the same rules as toSandboxPath, so a path it returns always maps', () => {
     for (const bad of ['E:/a:b', 'E:\\a<b', 'E:/a./b', 'E:/a /b', `E:/${'a'.repeat(1030)}`]) expect(() => normaliseWindowsPath(bad)).toThrow(SandboxPathError);
-    expect(toSandboxPath(normaliseWindowsPath('e:/Git//Grunt/'))).toBe('/mnt/e/Git/Grunt');
+    expect(toSandboxPath(normaliseWindowsPath('e:/Git//OtherBench/'))).toBe('/mnt/e/Git/OtherBench');
   });
 });
 
@@ -93,18 +93,18 @@ describe('planMounts', () => {
   const need = (windowsPath: string, writable = false) => ({ windowsPath, writable });
 
   it("merges every running chat's folders, read-write if any chat needs it writable, parents first", () => {
-    expect(planMounts([[need('E:\\Git\\Grunt'), need('D:\\Refs')], [need('e:\\git\\grunt', true)]])).toEqual([
+    expect(planMounts([[need('E:\\Git\\OtherBench'), need('D:\\Refs')], [need('e:\\git\\otherbench', true)]])).toEqual([
       { windowsPath: 'D:\\Refs', linuxPath: '/mnt/d/Refs', mode: 'ro' },
-      { windowsPath: 'E:\\Git\\Grunt', linuxPath: '/mnt/e/Git/Grunt', mode: 'rw' },
+      { windowsPath: 'E:\\Git\\OtherBench', linuxPath: '/mnt/e/Git/OtherBench', mode: 'rw' },
     ]);
   });
 
   it('drops a folder covered by a mounted parent of the same or wider mode, and keeps one that needs more', () => {
-    expect(planMounts([[need('E:\\Git', true), need('E:\\Git\\Grunt\\vendor')]])).toEqual([{ windowsPath: 'E:\\Git', linuxPath: '/mnt/e/Git', mode: 'rw' }]);
-    expect(planMounts([[need('E:\\Git'), need('E:\\Git\\Grunt')]])).toEqual([{ windowsPath: 'E:\\Git', linuxPath: '/mnt/e/Git', mode: 'ro' }]);
-    expect(planMounts([[need('E:\\Git'), need('E:\\Git\\Grunt', true)]])).toEqual([
+    expect(planMounts([[need('E:\\Git', true), need('E:\\Git\\OtherBench\\vendor')]])).toEqual([{ windowsPath: 'E:\\Git', linuxPath: '/mnt/e/Git', mode: 'rw' }]);
+    expect(planMounts([[need('E:\\Git'), need('E:\\Git\\OtherBench')]])).toEqual([{ windowsPath: 'E:\\Git', linuxPath: '/mnt/e/Git', mode: 'ro' }]);
+    expect(planMounts([[need('E:\\Git'), need('E:\\Git\\OtherBench', true)]])).toEqual([
       { windowsPath: 'E:\\Git', linuxPath: '/mnt/e/Git', mode: 'ro' },
-      { windowsPath: 'E:\\Git\\Grunt', linuxPath: '/mnt/e/Git/Grunt', mode: 'rw' },
+      { windowsPath: 'E:\\Git\\OtherBench', linuxPath: '/mnt/e/Git/OtherBench', mode: 'rw' },
     ]);
   });
 
@@ -123,19 +123,19 @@ describe('planMounts', () => {
 
 describe('sandboxFoldersPrompt', () => {
   it('names the workspace and each folder with its sandbox path', () => {
-    const text = sandboxFoldersPrompt('E:\\Git\\Grunt', [
+    const text = sandboxFoldersPrompt('E:\\Git\\OtherBench', [
       { root: 'D:\\Refs', access: 'read' },
       { root: 'D:\\Out', access: 'readwrite' },
     ]);
     expect(text).toContain('# Sandbox');
-    expect(text).toContain('The workspace E:\\Git\\Grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(text).toContain('The workspace E:\\Git\\OtherBench is /mnt/e/Git/OtherBench in the sandbox');
     expect(text).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
     expect(text).toContain('D:\\Out is /mnt/d/Out in the sandbox.');
   });
 
   it("maps each folder's real path when given a way to find it, and still names the folder as it was given", () => {
-    const text = sandboxFoldersPrompt('e:\\git\\grunt', [{ root: 'Z:\\Docs', access: 'read' }], (p) => (p === 'e:\\git\\grunt' ? 'E:\\Git\\Grunt' : '\\\\nas\\docs'));
-    expect(text).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
+    const text = sandboxFoldersPrompt('e:\\git\\otherbench', [{ root: 'Z:\\Docs', access: 'read' }], (p) => (p === 'e:\\git\\otherbench' ? 'E:\\Git\\OtherBench' : '\\\\nas\\docs'));
+    expect(text).toContain('The workspace e:\\git\\otherbench is /mnt/e/Git/OtherBench in the sandbox');
     expect(text).toMatch(/Z:\\Docs is not available in the sandbox \(network/);
   });
 
@@ -148,19 +148,19 @@ describe('sandboxPrompt', () => {
   const folders = [{ root: 'D:\\Refs', access: 'read' as const }];
 
   it('with file access off, names no folder: the command runs in its own home with none of them', () => {
-    const text = sandboxPrompt('off', 'E:\\Git\\Grunt', folders);
+    const text = sandboxPrompt('off', 'E:\\Git\\OtherBench', folders);
     expect(text).toBe(SANDBOX_NO_FILES_PROMPT);
     expect(text).toContain('# Sandbox');
     expect(text).toMatch(/File access is off/);
     expect(text).toMatch(/starts in its own home folder/);
-    expect(text).not.toMatch(/\/mnt|Grunt|Refs/);
+    expect(text).not.toMatch(/\/mnt|OtherBench|Refs/);
   });
 
   it("treats a file access it doesn't know as off", () => {
-    expect(sandboxPrompt('everything' as never, 'E:\\Git\\Grunt', folders)).toBe(SANDBOX_NO_FILES_PROMPT);
+    expect(sandboxPrompt('everything' as never, 'E:\\Git\\OtherBench', folders)).toBe(SANDBOX_NO_FILES_PROMPT);
   });
 
   it('with file access, is the folders block', () => {
-    for (const fs of ['read', 'readwrite'] as const) expect(sandboxPrompt(fs, 'E:\\Git\\Grunt', folders)).toBe(sandboxFoldersPrompt('E:\\Git\\Grunt', folders));
+    for (const fs of ['read', 'readwrite'] as const) expect(sandboxPrompt(fs, 'E:\\Git\\OtherBench', folders)).toBe(sandboxFoldersPrompt('E:\\Git\\OtherBench', folders));
   });
 });

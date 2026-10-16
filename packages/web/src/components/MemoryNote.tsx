@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX, type ReactNode } from 'react';
-import type { MemoryVersionSummary } from '@grunt/core/domain/memory.js';
+import type { MemoryVersionSummary } from '@otherbench/core/domain/memory.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { ApiError } from '../state/api.js';
 import { MarkdownBody } from './MarkdownBody.js';

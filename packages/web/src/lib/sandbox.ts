@@ -1,8 +1,8 @@
-/** run_command, as the API engines name it, or as Claude Code calls it on Grunt's relay (`mcp__grunt_<16 hex>__run_command`). */
-const RUN_COMMAND = /^(?:run_command|mcp__grunt_[0-9a-f]{16}__run_command)$/;
+/** run_command, as the API engines name it, or as Claude Code calls it on OtherBench's relay (`mcp__otherbench_<16 hex>__run_command`). */
+const RUN_COMMAND = /^(?:run_command|mcp__otherbench_[0-9a-f]{16}__run_command)$/;
 
 /**
- * True for a run_command result from Grunt's sandbox (spec 2026-10-12-sandbox-design):
+ * True for a run_command result from OtherBench's sandbox (spec 2026-10-12-sandbox-design):
  * an object with `sandbox: true`, or that object as JSON text (how Claude
  * Code's relay and the mock provider hand results back). Only run_command's:
  * any other tool (an MCP server's, say) can return `sandbox: true` too, and

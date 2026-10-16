@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ScheduleView } from '@grunt/core/ports/store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ScheduleView } from '@otherbench/core/ports/store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';

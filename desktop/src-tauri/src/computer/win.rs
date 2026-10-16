@@ -3,7 +3,7 @@
 //! NOTHING in this file may run in a test or an unattended session: it reads
 //! the real screen, moves the real mouse and presses real keys. It is only
 //! reached through desktop.rs, which only exists when the shell was started
-//! with GRUNT_COMPUTER_USE=1 for Adam's live check. No test calls it.
+//! with OTHERBENCH_COMPUTER_USE=1 for Adam's live check. No test calls it.
 //!
 //! Facts are found conservatively: when one can't be established it is left
 //! out or the target is refused, `shellView` is true when unsure, and a
@@ -81,7 +81,7 @@ fn filetime(t: FILETIME) -> u64 {
 pub fn screen_size() -> Result<(u32, u32), String> {
     let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
     if w <= 0 || h <= 0 {
-        return Err("Grunt couldn't read the screen size.".into());
+        return Err("OtherBench couldn't read the screen size.".into());
     }
     Ok((w as u32, h as u32))
 }
@@ -93,7 +93,7 @@ pub fn capture(max: (u32, u32)) -> Result<Capture, String> {
     unsafe {
         let screen = GetDC(None);
         if screen.is_invalid() {
-            return Err("Grunt couldn't read the screen.".into());
+            return Err("OtherBench couldn't read the screen.".into());
         }
         let memory = CreateCompatibleDC(Some(screen));
         let mut info = BITMAPINFO::default();
@@ -109,7 +109,7 @@ pub fn capture(max: (u32, u32)) -> Result<Capture, String> {
             Err(_) => {
                 let _ = DeleteDC(memory);
                 ReleaseDC(None, screen);
-                return Err("Grunt couldn't capture the screen.".into());
+                return Err("OtherBench couldn't capture the screen.".into());
             }
         };
         let previous = SelectObject(memory, HGDIOBJ(bitmap.0));
@@ -123,7 +123,7 @@ pub fn capture(max: (u32, u32)) -> Result<Capture, String> {
         let _ = DeleteDC(memory);
         ReleaseDC(None, screen);
         if bgra.is_empty() {
-            return Err("Grunt couldn't capture the screen.".into());
+            return Err("OtherBench couldn't capture the screen.".into());
         }
         Ok(Capture { bgra, width: w, height: h, screen_w, screen_h })
     }
@@ -131,12 +131,12 @@ pub fn capture(max: (u32, u32)) -> Result<Capture, String> {
 
 pub fn cursor() -> Result<(i32, i32), String> {
     let mut p = POINT::default();
-    unsafe { GetCursorPos(&mut p) }.map_err(|_| "Grunt couldn't read the cursor.".to_string())?;
+    unsafe { GetCursorPos(&mut p) }.map_err(|_| "OtherBench couldn't read the cursor.".to_string())?;
     Ok((p.x, p.y))
 }
 
 pub fn move_to(x: i32, y: i32) -> Result<(), String> {
-    unsafe { SetCursorPos(x, y) }.map_err(|_| "Grunt couldn't move the mouse; nothing more was done.".to_string())
+    unsafe { SetCursorPos(x, y) }.map_err(|_| "OtherBench couldn't move the mouse; nothing more was done.".to_string())
 }
 
 /// Keeps a window (the indicator bar) out of screenshots.
@@ -330,7 +330,7 @@ struct Process {
 }
 
 fn open_process(pid: u32) -> Result<Owned, String> {
-    unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map(Owned).map_err(|_| "Grunt can't open that app's process.".to_string())
+    unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map(Owned).map_err(|_| "OtherBench can't open that app's process.".to_string())
 }
 
 fn started_at(process: HANDLE) -> Option<u64> {
@@ -343,7 +343,7 @@ fn started_at(process: HANDLE) -> Option<u64> {
 /// substituted drives resolved, on-disk case, `\\?\` stripped one way. An
 /// unpaired surrogate anywhere is refused, never decoded lossily.
 fn image_path(process: HANDLE) -> Result<String, String> {
-    let unreadable = || "Grunt can't read that app's program path.".to_string();
+    let unreadable = || "OtherBench can't read that app's program path.".to_string();
     let mut image = vec![0u16; 32768];
     let mut len = image.len() as u32;
     unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(image.as_mut_ptr()), &mut len) }.map_err(|_| unreadable())?;
@@ -374,7 +374,7 @@ fn image_path(process: HANDLE) -> Result<String, String> {
 fn process(pid: u32) -> Result<Process, String> {
     let handle = open_process(pid)?;
     let path = image_path(handle.0)?;
-    let started = started_at(handle.0).ok_or("Grunt can't tell when that app started.")?;
+    let started = started_at(handle.0).ok_or("OtherBench can't tell when that app started.")?;
     Ok(Process { pid, handle, path, started })
 }
 
@@ -383,7 +383,7 @@ fn process(pid: u32) -> Result<Process, String> {
 fn owner(window: HWND) -> Result<Process, String> {
     let pid = window_pid(window);
     if pid == 0 {
-        return Err("Grunt can't tell which app owns that window.".into());
+        return Err("OtherBench can't tell which app owns that window.".into());
     }
     let frame = process(pid)?;
     if facts::file_name(&frame.path).eq_ignore_ascii_case("ApplicationFrameHost.exe") {
@@ -436,9 +436,9 @@ fn started_by_pid(pid: u32) -> Option<u64> {
     started_at(open_process(pid).ok()?.0)
 }
 
-/// Grunt's own process, any process descended from it (its webview and
-/// server children), or a window owned by a Grunt window. None: unknown.
-fn is_grunt(window: HWND, pid: u32) -> Option<bool> {
+/// OtherBench's own process, any process descended from it (its webview and
+/// server children), or a window owned by an OtherBench window. None: unknown.
+fn is_otherbench(window: HWND, pid: u32) -> Option<bool> {
     let own = unsafe { GetCurrentProcessId() };
     let parents = parents()?;
     let ours = |p: u32| facts::descends_from(p, own, &parents, &started_by_pid);
@@ -592,9 +592,9 @@ fn title(window: HWND) -> String {
 /// Every `ComputerTarget` fact about a top-level window, or a refusal.
 pub fn facts(window: HWND) -> Result<Facts, String> {
     let owner = owner(window)?;
-    let (elevated, ui_access) = token_flags(owner.handle.0).ok_or("Grunt can't read that app's permissions.")?;
+    let (elevated, ui_access) = token_flags(owner.handle.0).ok_or("OtherBench can't read that app's permissions.")?;
     Ok(Facts {
-        grunt: is_grunt(window, owner.pid),
+        otherbench: is_otherbench(window, owner.pid),
         console: is_console(window, &owner.path),
         location: location(&owner.path),
         original_name: original_name(&owner.path),

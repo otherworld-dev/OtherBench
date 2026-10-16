@@ -13,7 +13,7 @@ function problem(next: string): string | null {
 /**
  * Settings → Remote access → Change password (spec 2026-10-12-remote-access
  * §5). Needs the current password; every other device is signed out and
- * this one gets a new session. `grunt password` on the box does the same.
+ * this one gets a new session. `otherbench password` on the box does the same.
  */
 export function ChangePassword(): JSX.Element {
   const changePassword = useAuthStore((s) => s.changePassword);
@@ -48,7 +48,7 @@ export function ChangePassword(): JSX.Element {
   const field = 'mt-1 block w-full max-w-sm rounded border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5';
   return (
     <form onSubmit={(e) => void submit(e)} className="space-y-2" aria-label="Change password">
-      <input type="text" name="username" autoComplete="username" value="grunt" readOnly hidden />
+      <input type="text" name="username" autoComplete="username" value="otherbench" readOnly hidden />
       <label className="block">
         Current password
         <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} className={field} />

@@ -1,8 +1,8 @@
 import { createServer as createHttpServer, request, type IncomingMessage, type Server } from 'node:http';
 import { connect as netConnect, createServer as createNetServer, type AddressInfo, type Server as NetServer, type Socket } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { browserHostDenial, browserUrlCheck } from '@grunt/core/domain/browser-hosts.js';
-import { BROWSER_HOST_VECTORS, type BrowserHostVector } from '@grunt/core/testing/browser-host-vectors.js';
+import { browserHostDenial, browserUrlCheck } from '@otherbench/core/domain/browser-hosts.js';
+import { BROWSER_HOST_VECTORS, type BrowserHostVector } from '@otherbench/core/testing/browser-host-vectors.js';
 import { checkProxyTarget, startEgressProxy, type EgressProxy, type EgressProxyOptions } from '../../src/browser/proxy.js';
 
 const basic = (user: string, password: string) => `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`;
@@ -141,7 +141,7 @@ describe('startEgressProxy', () => {
     expect(p.server).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     const plain = await getVia(p, `http://site.test:${portOf(site)}/`, {});
     expect(plain.status).toBe(407);
-    expect(plain.headers['proxy-authenticate']).toBe('Basic realm="grunt"');
+    expect(plain.headers['proxy-authenticate']).toBe('Basic realm="otherbench"');
     expect((await connectVia(p, `echo.test:${portOf(echo)}`)).status).toBe(407);
     expect((await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', 'wrong'))).status).toBe(407);
   });

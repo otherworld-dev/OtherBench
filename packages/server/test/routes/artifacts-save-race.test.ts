@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A file that appears between Save's check and its open: openVerified says so with AlreadyExistsError.
-vi.mock('@grunt/tools/fs-tools.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@grunt/tools/fs-tools.js')>();
+vi.mock('@otherbench/tools/fs-tools.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@otherbench/tools/fs-tools.js')>();
   return { ...actual, openVerified: vi.fn(async (_root: string, candidate: string) => Promise.reject(new actual.AlreadyExistsError(candidate))) };
 });
 
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -19,7 +19,7 @@ let container: Container;
 let ws: string;
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-art-race-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-art-race-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);

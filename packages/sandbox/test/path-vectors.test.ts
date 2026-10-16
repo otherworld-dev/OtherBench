@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { SandboxPathError, toSandboxPath } from '@grunt/core/domain/sandbox-paths.js';
+import { SandboxPathError, toSandboxPath } from '@otherbench/core/domain/sandbox-paths.js';
 import { hasBash, runMountScriptWithEnvPaths as runMountScript } from './helpers.js';
 
 /**
  * One table of Windows paths, run against both implementations of the path rules: toSandboxPath
- * in core (what Grunt plans with) and mount.sh (the strict gate that runs as root). They must
+ * in core (what OtherBench plans with) and mount.sh (the strict gate that runs as root). They must
  * accept and refuse exactly the same paths and agree on where an accepted one is mounted.
  */
 interface Vector {

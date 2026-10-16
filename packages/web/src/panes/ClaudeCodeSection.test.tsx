@@ -1,8 +1,8 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import { useGruntStore } from '../state/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeCodeSection, resumeCommand } from './ClaudeCodeSection.js';
 
 afterEach(cleanup);
@@ -10,14 +10,14 @@ const msg = (id: string, createdAt: number, sessionId?: string): CanonMessage =>
 
 describe('ClaudeCodeSection', () => {
   it('renders nothing for a chat without Claude Code turns', () => {
-    useGruntStore.setState({ messages: { a: msg('a', 1) } });
+    useOtherBenchStore.setState({ messages: { a: msg('a', 1) } });
     const { container } = render(<ClaudeCodeSection chatId="c1" />);
     expect(container).toBeEmptyDOMElement();
   });
   it('shows the latest session with backend, tools, MCP servers and a copyable resume command', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    useGruntStore.setState({ messages: { a: msg('a', 1, 'old'), b: msg('b', 2, 'new-session') } });
+    useOtherBenchStore.setState({ messages: { a: msg('a', 1, 'old'), b: msg('b', 2, 'new-session') } });
     render(<ClaudeCodeSection chatId="c1" />);
     expect(screen.getByText('new-session')).toBeInTheDocument();
     expect(screen.getByText('Claude login')).toBeInTheDocument();
@@ -40,7 +40,7 @@ describe('ClaudeCodeSection', () => {
         mcpServers: [{ name: 'nextcloud', status: 'connected' }, { name: 'godot', status: 'failed' }, { name: 'idle-server', status: 'connected' }],
       },
     };
-    useGruntStore.setState({ messages: { a: m } });
+    useOtherBenchStore.setState({ messages: { a: m } });
     render(<ClaudeCodeSection chatId="c1" />);
 
     expect(screen.getByText('3 built-in tools')).toBeInTheDocument();
@@ -65,7 +65,7 @@ describe('ClaudeCodeSection', () => {
   });
 
   it('collapses built-in tools into one summary line until expanded', async () => {
-    useGruntStore.setState({ messages: { a: withMeta(['Read', 'Edit', 'Bash'], []) } });
+    useOtherBenchStore.setState({ messages: { a: withMeta(['Read', 'Edit', 'Bash'], []) } });
     render(<ClaudeCodeSection chatId="c1" />);
     expect(screen.getByText('3 built-in tools')).toBeInTheDocument();
     expect(screen.getByText('Read, Edit, Bash')).not.toBeVisible();
@@ -74,13 +74,13 @@ describe('ClaudeCodeSection', () => {
   });
 
   it('uses the singular for one built-in tool', () => {
-    useGruntStore.setState({ messages: { a: withMeta(['Read'], []) } });
+    useOtherBenchStore.setState({ messages: { a: withMeta(['Read'], []) } });
     render(<ClaudeCodeSection chatId="c1" />);
     expect(screen.getByText('1 built-in tool')).toBeInTheDocument();
   });
 
   it('hides zero-tool servers behind one counted summary, listed on expand', async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       messages: {
         a: withMeta(['Read', 'mcp__a__x'], [
           { name: 'a', status: 'connected' },
@@ -102,18 +102,18 @@ describe('ClaudeCodeSection', () => {
   });
 
   it('shows only the summary when every server has zero tools, and no MCP row without servers', () => {
-    useGruntStore.setState({ messages: { a: withMeta(['Read'], [{ name: 'x', status: 'needs-auth' }, { name: 'y', status: 'failed' }]) } });
+    useOtherBenchStore.setState({ messages: { a: withMeta(['Read'], [{ name: 'x', status: 'needs-auth' }, { name: 'y', status: 'failed' }]) } });
     const { unmount } = render(<ClaudeCodeSection chatId="c1" />);
     expect(screen.getByText('2 more with no tools (needs sign-in or failed)')).toBeInTheDocument();
     expect(document.querySelectorAll('details')).toHaveLength(2);
     unmount();
-    useGruntStore.setState({ messages: { a: withMeta(['Read'], []) } });
+    useOtherBenchStore.setState({ messages: { a: withMeta(['Read'], []) } });
     render(<ClaudeCodeSection chatId="c1" />);
     expect(screen.queryByText('MCP')).toBeNull();
   });
 
   it('orders servers with tools by tool count desc, then name', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       messages: {
         a: withMeta(['mcp__b__1', 'mcp__a__1', 'mcp__c__1', 'mcp__c__2', 'mcp__c__3', 'mcp__d__1', 'mcp__d__2'], [
           { name: 'a', status: 'connected' }, { name: 'b', status: 'connected' }, { name: 'c', status: 'connected' }, { name: 'd', status: 'connected' },

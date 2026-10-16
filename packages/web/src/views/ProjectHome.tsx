@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import { hasMemoryContent } from '@grunt/core/domain/memory.js';
-import { compareProjects, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import { hasMemoryContent } from '@otherbench/core/domain/memory.js';
+import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
@@ -11,7 +11,7 @@ import { ApiError } from '../state/api.js';
 import { chatStatus, useChatActivity } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
 import { StartChatError, startChat } from '../state/startChat.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
 import { awayFolderWhere } from './project/folders.js';
 
@@ -25,9 +25,9 @@ const EMPTY = 'text-sm text-[var(--text-faint)]';
  * Project settings and, for memory, the Inspector.
  */
 export function ProjectHome({ projectId }: { projectId: string }): JSX.Element {
-  const project = useGruntStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
-  const projectsLoaded = useGruntStore((s) => s.projectsLoaded);
-  const closeTab = useGruntStore((s) => s.closeTab);
+  const project = useOtherBenchStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
+  const projectsLoaded = useOtherBenchStore((s) => s.projectsLoaded);
+  const closeTab = useOtherBenchStore((s) => s.closeTab);
   // A restored tab renders before the project list arrives: that isn't a deleted project.
   if (!project && !projectsLoaded) return <p className={`p-6 ${EMPTY}`}>Loading…</p>;
   if (!project) {
@@ -44,9 +44,9 @@ export function ProjectHome({ projectId }: { projectId: string }): JSX.Element {
 }
 
 function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
-  const openProjectPage = useGruntStore((s) => s.openProjectPage);
-  const openTab = useGruntStore((s) => s.openTab);
-  const projects = useGruntStore((s) => s.projects);
+  const openProjectPage = useOtherBenchStore((s) => s.openProjectPage);
+  const openTab = useOtherBenchStore((s) => s.openTab);
+  const projects = useOtherBenchStore((s) => s.projects);
   const parent = projectParentOf(project, projectLookup(projects));
   return (
     <div data-testid="project-home" className="@container h-full min-h-0 overflow-y-auto bg-[var(--bg)]">
@@ -99,7 +99,7 @@ export function resetPendingStartsForTests(): void {
 function pendingStart(projectId: string): Chat | undefined {
   const id = pendingStarts.get(projectId);
   if (id === undefined) return undefined;
-  const chat = useGruntStore.getState().chats.find((c) => c.id === id);
+  const chat = useOtherBenchStore.getState().chats.find((c) => c.id === id);
   if (chat && chat.projectId === projectId && chat.archivedAt === null && chat.headMessageId === null) return chat;
   pendingStarts.delete(projectId);
   return undefined;
@@ -111,7 +111,7 @@ function pendingStart(projectId: string): Chat | undefined {
  * moved on to something else is left alone: the chat waits in the sidebar.
  */
 function showInPagePane(projectId: string, chatId: string): void {
-  const { paneState, focusPane, setActiveChatId } = useGruntStore.getState();
+  const { paneState, focusPane, setActiveChatId } = useOtherBenchStore.getState();
   const at = paneState.panes.indexOf(projectTabId(projectId));
   if (at === -1) return;
   const back = paneState.focusedPane;
@@ -139,7 +139,7 @@ function StartBox({ project }: { project: Project }): JSX.Element {
     } catch (err) {
       if (err instanceof StartChatError) pendingStarts.set(project.id, err.chat.id);
       const cause = err instanceof StartChatError ? err.cause : err;
-      console.error(`[grunt-web] failed to start a chat in project ${project.id}:`, cause);
+      console.error(`[otherbench-web] failed to start a chat in project ${project.id}:`, cause);
       setError(cause instanceof ApiError ? cause.message : "Couldn't start the chat. Please try again.");
     } finally {
       setSending(false);
@@ -175,9 +175,9 @@ function StartBox({ project }: { project: Project }): JSX.Element {
 
 /** A parent project's sub-projects, each opening its own page (spec 2026-10-15-sub-projects-design §6); nothing for one without. */
 function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
-  const projects = useGruntStore((s) => s.projects);
-  const chats = useGruntStore((s) => s.chats);
-  const openTab = useGruntStore((s) => s.openTab);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const openTab = useOtherBenchStore((s) => s.openTab);
   const lookup = projectLookup(projects);
   const subs = [...projects].sort(compareProjects).filter((p) => projectParentOf(p, lookup)?.id === projectId);
   if (subs.length === 0) return null;
@@ -208,9 +208,9 @@ function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
 }
 
 function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
-  const projects = useGruntStore((s) => s.projects);
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
+  const chats = useOtherBenchStore((s) => s.chats);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const { waiting, working } = useChatActivity();
   // The sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
@@ -245,7 +245,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
 }
 
 function About({ project }: { project: Project }): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
+  const profiles = useOtherBenchStore((s) => s.profiles);
   const profile = project.defaultProfileId === null ? null : (profiles.find((p) => p.id === project.defaultProfileId) ?? null);
   const away = awayFolderWhere(project);
   const extra = project.folderViews ?? [];
@@ -275,7 +275,7 @@ function About({ project }: { project: Project }): JSX.Element {
       </section>
       <section aria-label="Default profile">
         <h3 className={HEADING}>Default profile</h3>
-        <p className="text-sm">{profile?.name ?? "Grunt's default profile"}</p>
+        <p className="text-sm">{profile?.name ?? "OtherBench's default profile"}</p>
       </section>
       <section aria-label="Memory">
         <h3 className={HEADING}>Memory</h3>
@@ -286,7 +286,7 @@ function About({ project }: { project: Project }): JSX.Element {
 }
 
 function MemoryPanel({ projectId }: { projectId: string }): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
+  const chats = useOtherBenchStore((s) => s.chats);
   const { view, loadFailed } = useProjectMemory(projectId);
   if (!view) return <p className={EMPTY}>{loadFailed ? "Couldn't load project memory." : 'Loading…'}</p>;
   return (

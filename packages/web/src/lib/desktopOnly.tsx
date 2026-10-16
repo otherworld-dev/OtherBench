@@ -1,8 +1,8 @@
 import type { JSX } from 'react';
-import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@otherbench/core/domain/computer-apps.js';
 import { isDesktop } from '../desktop/bridge.js';
 import { ApiError } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 /**
  * What a card says when its answer didn't go through: the server's own words
@@ -25,11 +25,11 @@ export function answerErrorText(err: unknown, fallback: string): string {
  * shown, and a refused answer shows the server's own reason instead.
  */
 export function DesktopOnlyNote(): JSX.Element | null {
-  const controlling = useGruntStore((s) => Object.keys(s.computerSessions).length > 0);
+  const controlling = useOtherBenchStore((s) => Object.keys(s.computerSessions).length > 0);
   if (!controlling || isDesktop()) return null;
   return (
     <p data-testid="desktop-only-note" className="text-xs text-[var(--warn)]">
-      Grunt is controlling this computer. Until that ends, answer this in the Grunt app on this computer.
+      OtherBench is controlling this computer. Until that ends, answer this in the OtherBench app on this computer.
     </p>
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeSecretStore, FakeToolProvider, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeSecretStore, FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -148,7 +148,7 @@ describe('capability-fallback notice: real HTTP round trip (regression)', () => 
   it('a subscriber connecting right after the turn is posted still sees the notice in the hello replay -- not lost to the registerTurn race', async () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
-    // Shaped like the real GruntToolProvider: a genuine `async` method with
+    // Shaped like the real OtherBenchToolProvider: a genuine `async` method with
     // no internal `await` -- this is what creates the race (see this file's
     // module doc).
     const toolProvider = new FakeToolProvider();

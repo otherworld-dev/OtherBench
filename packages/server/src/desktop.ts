@@ -2,7 +2,7 @@ import type { MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 
 /**
- * Pieces of `grunt serve` that only the desktop shell turns on. Browser
+ * Pieces of `otherbench serve` that only the desktop shell turns on. Browser
  * mode (`npm run serve` + a browser) never mounts the CORS allowlist, and
  * keeps the same-origin `/api` it always had.
  */

@@ -4,32 +4,32 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { runArtifactCommand } from '@grunt/core/domain/artifacts.js';
-import { runRecallCommand } from '@grunt/core/domain/recall.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { Sandbox } from '@grunt/core/ports/sandbox.js';
-import type { ComputerDriver } from '@grunt/core/ports/computer.js';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
-import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
-import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
-import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/engine.js';
-import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
-import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
-import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
-import { SqliteStore } from '@grunt/store-sqlite/store.js';
-import { liveToolRisks } from '@grunt/tools/artifact-tool.js';
-import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
-import { BrowserManager } from '@grunt/tools/browser/manager.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { runArtifactCommand } from '@otherbench/core/domain/artifacts.js';
+import { runRecallCommand } from '@otherbench/core/domain/recall.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { reconcileInterruptedTurns } from '@otherbench/core/domain/reconcile.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
+import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { ToolProvider } from '@otherbench/core/ports/tool-provider.js';
+import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { AiSdkChatEngine } from '@otherbench/engine-aisdk/engine.js';
+import { ProviderRegistry } from '@otherbench/engine-aisdk/registry.js';
+import { ClaudeCodeChatEngine, type QueryFn } from '@otherbench/engine-claude-code/engine.js';
+import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
+import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { openDatabase } from '@otherbench/store-sqlite/db.js';
+import { runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
+import { createSecretStore } from '@otherbench/store-sqlite/secret-store.js';
+import { SqliteStore } from '@otherbench/store-sqlite/store.js';
+import { liveToolRisks } from '@otherbench/tools/artifact-tool.js';
+import { ChromiumSessions } from '@otherbench/tools/browser/chromium.js';
+import { BrowserManager } from '@otherbench/tools/browser/manager.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
 import type { BrowserPort } from './routes/browser.js';
@@ -133,7 +133,7 @@ export interface Container {
   /**
    * Computer use (spec 2026-10-12-computer-use-design section 7): the
    * control sessions over the driver, which is the desktop shell's on
-   * Windows and the fake one under GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only).
+   * Windows and the fake one under OTHERBENCH_COMPUTER_FAKE_DRIVER=1 (tests only).
    * Absent when there is no driver, and then no profile is offered the
    * `computer` tool whatever it says.
    */
@@ -146,7 +146,7 @@ export interface Container {
   settled?(): Promise<void>;
 }
 
-/** `GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` (tests only): ports on 127.0.0.1 the model's browser may reach. */
+/** `OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS` (tests only): ports on 127.0.0.1 the model's browser may reach. */
 export function loopbackPortsFromEnv(value: string | undefined): number[] {
   if (!value) return [];
   return value
@@ -159,9 +159,9 @@ export function loopbackPortsFromEnv(value: string | undefined): number[] {
 
 /**
  * The loopback ports the model's browser may reach (from
- * GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS) without Grunt's own: its API and peer
+ * OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS) without OtherBench's own: its API and peer
  * listeners are never a test fixture, and the browser reaching them would be
- * the model driving Grunt. `dropped` lists what was taken out.
+ * the model driving OtherBench. `dropped` lists what was taken out.
  */
 export function withoutOwnPorts(ports: readonly number[], own: readonly (number | undefined)[]): { ports: number[]; dropped: number[] } {
   const mine = new Set(own.filter((p): p is number => p !== undefined && p > 0));
@@ -171,7 +171,7 @@ export function withoutOwnPorts(ports: readonly number[], own: readonly (number 
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
-  /** The port Grunt's API listens on, when known (0 = any free port): never one the model's browser may reach. */
+  /** The port OtherBench's API listens on, when known (0 = any free port): never one the model's browser may reach. */
   apiPort?: number;
   /** The peer listener's port (default 4748; 0 = any free port). */
   peerPort?: number;
@@ -213,7 +213,7 @@ async function pathExists(path: string): Promise<boolean> {
  * Resolves the passphrase `EncryptedFileSecretStore` (packages/store-sqlite)
  * derives its AES-256-GCM key from.
  *
- * `GRUNT_SECRETS_PASSPHRASE` wins if set -- an operator or the desktop shell
+ * `OTHERBENCH_SECRETS_PASSPHRASE` wins if set -- an operator or the desktop shell
  * can supply and manage it explicitly. Otherwise a random 256-bit passphrase
  * is generated once and persisted next to the secrets file
  * (`<secretsPath>.key`, mode 0600 *on POSIX*; Node's `mode` option is a
@@ -222,8 +222,8 @@ async function pathExists(path: string): Promise<boolean> {
  * resulting file is 644-equivalent there. Stated here explicitly rather than
  * silently claimed as fact; see `EncryptedFileSecretStore`'s docstring in
  * secret-store.ts for the same caveat on the secrets file itself) so the
- * same key is reused across restarts without requiring Grunt's single local
- * user to remember or type one anywhere -- `grunt serve` has no
+ * same key is reused across restarts without requiring OtherBench's single local
+ * user to remember or type one anywhere -- `otherbench serve` has no
  * `--secrets-passphrase` flag in the brief, and the global constraint that
  * API keys must never sit in SQLite still needs *something* to key the
  * encrypted file with. This is a pragmatic default for a local, single-user
@@ -240,7 +240,7 @@ async function pathExists(path: string): Promise<boolean> {
  * not a defense against local filesystem access.
  */
 export async function resolveSecretsPassphrase(secretsPath: string): Promise<string> {
-  const envPassphrase = process.env['GRUNT_SECRETS_PASSPHRASE'];
+  const envPassphrase = process.env['OTHERBENCH_SECRETS_PASSPHRASE'];
   if (envPassphrase) return envPassphrase;
 
   const keyPath = `${secretsPath}.key`;
@@ -294,7 +294,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const store = withChatEvents(new SqliteStore(db), events);
 
   // A message row left `status: 'streaming'` means the process that was
-  // writing it is gone -- ASSUMING a single Grunt server process per
+  // writing it is gone -- ASSUMING a single OtherBench server process per
   // database: this process's own `TurnRunner.controllers` (the only thing
   // that could still be driving one) is empty on every fresh start, so any
   // such row found here looks orphaned to it. `openDatabase`'s WAL mode
@@ -312,7 +312,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const reconciled = reconcileInterruptedTurns(store);
   if (reconciled.length > 0) {
     console.warn(
-      `[grunt-server] reconciled ${reconciled.length} message(s) left "streaming" by a previous process: ` +
+      `[otherbench-server] reconciled ${reconciled.length} message(s) left "streaming" by a previous process: ` +
         reconciled.map((m) => m.id).join(', ')
     );
   }
@@ -323,7 +323,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Per-database attachment roots (task 32 fix round 1, Critical #2):
   // derived from THIS database's own path, never shared with any other
   // database that happens to sit next to the same secrets.json (or, for
-  // `:memory:`, the same default ~/.grunt directory) -- see
+  // `:memory:`, the same default ~/.otherbench directory) -- see
   // resolveAttachmentsRoots's doc for the incident this fixes. The legacy
   // shared root is read-only from here on: `blobStore.get()` falls back to
   // it, but nothing ever writes to or sweeps it again.
@@ -332,7 +332,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   if (await pathExists(roots.legacyRoot)) {
     console.warn(
-      `[grunt-server] legacy shared attachments directory "${roots.legacyRoot}" still exists. New uploads for ` +
+      `[otherbench-server] legacy shared attachments directory "${roots.legacyRoot}" still exists. New uploads for ` +
         `this database go to "${roots.writeRoot}" instead, and it is never written to or swept -- but it is ` +
         `STILL READ: any attachment uploaded before this change is served from there. Do NOT delete it -- doing ` +
         `so will make those older attachments 404.`
@@ -350,38 +350,38 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // own file sitting in the same parent directory.
   const swept = await sweepOrphanedBlobs(store, blobStore);
   if (swept.removed > 0) {
-    console.warn(`[grunt-server] startup blob sweep removed ${swept.removed} orphaned attachment blob(s) (of ${swept.scanned} scanned).`);
+    console.warn(`[otherbench-server] startup blob sweep removed ${swept.removed} orphaned attachment blob(s) (of ${swept.scanned} scanned).`);
   }
 
   const registry = new ProviderRegistry();
   const aisdkEngine = new AiSdkChatEngine(registry);
 
   // Read once at start; set only by the e2e run (spec 2026-10-12-model-browser-design §5).
-  const loopback = withoutOwnPorts(loopbackPortsFromEnv(process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS']), [options.apiPort, options.peerPort ?? DEFAULT_PEER_PORT]);
+  const loopback = withoutOwnPorts(loopbackPortsFromEnv(process.env['OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS']), [options.apiPort, options.peerPort ?? DEFAULT_PEER_PORT]);
   if (loopback.dropped.length > 0) {
-    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS names Grunt's own port(s) ${loopback.dropped.join(', ')}; the model's browser may not reach them, so they are left out.`);
+    console.warn(`[otherbench-server] OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS names OtherBench's own port(s) ${loopback.dropped.join(', ')}; the model's browser may not reach them, so they are left out.`);
   }
   const allowLoopbackPorts = loopback.ports;
   if (allowLoopbackPorts.length > 0) {
-    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS is set: the model's browser may reach 127.0.0.1 on port(s) ${allowLoopbackPorts.join(', ')}. This is for tests only.`);
+    console.warn(`[otherbench-server] OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS is set: the model's browser may reach 127.0.0.1 on port(s) ${allowLoopbackPorts.join(', ')}. This is for tests only.`);
   }
   const broker = new PermissionBroker(store, { allowLoopbackPorts });
   const mcpManager = new McpServerManager(store, secrets);
   // Next to the database, like its attachments; a :memory: database (tests) uses the temp folder.
-  const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-data-${process.pid}`) : dirname(options.dbPath);
+  const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-data-${process.pid}`) : dirname(options.dbPath);
   const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
   // Computer use: the shell's driver when the CLI passed one (the desktop
   // channel exists: the shell started this server with --desktop-rpc). It is
   // not available, and the tool is not offered, until the shell has said
-  // hello with computer use on. For tests only, GRUNT_COMPUTER_FAKE_DRIVER=1
+  // hello with computer use on. For tests only, OTHERBENCH_COMPUTER_FAKE_DRIVER=1
   // wires a fake that touches nothing. Read once. With neither (a server
   // started by hand, one that takes sign-ins) there is no driver, and no
   // profile is offered the tool.
-  const fakeComputer = options.computer === undefined && process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1';
+  const fakeComputer = options.computer === undefined && process.env['OTHERBENCH_COMPUTER_FAKE_DRIVER'] === '1';
   if (fakeComputer) {
-    console.warn('[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
+    console.warn('[otherbench-server] OTHERBENCH_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
   }
   const computerDriver = options.computer ?? (fakeComputer ? new FakeComputerDriver() : undefined);
   // One chat in control at a time; every start, action and end announced for
@@ -406,9 +406,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // (The profile and connection routes, whose deletes cascade past every event, call endIfChatGone themselves.)
     endSessionsOfChatsThatAreGone(events, computer);
   }
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { sandbox, browser, ...(computer ? { computer } : {}) });
+  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
-    options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
+    options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
     aisdkEngine,
     new ClaudeCodeChatEngine({
@@ -420,7 +420,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       artifactTool: async (ctx, args) =>
         runArtifactCommand(store, { chatId: ctx.chatId, messageId: ctx.messageId, liveTools: () => liveToolRisks(toolProvider.relayMcpTools(ctx.mcpServerIds)) }, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
-      // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through Grunt's own server.
+      // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through OtherBench's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (policy) => toolProvider.relayTools(policy),
     })
@@ -431,7 +431,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // fire-and-forget so a slow/unreachable server doesn't delay server
   // startup; its status simply stays 'connecting'/'error' until it resolves.
   void mcpManager.sync().catch((err: unknown) => {
-    console.error('[grunt-server] initial MCP server sync failed:', err);
+    console.error('[otherbench-server] initial MCP server sync failed:', err);
   });
 
   const turnRunner = new TurnRunner(store, engine, {
@@ -463,7 +463,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         // API responses to prevent in the first place (task 32 decision
         // #3), reopened through a different door. This names the
         // attachment by id/filename instead -- never a path.
-        console.error(`[grunt-server] failed to load attachment "${id}"'s blob:`, err);
+        console.error(`[otherbench-server] failed to load attachment "${id}"'s blob:`, err);
         throw new Error(`Attachment "${attachment.filename}" (${id}) is missing or unreadable.`);
       }
     },
@@ -479,10 +479,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const memory = new MemoryServices(new ProjectMemoryService(memoryDeps), new GlobalMemoryService(memoryDeps));
   memory.attach(turnRunner);
   // Imported project docs and claude.ai's memory files sit beside this database, like its attachments.
-  const importRoot = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-import-${process.pid}-${randomBytes(4).toString('hex')}`) : `${options.dbPath}.imported`;
-  // Cowork sessions are read where Claude Desktop keeps them on this machine. GRUNT_COWORK_ROOT points
+  const importRoot = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-import-${process.pid}-${randomBytes(4).toString('hex')}`) : `${options.dbPath}.imported`;
+  // Cowork sessions are read where Claude Desktop keeps them on this machine. OTHERBENCH_COWORK_ROOT points
   // elsewhere (the e2e run's fixture) or, empty, nowhere; a :memory: database (tests) has none.
-  const coworkOverride = process.env['GRUNT_COWORK_ROOT'];
+  const coworkOverride = process.env['OTHERBENCH_COWORK_ROOT'];
   const coworkRoot = options.dbPath === ':memory:' ? null : coworkOverride !== undefined ? coworkOverride || null : defaultCoworkRoot();
   const claudeImport = new ClaudeImportService({ ...memoryDeps, events, blobStore, importRoot: join(importRoot, 'claude'), coworkRoot });
 
@@ -540,7 +540,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     close: () => {
       syncer.stop();
       // Not awaited (close is synchronous): stops accepting peers' calls.
-      void peers.close().catch((err: unknown) => console.error('[grunt-server] error stopping the peer listener:', err));
+      void peers.close().catch((err: unknown) => console.error('[otherbench-server] error stopping the peer listener:', err));
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
@@ -549,31 +549,31 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Computer use ends with the server: the driver is told, and nothing starts afterwards.
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
-      void browser.closeAll().catch((err: unknown) => console.error('[grunt-server] error closing the model browser:', err));
+      void browser.closeAll().catch((err: unknown) => console.error('[otherbench-server] error closing the model browser:', err));
       // Claude Code processes kept alive between replies.
       engine.dispose();
       // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
-      sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[grunt-server] error closing the sandbox:', err));
+      sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[otherbench-server] error closing the sandbox:', err));
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
       // MCP clients is cleanup, not something anything downstream of
       // `close()` depends on having finished.
       void toolProvider.shutdown().catch((err: unknown) => {
-        console.error('[grunt-server] error shutting down tool provider:', err);
+        console.error('[otherbench-server] error shutting down tool provider:', err);
       });
       // A `:memory:` database's write root is an ephemeral per-process temp
       // directory (resolveAttachmentsRoots) that nothing else will ever
       // reuse or clean up -- without this it accumulates forever under
       // %TEMP%/$TMPDIR across restarts and test runs (task 32 fix round 2,
-      // Minor #2: confirmed 28 stray `grunt-attachments-*` directories
+      // Minor #2: confirmed 28 stray `otherbench-attachments-*` directories
       // already sitting there from exactly this). Removed here, best-effort
       // and not awaited, same reasoning as `toolProvider.shutdown()` above.
       // A real file database's write root is never touched -- it's the
       // user's own attachment storage, not this process's temp scratch.
       if (roots.isTemporary) {
         void rm(roots.writeRoot, { recursive: true, force: true }).catch((err: unknown) => {
-          console.error(`[grunt-server] failed to remove temporary attachments directory "${roots.writeRoot}":`, err);
+          console.error(`[otherbench-server] failed to remove temporary attachments directory "${roots.writeRoot}":`, err);
         });
         // Likewise the temporary import folder, if an import ever made it.
         void rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -589,7 +589,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     memory.sweep();
   } catch (err) {
     // Never let the memory sweep stop the server starting.
-    console.warn('[grunt-server] project memory startup sweep failed:', err);
+    console.warn('[otherbench-server] project memory startup sweep failed:', err);
   }
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
@@ -607,15 +607,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     container.schedules.start();
   } catch (err) {
     // Never let the scheduler stop the server starting.
-    console.warn('[grunt-server] scheduled tasks failed to start:', err);
+    console.warn('[otherbench-server] scheduled tasks failed to start:', err);
   }
   // Listening for paired machines only if there are any. A failed bind
-  // (another Grunt on this port, say) leaves this machine working alone
+  // (another OtherBench on this port, say) leaves this machine working alone
   // rather than stopping it starting.
   try {
     await peers.refreshListener();
   } catch (err) {
-    console.error('[grunt-server] could not start the peer listener; paired machines cannot reach this one:', err);
+    console.error('[otherbench-server] could not start the peer listener; paired machines cannot reach this one:', err);
   }
   forwarded = forwardedApi(container);
   peers.startMonitoring();

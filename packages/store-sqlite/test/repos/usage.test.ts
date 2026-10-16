@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { UsageRecord } from '@grunt/core/ports/store.js';
-import type { PricingSnapshot } from '@grunt/core/types/usage.js';
+import type { UsageRecord } from '@otherbench/core/ports/store.js';
+import type { PricingSnapshot } from '@otherbench/core/types/usage.js';
 import { freshDb, seedChatChain } from '../helpers.js';
 import { SqliteMessageRepo } from '../../src/repos/messages.js';
 import { SqliteUsageRepo } from '../../src/repos/usage.js';

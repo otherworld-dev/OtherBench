@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 
 /**
  * Keyboard for tabs and panes (#824):
@@ -12,7 +12,7 @@ import { useGruntStore } from './store.js';
 export function usePaneShortcuts(narrow: boolean): void {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent): void {
-      const { paneState, activeChatId, focusPane, setActiveChatId, toggleMaximised } = useGruntStore.getState();
+      const { paneState, activeChatId, focusPane, setActiveChatId, toggleMaximised } = useOtherBenchStore.getState();
       const ctrl = e.ctrlKey || e.metaKey;
 
       if (ctrl && e.key === 'Tab') {

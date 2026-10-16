@@ -76,7 +76,7 @@ pub fn absolute(x: i32, y: i32, desk: (i32, i32, i32, i32)) -> Option<(i32, i32)
 /// GDI's top-down 32-bit BGRA rows as an RGB PNG.
 pub fn encode_png(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE || bgra.len() != width as usize * height as usize * 4 {
-        return Err("Grunt couldn't capture the screen.".into());
+        return Err("OtherBench couldn't capture the screen.".into());
     }
     let rgb: Vec<u8> = bgra.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect();
     let mut out = Vec::new();
@@ -84,8 +84,8 @@ pub fn encode_png(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
         let mut encoder = png::Encoder::new(&mut out, width, height);
         encoder.set_color(png::ColorType::Rgb);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|_| "Grunt couldn't encode the screenshot.".to_string())?;
-        writer.write_image_data(&rgb).map_err(|_| "Grunt couldn't encode the screenshot.".to_string())?;
+        let mut writer = encoder.write_header().map_err(|_| "OtherBench couldn't encode the screenshot.".to_string())?;
+        writer.write_image_data(&rgb).map_err(|_| "OtherBench couldn't encode the screenshot.".to_string())?;
     }
     Ok(out)
 }

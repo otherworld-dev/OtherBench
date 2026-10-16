@@ -7,7 +7,7 @@ import { containPath, containPathIn, PathEscapeError } from '../src/domain/paths
 let root: string, outside: string, base: string;
 
 beforeAll(() => {
-  base = mkdtempSync(join(tmpdir(), 'grunt-paths-'));
+  base = mkdtempSync(join(tmpdir(), 'otherbench-paths-'));
   root = join(base, 'ws'); outside = join(base, 'outside');
   mkdirSync(root); mkdirSync(outside);
   writeFileSync(join(root, 'ok.txt'), 'ok');
@@ -139,7 +139,7 @@ describe('containPath', () => {
     // parent was itself a root (e.g. containPath('C:\\', 'newfile.txt') used
     // to return 'C:\\ewfile.txt'). basename() has no such assumption.
     const driveRoot = parse(root).root;
-    const uniqueName = `grunt-root-probe-${Date.now()}.txt`;
+    const uniqueName = `otherbench-root-probe-${Date.now()}.txt`;
     expect(containPath(driveRoot, uniqueName)).toBe(join(driveRoot, uniqueName));
   });
 });
@@ -147,7 +147,7 @@ describe('containPath', () => {
 describe('containPathIn (extra folders)', () => {
   let ws: string, refs: string, notes: string, vendor: string, elsewhere: string;
   beforeAll(() => {
-    const b = mkdtempSync(join(tmpdir(), 'grunt-folders-'));
+    const b = mkdtempSync(join(tmpdir(), 'otherbench-folders-'));
     ws = join(b, 'project'); refs = join(b, 'refs'); notes = join(b, 'notes'); elsewhere = join(b, 'elsewhere');
     vendor = join(ws, 'vendor');
     for (const d of [ws, refs, notes, elsewhere, vendor]) mkdirSync(d, { recursive: true });

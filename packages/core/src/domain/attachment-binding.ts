@@ -14,7 +14,7 @@ const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*(?::[A-Za-z0-9][A-Za-z0-9_-]*)*
 export const MAX_ATTACHMENT_ID_LENGTH = 128;
 
 /**
- * An attachment id as Grunt makes one. The shapes it makes are: a UUID (an
+ * An attachment id as OtherBench makes one. The shapes it makes are: a UUID (an
  * upload, and a tool's image), `<transcript line uuid>:image:<n>` (an image a
  * Cowork import brought in, see cowork-import.ts), and the short ids tests
  * use. So: words of letters, digits, `-` and `_` joined by single colons, at

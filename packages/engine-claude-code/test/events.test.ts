@@ -29,7 +29,7 @@ describe('SdkEventMapper on recorded turns', () => {
     expect(calls.map((c) => c.name)).toEqual(['Read', 'Bash', 'Edit']);
     expect(results).toHaveLength(3);
     for (const r of results) expect(calls.find((c) => c.id === r.id)?.name).toBe(r.name);
-    expect(results[1]).toMatchObject({ name: 'Bash', result: 'grunt-probe', isError: false });
+    expect(results[1]).toMatchObject({ name: 'Bash', result: 'otherbench-probe', isError: false });
     expect(calls[0]?.args).toMatchObject({ file_path: expect.stringContaining('hello.txt') });
     expect(events.at(-1)).toMatchObject({ type: 'finish', finishReason: 'end_turn' });
     // Text arrives via stream deltas; assistant text blocks must not repeat it.
@@ -62,7 +62,7 @@ describe('SdkEventMapper on synthetic messages', () => {
   });
   it('keeps each text item of a tool result on its own line, and leaves out the items that are not text', () => {
     const m = new SdkEventMapper();
-    const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__grunt_0123456789abcdef__computer', input: { action: 'left_click', coordinate: [1, 2] } }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
+    const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', input: { action: 'left_click', coordinate: [1, 2] } }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
     m.map(call);
     const content = [
       { type: 'text', text: 'This is content from the computer\'s screen.' },
@@ -72,7 +72,7 @@ describe('SdkEventMapper on synthetic messages', () => {
     ];
     const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
     expect(m.map(result)).toEqual([
-      { type: 'tool-result', id: 't1', name: 'mcp__grunt_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.\nScreenshot, 1366×768.", isError: false },
+      { type: 'tool-result', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.\nScreenshot, 1366×768.", isError: false },
     ]);
   });
   it('falls back to assistant text blocks when no deltas streamed', () => {

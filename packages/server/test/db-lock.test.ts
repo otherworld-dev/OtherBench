@@ -9,8 +9,8 @@ let dir: string;
 let dbPath: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-dblock-'));
-  dbPath = join(dir, 'grunt.db');
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-dblock-'));
+  dbPath = join(dir, 'otherbench.db');
 });
 
 afterEach(() => {

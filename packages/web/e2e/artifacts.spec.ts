@@ -12,7 +12,7 @@ import { BASE_URL } from '../playwright.config.js';
  */
 let ws: string;
 test.beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-artifacts-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-e2e-artifacts-'));
 });
 test.afterEach(() => {
   try {

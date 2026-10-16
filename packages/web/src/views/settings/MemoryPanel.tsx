@@ -1,11 +1,11 @@
 import { useEffect, useState, type JSX } from 'react';
-import { ABOUT_MAX_CHARS, GLOBAL_MEMORY_HEADINGS, validateGlobalMemoryBody } from '@grunt/core/domain/global-memory.js';
-import { hasMemoryContent } from '@grunt/core/domain/memory.js';
-import type { AppSettings } from '@grunt/core/ports/store.js';
+import { ABOUT_MAX_CHARS, GLOBAL_MEMORY_HEADINGS, validateGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
+import { hasMemoryContent } from '@otherbench/core/domain/memory.js';
+import type { AppSettings } from '@otherbench/core/ports/store.js';
 import { MemoryNote } from '../../components/MemoryNote.js';
 import { formatRelativeTime } from '../../lib/relativeTime.js';
 import { ApiError, api, type GlobalMemoryView } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 export const MEMORY_MODEL_HINT =
   "Keeps project memory and your global note up to date a few minutes after a chat goes quiet. The memory model reads your chats, so choose a model you're happy to send that content to; a local model keeps it on this machine. Default uses each project's default profile for its note, else the app default.";
@@ -33,7 +33,7 @@ export function MemoryPanel(): JSX.Element {
         if (!cancelled) setView(next);
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load global memory:', err);
+        console.error('[otherbench-web] failed to load global memory:', err);
         if (!cancelled) setLoadFailed(true);
       });
     return () => {
@@ -116,7 +116,7 @@ function AboutYou({ about, onSaved }: { about: string; onSaved: (view: GlobalMem
 }
 
 function LearnedNote({ view, onChange }: { view: GlobalMemoryView; onChange: (view: GlobalMemoryView) => void }): JSX.Element {
-  const chats = useGruntStore((s) => s.chats);
+  const chats = useOtherBenchStore((s) => s.chats);
   const { memory, lastError } = view;
 
   function chatTitle(id: string | null): string {
@@ -133,7 +133,7 @@ function LearnedNote({ view, onChange }: { view: GlobalMemoryView; onChange: (vi
 
   return (
     <div className="space-y-2">
-      <h3 className={HEADING}>What Grunt has learned about you</h3>
+      <h3 className={HEADING}>What OtherBench has learned about you</h3>
       <p className={HINT}>
         Lasting facts about you that the memory model picks up from your chats, added to every chat as background. Pinned is yours: it&rsquo;s never changed
         automatically. A chat marked &ldquo;Don&rsquo;t add to memory&rdquo; is never read.
@@ -164,7 +164,7 @@ function LearnedNote({ view, onChange }: { view: GlobalMemoryView; onChange: (vi
 
 /** The model both memory summarisers run on (spec 2026-10-03-project-memory-design §5). */
 function MemoryModel(): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
+  const profiles = useOtherBenchStore((s) => s.profiles);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -178,7 +178,7 @@ function MemoryModel(): JSX.Element {
         if (!cancelled) setSettings(s);
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load settings:', err);
+        console.error('[otherbench-web] failed to load settings:', err);
         if (!cancelled) setError("Couldn't load the settings.");
       });
     return () => {
@@ -199,7 +199,7 @@ function MemoryModel(): JSX.Element {
       setSettings(await api.settings.patch({ memoryProfileId: next === '' ? null : next }));
       setSaved(true);
     } catch (err) {
-      console.error('[grunt-web] failed to save the memory model:', err);
+      console.error('[otherbench-web] failed to save the memory model:', err);
       setError(errorText(err, 'Save failed -- please try again.'));
     } finally {
       setSaving(false);

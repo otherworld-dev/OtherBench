@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { AppEventsHello } from '@grunt/core/types/events.js';
+import type { AppEventsHello } from '@otherbench/core/types/events.js';
 import type { Container } from '../container.js';
 import { sseStream } from '../stream/sse.js';
 import { eventView } from '../workspace-view.js';

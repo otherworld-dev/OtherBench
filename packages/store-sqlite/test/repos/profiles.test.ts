@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import type { Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { freshDb, seedConnectionAndModel } from '../helpers.js';
 import { SqliteProfileRepo } from '../../src/repos/profiles.js';
 

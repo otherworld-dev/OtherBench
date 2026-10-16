@@ -1,10 +1,10 @@
 ﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, NO_MEMORY_MODEL_MESSAGE, emptyMemoryBody } from '@grunt/core/domain/memory.js';
-import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { FakeChatEngine, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
-import type { MessageStatus } from '@grunt/core/types/messages.js';
+import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, NO_MEMORY_MODEL_MESSAGE, emptyMemoryBody } from '@otherbench/core/domain/memory.js';
+import { TurnRunner, type TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { FakeChatEngine, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Profile, ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import { MEMORY_UPDATE_TIMEOUT_MS, ProjectMemoryService, type ProjectMemoryServiceDeps } from '../../src/memory/service.js';
 import { ManualClock } from './manual-clock.js';
 

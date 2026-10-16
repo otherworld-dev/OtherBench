@@ -1,5 +1,5 @@
 /*
- * Grunt's three typefaces, self-hosted from @fontsource so the desktop build
+ * OtherBench's three typefaces, self-hosted from @fontsource so the desktop build
  * works offline. Only the latin and latin-ext faces, and only woff2: the
  * packages' own weight stylesheets pull in every subset plus woff fallbacks.
  * Generated from node_modules/@fontsource/<pkg>/<weight>.css -- regenerate

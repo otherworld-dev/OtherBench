@@ -8,7 +8,7 @@ import { BASE_URL } from '../playwright.config.js';
 /**
  * End-to-end verification (task 19/20 brief, decision #5): builds nothing
  * itself -- `playwright.config.ts`'s `webServer` starts the already-built
- * `grunt serve` against a scratch database -- and drives the real browser
+ * `otherbench serve` against a scratch database -- and drives the real browser
  * app against it, using the keyless mock provider (`ConnectionKind:
  * 'mock'`, packages/engine-aisdk/src/mock-provider.ts) so no API key or
  * network access is required. Seeds one connection + one default profile
@@ -47,7 +47,7 @@ test('creating a chat, sending a message, and watching it stream in', async ({ p
   // The mock provider's canned reply streams in over several chunks;
   // asserting on it proves text actually arrived over the live SSE
   // connection, not just that the turn was created.
-  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
 
   // And the turn reaches a terminal state -- the streaming caret goes away.
   await expect(page.getByLabel('streaming')).toHaveCount(0);
@@ -115,7 +115,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
   const suffix = uniqueSuffix();
   const chatTitle = `Smoke Journey ${suffix}`;
   const searchToken = `smoketoken${suffix}`;
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'grunt-e2e-smoke-journey-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'otherbench-e2e-smoke-journey-'));
   writeFileSync(join(workspaceRoot, 'notes.txt'), 'THE SMOKE TEST FILE CONTENTS');
 
   try {
@@ -150,7 +150,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
 
     // --- Start a chat. Seeded with a real workspace root (same technique as
     // tool-approval.spec.ts) so the tool-call step below reads a genuine
-    // file through the full PermissionBroker -> GruntToolProvider ->
+    // file through the full PermissionBroker -> OtherBenchToolProvider ->
     // fs-tools.readFileTool chain, not a stand-in.
     const chatRes = await request.post(`${BASE_URL}/api/chats`, { data: { title: chatTitle, profileId: profileAId, workspaceRoot } });
     expect(chatRes.ok()).toBeTruthy();
@@ -177,7 +177,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     await textbox.fill(`Hello from the smoke journey ${searchToken}`);
     await textbox.press('Enter');
     await expect(main.getByTestId('thread-scroll').getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
-    await expect(main.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+    await expect(main.getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
     await expect(page.getByLabel('streaming')).toHaveCount(0);
 
     // --- Trigger a tool call and approve it.

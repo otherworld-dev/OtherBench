@@ -4,12 +4,12 @@ import { fenced } from './export.js';
 
 /**
  * Import from claude.ai (spec 2026-10-09-claude-import-design): turns the
- * parts of a claude.ai data export, already read and parsed, into what Grunt
+ * parts of a claude.ai data export, already read and parsed, into what OtherBench
  * stores. Pure: the server reads the files and writes the plan.
  *
  * The export format isn't documented, so every field is checked before it's
  * used and anything unexpected is skipped and counted rather than trusted.
- * claude.ai's uuids are kept as Grunt ids, which is what makes a second
+ * claude.ai's uuids are kept as OtherBench ids, which is what makes a second
  * import of the same export skip what is already there.
  */
 
@@ -20,7 +20,7 @@ export const CLAUDE_REPLY_NAME = 'Claude';
 export const CLAUDE_REPLY_MODEL = 'claude.ai';
 export const UNTITLED_CHAT = 'Untitled chat';
 export const UNTITLED_PROJECT = 'Untitled claude.ai project';
-/** Longest title made from a chat's first message, as for Grunt's own titles. */
+/** Longest title made from a chat's first message, as for OtherBench's own titles. */
 const DERIVED_TITLE_MAX = 48;
 const TITLE_MAX = 200;
 const DOC_NAME_MAX = 100;
@@ -63,7 +63,7 @@ export interface ImportProfile {
 }
 
 export interface ImportedArtifact {
-  /** The Grunt artifact's id. */
+  /** The OtherBench artifact's id. */
   id: string;
   slug: string;
   /** Oldest first; numbered 1, 2, … in this order. */
@@ -669,7 +669,7 @@ function planArtifact(raw: { meta: unknown; html: Record<string, string> }, prof
     return null;
   }
   versions.sort(byTime);
-  // Grunt's current version is the last one made, so the one claude.ai showed goes last.
+  // OtherBench's current version is the last one made, so the one claude.ai showed goes last.
   const activeId = str(meta['active_version']);
   const activeAt = versions.findIndex((v) => v.sourceId === activeId);
   if (activeAt !== -1 && activeAt !== versions.length - 1) versions.push(...versions.splice(activeAt, 1));

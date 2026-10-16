@@ -2,8 +2,8 @@ import { useState, type JSX } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ScheduleView } from '@grunt/core/ports/store.js';
-import type { Connection, Profile } from '@grunt/core/types/config.js';
+import type { ScheduleView } from '@otherbench/core/ports/store.js';
+import type { Connection, Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', () => ({
   ApiError: class ApiError extends Error {
@@ -21,7 +21,7 @@ vi.mock('../state/api.js', () => ({
 }));
 
 import { api, ApiError } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { SCHEDULES_POLL_MS, SchedulesView } from './SchedulesView.js';
 
 const list = vi.mocked(api.schedules.list);
@@ -42,8 +42,8 @@ const profile: Profile = { id: 'p1', name: 'Mock', description: null, colour: nu
 const connection: Connection = { id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null };
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ profiles: [profile], connections: [connection] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ profiles: [profile], connections: [connection] });
 });
 
 afterEach(() => {
@@ -109,7 +109,7 @@ describe('SchedulesView', () => {
 
   it('opens the editor on its prefilled chat, with the profile warnings, and saves a new schedule', async () => {
     list.mockResolvedValue([]);
-    useGruntStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     create.mockResolvedValue(view());
     const user = userEvent.setup();
     render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normaliseLiveToolName } from '@grunt/core/domain/live-artifacts.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { gruntServerName, gruntToolName } from '../src/grunt-server.js';
+import { normaliseLiveToolName } from '@otherbench/core/domain/live-artifacts.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { otherBenchServerName, otherBenchToolName } from '../src/otherbench-server.js';
 import { buildRelay, currentRelayed, relayName, relayServerTool } from '../src/relay.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 
 const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
   name: 'mcp__nextcloud__deck_add',
@@ -15,7 +15,7 @@ const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
   execute: async () => [{ type: 'text', text: 'ok' }],
   ...o,
 });
-const SERVER = 'grunt_0123456789abcdef';
+const SERVER = 'otherbench_0123456789abcdef';
 
 describe('relayName', () => {
   it("drops the mcp__ prefix of the API model's name", () => {
@@ -35,12 +35,12 @@ describe('relayName', () => {
 describe('relayed names in a live declaration', () => {
   it("map back to the tool's own name when the relay name is whole", () => {
     const name = spec().name;
-    expect(normaliseLiveToolName(gruntToolName(gruntServerName(), relayName(name)))).toBe(name);
+    expect(normaliseLiveToolName(otherBenchToolName(otherBenchServerName(), relayName(name)))).toBe(name);
   });
 
   it("stay as they are, so they're refused as unknown, when the relay name was cut and hashed", () => {
     const long = `mcp__${'a'.repeat(40)}__${'b'.repeat(40)}`;
-    const seen = gruntToolName(gruntServerName(), relayName(long));
+    const seen = otherBenchToolName(otherBenchServerName(), relayName(long));
     expect(normaliseLiveToolName(seen)).not.toBe(long);
     expect(normaliseLiveToolName(seen)).toBe(`mcp__${relayName(long)}`);
   });

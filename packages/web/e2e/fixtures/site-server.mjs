@@ -1,5 +1,5 @@
 // A one-page site on 127.0.0.1 for browser.spec.ts: the model's browser
-// reaches it only because the e2e server sets GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS
+// reaches it only because the e2e server sets OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS
 // to this port. No test browses the internet.
 import { createServer } from 'node:http';
 

@@ -3,7 +3,7 @@ import type { FsMode } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 
 /**
- * Windows folders as Grunt's sandbox sees them (spec 2026-10-12-sandbox-design,
+ * Windows folders as OtherBench's sandbox sees them (spec 2026-10-12-sandbox-design,
  * "Folders in the VM"). Pure string work, no filesystem: a folder `X:\a\b` is
  * mounted at `/mnt/x/a/b` (WSL's own convention), so paths map by rule. The
  * caller canonicalises a folder first (WslSandbox uses realpath, which gives
@@ -78,7 +78,7 @@ export function normaliseWindowsPath(path: string): string {
 }
 
 /**
- * Where a Windows folder appears in the sandbox: `E:\Git\Grunt` -> `/mnt/e/Git/Grunt`.
+ * Where a Windows folder appears in the sandbox: `E:\Git\OtherBench` -> `/mnt/e/Git/OtherBench`.
  * Strict: the path must already be in the form mount.sh accepts (backslashes,
  * no repeated or trailing separators); use normaliseWindowsPath first for a path
  * from outside. Throws SandboxPathError.

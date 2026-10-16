@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Grant, GrantRepo } from '@grunt/core/ports/store.js';
+import type { Grant, GrantRepo } from '@otherbench/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromJsonNullable, toJsonNullable } from './util.js';
 

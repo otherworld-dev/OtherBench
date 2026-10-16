@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Part } from '@grunt/core/types/messages.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import { ApiError, api } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
 
 /**
@@ -17,10 +17,10 @@ import { useChatSync } from '../state/useChatSync.js';
  * starts afresh next time; `Esc` just hides the window, keeping the chat.
  */
 export function QuickChat(): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
-  const setProfiles = useGruntStore((s) => s.setProfiles);
-  const messages = useGruntStore((s) => s.messages);
-  const registerMessage = useGruntStore((s) => s.registerMessage);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const setProfiles = useOtherBenchStore((s) => s.setProfiles);
+  const messages = useOtherBenchStore((s) => s.messages);
+  const registerMessage = useOtherBenchStore((s) => s.registerMessage);
   const [chat, setChat] = useState<Chat | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -33,7 +33,7 @@ export function QuickChat(): JSX.Element {
     api.profiles
       .list()
       .then(setProfiles)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Couldn't reach the Grunt server."));
+      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Couldn't reach the OtherBench server."));
   }, [setProfiles]);
 
   // Each time the hotkey brings the window up, the cursor goes to the message box.
@@ -49,7 +49,7 @@ export function QuickChat(): JSX.Element {
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
-      hideQuick().catch((err: unknown) => console.error('[grunt-web] failed to hide quick chat:', err));
+      hideQuick().catch((err: unknown) => console.error('[otherbench-web] failed to hide quick chat:', err));
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -79,7 +79,7 @@ export function QuickChat(): JSX.Element {
   useEffect(() => {
     if (!chat || !focused || lastReplyId === null || readReplyId.current === lastReplyId) return;
     readReplyId.current = lastReplyId;
-    api.chats.patch(chat.id, { unread: false }).catch((err: unknown) => console.error(`[grunt-web] failed to mark chat ${chat.id} read:`, err));
+    api.chats.patch(chat.id, { unread: false }).catch((err: unknown) => console.error(`[otherbench-web] failed to mark chat ${chat.id} read:`, err));
   }, [chat, focused, lastReplyId]);
 
   async function send(): Promise<void> {
@@ -106,7 +106,7 @@ export function QuickChat(): JSX.Element {
       }
       setText('');
     } catch (err) {
-      console.error('[grunt-web] quick chat failed to send:', err);
+      console.error('[otherbench-web] quick chat failed to send:', err);
       setError(err instanceof ApiError ? err.message : "Couldn't send that. Please try again.");
     } finally {
       setSending(false);
@@ -118,7 +118,7 @@ export function QuickChat(): JSX.Element {
     const id = chat.id;
     setChat(null);
     setText('');
-    openChatInMain(id).catch((err: unknown) => console.error('[grunt-web] failed to open the chat in the main window:', err));
+    openChatInMain(id).catch((err: unknown) => console.error('[otherbench-web] failed to open the chat in the main window:', err));
   }
 
   return (
@@ -141,7 +141,7 @@ export function QuickChat(): JSX.Element {
           {error}
         </p>
       )}
-      {!profile && profiles.length === 0 && !error && <p className="text-xs text-[var(--text-muted)]">Set up a profile in Grunt's Settings first.</p>}
+      {!profile && profiles.length === 0 && !error && <p className="text-xs text-[var(--text-muted)]">Set up a profile in OtherBench's Settings first.</p>}
       <textarea
         ref={inputRef}
         value={text}

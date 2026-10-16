@@ -74,7 +74,7 @@ export interface PaneState {
 export const DEFAULT_PANE_STATE: PaneState = { tabs: [], layout: 'single', panes: [null], focusedPane: 0, sizes: {}, maximised: false };
 
 /** localStorage key for the tabs, layout and what each pane shows. Per device. */
-export const PANE_STATE_STORAGE_KEY = 'grunt.panes';
+export const PANE_STATE_STORAGE_KEY = 'otherbench.panes';
 
 export function paneCount(layout: Layout): number {
   return LAYOUTS.find((l) => l.id === layout)?.panes ?? 1;

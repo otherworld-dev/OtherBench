@@ -1,11 +1,11 @@
 // Smoke test for the bundled server (v2 plan, Task 40): starts
 // dist-bundle/server/cli.js the way the desktop app does (`--port 0
-// --announce`, token in GRUNT_TOKEN) against a scratch database, then
+// --announce`, token in OTHERBENCH_TOKEN) against a scratch database, then
 // checks health, a mock-provider turn, search, a .docx, an .xlsx and a .pptx
 // made by the bundled writers, and that the packages left out of the bundle load.
 // Exits non-zero on any failure.
 //
-// `npm run bundle:smoke -w @grunt/server`, after `npm run bundle`. Pass a
+// `npm run bundle:smoke -w @otherbench/server`, after `npm run bundle`. Pass a
 // server folder to test another copy (the one a desktop build carries), and
 // run it with that build's node to test the pair.
 
@@ -19,11 +19,11 @@ import { fileURLToPath } from 'node:url';
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = join(process.argv[2] ?? join(serverDir, 'dist-bundle', 'server'), 'cli.js');
-const dir = mkdtempSync(join(tmpdir(), 'grunt-bundle-smoke-'));
+const dir = mkdtempSync(join(tmpdir(), 'otherbench-bundle-smoke-'));
 const token = randomBytes(32).toString('hex');
 
-const child = spawn(process.execPath, [bundle, 'serve', '--port', '0', '--announce', '--db', join(dir, 'grunt.db')], {
-  env: { ...process.env, GRUNT_TOKEN: token },
+const child = spawn(process.execPath, [bundle, 'serve', '--port', '0', '--announce', '--db', join(dir, 'otherbench.db')], {
+  env: { ...process.env, OTHERBENCH_TOKEN: token },
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 

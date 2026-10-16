@@ -1,14 +1,14 @@
 import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 
 /**
- * One Grunt server process per database, enforced.
+ * One OtherBench server process per database, enforced.
  *
  * `openDatabase`'s WAL mode and busy timeout happily let a second process
  * open the same file, and `createContainer` reconciles every `streaming`
  * row as abandoned before it binds a port -- so a second launch (even one
  * about to fail with `EADDRINUSE`) used to flip a still-live first process's
  * stream to `error` underneath it (see container.ts). Since the desktop app
- * and `npm run serve` default to the same `~/.grunt/grunt.db`, that stopped
+ * and `npm run serve` default to the same `~/.otherbench/otherbench.db`, that stopped
  * being a theoretical case. This lock is taken before anything touches the
  * store and held until `close()`.
  *
@@ -27,8 +27,8 @@ export class DatabaseLockedError extends Error {
   constructor(dbPath: string, holderPid: number, holderStartedAt: number) {
     const lockPath = lockPathFor(dbPath);
     super(
-      `Database "${dbPath}" is already in use by another Grunt server (pid ${holderPid}). ` +
-        'Stop that process first. If no Grunt server is running, the lock is left over from a crash ' +
+      `Database "${dbPath}" is already in use by another OtherBench server (pid ${holderPid}). ` +
+        'Stop that process first. If no OtherBench server is running, the lock is left over from a crash ' +
         `whose process id has since been reused: delete "${lockPath}" and try again.`
     );
     this.name = 'DatabaseLockedError';
@@ -108,6 +108,12 @@ function unlinkIfPresent(path: string): void {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
+}
+
+/** The pid of the live process holding `dbPath`'s lock, or null when none does. */
+export function liveLockHolder(dbPath: string, isAlive: (pid: number) => boolean = processIsAlive): number | null {
+  const holder = readLock(lockPathFor(dbPath));
+  return holder && isAlive(holder.pid) ? holder.pid : null;
 }
 
 /**

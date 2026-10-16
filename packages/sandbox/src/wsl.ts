@@ -1,20 +1,20 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import { win32 } from 'node:path';
-import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
+import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 
 /**
  * A thin runner for `wsl.exe` (spec 2026-10-12-sandbox-design §2). Every
- * in-distro command goes as `wsl.exe -d grunt-sandbox -u <user> --exec
+ * in-distro command goes as `wsl.exe -d otherbench-sandbox -u <user> --exec
  * <program> <args...>`: `--exec` hands the arguments to the program as they
  * are. The live probe found that `wsl.exe ... -- <cmd>` goes through a Linux
  * shell, which ate the backslashes of `C:\...` paths. The spawn function is
  * injected, so tests never start wsl.exe.
  */
 
-/** The WSL distro Grunt owns. */
-export const DISTRO = 'grunt-sandbox';
+/** The WSL distro OtherBench owns. */
+export const DISTRO = 'otherbench-sandbox';
 
-export type WslUser = 'root' | 'grunt';
+export type WslUser = 'root' | 'otherbench';
 
 export interface WslResult {
   /** null when wsl.exe couldn't start, was killed or timed out. */

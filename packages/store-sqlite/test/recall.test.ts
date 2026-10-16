@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runRecallCommand } from '@grunt/core/domain/recall.js';
+import { runRecallCommand } from '@otherbench/core/domain/recall.js';
 import { openDatabase } from '../src/db.js';
 import { runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';

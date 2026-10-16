@@ -9,7 +9,7 @@ let path: string;
 const clock = { now: 1_800_000_000_000 };
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-devices-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-devices-'));
   path = join(dir, 'device-key.json');
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));

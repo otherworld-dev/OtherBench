@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import { api } from '../state/api.js';
 
 function formatCost(cost: number): string {
@@ -69,7 +69,7 @@ function PricingRow({ model, onSaved }: PricingRowProps): JSX.Element {
       });
       onSaved(updated);
     } catch (err) {
-      console.error(`[grunt-web] failed to save pricing for model ${model.id}:`, err);
+      console.error(`[otherbench-web] failed to save pricing for model ${model.id}:`, err);
       setError('Save failed -- please try again.');
     } finally {
       setSaving(false);
@@ -158,14 +158,14 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
       .get()
       .then(setRollup)
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load global usage rollup:', err);
+        console.error('[otherbench-web] failed to load global usage rollup:', err);
         setRollupFailed(true);
       });
     api.models
       .list()
       .then(setModels)
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load models for pricing:', err);
+        console.error('[otherbench-web] failed to load models for pricing:', err);
         setModelsFailed(true);
       });
   }, []);

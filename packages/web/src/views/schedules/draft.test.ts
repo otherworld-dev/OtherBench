@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Chat, Project, Schedule } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 import { createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, targetHasFolder, type ScheduleDraft } from './draft.js';
 
 function chat(over: Partial<Chat> = {}): Chat {

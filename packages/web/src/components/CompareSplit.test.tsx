@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { CompareSplit } from './CompareSplit.js';
 
 function variant(id: string, overrides: Partial<CanonMessage> = {}): CanonMessage {

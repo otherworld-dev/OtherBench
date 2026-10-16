@@ -101,7 +101,7 @@ describe('reading Excel files', () => {
   it('leaves out columns past the 200th and says so, and also for a sheet of only such cells', () => {
     const rows = '<row r="1"><c r="A1"><v>1</v></c><c r="XFD1"><v>2</v></c></row>';
     expect(extractOfficeText(xlsx({ sheets: [{ name: 'W', rows }] }))).toBe('Sheet "W" (A1:A1) as CSV:\n1\n(Columns after GR were left out.)');
-    expect(extractOfficeText(xlsx({ sheets: [{ name: 'W', rows: '<row r="1"><c r="XFD1"><v>2</v></c></row>' }] }))).toBe('Sheet "W" has cells only past column GR, which Grunt leaves out.');
+    expect(extractOfficeText(xlsx({ sheets: [{ name: 'W', rows: '<row r="1"><c r="XFD1"><v>2</v></c></row>' }] }))).toBe('Sheet "W" has cells only past column GR, which OtherBench leaves out.');
   });
 
   it('shows a date-styled number that Excel could not show as a date as the number', () => {
@@ -153,12 +153,12 @@ describe('serialToIso', () => {
 describe('reading hostile Excel files', () => {
   const FAST_MS = 5000;
   const CAP = 100_000;
-  /** Runs `fn`, checks it was fast, and reports the time when GRUNT_TIMINGS is set. */
+  /** Runs `fn`, checks it was fast, and reports the time when OTHERBENCH_TIMINGS is set. */
   function timed<T>(label: string, fn: () => T): T {
     const start = performance.now();
     const result = fn();
     const ms = performance.now() - start;
-    if (process.env['GRUNT_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
+    if (process.env['OTHERBENCH_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
     expect(ms).toBeLessThan(FAST_MS);
     return result;
   }

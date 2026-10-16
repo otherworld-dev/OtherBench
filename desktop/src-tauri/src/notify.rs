@@ -3,7 +3,7 @@
 //!
 //! tauri-plugin-notification can't report a click on desktop, so on Windows
 //! the toast is shown here directly, with an activation handler that brings
-//! Grunt forward and opens the chat. Elsewhere the plugin shows it and the
+//! OtherBench forward and opens the chat. Elsewhere the plugin shows it and the
 //! tray icon opens the last notified chat instead.
 
 use tauri::AppHandle;

@@ -1,8 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
-import { containPath } from '@grunt/core/domain/paths.js';
+import type { CoworkSessionFiles } from '@otherbench/core/domain/cowork-import.js';
+import { containPath } from '@otherbench/core/domain/paths.js';
 
 /**
  * Finds Cowork sessions (spec 2026-10-09-claude-import-design, Cowork

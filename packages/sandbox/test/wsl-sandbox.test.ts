@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlannedMount } from '@grunt/core/domain/sandbox-paths.js';
-import type { SandboxRunRequest, StoredSandboxState } from '@grunt/core/ports/sandbox.js';
+import type { PlannedMount } from '@otherbench/core/domain/sandbox-paths.js';
+import type { SandboxRunRequest, StoredSandboxState } from '@otherbench/core/ports/sandbox.js';
 import { SELF_TEST_STEP } from '../src/setup.js';
 import { UnsupportedSandbox } from '../src/unsupported-sandbox.js';
 import { WslSandbox, type StateStore, type WslSandboxOptions } from '../src/wsl-sandbox.js';
@@ -11,7 +11,7 @@ import { happyWsl, scriptedAgent, type FakeChannel, type FakeWsl, type RunMessag
 
 let tmp: string;
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'grunt-wsl-sandbox-'));
+  tmp = mkdtempSync(join(tmpdir(), 'otherbench-wsl-sandbox-'));
 });
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -33,13 +33,13 @@ function make(over: Partial<WslSandboxOptions> = {}, onRun?: (msg: RunMessage, c
   const channels: { chatId: string; channel: FakeChannel }[] = [];
   const mounts: string[] = [];
   const state = memoryState(initial);
-  const runner = (over.runner as FakeWsl | undefined) ?? happyWsl({ distros: 'Ubuntu\r\ngrunt-sandbox\r\n', node: true });
+  const runner = (over.runner as FakeWsl | undefined) ?? happyWsl({ distros: 'Ubuntu\r\notherbench-sandbox\r\n', node: true });
   const sandbox = new WslSandbox({
     runner,
-    resourcesDir: () => 'E:\\Grunt\\packages\\sandbox\\resources',
+    resourcesDir: () => 'E:\\OtherBench\\packages\\sandbox\\resources',
     state,
     machineName: () => 'Gigabyte',
-    gruntPort: () => 4747,
+    otherBenchPort: () => 4747,
     selfTestDir: join(tmp, 'selftest'),
     realpath: (p) => p,
     readWslConfig: async () => null,
@@ -65,7 +65,7 @@ const request = (over: Partial<SandboxRunRequest> = {}): SandboxRunRequest => ({
   chatId: 'chat-1',
   command: 'make test',
   timeoutMs: 120_000,
-  workspaceRoot: 'E:\\Git\\Grunt',
+  workspaceRoot: 'E:\\Git\\OtherBench',
   folders: [{ root: 'D:\\Refs', access: 'read' }],
   fs: 'readwrite',
   allowedHosts: ['pypi.org'],
@@ -85,18 +85,18 @@ describe('WslSandbox.run', () => {
   it("runs a command in the chat's agent with its folders mounted, and answers like run_command plus sandbox and cwd", async () => {
     const { sandbox, channels, mounts } = make();
     const result = await sandbox.run(request());
-    expect(mounts).toEqual(['mount ro D:\\Refs /mnt/d/Refs', 'mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount ro D:\\Refs /mnt/d/Refs', 'mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
     expect(channels.map((c) => c.chatId)).toEqual(['chat-1']);
     expect(channels[0]!.channel.runs()[0]).toMatchObject({
       command: 'make test',
-      cwd: '/mnt/e/Git/Grunt',
+      cwd: '/mnt/e/Git/OtherBench',
       timeoutMs: 120_000,
-      readPaths: ['/mnt/e/Git/Grunt', '/mnt/d/Refs'],
-      writePaths: ['/mnt/e/Git/Grunt'],
+      readPaths: ['/mnt/e/Git/OtherBench', '/mnt/d/Refs'],
+      writePaths: ['/mnt/e/Git/OtherBench'],
       denyWritePaths: ['/mnt/d/Refs'],
       allowedHosts: ['pypi.org'],
     });
-    expect(result).toEqual({ command: 'make test', exitCode: 0, signal: null, timedOut: false, truncated: false, output: 'ran\n', timeoutMsUsed: 120_000, sandbox: true, cwd: '/mnt/e/Git/Grunt' });
+    expect(result).toEqual({ command: 'make test', exitCode: 0, signal: null, timedOut: false, truncated: false, output: 'ran\n', timeoutMsUsed: 120_000, sandbox: true, cwd: '/mnt/e/Git/OtherBench' });
   });
 
   it('hands the runtime only host names from the allowlist: IP literals and localhost (a synced profile skips the routes) are dropped', async () => {
@@ -109,8 +109,8 @@ describe('WslSandbox.run', () => {
   it('with the profile reading files only, nothing is writable and the workspace is mounted read-only', async () => {
     const { sandbox, channels, mounts } = make();
     await sandbox.run(request({ fs: 'read', folders: [] }));
-    expect(mounts).toEqual(['mount ro E:\\Git\\Grunt /mnt/e/Git/Grunt']);
-    expect(channels[0]!.channel.runs()[0]).toMatchObject({ writePaths: [], denyWritePaths: ['/mnt/e/Git/Grunt'] });
+    expect(mounts).toEqual(['mount ro E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
+    expect(channels[0]!.channel.runs()[0]).toMatchObject({ writePaths: [], denyWritePaths: ['/mnt/e/Git/OtherBench'] });
   });
 
   it("with file access off, the command gets none of the chat's folders: nothing mounted, nothing allowed, and it starts in its home", async () => {
@@ -118,8 +118,8 @@ describe('WslSandbox.run', () => {
     // The workspace and folders a caller names anyway are ignored, not mounted.
     const result = await sandbox.run(request({ fs: 'off' }));
     expect(mounts).toEqual([]);
-    expect(channels[0]!.channel.runs()[0]).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
-    expect(result.cwd).toBe('/home/grunt/chats/chat-1');
+    expect(channels[0]!.channel.runs()[0]).toMatchObject({ cwd: '/home/otherbench/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+    expect(result.cwd).toBe('/home/otherbench/chats/chat-1');
   });
 
   it('with file access off, ignores a workspace that is missing or could never be mounted', async () => {
@@ -132,10 +132,10 @@ describe('WslSandbox.run', () => {
   it("treats a file access it doesn't know (a newer peer's synced profile) as off: nothing mounted, nothing allowed", async () => {
     const { sandbox, channels, mounts } = make();
     for (const fs of ['everything', 'READWRITE', '', undefined, null]) {
-      await expect(sandbox.run(request({ fs: fs as never }))).resolves.toMatchObject({ cwd: '/home/grunt/chats/chat-1' });
+      await expect(sandbox.run(request({ fs: fs as never }))).resolves.toMatchObject({ cwd: '/home/otherbench/chats/chat-1' });
     }
     expect(mounts).toEqual([]);
-    for (const run of channels[0]!.channel.runs()) expect(run).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+    for (const run of channels[0]!.channel.runs()) expect(run).toMatchObject({ cwd: '/home/otherbench/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
   });
 
   it('refuses a command with file access and no workspace, mounting nothing', async () => {
@@ -158,10 +158,10 @@ describe('WslSandbox.run', () => {
       },
     });
     await sandbox.run(request({ fs: 'read', folders: [] }));
-    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/OtherBench']);
     await sandbox.run(request({ fs: 'off' }));
-    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
-    expect(channels[0]!.channel.runs()[1]).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/OtherBench']);
+    expect(channels[0]!.channel.runs()[1]).toMatchObject({ cwd: '/home/otherbench/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
     // Another chat's agent dies, so every mount may be gone (wsl --shutdown) and the next change of the chat's
     // mounts would mount its earlier folders again; here that remount fails, so the doubt stays.
     await sandbox.run(request({ chatId: 'chat-2', fs: 'off' }));
@@ -171,11 +171,11 @@ describe('WslSandbox.run', () => {
     failMounts = false;
     // The chat's next files-off command doesn't put its earlier folder back: it touches no mount at all.
     await sandbox.run(request({ fs: 'off' }));
-    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/OtherBench']);
     expect(channels[0]!.channel.runs()[2]).toMatchObject({ readPaths: [], writePaths: [], denyWritePaths: [] });
     // A later read run of the chat does.
     await sandbox.run(request({ fs: 'read', folders: [] }));
-    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git/Grunt']);
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/OtherBench', 'mount ro /mnt/e/Git/OtherBench']);
   });
 
   it("with file access off, runs alongside another chat's command writing the workspace: it holds no folder", async () => {
@@ -214,15 +214,15 @@ describe('WslSandbox.run', () => {
     expect(mounts).toEqual([]);
     expect(channels).toEqual([]);
     expect((await sandbox.run(request({ chatId: 'other', folders: [] }))).exitCode).toBe(0);
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
   });
 
   it('refuses a read-only folder inside a writable one (in any spelling, or the same folder), mounting nothing and starting nothing', async () => {
     const { sandbox, mounts, channels } = make();
     for (const folders of [
-      [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' as const }],
-      [{ root: 'e:\\git\\grunt\\Vendor\\lib', access: 'read' as const }],
-      [{ root: 'E:\\GIT\\GRUNT', access: 'read' as const }],
+      [{ root: 'E:\\Git\\OtherBench\\vendor', access: 'read' as const }],
+      [{ root: 'e:\\git\\otherbench\\Vendor\\lib', access: 'read' as const }],
+      [{ root: 'E:\\GIT\\OTHERBENCH', access: 'read' as const }],
       // Inside a writable extra folder, not only the workspace.
       [
         { root: 'D:\\Data', access: 'readwrite' as const },
@@ -231,8 +231,8 @@ describe('WslSandbox.run', () => {
     ]) {
       await expect(sandbox.run(request({ folders }))).rejects.toMatchObject({ code: 'bad_folder', message: expect.stringContaining("is read-only but sits inside the writable") });
     }
-    await expect(sandbox.run(request({ folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).rejects.toThrow(
-      "E:\\Git\\Grunt\\vendor is read-only but sits inside the writable E:\\Git\\Grunt; the sandbox can't keep it read-only. Make it a separate folder, or make the parent read-only."
+    await expect(sandbox.run(request({ folders: [{ root: 'E:\\Git\\OtherBench\\vendor', access: 'read' }] }))).rejects.toThrow(
+      "E:\\Git\\OtherBench\\vendor is read-only but sits inside the writable E:\\Git\\OtherBench; the sandbox can't keep it read-only. Make it a separate folder, or make the parent read-only."
     );
     expect(mounts).toEqual([]);
     expect(channels).toEqual([]);
@@ -240,23 +240,23 @@ describe('WslSandbox.run', () => {
 
   it('allows a read-only folder inside another read-only one, a sibling with a shared prefix, and a writable folder inside a read-only one', async () => {
     const { sandbox } = make();
-    await expect(sandbox.run(request({ fs: 'read', folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
-    await expect(sandbox.run(request({ chatId: 'b', folders: [{ root: 'E:\\Git\\Grunt-refs', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ fs: 'read', folders: [{ root: 'E:\\Git\\OtherBench\\vendor', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'b', folders: [{ root: 'E:\\Git\\OtherBench-refs', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
     await expect(sandbox.run(request({ chatId: 'c', folders: [{ root: 'E:\\Git', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
   });
 
   it("uses each folder's real path, so another spelling of the same folder lands in the same place", async () => {
-    const { sandbox, channels } = make({ realpath: (p) => (p.toLowerCase() === 'e:\\git\\grunt' ? 'E:\\Git\\Grunt' : p) });
-    expect((await sandbox.run(request({ workspaceRoot: 'e:\\git\\grunt', folders: [] }))).cwd).toBe('/mnt/e/Git/Grunt');
-    expect(channels[0]!.channel.runs()[0]!.cwd).toBe('/mnt/e/Git/Grunt');
+    const { sandbox, channels } = make({ realpath: (p) => (p.toLowerCase() === 'e:\\git\\otherbench' ? 'E:\\Git\\OtherBench' : p) });
+    expect((await sandbox.run(request({ workspaceRoot: 'e:\\git\\otherbench', folders: [] }))).cwd).toBe('/mnt/e/Git/OtherBench');
+    expect(channels[0]!.channel.runs()[0]!.cwd).toBe('/mnt/e/Git/OtherBench');
   });
 
   it('tidies forward slashes and repeated or trailing separators before mounting', async () => {
     const { sandbox, channels, mounts } = make();
-    const result = await sandbox.run(request({ workspaceRoot: 'e:/Git//Grunt/', folders: [{ root: 'D:\\Refs\\', access: 'read' }] }));
-    expect(result.cwd).toBe('/mnt/e/Git/Grunt');
-    expect(mounts).toEqual(['mount ro D:\\Refs /mnt/d/Refs', 'mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
-    expect(channels[0]!.channel.runs()[0]).toMatchObject({ readPaths: ['/mnt/e/Git/Grunt', '/mnt/d/Refs'], denyWritePaths: ['/mnt/d/Refs'] });
+    const result = await sandbox.run(request({ workspaceRoot: 'e:/Git//OtherBench/', folders: [{ root: 'D:\\Refs\\', access: 'read' }] }));
+    expect(result.cwd).toBe('/mnt/e/Git/OtherBench');
+    expect(mounts).toEqual(['mount ro D:\\Refs /mnt/d/Refs', 'mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
+    expect(channels[0]!.channel.runs()[0]).toMatchObject({ readPaths: ['/mnt/e/Git/OtherBench', '/mnt/d/Refs'], denyWritePaths: ['/mnt/d/Refs'] });
   });
 
   it('starts a new agent and mounts the folders again after the old agent died (wsl --shutdown)', async () => {
@@ -266,7 +266,7 @@ describe('WslSandbox.run', () => {
     await tick();
     await sandbox.run(request({ folders: [] }));
     expect(channels).toHaveLength(2);
-    expect(mounts.filter((m) => m.startsWith('mount'))).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts.filter((m) => m.startsWith('mount'))).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench', 'mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
   });
 
   it("keeps a chat's folders read-write while its agent lives, so a read-only run doesn't narrow them under a writable one", async () => {
@@ -275,15 +275,15 @@ describe('WslSandbox.run', () => {
     const writing = sandbox.run(request({ folders: [] }));
     const reading = sandbox.run(request({ fs: 'read', folders: [] }));
     await vi.waitFor(() => expect(held).toHaveLength(1));
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
     held[0]!.ch.finish(held[0]!.m.id, 'w\n');
     await vi.waitFor(() => expect(held).toHaveLength(2));
     // The runtime still keeps the read-only run from writing.
-    expect(held[1]!.m).toMatchObject({ writePaths: [], denyWritePaths: ['/mnt/e/Git/Grunt'] });
+    expect(held[1]!.m).toMatchObject({ writePaths: [], denyWritePaths: ['/mnt/e/Git/OtherBench'] });
     held[1]!.ch.finish(held[1]!.m.id, 'r\n');
     expect((await writing).output).toBe('w\n');
     expect((await reading).output).toBe('r\n');
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
   });
 
   it("widens a chat's folder only once its command in that folder has finished", async () => {
@@ -293,10 +293,10 @@ describe('WslSandbox.run', () => {
     await vi.waitFor(() => expect(held).toHaveLength(1));
     const writing = sandbox.run(request({ folders: [] }));
     await tick();
-    expect(mounts).toEqual(['mount ro E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount ro E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
     held[0]!.ch.finish(held[0]!.m.id);
     await vi.waitFor(() => expect(held).toHaveLength(2));
-    expect(mounts).toEqual(['mount ro E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt', 'mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount ro E:\\Git\\OtherBench /mnt/e/Git/OtherBench', 'unmount /mnt/e/Git/OtherBench', 'mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
     held[1]!.ch.finish(held[1]!.m.id);
     await Promise.all([reading, writing]);
   });
@@ -320,8 +320,8 @@ describe('WslSandbox.run', () => {
     const { sandbox } = make({}, onRun);
     const first = sandbox.run(request({ chatId: 'a', folders: [] }));
     await vi.waitFor(() => expect(held).toHaveLength(1));
-    const same = sandbox.run(request({ chatId: 'b', workspaceRoot: 'e:\\git\\grunt', folders: [] }));
-    const inside = sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }));
+    const same = sandbox.run(request({ chatId: 'b', workspaceRoot: 'e:\\git\\otherbench', folders: [] }));
+    const inside = sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\OtherBench\\packages', folders: [] }));
     // Reading the folder, or writing another one, doesn't wait.
     const reading = sandbox.run(request({ chatId: 'd', fs: 'read', folders: [] }));
     const elsewhere = sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }));
@@ -362,14 +362,14 @@ describe('WslSandbox.run', () => {
 
   it("refuses commands that would write a folder an agent couldn't confirm it put back, until release or Repair", async () => {
     let unguarded = true;
-    const { sandbox, channels } = make({}, (m, ch) => queueMicrotask(() => ch.finish(m.id, 'ran\n', 0, unguarded ? ['/mnt/e/Git/Grunt'] : [])));
+    const { sandbox, channels } = make({}, (m, ch) => queueMicrotask(() => ch.finish(m.id, 'ran\n', 0, unguarded ? ['/mnt/e/Git/OtherBench'] : [])));
     // The run itself still answers (its note says what failed).
     expect((await sandbox.run(request({ chatId: 'a', folders: [] }))).exitCode).toBe(0);
     unguarded = false;
-    const refusal = { code: 'agent_failed', message: expect.stringContaining("The sandbox couldn't confirm it undid changes to protected files in E:\\Git\\Grunt") };
+    const refusal = { code: 'agent_failed', message: expect.stringContaining("The sandbox couldn't confirm it undid changes to protected files in E:\\Git\\OtherBench") };
     await expect(sandbox.run(request({ chatId: 'a', fs: 'read', folders: [] }))).rejects.toMatchObject(refusal);
     await expect(sandbox.run(request({ chatId: 'b', folders: [] }))).rejects.toMatchObject(refusal);
-    await expect(sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }))).rejects.toMatchObject(refusal);
+    await expect(sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\OtherBench\\packages', folders: [] }))).rejects.toMatchObject(refusal);
     // Reading it, or writing somewhere else, goes ahead.
     await expect(sandbox.run(request({ chatId: 'd', fs: 'read', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
     await expect(sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
@@ -442,7 +442,7 @@ describe('WslSandbox.run', () => {
     releaseMount();
     await next;
     expect(channels).toHaveLength(2);
-    expect(seen).toEqual(['mount rw /mnt/e/Git/Grunt', 'mount ro /mnt/d/Refs']);
+    expect(seen).toEqual(['mount rw /mnt/e/Git/OtherBench', 'mount ro /mnt/d/Refs']);
   });
 
   it("passes the agent's question signal through to askHost, and refuses a host longer than 253 characters without asking", async () => {
@@ -484,7 +484,7 @@ describe('WslSandbox.run', () => {
     await queuedRefused;
     await tick();
     expect(channels).toHaveLength(1);
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench', 'unmount /mnt/e/Git/OtherBench']);
   });
 
   it('refuses a command queued behind a running one on release even when the closing agent reports the running one done', async () => {
@@ -509,7 +509,7 @@ describe('WslSandbox.run', () => {
     await tick();
     expect(agents).toHaveLength(1);
     expect(held).toHaveLength(1);
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench', 'unmount /mnt/e/Git/OtherBench']);
   });
 
   it('refuses a command queued behind a running one when setup starts, starting no agent', async () => {
@@ -563,7 +563,7 @@ describe('WslSandbox.run', () => {
     mounts.length = 0;
     await sandbox.run(request({ fs: 'read', folders: [] }));
     // The new agent's commands have only ever asked for read-only: the workspace is no longer kept read-write.
-    expect(mounts).toContain('mount ro /mnt/e/Git/Grunt');
+    expect(mounts).toContain('mount ro /mnt/e/Git/OtherBench');
   });
 
   it('runs commands again after a setup', async () => {
@@ -574,25 +574,25 @@ describe('WslSandbox.run', () => {
     expect((await sandbox.run(request({ folders: [] }))).exitCode).toBe(0);
     expect(channels).toHaveLength(2);
     // Setup restarts the distro, which drops the mounts: nothing is unmounted one by one, and the next command mounts again.
-    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+    expect(mounts).toEqual(['mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench', 'mount rw E:\\Git\\OtherBench /mnt/e/Git/OtherBench']);
   });
 });
 
 describe('WslSandbox.release and close', () => {
-  it("closes the chat's agent, unmounts its folders and removes its home and temp folders in the VM as grunt", async () => {
+  it("closes the chat's agent, unmounts its folders and removes its home and temp folders in the VM as otherbench", async () => {
     const { sandbox, channels, mounts, runner } = make();
     await sandbox.run(request({ folders: [] }));
     await sandbox.release('chat-1');
     expect(channels[0]!.channel.sent.at(-1)).toEqual({ type: 'close' });
-    expect(mounts.at(-1)).toBe('unmount /mnt/e/Git/Grunt');
-    expect(runner.calls).toContainEqual({ kind: 'exec', user: 'grunt', argv: ['/bin/rm', '-rf', '--one-file-system', '/home/grunt/chats/chat-1', '/tmp/grunt-chats/chat-1'] });
+    expect(mounts.at(-1)).toBe('unmount /mnt/e/Git/OtherBench');
+    expect(runner.calls).toContainEqual({ kind: 'exec', user: 'otherbench', argv: ['/bin/rm', '-rf', '--one-file-system', '/home/otherbench/chats/chat-1', '/tmp/otherbench-chats/chat-1'] });
     expect(runner.commands.some((l) => l.startsWith('root: /bin/rm'))).toBe(false);
   });
 
   it("names the chat's folders in the VM with a safe name", async () => {
     const { sandbox, runner } = make();
     await sandbox.release('../x y');
-    expect(runner.calls).toContainEqual({ kind: 'exec', user: 'grunt', argv: ['/bin/rm', '-rf', '--one-file-system', '/home/grunt/chats/___x_y', '/tmp/grunt-chats/___x_y'] });
+    expect(runner.calls).toContainEqual({ kind: 'exec', user: 'otherbench', argv: ['/bin/rm', '-rf', '--one-file-system', '/home/otherbench/chats/___x_y', '/tmp/otherbench-chats/___x_y'] });
   });
 
   it('close closes every agent and unmounts everything', async () => {
@@ -601,7 +601,7 @@ describe('WslSandbox.release and close', () => {
     await sandbox.run(request({ chatId: 'b', workspaceRoot: 'D:\\Other', folders: [] }));
     await sandbox.close();
     expect(channels.every((c) => c.channel.sent.at(-1)?.type === 'close')).toBe(true);
-    expect(mounts.filter((m) => m.startsWith('unmount')).sort()).toEqual(['unmount /mnt/d/Other', 'unmount /mnt/e/Git/Grunt']);
+    expect(mounts.filter((m) => m.startsWith('unmount')).sort()).toEqual(['unmount /mnt/d/Other', 'unmount /mnt/e/Git/OtherBench']);
   });
 });
 
@@ -632,7 +632,7 @@ describe('WslSandbox setup and status', () => {
     const { sandbox } = make(
       {
         resourcesDir: () => {
-          throw new Error("Grunt's sandbox files (agent.mjs) weren't found");
+          throw new Error("OtherBench's sandbox files (agent.mjs) weren't found");
         },
       },
       undefined,
@@ -698,7 +698,7 @@ describe('WslSandbox setup and status', () => {
     expect(state.value).toEqual({ state: 'not_set_up', packages: [] });
   });
 
-  it('records a setup as interrupted while it runs, so a Grunt stopped mid-Repair is not left ready', async () => {
+  it('records a setup as interrupted while it runs, so an OtherBench stopped mid-Repair is not left ready', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { sandbox, state } = make({ steps: [{ name: 'Wait', run: () => gate }] });
@@ -721,7 +721,7 @@ describe('WslSandbox setup and status', () => {
   });
 
   it.skipIf(process.platform !== 'win32')('passes the self-test when the sandbox blocks what it should, then lets its agent go', async () => {
-    const works = /grunt-sandbox-ok|hello\.txt|written\.txt|registry\.npmjs\.org|^test ! -e /;
+    const works = /otherbench-sandbox-ok|hello\.txt|written\.txt|registry\.npmjs\.org|^test ! -e /;
     const undone = 'The sandbox undid changes to .git/hooks/x, .claude/settings.local.json, .vscode/tasks.json (protected files).';
     const { sandbox, channels, mounts } = make(
       { steps: [SELF_TEST_STEP] },
@@ -755,7 +755,7 @@ describe('WslSandbox remove and packages', () => {
   it('remove unregisters the distro and keeps the package list', async () => {
     const { sandbox, runner, state } = make({}, undefined, { ...READY, packages: ['ffmpeg'] });
     await sandbox.remove();
-    expect(runner.commands).toContain('wsl --unregister grunt-sandbox');
+    expect(runner.commands).toContain('wsl --unregister otherbench-sandbox');
     expect(state.value).toEqual({ state: 'not_set_up', packages: ['ffmpeg'] });
   });
 
@@ -772,7 +772,7 @@ describe('WslSandbox remove and packages', () => {
   it('refuses commands while the distro is being removed', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const runner = happyWsl({ distros: 'Ubuntu\r\ngrunt-sandbox\r\n', node: true });
+    const runner = happyWsl({ distros: 'Ubuntu\r\notherbench-sandbox\r\n', node: true });
     const wsl = runner.wsl.bind(runner);
     runner.wsl = async (args) => {
       if (args[0] === '--unregister') await gate;
@@ -796,7 +796,7 @@ describe('WslSandbox remove and packages', () => {
 
   it("a failed package install leaves the sandbox ready, says why, and commands still run", async () => {
     const runner = happyWsl({
-      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      distros: 'Ubuntu\r\notherbench-sandbox\r\n',
       node: true,
       override: (call) => (call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: Unable to locate package nosuch' } : undefined),
     });
@@ -813,7 +813,7 @@ describe('WslSandbox remove and packages', () => {
   it('a later successful install clears the earlier failure', async () => {
     let fail = true;
     const runner = happyWsl({
-      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      distros: 'Ubuntu\r\notherbench-sandbox\r\n',
       node: true,
       override: (call) => (fail && call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: nope' } : undefined),
     });
@@ -828,7 +828,7 @@ describe('WslSandbox remove and packages', () => {
 
   it('a package list change that installs nothing also clears an earlier failed install', async () => {
     const runner = happyWsl({
-      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      distros: 'Ubuntu\r\notherbench-sandbox\r\n',
       node: true,
       override: (call) => (call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: nope' } : undefined),
     });

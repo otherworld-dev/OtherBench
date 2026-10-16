@@ -63,7 +63,7 @@ const HOST_LABELS = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
  * The canonical form of a host name, or `null` when `raw` isn't one.
  *
  * The spelling is `normaliseHost`'s (browser-hosts.ts), the one the browser's
- * cards and grants use, so a host has one canonical form in Grunt. `URL` does
+ * cards and grants use, so a host has one canonical form in OtherBench. `URL` does
  * the work there: IDNA (Unicode to punycode), lowercasing, and IPv4
  * normalisation (`0x7f.1` and `2130706433` both become `127.0.0.1`). One
  * trailing dot is dropped (`pypi.org.` is `pypi.org`).

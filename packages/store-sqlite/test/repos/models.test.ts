@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import { freshDb } from '../helpers.js';
 import { SqliteConnectionRepo } from '../../src/repos/connections.js';
 import { SqliteModelRepo } from '../../src/repos/models.js';

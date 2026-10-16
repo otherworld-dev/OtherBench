@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_ACTIONS, COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
-import type { ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
-import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
-import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { COMPUTER_ACTIONS, COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
+import { AiSdkChatEngine } from '@otherbench/engine-aisdk/engine.js';
+import { ProviderRegistry } from '@otherbench/engine-aisdk/registry.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 // The one pairing check, shared with the engine's own tests (this package's tests already import other packages' test helpers).
 import { expectWellFormed } from '../../engine-aisdk/test/tool-channel.js';
 
 /**
  * Anthropic's computer toolset end to end on this side of the wire: the real
- * provider registry, the real engine, the real `GruntToolProvider` and
+ * provider registry, the real engine, the real `OtherBenchToolProvider` and
  * `PermissionBroker`, the real `computer` tool, and `FakeComputerDriver`
  * (never a real mouse, keyboard or screen). The model is a canned stream
  * behind a stubbed global `fetch`; the connection's base URL points at this
@@ -73,12 +73,12 @@ type Block = Record<string, unknown>;
 
 /** A model that takes the toolset. */
 const TOOLSET_MODEL = 'claude-opus-5-5';
-/** A model that gets Grunt's JSON `computer` tool instead. */
+/** A model that gets OtherBench's JSON `computer` tool instead. */
 const JSON_TOOL_MODEL = 'claude-sonnet-4-5';
 /** The model the next `setup` makes its profile for; back to the toolset model after every test. */
 const MODEL = { id: TOOLSET_MODEL };
 
-/** One assistant turn calling Grunt's JSON `computer` tool: the action is a field of the input, and nothing names a toolset. */
+/** One assistant turn calling OtherBench's JSON `computer` tool: the action is a field of the input, and nothing names a toolset. */
 function jsonToolCall(id: string, input: Record<string, unknown>): string {
   return sse([
     start(`msg_${id}`),
@@ -106,7 +106,7 @@ async function setup(...replies: string[]) {
   const store = new InMemoryStore();
   store.chats.create({ id: 'chat-1', title: 'Budget sheet', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
   const driver = new FakeComputerDriver();
-  const provider = new GruntToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
   const requests: ApprovalRequest[] = [];
   provider.onApprovalEvent((e) => {
     if (e.type === 'request') requests.push(e.request);
@@ -122,7 +122,7 @@ async function setup(...replies: string[]) {
       contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
     },
   };
-  // Every profile is also offered Grunt's thread tools (spec 2026-10-12-thread-cards-design); they go out as ordinary
+  // Every profile is also offered OtherBench's thread tools (spec 2026-10-12-thread-cards-design); they go out as ordinary
   // JSON tools beside computer use, and the checks below look at what is sent besides them.
   const listed = await provider.listTools(policy);
   const threadNames = listed.filter((t) => t.source === 'thread').map((t) => t.name);
@@ -141,7 +141,7 @@ async function setup(...replies: string[]) {
     for await (const event of engine.stream(request)) events.push(event);
     return events;
   };
-  /** The tools a request body sends, besides Grunt's thread tools. */
+  /** The tools a request body sends, besides OtherBench's thread tools. */
   const toolsSent = (body: Record<string, unknown>): Block[] => (body['tools'] as Block[]).filter((t) => !threadNames.includes(String(t['name'])));
   return { store, driver, provider, requests, bodies, urls, run, threadNames, toolsSent };
 }
@@ -242,7 +242,7 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
     expect(made.driver.refused).toEqual([]);
     expect(made.requests).toEqual([]);
     // Refused by the gate, like an unknown action of the JSON tool, and in the audit like one.
-    const refusal = (name: string) => ({ about: COMPUTER_SCREEN_ABOUT, error: true, code: 'permission_denied', message: `"${name}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.` });
+    const refusal = (name: string) => ({ about: COMPUTER_SCREEN_ABOUT, error: true, code: 'permission_denied', message: `"${name}" isn't a computer action OtherBench can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.` });
     expect(resultEvents(events).map((e) => e.result)).toEqual([refusal('left_click_drag'), refusal('hold_key')]);
     const audit = made.store.audit.list('chat-1');
     expect(audit.map((r) => [r.toolName, r.grantedBy, r.resultSummary])).toEqual([

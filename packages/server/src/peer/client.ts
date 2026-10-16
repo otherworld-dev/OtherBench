@@ -1,7 +1,7 @@
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { isIP } from 'node:net';
 import { connect, type TLSSocket } from 'node:tls';
-import { fingerprintOf } from '@grunt/core/domain/pairing.js';
+import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
 import type { NodeIdentity } from './identity.js';
 
 /** The peer listener's default port (v2 spec §1). */

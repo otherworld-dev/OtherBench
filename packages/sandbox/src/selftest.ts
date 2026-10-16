@@ -1,7 +1,7 @@
-import type { SandboxRunResult } from '@grunt/core/ports/sandbox.js';
+import type { SandboxRunResult } from '@otherbench/core/ports/sandbox.js';
 import { INSTALL_DIR, INTEROP_OFF } from './setup.js';
 
-/** One check run inside the inner sandbox as grunt (spec 2026-10-12-sandbox-design §4, "Self-test"). */
+/** One check run inside the inner sandbox as otherbench (spec 2026-10-12-sandbox-design §4, "Self-test"). */
 export interface SelfTestCase {
   name: string;
   command: string;
@@ -34,7 +34,7 @@ export const PROTECTED_PROBES = ['.git/hooks/x', '.claude/settings.local.json', 
 export const EXISTING_PROBE = '.claude/settings.local.json';
 export const EXISTING_PROBE_CONTENT = '{}';
 
-/** Where the self-test's folders are in the sandbox, and how to reach Grunt from the VM. */
+/** Where the self-test's folders are in the sandbox, and how to reach OtherBench from the VM. */
 export interface SelfTestPlaces {
   /** The self-test chat's workspace, mounted read-write, with .git/hooks, .claude and .vscode folders in it. */
   rwLinux: string;
@@ -42,8 +42,8 @@ export interface SelfTestPlaces {
   roLinux: string;
   /** The Windows host as the VM sees it (the default route), or null. */
   gateway: string | null;
-  /** Grunt's port, or null when not known yet. */
-  gruntPort: number | null;
+  /** OtherBench's port, or null when not known yet. */
+  otherBenchPort: number | null;
 }
 
 /** The path with the case of its last name's letters flipped (`/mnt/c/st/ro` to `/mnt/c/st/RO`): the same Windows folder. */
@@ -68,7 +68,7 @@ export function shellQuote(s: string): string {
 export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
   const none: string[] = [];
   const cases: SelfTestCase[] = [
-    { name: 'a plain command runs', command: 'echo grunt-sandbox-ok', expect: 'ok', allowedHosts: none },
+    { name: 'a plain command runs', command: 'echo otherbench-sandbox-ok', expect: 'ok', allowedHosts: none },
     { name: 'the read-only folder can be read', command: `cat ${shellQuote(`${p.roLinux}/hello.txt`)}`, expect: 'ok', allowedHosts: none },
     { name: 'the read-write folder can be written', command: `echo ok > ${shellQuote(`${p.rwLinux}/written.txt`)}`, expect: 'ok', allowedHosts: none },
     // The agent gives each command its home and a temp folder of its own, both writable.
@@ -77,7 +77,7 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     // The canary for the runtime's proxy sockets: with them hidden, no command has any network, silently.
     { name: 'an allowlisted host is reachable', command: 'curl -sS -m 30 -o /dev/null https://registry.npmjs.org/', expect: 'ok', allowedHosts: ['registry.npmjs.org'] },
     { name: "a path outside the chat's folders is unreadable", command: 'ls /mnt/c/Windows', expect: 'blocked', allowedHosts: none },
-    { name: 'the rest of /home is unreadable', command: 'cat /home/grunt/.bashrc', expect: 'blocked', allowedHosts: none },
+    { name: 'the rest of /home is unreadable', command: 'cat /home/otherbench/.bashrc', expect: 'blocked', allowedHosts: none },
     { name: "the read-only folder can't be written", command: `echo no > ${shellQuote(`${p.roLinux}/nope.txt`)}`, expect: 'blocked', allowedHosts: none, expectOutput: WRITE_REFUSED },
     // Windows folders in the VM ignore case: another spelling of the read-only folder must not reach it either.
     {
@@ -117,7 +117,7 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     },
     { name: "cmd.exe isn't there", command: 'cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     { name: "Windows programs by path aren't there", command: '/mnt/c/Windows/System32/cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
-    // The same check setup runs as root, here as grunt inside the runtime: tries to start a Windows program, also
+    // The same check setup runs as root, here as otherbench inside the runtime: tries to start a Windows program, also
     // pointed at each interop socket, and says INTEROP_OFF (exit 0) only if every attempt fails the way it does with
     // interop off. Exit 3 (interop on) or 4 (couldn't tell) fails the self-test. Each attempt can take about 10 s.
     {
@@ -131,23 +131,23 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     { name: '/etc/shadow is unreadable', command: 'cat /etc/shadow', expect: 'blocked', allowedHosts: none },
     { name: "a host that isn't allowlisted is refused", command: 'curl -sS -m 15 -o /dev/null https://example.com/', expect: 'blocked', allowedHosts: none },
   ];
-  if (p.gateway !== null && p.gruntPort !== null) {
+  if (p.gateway !== null && p.otherBenchPort !== null) {
     // Straight at the machine, not through the runtime's proxy (which would answer 403 and prove nothing about the
     // network boundary). curl exits 0 on any HTTP status, so "blocked" is: the connection failed (non-zero exit) and
-    // no HTTP status came back (http_code=000), whatever Grunt would have answered.
+    // no HTTP status came back (http_code=000), whatever OtherBench would have answered.
     cases.push({
-      name: "Grunt's own API on this machine is unreachable",
-      command: `curl -sS --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' http://${p.gateway}:${p.gruntPort}/api/health`,
+      name: "OtherBench's own API on this machine is unreachable",
+      command: `curl -sS --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' http://${p.gateway}:${p.otherBenchPort}/api/health`,
       expect: 'blocked',
       allowedHosts: none,
       expectOutput: /http_code=000/,
     });
-    // In sign-in mode (remote access) Grunt's port speaks HTTPS only, and a plain-HTTP request to it gets no HTTP
+    // In sign-in mode (remote access) OtherBench's port speaks HTTPS only, and a plain-HTTP request to it gets no HTTP
     // status either (the TLS handshake fails), so the check above would pass even if the port were reachable.
-    // The same check over HTTPS (any certificate) covers that port: whichever one Grunt speaks answers if reachable.
+    // The same check over HTTPS (any certificate) covers that port: whichever one OtherBench speaks answers if reachable.
     cases.push({
-      name: "Grunt's own API on this machine is unreachable over HTTPS too",
-      command: `curl -sS -k --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' https://${p.gateway}:${p.gruntPort}/api/health`,
+      name: "OtherBench's own API on this machine is unreachable over HTTPS too",
+      command: `curl -sS -k --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' https://${p.gateway}:${p.otherBenchPort}/api/health`,
       expect: 'blocked',
       allowedHosts: none,
       expectOutput: /http_code=000/,

@@ -1,4 +1,4 @@
-import { SANDBOX_MAX_OUTPUT_BYTES, SandboxError } from '@grunt/core/ports/sandbox.js';
+import { SANDBOX_MAX_OUTPUT_BYTES, SandboxError } from '@otherbench/core/ports/sandbox.js';
 import type { AgentChannel, AgentExit } from './agent-channel.js';
 import type { AgentMessage } from './protocol.js';
 

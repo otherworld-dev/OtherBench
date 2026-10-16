@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { adoptIntoLocation, inferLocationMapping, relativeSegments } from '@grunt/core/domain/workspace.js';
-import type { Location, LocationPath } from '@grunt/core/types/workspace.js';
+import { adoptIntoLocation, inferLocationMapping, relativeSegments } from '@otherbench/core/domain/workspace.js';
+import type { Location, LocationPath } from '@otherbench/core/types/workspace.js';
 import type { Container } from '../container.js';
 import { optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanUsage } from '@grunt/core/types/usage.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { PLAN_USAGE_MAX_AGE_MS, PLAN_USAGE_MIN_REFRESH_MS, PlanUsageCache } from '../src/plan-usage.js';
 
 const reading = (percent: number, fetchedAt = 0): PlanUsage => ({ fetchedAt, windows: [{ id: 'five_hour', label: '5-hour', percent, resetsAt: null }] });

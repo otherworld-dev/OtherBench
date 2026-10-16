@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -24,7 +24,7 @@ beforeEach(async () => {
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);
   manager = new McpServerManager(store, new FakeSecretStore(), { initialBackoffMs: 50, maxBackoffMs: 100 });
-  const toolProvider = new GruntToolProvider(store, new PermissionBroker(store), manager);
+  const toolProvider = new OtherBenchToolProvider(store, new PermissionBroker(store), manager);
   container = {
     store, secrets: new FakeSecretStore(), engine, registry: {} as never, toolProvider, mcpManager: manager,
     turnRunner, streamRegistry: new StreamRegistry(turnRunner, store), blobStore: {} as never, close: () => {},

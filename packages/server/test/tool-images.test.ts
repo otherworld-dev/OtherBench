@@ -2,17 +2,17 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TOOL_IMAGE_BYTES, toolImageBound } from '@grunt/core/domain/tool-images.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
-import { FakeChatEngine, FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore, sha256Of, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
-import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { MAX_TOOL_IMAGE_BYTES, toolImageBound } from '@otherbench/core/domain/tool-images.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
+import { FakeChatEngine, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore, sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { openDatabase } from '@otherbench/store-sqlite/db.js';
+import { runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
+import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
@@ -57,7 +57,7 @@ async function blobFiles(): Promise<string[]> {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-tool-images-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-tool-images-'));
   const db = openDatabase(':memory:');
   runMigrations(db);
   store = new SqliteStore(db);

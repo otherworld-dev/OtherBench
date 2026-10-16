@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InvalidAttachmentReferenceError, TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import { InvalidAttachmentReferenceError, TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { startTurn } from '../src/turn-start.js';

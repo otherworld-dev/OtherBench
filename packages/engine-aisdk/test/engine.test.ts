@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { APICallError } from '@ai-sdk/provider';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
-import { createPlanGate } from '@grunt/core/domain/thread-tools.js';
-import { FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { Connection, ResolvedProfile } from '@otherbench/core/types/config.js';
+import { createPlanGate } from '@otherbench/core/domain/thread-tools.js';
+import { FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { AiSdkChatEngine, type ProviderResolver } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 

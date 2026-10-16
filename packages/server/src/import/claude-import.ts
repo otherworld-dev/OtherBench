@@ -1,19 +1,19 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setImmediate as breathe } from 'node:timers/promises';
-import { chatListUrl, ClaudeExportError, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
-import { emptyCoworkStats, planCoworkSession, type CoworkChat, type CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
-import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@grunt/core/domain/claude-import-memory.js';
-import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@grunt/core/domain/global-memory.js';
-import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@grunt/core/domain/memory.js';
-import { containPath } from '@grunt/core/domain/paths.js';
-import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@grunt/core/domain/workspace.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { Project, Store } from '@grunt/core/ports/store.js';
-import type { AboutOutcome, CoworkPreview, ImportPhase, ImportPreview, ImportReport, ImportStart, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
-import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
-import { withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
-import { sha256Of, type BlobStore, type StoredBlob } from '@grunt/store-sqlite/blob-store.js';
+import { chatListUrl, ClaudeExportError, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@otherbench/core/domain/claude-import.js';
+import { emptyCoworkStats, planCoworkSession, type CoworkChat, type CoworkSessionFiles } from '@otherbench/core/domain/cowork-import.js';
+import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@otherbench/core/domain/claude-import-memory.js';
+import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@otherbench/core/domain/global-memory.js';
+import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@otherbench/core/domain/memory.js';
+import { containPath } from '@otherbench/core/domain/paths.js';
+import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@otherbench/core/domain/workspace.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { Project, Store } from '@otherbench/core/ports/store.js';
+import type { AboutOutcome, CoworkPreview, ImportPhase, ImportPreview, ImportReport, ImportStart, ImportStatus, MemoryOutcome } from '@otherbench/core/types/claude-import.js';
+import type { Profile, ResolvedProfile } from '@otherbench/core/types/config.js';
+import { withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
+import { sha256Of, type BlobStore, type StoredBlob } from '@otherbench/store-sqlite/blob-store.js';
 import { askMemoryModel, errorMessage, MEMORY_UPDATE_TIMEOUT_MS, pickMemoryProfile, type MemoryQueue } from '../memory/shared.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
@@ -345,7 +345,7 @@ export class ClaudeImportService {
   }
 
   private step(phase: ImportPhase): void {
-    if (this.disposed) throw new Error('Grunt was shut down during the import.');
+    if (this.disposed) throw new Error('OtherBench was shut down during the import.');
     this.current.phase = phase;
   }
 
@@ -385,7 +385,7 @@ export class ClaudeImportService {
         }
         this.tick();
       }
-      // claude.ai's project ids to Grunt's: an imported project keeps its id, a merged one is the project it merged into.
+      // claude.ai's project ids to OtherBench's: an imported project keeps its id, a merged one is the project it merged into.
       const projectFor = new Map(targets.map((t) => [t.planned.id, t.project.id]));
       const groundedProject = (claudeId: string | null | undefined): string | null =>
         claudeId ? (projectFor.get(claudeId) ?? (this.deps.store.projects.get(claudeId) ? claudeId : null)) : null;
@@ -467,7 +467,7 @@ export class ClaudeImportService {
    * A chat already here is left as it is, except that one still in No
    * project is filed (the user's own filing is never undone); `newer` says
    * the export has messages it lacks, which a re-run doesn't add, so a chat
-   * carried on in Grunt keeps its own branch.
+   * carried on in OtherBench keeps its own branch.
    */
   private writeChat(chat: ImportedChat, profileId: string, projectId: string | null, images: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = []): ChatOutcome {
     const { store } = this.deps;
@@ -630,9 +630,9 @@ export class ClaudeImportService {
 
   private ask(model: ResolvedProfile, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     return this.deps.queue.add(async () =>
-      // A call still queued when Grunt shuts down never starts.
+      // A call still queued when OtherBench shuts down never starts.
       this.disposed
-        ? { ok: false as const, error: 'Grunt was shut down during the import.' }
+        ? { ok: false as const, error: 'OtherBench was shut down during the import.' }
         : askMemoryModel({ engine: this.deps.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running }, model, IMPORT_CHAT_ID, prompt)
     );
   }

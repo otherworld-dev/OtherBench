@@ -1,6 +1,6 @@
 import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { SecretStore } from '@grunt/core/ports/secret-store.js';
-import type { McpServerOAuth, Store } from '@grunt/core/ports/store.js';
+import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
+import type { McpServerOAuth, Store } from '@otherbench/core/ports/store.js';
 import { accountFromIdToken } from './oauth-provider.js';
 import { normaliseResource, sameResource } from './url.js';
 
@@ -167,7 +167,7 @@ export class McpOAuthStore {
     });
   }
 
-  /** The hand-registered client ("Sign-in app"), or null when Grunt registers itself. */
+  /** The hand-registered client ("Sign-in app"), or null when OtherBench registers itself. */
   async manualClient(serverId: string): Promise<ManualClient | null> {
     const oauth = this.store.mcpServers.get(serverId)?.oauth;
     if (!oauth?.clientId) return null;

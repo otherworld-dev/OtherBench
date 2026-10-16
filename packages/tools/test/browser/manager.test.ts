@@ -354,7 +354,7 @@ describe('BrowserManager with the real egress proxy', () => {
 
   /**
    * A loopback site, and a manager wired to the real proxy with every name
-   * resolving to `resolvesTo`. `allowFixturePort` plays GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS.
+   * resolving to `resolvesTo`. `allowFixturePort` plays OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS.
    */
   async function setup(resolvesTo: string, allowFixturePort: boolean) {
     const hits: string[] = [];

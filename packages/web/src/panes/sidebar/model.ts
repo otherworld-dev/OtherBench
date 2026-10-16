@@ -1,5 +1,5 @@
-import { compareProjects, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 

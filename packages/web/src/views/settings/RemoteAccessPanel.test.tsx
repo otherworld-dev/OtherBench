@@ -22,7 +22,7 @@ beforeEach(() => {
       signedIn: true,
       caDownload: true,
       session: { expiresAt: Date.UTC(2026, 9, 13, 8, 0), remember: false },
-      remote: { publicUrls: ['https://grunt.lan:4747', 'https://192.168.1.5:4747'], tls: { mode: 'auto', notAfter: Date.UTC(2028, 11, 20), caFingerprint: FP, names: ['grunt.lan', '192.168.1.5'] }, trustProxies: [] },
+      remote: { publicUrls: ['https://otherbench.lan:4747', 'https://192.168.1.5:4747'], tls: { mode: 'auto', notAfter: Date.UTC(2028, 11, 20), caFingerprint: FP, names: ['otherbench.lan', '192.168.1.5'] }, trustProxies: [] },
     },
   }, true);
 });
@@ -36,11 +36,11 @@ describe('RemoteAccessPanel', () => {
     render(<RemoteAccessPanel />);
 
     expect(screen.getByText(/^Signed in until /)).toBeInTheDocument();
-    expect(screen.getByText('https://grunt.lan:4747')).toBeInTheDocument();
+    expect(screen.getByText('https://otherbench.lan:4747')).toBeInTheDocument();
     expect(screen.getByText('https://192.168.1.5:4747')).toBeInTheDocument();
     expect(screen.getByText(FP)).toBeInTheDocument();
-    expect(screen.getByText(/grunt\.lan, 192\.168\.1\.5/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: "Download Grunt's certificate" })).toHaveAttribute('href', '/grunt-ca.crt');
+    expect(screen.getByText(/otherbench\.lan, 192\.168\.1\.5/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: "Download OtherBench's certificate" })).toHaveAttribute('href', '/otherbench-ca.crt');
   });
 
   it('names the trusted proxies behind a proxy', () => {

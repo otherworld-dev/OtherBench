@@ -23,7 +23,7 @@ export function browserCommandRisk(command: BrowserCommand): RiskClass {
 }
 
 /*
- * One parser, the one Chromium uses. Every host Grunt compares (a card's site,
+ * One parser, the one Chromium uses. Every host OtherBench compares (a card's site,
  * a grant, the blocklist, the private-address refusal, the proxy) comes out of
  * WHATWG `new URL()` and the single normalisation in `hostOf`: IDNA/punycode,
  * lower case, IPv4 in any spelling as a dotted quad (`2130706433`, `0x7f.1`,
@@ -335,7 +335,7 @@ export function hasLocalSuffix(canonical: string): boolean {
  * Whether a CANONICAL host that is NOT an IP address is a name that only ever
  * means this machine or a private network: a name with no dot (`router`,
  * `intranet`: a search-domain name, which is a different machine on each
- * network, so a grant for one would mean a different site wherever Grunt
+ * network, so a grant for one would mean a different site wherever OtherBench
  * runs), `localhost`, or a name under a local suffix. One rule for the browser
  * and for the sandbox's network cards. Not for an IPv6 literal, which has no
  * dot either: judge an address by `isPublicAddress`.
@@ -351,7 +351,7 @@ export function isLocalName(host: string): boolean {
 }
 
 export interface HostCheckOptions {
-  /** Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 is allowed on these ports. */
+  /** Tests only (`OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 is allowed on these ports. */
   allowLoopbackPorts?: readonly number[];
   /** The port being reached, when known: the proxy knows it, the broker doesn't. */
   port?: number;
@@ -367,7 +367,7 @@ export function browserHostDenial(
   opts: HostCheckOptions = {}
 ): string | null {
   const h = typeof host === 'string' ? normaliseHost(host) : null;
-  if (h === null) return "Grunt couldn't tell which website this is for.";
+  if (h === null) return "OtherBench couldn't tell which website this is for.";
   for (const entry of policy.browserBlockedHosts ?? []) {
     const blocked = normaliseHost(entry);
     if (blocked !== null && (h === blocked || h.endsWith(`.${blocked}`))) return `${h} is blocked for this profile.`;

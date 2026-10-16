@@ -1,5 +1,5 @@
 #!/bin/sh
-# Is Windows interop off in this distro? Run by setup (as root) and by the self-test (as grunt, inside
+# Is Windows interop off in this distro? Run by setup (as root) and by the self-test (as otherbench, inside
 # the sandbox runtime). Prints "interop-off" and exits 0 only when nothing it tried could start a Windows
 # program. Exits 3 when it saw interop on, and 4 when it couldn't tell (couldn't test, or an outcome it
 # doesn't recognise); both fail setup and the self-test.
@@ -29,7 +29,7 @@ if [ -n "${WSL_INTEROP-}" ]; then
   exit 3
 fi
 
-dir=$(mktemp -d "${TMPDIR:-/tmp}/grunt-interop.XXXXXX") || { echo "INTEROP-UNKNOWN: couldn't make a temp folder to test with"; exit 4; }
+dir=$(mktemp -d "${TMPDIR:-/tmp}/otherbench-interop.XXXXXX") || { echo "INTEROP-UNKNOWN: couldn't make a temp folder to test with"; exit 4; }
 probe="$dir/probe.exe"
 # "MZ" is what WSL's interop registration matches; the rest makes it a file Windows can't run.
 if ! printf 'MZ\000\000' > "$probe" || ! chmod 700 "$probe"; then

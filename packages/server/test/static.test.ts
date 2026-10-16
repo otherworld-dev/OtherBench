@@ -9,7 +9,7 @@ describe('mountStatic', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'grunt-web-dist-'));
+    dir = mkdtempSync(join(tmpdir(), 'otherbench-web-dist-'));
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -23,7 +23,7 @@ describe('mountStatic', () => {
 
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain('Grunt server is running');
+    expect(body).toContain('OtherBench server is running');
     expect(body).toContain('npm run build');
   });
 
@@ -34,7 +34,7 @@ describe('mountStatic', () => {
     const res = await app.request('/some/client/route');
 
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('Grunt server is running');
+    expect(await res.text()).toContain('OtherBench server is running');
   });
 
   it('never intercepts /api paths, even when the bundle is missing -- an unmatched one still falls through to a plain 404', async () => {
@@ -47,11 +47,11 @@ describe('mountStatic', () => {
 
     const missing = await app.request('/api/nonexistent');
     expect(missing.status).toBe(404);
-    expect(await missing.text()).not.toContain('Grunt server is running');
+    expect(await missing.text()).not.toContain('OtherBench server is running');
   });
 
   it('serves index.html at "/" once the bundle exists', async () => {
-    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>OtherBench App</title>');
 
     const app = new Hono();
     mountStatic(app, { webDistDir: dir });
@@ -59,11 +59,11 @@ describe('mountStatic', () => {
     const res = await app.request('/');
 
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('Grunt App');
+    expect(await res.text()).toContain('OtherBench App');
   });
 
   it('serves a real built asset with its own content type', async () => {
-    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>OtherBench App</title>');
     writeFileSync(join(dir, 'app.js'), 'console.log("hi");');
 
     const app = new Hono();
@@ -77,7 +77,7 @@ describe('mountStatic', () => {
   });
 
   it('falls back to index.html for an unrecognised client-side route (SPA fallback)', async () => {
-    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>OtherBench App</title>');
 
     const app = new Hono();
     mountStatic(app, { webDistDir: dir });
@@ -85,11 +85,11 @@ describe('mountStatic', () => {
     const res = await app.request('/chats/some-id');
 
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('Grunt App');
+    expect(await res.text()).toContain('OtherBench App');
   });
 
   it('still 404s an unmatched /api path once the bundle exists', async () => {
-    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>OtherBench App</title>');
 
     const app = new Hono();
     app.get('/api/health', (c) => c.json({ status: 'ok' }));
@@ -101,7 +101,7 @@ describe('mountStatic', () => {
   });
 
   it("tells browsers never to frame what it serves, the app, its assets and the placeholder alike", async () => {
-    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>OtherBench App</title>');
     writeFileSync(join(dir, 'app.js'), 'console.log(1)');
     const app = new Hono();
     mountStatic(app, { webDistDir: dir });

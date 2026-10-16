@@ -4,11 +4,11 @@ import { basename, extname, isAbsolute } from 'node:path';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
-import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
-import { sniffToolImageMime, toolImageBound } from '@grunt/core/domain/tool-images.js';
-import type { Attachment, PublicAttachment } from '@grunt/core/ports/store.js';
-import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
-import { sha256Of } from '@grunt/store-sqlite/blob-store.js';
+import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
+import { sniffToolImageMime, toolImageBound } from '@otherbench/core/domain/tool-images.js';
+import type { Attachment, PublicAttachment } from '@otherbench/core/ports/store.js';
+import { gcBlobIfOrphaned, withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
+import { sha256Of } from '@otherbench/store-sqlite/blob-store.js';
 import type { Container } from '../container.js';
 import { extractAttachmentText } from '../attachment-text.js';
 import { requireNonEmptyString } from '../validation.js';
@@ -294,7 +294,7 @@ export function attachmentsRoutes(container: Container): Hono {
 
   /**
    * Attaches an image straight from a path on this machine (v2 plan, Task
-   * 39): the desktop app's "Send to Grunt" verb and `--send <file>`. Images
+   * 39): the desktop app's "Send to OtherBench" verb and `--send <file>`. Images
    * only (FROM_PATH_IMAGE_TYPES): the extension, the real file behind any
    * link, and the file's own leading bytes must all agree, under the same
    * 25MB cap as an upload. It reads a file the caller names, so it only ever
@@ -366,7 +366,7 @@ export function attachmentsRoutes(container: Container): Hono {
    * Removes the row first, then GCs its blob (a no-op if some OTHER
    * attachment row -- upload dedupes by content hash, possibly in a
    * different chat entirely -- still references the same sha256): see
-   * `gcBlobIfOrphaned` (@grunt/store-sqlite/blob-gc.js). A filesystem-level
+   * `gcBlobIfOrphaned` (@otherbench/store-sqlite/blob-gc.js). A filesystem-level
    * GC failure (a locked file, a permissions error, ...) is logged and
    * swallowed by that function itself, never surfaced as a failure of this
    * DELETE -- but a programming/wiring error is NOT swallowed (see that

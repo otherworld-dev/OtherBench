@@ -10,13 +10,13 @@ import { SessionStore } from './sessions.js';
 /** How HTTPS reaches the browser, for the status route and Settings → Remote access. */
 export interface RemoteTls {
   mode: 'auto' | 'files' | 'proxy';
-  /** When the certificate Grunt serves expires (auto and files). */
+  /** When the certificate OtherBench serves expires (auto and files). */
   notAfter?: number;
-  /** `--tls auto`: the CA's SHA-256, as `grunt serve` prints it. */
+  /** `--tls auto`: the CA's SHA-256, as `otherbench serve` prints it. */
   caFingerprint?: string;
   /** `--tls auto`: the names the certificate covers. */
   names?: string[];
-  /** `--tls auto`: the CA certificate, DER, for `GET /grunt-ca.crt`. Never in the status route. */
+  /** `--tls auto`: the CA certificate, DER, for `GET /otherbench-ca.crt`. Never in the status route. */
   caDer?: Buffer;
 }
 

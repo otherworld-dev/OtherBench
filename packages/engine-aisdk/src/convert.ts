@@ -6,9 +6,9 @@ import type {
   ToolCallPart,
   ToolResultPart,
 } from 'ai';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
-import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
+import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
 import {
   ATTACHMENT_BUDGET_NOTE,
   ATTACHMENT_TOO_LARGE_NOTE,
@@ -19,7 +19,7 @@ import {
   selectWithinBudget,
   withinAfterLoad,
   type Verdict,
-} from '@grunt/core/domain/request-budget.js';
+} from '@otherbench/core/domain/request-budget.js';
 import { IMAGE_UNSUPPORTED_NOTE, loadReplayImages, replayCandidates, replayedBytes, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
 
 // The notes for an attachment left out are core's (one wording for every engine); they are exported from here as before.
@@ -151,9 +151,9 @@ function imagePlaceholder(attachmentId: string, mime: string): string {
 
 /**
  * A tool name as providers accept one in a replayed history (letters, digits,
- * `_` and `-`, at most 64). Grunt's own tools already are; a chat imported
+ * `_` and `-`, at most 64). OtherBench's own tools already are; a chat imported
  * from claude.ai holds names such as "Home Assistant:ha_get_state", which are
- * kept as they are in Grunt and only changed on the way to the model.
+ * kept as they are in OtherBench and only changed on the way to the model.
  */
 export function replayToolName(name: string): string {
   if (/^[A-Za-z0-9_-]{1,64}$/.test(name)) return name;
@@ -318,12 +318,12 @@ async function assistantContentFromParts(
         break;
       case 'notice':
         // Dropped entirely, same reasoning as `reasoning`: a capability-
-        // fallback disclosure describes what GRUNT did, not something the
+        // fallback disclosure describes what OTHERBENCH did, not something the
         // model said, so replaying it as this message's own content in a
         // later turn would misattribute it as assistant output.
         break;
       case 'subagent':
-        // A sub-agent's transcript is Grunt's record of what it did. The
+        // A sub-agent's transcript is OtherBench's record of what it did. The
         // parent model only ever sees its own `subagent` tool call and the
         // result (the sub-agent's answer), so this is never replayed.
         break;

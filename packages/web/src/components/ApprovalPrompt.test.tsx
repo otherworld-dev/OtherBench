@@ -1,11 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { canonicalHost } from '@otherbench/core/domain/network-hosts.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {

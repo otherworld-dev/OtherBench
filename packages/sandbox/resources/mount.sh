@@ -1,8 +1,8 @@
 #!/bin/bash
-# Mounts or unmounts one Windows folder in Grunt's sandbox distro (spec
-# 2026-10-12-sandbox-design, "Folders in the VM"). Grunt runs it as root:
-#   wsl.exe -d grunt-sandbox -u root --exec /opt/grunt-sandbox/mount.sh ...
-# The model never can: the grunt user has no sudo, and this file is root's.
+# Mounts or unmounts one Windows folder in OtherBench's sandbox distro (spec
+# 2026-10-12-sandbox-design, "Folders in the VM"). OtherBench runs it as root:
+#   wsl.exe -d otherbench-sandbox -u root --exec /opt/otherbench-sandbox/mount.sh ...
+# The model never can: the otherbench user has no sudo, and this file is root's.
 #
 #   mount.sh mount   'X:\a\b' /mnt/x/a/b ro|rw
 #   mount.sh unmount 'X:\a\b' /mnt/x/a/b
@@ -13,28 +13,28 @@
 # mode is left alone (another chat's command may be running in it), and only
 # a mode change unmounts and mounts again.
 #
-# Because it runs as root while the sandboxed `grunt` user can write to parts
+# Because it runs as root while the sandboxed `otherbench` user can write to parts
 # of the filesystem, it also walks every folder from /mnt down to the target
-# before touching anything, and refuses a symbolic link or a folder grunt could
+# before touching anything, and refuses a symbolic link or a folder otherbench could
 # swap for one: each must be root-owned and not group- or other-writable, or sit
 # on a read-only mount (a child
 # folder can be mounted rw inside a read-only drvfs parent, planMounts does
-# that, and drvfs files there are owned by uid 1000 = grunt but can't be
+# that, and drvfs files there are owned by uid 1000 = otherbench but can't be
 # changed). Missing folders are created here, as root, one level at a time.
 #
-# GRUNT_MOUNT_DRY_RUN=1 prints the commands instead of running them, and
+# OTHERBENCH_MOUNT_DRY_RUN=1 prints the commands instead of running them, and
 # simulates the filesystem, which has /mnt and nothing below it:
-#   GRUNT_MOUNT_DRY_RUN_MOUNTED=ro|rw|<other>  the target exists and is mounted so
+#   OTHERBENCH_MOUNT_DRY_RUN_MOUNTED=ro|rw|<other>  the target exists and is mounted so
 #                                              (anything but ro/rw: mode unreadable)
-#   GRUNT_MOUNT_DRY_RUN_SYMLINK=<path>         that folder exists and is a symlink
-#   GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED=<path>     that folder exists, owned by grunt
-#   GRUNT_MOUNT_DRY_RUN_WRITABLE=<path>        that folder exists, root-owned but group/other-writable
-#   GRUNT_MOUNT_DRY_RUN_READONLY=1             ... and those two lie on a read-only mount
+#   OTHERBENCH_MOUNT_DRY_RUN_SYMLINK=<path>         that folder exists and is a symlink
+#   OTHERBENCH_MOUNT_DRY_RUN_OTHERBENCH_OWNED=<path>     that folder exists, owned by otherbench
+#   OTHERBENCH_MOUNT_DRY_RUN_WRITABLE=<path>        that folder exists, root-owned but group/other-writable
+#   OTHERBENCH_MOUNT_DRY_RUN_READONLY=1             ... and those two lie on a read-only mount
 set -euo pipefail
 export LC_ALL=C
 
 die() { printf 'mount.sh: %s\n' "$*" >&2; exit 2; }
-dry() { [ "${GRUNT_MOUNT_DRY_RUN:-}" = 1 ]; }
+dry() { [ "${OTHERBENCH_MOUNT_DRY_RUN:-}" = 1 ]; }
 run() {
   if dry; then printf '%s|' "$@"; printf '\n'; else "$@"; fi
 }
@@ -89,14 +89,14 @@ expected="/mnt/$drive"
 [ "$target" = "$expected" ] || die "target $target doesn't match $win (expected $expected)"
 
 is_mounted() {
-  if dry; then [ -n "${GRUNT_MOUNT_DRY_RUN_MOUNTED:-}" ]; else mountpoint -q "$target"; fi
+  if dry; then [ -n "${OTHERBENCH_MOUNT_DRY_RUN_MOUNTED:-}" ]; else mountpoint -q "$target"; fi
 }
 
 # The mode the target is mounted in now: ro, rw, "unknown" if it is mounted
 # but the mode can't be read (treated as a mismatch), or empty if it isn't.
 mounted_mode() {
   if ! is_mounted; then return 0; fi
-  if dry; then printf '%s' "${GRUNT_MOUNT_DRY_RUN_MOUNTED:-}"; return 0; fi
+  if dry; then printf '%s' "${OTHERBENCH_MOUNT_DRY_RUN_MOUNTED:-}"; return 0; fi
   local options first
   options=$(findmnt -n -o OPTIONS --mountpoint "$target" || true)
   first=${options%%,*}
@@ -109,22 +109,22 @@ mounted_mode() {
 # --- what is on disk below /mnt (simulated in a dry run, see the header) ---
 c_exists() {
   if dry; then
-    [ "$1" = /mnt ] || [ -n "${GRUNT_MOUNT_DRY_RUN_MOUNTED:-}" ] || [ "$action" = unmount ] \
-      || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_SYMLINK:-}" ] || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ] \
-      || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_WRITABLE:-}" ]
+    [ "$1" = /mnt ] || [ -n "${OTHERBENCH_MOUNT_DRY_RUN_MOUNTED:-}" ] || [ "$action" = unmount ] \
+      || [ "$1" = "${OTHERBENCH_MOUNT_DRY_RUN_SYMLINK:-}" ] || [ "$1" = "${OTHERBENCH_MOUNT_DRY_RUN_OTHERBENCH_OWNED:-}" ] \
+      || [ "$1" = "${OTHERBENCH_MOUNT_DRY_RUN_WRITABLE:-}" ]
   else
     [ -e "$1" ] || [ -L "$1" ]
   fi
 }
 c_symlink() {
-  if dry; then [ "$1" = "${GRUNT_MOUNT_DRY_RUN_SYMLINK:-}" ]; else [ -L "$1" ]; fi
+  if dry; then [ "$1" = "${OTHERBENCH_MOUNT_DRY_RUN_SYMLINK:-}" ]; else [ -L "$1" ]; fi
 }
 c_folder() {
   if dry; then return 0; fi
   [ -d "$1" ]
 }
 c_on_readonly_mount() {
-  if dry; then [ "${GRUNT_MOUNT_DRY_RUN_READONLY:-}" = 1 ]; return; fi
+  if dry; then [ "${OTHERBENCH_MOUNT_DRY_RUN_READONLY:-}" = 1 ]; return; fi
   local options
   options=$(findmnt -n -o OPTIONS --target "$1" || true)
   [ "${options%%,*}" = ro ]
@@ -133,7 +133,7 @@ c_on_readonly_mount() {
 # everyone else can write to it, or it lies on a read-only mount.
 c_trusted() {
   if dry; then
-    if [ "$1" != "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ] && [ "$1" != "${GRUNT_MOUNT_DRY_RUN_WRITABLE:-}" ]; then return 0; fi
+    if [ "$1" != "${OTHERBENCH_MOUNT_DRY_RUN_OTHERBENCH_OWNED:-}" ] && [ "$1" != "${OTHERBENCH_MOUNT_DRY_RUN_WRITABLE:-}" ]; then return 0; fi
     c_on_readonly_mount "$1"
     return
   fi
@@ -189,8 +189,8 @@ if [ "$action" = mount ]; then
     uid=UID
     gid=GID
   else
-    uid=$(id -u grunt)
-    gid=$(id -g grunt)
+    uid=$(id -u otherbench)
+    gid=$(id -g otherbench)
   fi
   # Mounted in the other mode, or in a mode we can't tell: take it off first, and
   # give up if it won't go (never stack a mount on it, never leave it wider than asked).

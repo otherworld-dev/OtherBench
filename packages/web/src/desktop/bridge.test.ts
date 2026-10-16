@@ -128,8 +128,8 @@ describe('desktop bridge', () => {
 
   it("launchArgs asks the shell for this launch's arguments", async () => {
     enterDesktop();
-    invoke.mockResolvedValue(['grunt.exe', '--send', 'a.png']);
-    await expect(launchArgs()).resolves.toEqual(['grunt.exe', '--send', 'a.png']);
+    invoke.mockResolvedValue(['otherbench.exe', '--send', 'a.png']);
+    await expect(launchArgs()).resolves.toEqual(['otherbench.exe', '--send', 'a.png']);
     expect(invoke).toHaveBeenCalledWith('launch_args');
   });
 
@@ -164,7 +164,7 @@ describe('desktop bridge', () => {
     expect(command).toBe('save_download');
     expect(body).toBeInstanceOf(Uint8Array);
     expect(new TextDecoder().decode(body as Uint8Array)).toBe('hello');
-    expect(options).toEqual({ headers: { 'x-grunt-name': 'Trip%20plans%20%C3%A9.md' } });
+    expect(options).toEqual({ headers: { 'x-otherbench-name': 'Trip%20plans%20%C3%A9.md' } });
   });
 
   it("setTrayStatus sends the pending-approval count and the machines' status lines to the shell, and does nothing in a browser", async () => {
@@ -194,11 +194,11 @@ describe('desktop bridge', () => {
 
     const off = await onDesktopEvent('open-args', cb);
     const handler = listen.mock.calls[0]![1] as (event: { payload: unknown }) => void;
-    handler({ payload: ['grunt.exe', '--send', 'a.png'] });
+    handler({ payload: ['otherbench.exe', '--send', 'a.png'] });
     off();
 
     expect(listen.mock.calls[0]![0]).toBe('open-args');
-    expect(cb).toHaveBeenCalledWith(['grunt.exe', '--send', 'a.png']);
+    expect(cb).toHaveBeenCalledWith(['otherbench.exe', '--send', 'a.png']);
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 

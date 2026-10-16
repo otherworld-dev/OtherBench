@@ -4,7 +4,7 @@ import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_OTHERBENCH_UI_REASON, OTHERBENCH_UI_TITLE } from '../src/domain/computer-apps.js';
 import { fakeComputerTarget } from '../src/testing/fake-computer.js';
 
 // App keys are the paths the shell resolved, compared exactly: on-disk case and all.
@@ -12,7 +12,7 @@ const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
 const DOWNLOADED_EXCEL = 'C:\\Users\\Adam\\Downloads\\EXCEL.EXE';
 const NOTEPAD = 'C:\\Windows\\System32\\notepad.exe';
 const CMD = 'C:\\Windows\\System32\\cmd.exe';
-const NO_APP = "Grunt couldn't tell which app this action would use, so it didn't run it.";
+const NO_APP = "OtherBench couldn't tell which app this action would use, so it didn't run it.";
 
 const COMPUTER: ToolSpec = { name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute: async () => null };
 
@@ -101,12 +101,12 @@ describe('PermissionBroker and computer use', () => {
     // A wait longer than the cap is cut to it; one that is not a length of time is no wait.
     expect(broker.decide(COMPUTER, { action: 'wait', duration: 1e9 }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
     for (const duration of [Number.NaN, Number.POSITIVE_INFINITY, -1, '5', {}]) {
-      expect(broker.decide(COMPUTER, { action: 'wait', duration }, policy(), ctx()), String(duration)).toEqual({ kind: 'deny', reason: "Grunt can't carry out that action as it was sent, so it didn't run it." });
+      expect(broker.decide(COMPUTER, { action: 'wait', duration }, policy(), ctx()), String(duration)).toEqual({ kind: 'deny', reason: "OtherBench can't carry out that action as it was sent, so it didn't run it." });
     }
     // An app a look's arguments name changes nothing: it is still only a look.
     expect(broker.decide(COMPUTER, { action: 'screenshot', app: CMD }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
     // A look carrying fields it doesn't use is not let through as a look: it is refused like any other call it can't carry out.
-    expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'deny', reason: "Grunt can't carry out that action as it was sent, so it didn't run it." });
+    expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'deny', reason: "OtherBench can't carry out that action as it was sent, so it didn't run it." });
   });
 
   it('never lets an action that is not exactly a known name through, with or without a grant', () => {
@@ -140,7 +140,7 @@ describe('PermissionBroker and computer use', () => {
     expect(store.grants.list()).toHaveLength(1);
     // What it says back never carries a hidden character it was sent.
     const hostile = broker.decide(COMPUTER, { action: 'evil\u202eaction' }, policy(), ctx());
-    expect(hostile).toEqual({ kind: 'deny', reason: '"evilaction" isn\'t a computer action Grunt can do.' });
+    expect(hostile).toEqual({ kind: 'deny', reason: '"evilaction" isn\'t a computer action OtherBench can do.' });
   });
 
   it('goes by the action name, not the declared risk', () => {
@@ -165,16 +165,16 @@ describe('PermissionBroker and computer use', () => {
 
   it('refuses a call it cannot bind to one window, whatever grants are stored', () => {
     grant(EXCEL);
-    const unpinned = "Grunt couldn't pin down which window that is, so it didn't use it.";
+    const unpinned = "OtherBench couldn't pin down which window that is, so it didn't use it.";
     for (const over of [{ appWindow: undefined }, { appWindow: '' }, { appWindow: 7 }, { appPid: undefined }, { appPid: '4242' }, { appPid: 0 }, { appStarted: undefined }, { appStarted: '' }, { appShellView: undefined }, { appShellView: 'false' }, { appShellView: null }]) {
       expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toEqual({ kind: 'deny', reason: unpinned });
     }
     expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
-  it('refuses an action Grunt would never send, whatever grants are stored: a key combination that leaves the app, a point off the screen', () => {
+  it('refuses an action OtherBench would never send, whatever grants are stored: a key combination that leaves the app, a point off the screen', () => {
     grant(EXCEL);
-    const never = "Grunt can't carry out that action as it was sent, so it didn't run it.";
+    const never = "OtherBench can't carry out that action as it was sent, so it didn't run it.";
     const bad: Record<string, unknown>[] = [
       { action: 'key', text: 'ctrl+Escape' },
       { action: 'key', text: 'alt+Tab' },
@@ -202,14 +202,14 @@ describe('PermissionBroker and computer use', () => {
     for (const over of bad) {
       expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toEqual({ kind: 'deny', reason: never });
     }
-    // The same grant does cover what Grunt would send.
+    // The same grant does cover what OtherBench would send.
     for (const over of [{ action: 'key', text: 'ctrl+s' }, { action: 'type', text: 'hello' }, { action: 'scroll', scroll_direction: 'down' }]) {
       expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
     }
   });
 
   it('names the app on the card from its key alone, never from a name the call carries', () => {
-    for (const appName of ['EXCEL', 'Notepad', 'Trusted by Grunt policy', 'cmd\u202e', 42, undefined]) {
+    for (const appName of ['EXCEL', 'Notepad', 'Trusted by OtherBench policy', 'cmd\u202e', 42, undefined]) {
       const ask = expectAsk(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL, { appName, appTitle: 'Microsoft Excel (verified)' }), policy(), ctx()));
       expect(ask.request).toMatchObject({ toolName: 'computer', source: 'computer', summary: 'Use EXCEL.EXE: click at 512, 300' });
     }
@@ -347,7 +347,7 @@ describe('PermissionBroker and computer use', () => {
   it('only ever allows a high-risk app once: a chat or always answer is refused and stores nothing', () => {
     for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: CMD } }]) {
       const ask = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
-      expect(() => broker.resolve(ask.request.id, choice), choice.choice).toThrow('Refusing to store a grant for computer use of cmd.exe: Grunt asks every time for this app.');
+      expect(() => broker.resolve(ask.request.id, choice), choice.choice).toThrow('Refusing to store a grant for computer use of cmd.exe: OtherBench asks every time for this app.');
       expect(broker.hasPending(ask.request.id)).toBe(false);
     }
     expect(store.grants.list()).toEqual([]);
@@ -411,14 +411,14 @@ describe('PermissionBroker and computer use', () => {
     expect(store.grants.list()).toHaveLength(2);
   });
 
-  it("refuses a call whose window shows Grunt's own UI, with no card, even with chat and always grants for the browser", () => {
+  it("refuses a call whose window shows OtherBench's own UI, with no card, even with chat and always grants for the browser", () => {
     const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
     grant(CHROME);
     grant(CHROME, { chatId: 'chat-1', scope: 'chat' });
     for (const action of [{}, { action: 'type', text: 'hi' }, { action: 'key', text: 'Return' }]) {
-      const args = click(CHROME, { appTitle: `${GRUNT_UI_TITLE} - Google Chrome`, ...action });
-      expect(broker.decide(COMPUTER, args, policy(), ctx()), JSON.stringify(action)).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
-      expect(broker.decide(COMPUTER, args, policy({ approvalMode: 'always_ask' }), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+      const args = click(CHROME, { appTitle: `${OTHERBENCH_UI_TITLE} - Google Chrome`, ...action });
+      expect(broker.decide(COMPUTER, args, policy(), ctx()), JSON.stringify(action)).toEqual({ kind: 'deny', reason: COMPUTER_OTHERBENCH_UI_REASON });
+      expect(broker.decide(COMPUTER, args, policy({ approvalMode: 'always_ask' }), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_OTHERBENCH_UI_REASON });
     }
     // Its undocked developer tools: the same program, refused the same way.
     for (const appTitle of ['DevTools - example.com/', 'Developer Tools - Inbox']) {

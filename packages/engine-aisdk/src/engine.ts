@@ -8,17 +8,17 @@ import type {
   DiscoveredModel,
   EngineEvent,
   EngineRequest,
-} from '@grunt/core/ports/chat-engine.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
-import { classifyProviderError } from '@grunt/core/types/errors.js';
-import type { Usage } from '@grunt/core/types/usage.js';
-import { cardLine } from '@grunt/core/domain/card-text.js';
-import { COMPUTER_TOOL, desktopTextForResult, isComputerAction, screenContentError } from '@grunt/core/domain/computer-apps.js';
+} from '@otherbench/core/ports/chat-engine.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { Connection, ConnectionKind } from '@otherbench/core/types/config.js';
+import { classifyProviderError } from '@otherbench/core/types/errors.js';
+import type { Usage } from '@otherbench/core/types/usage.js';
+import { cardLine } from '@otherbench/core/domain/card-text.js';
+import { COMPUTER_TOOL, desktopTextForResult, isComputerAction, screenContentError } from '@otherbench/core/domain/computer-apps.js';
 import { toolsetSafeMessages } from './computer-toolset.js';
 import { toModelMessages } from './convert.js';
-import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@otherbench/core/domain/tool-images.js';
 import { liveToolOutput, toolImagesSupported } from './tool-images.js';
 import { MockChatEngine } from './mock-provider.js';
 import { DEFAULT_OLLAMA_BASE_URL, type ProviderHandle } from './registry.js';
@@ -69,7 +69,7 @@ const MAX_TOOL_STEPS = 20;
 /**
  * Models that take Anthropic's computer toolset (spec
  * 2026-10-12-computer-use-design section 5), on Anthropic connections. Every
- * other model gets Grunt's JSON-schema `computer` tool, with the same action
+ * other model gets OtherBench's JSON-schema `computer` tool, with the same action
  * names and arguments, which any model can call. Anthropic's tool versions
  * change often: this list is the one place to update.
  *
@@ -117,7 +117,7 @@ const SNAPSHOT_DATE = /^\d{8}$/;
 /**
  * Whether a model is given the toolset instead of the JSON tool: an Anthropic
  * connection, and a model id that is one of `COMPUTER_TOOLSET_MODELS` exactly
- * or a dated snapshot of one. Not a bare prefix: a model Grunt does not know
+ * or a dated snapshot of one. Not a bare prefix: a model OtherBench does not know
  * (`claude-opus-5-9`, a later `claude-opus-50`) keeps the JSON tool, which any
  * model can use, where a toolset it may not take would fail the request.
  */
@@ -208,7 +208,7 @@ export class AiSdkChatEngine implements ChatEngine {
       );
       // One budget for the whole reply: images a tool returns are screened against it as they come, across every step.
       const imageBudget: ToolImageBudget = { images: 0, bytes: 0 };
-      // Anthropic's own computer toolset, for the models that take it. It only stands in for Grunt's `computer` tool when the request has one.
+      // Anthropic's own computer toolset, for the models that take it. It only stands in for OtherBench's `computer` tool when the request has one.
       const toolset = usesComputerToolset(req.profile.connection.kind, req.profile.modelId) ? computerToolsetOf(handle) : null;
       const tools = buildToolSet(req, imagesOk, imageBudget, toolset);
       const model = resolveLanguageModel(handle, req.profile.modelId);
@@ -468,7 +468,7 @@ export class AiSdkChatEngine implements ChatEngine {
 
 /**
  * Ollama serves its native API (`/api/tags`, etc.) at the host root, but
- * Grunt talks to it through the OpenAI-compatible surface at `/v1`
+ * OtherBench talks to it through the OpenAI-compatible surface at `/v1`
  * (`DEFAULT_OLLAMA_BASE_URL`, or a user-supplied `baseUrl` ending the same
  * way) -- so the native root is derived by stripping that suffix. A
  * `baseUrl` that was never given a `/v1` suffix (already pointing at the
@@ -487,7 +487,7 @@ function deriveOllamaNativeBaseUrl(base: string): string {
  * The fallback used when a request carries no `EngineRequest.loadAttachment`
  * at all (every pre-task-21 caller, and any task-21+ caller that genuinely
  * has nowhere to load attachment bytes from). `engine-aisdk` still has no
- * dependency on `@grunt/store-sqlite`/filesystem access of its own -- task 21
+ * dependency on `@otherbench/store-sqlite`/filesystem access of its own -- task 21
  * wires a real loader through from the TurnRunner
  * (`TurnRunnerOptions.loadAttachment`, populated by the server's `Container`
  * from the content-addressed blob store) onto `req.loadAttachment`, and
@@ -517,7 +517,7 @@ function resolveLanguageModel(handle: Extract<ProviderHandle, { kind: 'aisdk' }>
   return (handle.provider as unknown as (id: string) => LanguageModel)(modelId);
 }
 
-/** Grunt's own `computer` tool (packages/tools/src/computer-tool.ts), by source and by name: the one tool the toolset can stand in for. */
+/** OtherBench's own `computer` tool (packages/tools/src/computer-tool.ts), by source and by name: the one tool the toolset can stand in for. */
 function isComputerSpec(spec: ToolSpec): boolean {
   return spec.source === 'computer' && spec.name === COMPUTER_TOOL;
 }
@@ -529,7 +529,7 @@ function declaredFields(spec: ToolSpec): string[] {
 }
 
 /**
- * A member call of the computer toolset as the arguments of Grunt's `computer`
+ * A member call of the computer toolset as the arguments of OtherBench's `computer`
  * tool, or why it has none. The SDK hands a member call over as
  * `{ action: <member>, ...its input }`, which is the JSON tool's own shape.
  *
@@ -540,7 +540,7 @@ function declaredFields(spec: ToolSpec): string[] {
  *     session is started, with no card) and records it in the audit.
  *   - A phase-1 action that carries a field the tool's parameters do not
  *     declare (`fields`): the provider's schema allows `region`, `repeat` and
- *     `start_coordinate`, which Grunt does nothing with. It is refused here,
+ *     `start_coordinate`, which OtherBench does nothing with. It is refused here,
  *     naming the field, rather than run without it: a click sent with
  *     `repeat: 3` that ran once would leave the model and the transcript
  *     believing it ran three times. This refusal is the engine's own and
@@ -571,7 +571,7 @@ function buildToolSet(
   req: EngineRequest,
   imagesOk: boolean,
   imageBudget: ToolImageBudget,
-  /** Anthropic's computer toolset when this request's model takes it: it then stands in for Grunt's `computer` tool, when the request has one. */
+  /** Anthropic's computer toolset when this request's model takes it: it then stands in for OtherBench's `computer` tool, when the request has one. */
   toolset: ComputerToolsetFactory | null
 ): ToolSet {
   const toolSet: ToolSet = {};
@@ -616,7 +616,7 @@ function buildToolSet(
         toModelOutput,
         execute: async (input: unknown, opts) => {
           const member = memberArgs(input, fields);
-          // The shape of every other refusal the model gets from a Grunt tool (packages/tools/src/provider.ts).
+          // The shape of every other refusal the model gets from an OtherBench tool (packages/tools/src/provider.ts).
           if ('refuse' in member) return { error: true, code: 'computer_bad_action', message: member.refuse };
           return run(member.args, opts.abortSignal, opts.toolCallId);
         },

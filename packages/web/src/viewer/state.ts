@@ -13,7 +13,7 @@ export interface ChatViewer {
 }
 
 export const DEFAULT_VIEWER: ChatViewer = { open: false, mode: 'files', history: [], index: -1, share: 0.45 };
-export const VIEWER_STORAGE_KEY = 'grunt.viewers';
+export const VIEWER_STORAGE_KEY = 'otherbench.viewers';
 export const MAX_VIEWER_HISTORY = 30;
 export const MAX_VIEWER_CHATS = 50;
 

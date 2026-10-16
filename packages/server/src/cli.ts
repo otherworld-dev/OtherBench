@@ -7,12 +7,13 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
-import type { ComputerDriver } from '@grunt/core/ports/computer.js';
+import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
 import { createApp } from './app.js';
 import { DesktopChannel } from './computer/desktop-channel.js';
 import { DesktopComputerDriver } from './computer/desktop-driver.js';
 import { createContainer, type Container } from './container.js';
 import { DatabaseLockedError } from './db-lock.js';
+import { adoptLegacyData, DATA_DIR, DB_NAME, LegacyDataError } from './legacy-data.js';
 import { announceLine, exitOnStdinClose } from './desktop.js';
 import {
   InvalidTrustProxyError,
@@ -26,9 +27,9 @@ import { PasswordCommandError, runPasswordCommand } from './remote/password-comm
 import { parsePublicUrl } from './remote/public-url.js';
 import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
 import { expiryWarning } from './remote/tls.js';
-import { isServerOnlyEnvVar } from '@grunt/core/domain/child-env.js';
+import { isServerOnlyEnvVar } from '@otherbench/core/domain/child-env.js';
 
-/** Arbitrary default port for `grunt serve`; overridable with `--port`. */
+/** Arbitrary default port for `otherbench serve`; overridable with `--port`. */
 const DEFAULT_PORT = 4747;
 const DEFAULT_HOST = '127.0.0.1';
 /**
@@ -39,24 +40,31 @@ const DEFAULT_HOST = '127.0.0.1';
 export const SHUTDOWN_WAIT_MS = 2500;
 
 function defaultDbPath(): string {
-  return join(homedir(), '.grunt', 'grunt.db');
+  return join(homedir(), DATA_DIR, DB_NAME);
 }
 
 function defaultSecretsPath(dbPath: string): string {
-  return dbPath === ':memory:' ? join(homedir(), '.grunt', 'secrets.json') : join(dirname(dbPath), 'secrets.json');
+  return dbPath === ':memory:' ? join(homedir(), DATA_DIR, 'secrets.json') : join(dirname(dbPath), 'secrets.json');
 }
 
-/** Where `grunt password` writes and `grunt serve` reads the sign-in password. */
+/** Grunt's data moved to OtherBench's names (legacy-data.ts), only for the default database: `--db` names its own. */
+function adoptForDefault(dbPath: string, adopt: () => string | null): void {
+  if (dbPath !== defaultDbPath()) return;
+  const moved = adopt();
+  if (moved) console.error(moved);
+}
+
+/** Where `otherbench password` writes and `otherbench serve` reads the sign-in password. */
 export function defaultLoginPath(dbPath: string): string {
   return loginPathFor(defaultSecretsPath(dbPath));
 }
 
 /**
- * `@grunt/web`'s built bundle lives at `packages/web/dist` -- a sibling of
+ * `@otherbench/web`'s built bundle lives at `packages/web/dist` -- a sibling of
  * this package, `packages/server`, regardless of the working directory
- * `grunt serve` is launched from. Computed from `import.meta.url` (this
+ * `otherbench serve` is launched from. Computed from `import.meta.url` (this
  * file's own compiled location, `packages/server/dist/cli.js`) rather than
- * `process.cwd()`, since a globally-installed `grunt` binary may be
+ * `process.cwd()`, since a globally-installed `otherbench` binary may be
  * invoked from anywhere. `static.ts` degrades to a placeholder page if
  * nothing has been built there yet -- this function only computes the
  * path, it never asserts the bundle exists.
@@ -75,7 +83,7 @@ export interface ServeOptions {
   /** Desktop handshake: print `{"port":N}` as the only stdout line, exit when stdin closes. */
   announce: boolean;
   /**
-   * The desktop shell speaks the GRUNT-RPC channel on this process's stdio
+   * The desktop shell speaks the OTHERBENCH-RPC channel on this process's stdio
    * (computer use, computer/desktop-channel.ts). Only with `announce`, and
    * refused without it (`DesktopRpcWithoutAnnounceError`): a server started
    * by hand, and one that takes sign-ins, has no channel.
@@ -88,7 +96,7 @@ export interface ServeOptions {
   peerHosts: string[];
   /** `--public-url`, repeatable: turns sign-in on (spec 2026-10-12-remote-access §1). */
   publicUrls: string[];
-  /** `--tls auto`: Grunt's own CA and certificate. */
+  /** `--tls auto`: OtherBench's own CA and certificate. */
   tls: 'auto' | null;
   tlsCert: string | null;
   tlsKey: string | null;
@@ -97,7 +105,7 @@ export interface ServeOptions {
 }
 
 /**
- * `--token` wins; otherwise `GRUNT_TOKEN`. The desktop shell always uses
+ * `--token` wins; otherwise `OTHERBENCH_TOKEN`. The desktop shell always uses
  * the environment variable, because a command line is readable by every
  * other process on the machine and an environment block is not.
  */
@@ -127,7 +135,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     throw new Error(`Invalid --port "${String(values['port'])}": must be an integer between 0 and 65535 (0 = any free port).`);
   }
   const dbPath = typeof values['db'] === 'string' ? values['db'] : defaultDbPath();
-  const envToken = env['GRUNT_TOKEN'];
+  const envToken = env['OTHERBENCH_TOKEN'];
   const corsOrigins = values['cors-origin'];
   const peerHosts = values['peer-host'];
   const peerPort = values['peer-port'] !== undefined ? Number(values['peer-port']) : undefined;
@@ -159,7 +167,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
 
 /**
  * True for the loopback addresses a client on the SAME machine reaches the
- * server through -- the only hosts `grunt serve` will bind to without a
+ * server through -- the only hosts `otherbench serve` will bind to without a
  * `--token` (see {@link assertServeSecurity}).
  */
 export function isLoopbackHost(host: string): boolean {
@@ -222,7 +230,7 @@ export function assertServeSecurity(options: SecurityOptions): ServeMode {
  */
 export class AnnounceWithoutTokenError extends Error {
   constructor() {
-    super('Refusing to start: --announce requires a token. Set GRUNT_TOKEN in the environment (preferred) or pass --token.');
+    super('Refusing to start: --announce requires a token. Set OTHERBENCH_TOKEN in the environment (preferred) or pass --token.');
     this.name = 'AnnounceWithoutTokenError';
   }
 }
@@ -278,6 +286,8 @@ export interface ServeDeps {
   exit: (code: number) => void;
   /** In `--desktop-rpc` mode, sends what the console would write to stdout to stderr. Defaults to `consoleToStderr()`. */
   consoleToStderr: () => void;
+  /** Moves Grunt's data to OtherBench's names before the default database opens. Defaults to `adoptLegacyData(homedir())`. */
+  adoptLegacyData: () => string | null;
 }
 
 const defaultDeps: ServeDeps = {
@@ -288,6 +298,10 @@ const defaultDeps: ServeDeps = {
   stdin: process.stdin,
   exit: (code) => process.exit(code),
   consoleToStderr: () => consoleToStderr(),
+  adoptLegacyData: () => {
+    const claudeConfigDir = process.env['CLAUDE_CONFIG_DIR'];
+    return adoptLegacyData(homedir(), claudeConfigDir ? { claudeConfigDir } : {});
+  },
 };
 
 export interface ServerHandle {
@@ -323,9 +337,11 @@ export async function runServe(
     stdin,
     exit,
     consoleToStderr: quietStdout,
+    adoptLegacyData: adopt,
   } = { ...defaultDeps, ...deps };
 
   const options = parseServeArgs(argv, env);
+  adoptForDefault(options.dbPath, adopt);
   // The token is in `options` now. Nothing this server starts (a shell command, Claude Code, an MCP server, the
   // sandbox's wsl.exe, the model's browser, a worker) may inherit it: on the desktop server it is the real barrier
   // against anything else on the machine driving the API. Every spawn also leaves it out (core/domain/child-env.ts).
@@ -454,18 +470,18 @@ export async function runServe(
 
 export interface MainDeps extends Partial<ServeDeps> {
   env?: NodeJS.ProcessEnv;
-  /** Whether stdin is a terminal, for `grunt password`. Defaults to `process.stdin.isTTY`. */
+  /** Whether stdin is a terminal, for `otherbench password`. Defaults to `process.stdin.isTTY`. */
   isTTY?: boolean;
 }
 
 const USAGE = [
   'Usage:',
-  '  grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce [--desktop-rpc]] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...',
+  '  otherbench serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce [--desktop-rpc]] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...',
   '              [--public-url https://<host>[:<port>]]... [--tls auto | --tls-cert <file> --tls-key <file>] [--trust-proxy <ip>]...',
-  '  grunt password [--db <path>]',
+  '  otherbench password [--db <path>]',
 ].join('\n');
 
-/** The CLI entry point: `grunt serve` or `grunt password`. */
+/** The CLI entry point: `otherbench serve` or `otherbench password`. */
 export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
   const exit = deps.exit ?? ((code: number) => { process.exitCode = code; });
   const [command, ...rest] = argv;
@@ -474,13 +490,14 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
     const { values } = parseArgs({ args: rest, options: { db: { type: 'string' } }, strict: false });
     const dbPath = typeof values['db'] === 'string' ? values['db'] : defaultDbPath();
     try {
+      adoptForDefault(dbPath, deps.adoptLegacyData ?? defaultDeps.adoptLegacyData);
       await runPasswordCommand(defaultLoginPath(dbPath), {
         stdin: deps.stdin ?? process.stdin,
         stdout: deps.stdout ?? process.stdout,
         isTTY: deps.isTTY ?? Boolean(process.stdin.isTTY),
       });
     } catch (err) {
-      if (err instanceof PasswordCommandError) {
+      if (err instanceof PasswordCommandError || err instanceof LegacyDataError) {
         console.error(`Error: ${err.message}`);
         exit(1);
         return;
@@ -501,7 +518,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
     // In announce mode stdout belongs to the handshake alone.
     const log = handle.announce ? console.error : console.log;
     const signIn = handle.publicUrls.length > 0 ? `; sign-in on ${handle.publicUrls.join(', ')}` : '';
-    log(`Grunt server listening on ${handle.scheme}://${handle.host}:${handle.port}${signIn}`);
+    log(`OtherBench server listening on ${handle.scheme}://${handle.host}:${handle.port}${signIn}`);
     for (const note of handle.notes) log(note);
   } catch (err) {
     if (
@@ -509,7 +526,8 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
       err instanceof AnnounceWithoutTokenError ||
       err instanceof DesktopRpcWithoutAnnounceError ||
       err instanceof RemoteStartError ||
-      err instanceof DatabaseLockedError
+      err instanceof DatabaseLockedError ||
+      err instanceof LegacyDataError
     ) {
       console.error(`Error: ${err.message}`);
       exit(1);

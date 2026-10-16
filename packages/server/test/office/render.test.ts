@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkOfficeContent, formulaForFile, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
-import type { PresentationSpec } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, formulaForFile, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@otherbench/core/domain/office-spec.js';
+import type { PresentationSpec } from '@otherbench/core/domain/office-spec.js';
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
 import { extractOfficeText } from '../../src/office/extract.js';
 import { renderPptx } from '../../src/office/pptx.js';
@@ -175,7 +175,7 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
-  // Kept cheap with small worker limits (a test-only option): with Grunt's own limits these failures take 4-15 s of
+  // Kept cheap with small worker limits (a test-only option): with OtherBench's own limits these failures take 4-15 s of
   // CPU and sit on measured cliffs (3,000 levels of `- > ` overflow the stack, 4,000 the 512 MB heap).
   it('gives a worker that runs out of stack as an OfficeRenderError, and leaves no worker running', async () => {
     const limits = { resourceLimits: { maxOldGenerationSizeMb: 512, stackSizeMb: 0.5 }, timeoutMs: 5000 };
@@ -183,7 +183,7 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     expect(checkOfficeContent('document', deep)).toBeNull();
     const error = await renderOfficeFile('document', deep, 'Deep', limits).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OfficeRenderError);
-    expect((error as Error).message).toMatch(/Maximum call stack size exceeded|more memory than Grunt allows|too large or too complex to make in time/);
+    expect((error as Error).message).toMatch(/Maximum call stack size exceeded|more memory than OtherBench allows|too large or too complex to make in time/);
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
@@ -194,7 +194,7 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     const paragraphs = Array.from({ length: 500 }, (_, i) => `Paragraph ${i} with **bold** and a [link](https://example.com/${i}).`).join('\n\n');
     const error = await renderOfficeFile('document', paragraphs, 'Big', limits).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OfficeRenderError);
-    expect((error as Error).message).toBe('The document is too large or too complex to make: it needs more memory than Grunt allows. Simplify it or split it into more than one artifact.');
+    expect((error as Error).message).toBe('The document is too large or too complex to make: it needs more memory than OtherBench allows. Simplify it or split it into more than one artifact.');
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 

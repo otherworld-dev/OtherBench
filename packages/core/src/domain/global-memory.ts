@@ -105,7 +105,7 @@ export function projectIndexPrompt(entries: ProjectIndexEntry[], canLookUp = fal
   const lines = entries.slice(0, PROJECT_INDEX_MAX).map(indexLine);
   const body = defuse(lines.join('\n'), 'user-projects');
   const more = canLookUp ? 'look it up with the recall tool' : 'ask';
-  return `# The user's projects\nOther projects in Grunt, for context only. If you need more than this, ${more}.\n\n<user-projects>\n${body}\n</user-projects>`;
+  return `# The user's projects\nOther projects in OtherBench, for context only. If you need more than this, ${more}.\n\n<user-projects>\n${body}\n</user-projects>`;
 }
 
 /** The summariser's single user message for the learned note: the rules, the current note, then the new conversation. */

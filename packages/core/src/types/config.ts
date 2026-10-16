@@ -48,12 +48,12 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * source as well as name -- a tool merely sharing the shell tool's name must
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
- * Grunt only gates, never performs.
+ * OtherBench only gates, never performs.
  * `'sandbox'` is the sandboxed `run_command` (spec 2026-10-12-sandbox-design)
  * and `'network'` the `sandbox_network` approval a sandboxed command raises
  * for a host that isn't on its allowlist: new sources rather than flags, so
- * nothing but Grunt's own sandbox tool can claim to be sandboxed.
- * `'thread'` is Grunt's own checklist, question and plan tools (spec
+ * nothing but OtherBench's own sandbox tool can claim to be sandboxed.
+ * `'thread'` is OtherBench's own checklist, question and plan tools (spec
  * 2026-10-12-thread-cards-design), allowed by policy and audited.
  * `'subagent'` is the API engine's sub-agent tool (spec
  * 2026-10-12-api-subagents-design).
@@ -84,7 +84,7 @@ export function isClaudeEffort(value: unknown): value is ClaudeEffort {
   return typeof value === 'string' && (CLAUDE_EFFORTS as readonly string[]).includes(value);
 }
 
-/** Where a profile's shell commands run (spec 2026-10-12-sandbox-design): on this machine, or in Grunt's sandbox. */
+/** Where a profile's shell commands run (spec 2026-10-12-sandbox-design): on this machine, or in OtherBench's sandbox. */
 export type ShellRuns = 'host' | 'sandbox';
 
 export interface ToolPolicy {

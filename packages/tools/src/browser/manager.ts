@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { browserHostDenial, isPublicAddress, siteOf } from '@grunt/core/domain/browser-hosts.js';
+import { browserHostDenial, isPublicAddress, siteOf } from '@otherbench/core/domain/browser-hosts.js';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './proxy.js';
 import { BrowserBusyError, type BrowserSession, type SessionFactory } from './session.js';
 
@@ -42,7 +42,7 @@ export interface ChatBrowser {
 
 export interface BrowserManagerOptions {
   factory: SessionFactory;
-  /** Tests only (GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS). 127.0.0.1 may be reached on these ports and nothing else local. */
+  /** Tests only (OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS). 127.0.0.1 may be reached on these ports and nothing else local. */
   allowLoopbackPorts?: readonly number[];
   /** Defaults to startEgressProxy; tests pass a fake. */
   startProxy?: (options: EgressProxyOptions) => Promise<EgressProxy>;

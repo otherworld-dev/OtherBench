@@ -1,4 +1,4 @@
-// Run inside the grunt-sandbox distro by live.test.ts, on the distro's own Node,
+// Run inside the otherbench-sandbox distro by live.test.ts, on the distro's own Node,
 // against the agent setup installed and the real sandbox runtime beside it.
 // live.test.ts sends this file down stdin with one line in front of it:
 //   const INPUT = { denied, hosts, addresses };
@@ -8,9 +8,9 @@
 // It prints one line of JSON: what the runtime's own checks make of those.
 /* global INPUT */
 import { lookup } from 'node:dns/promises';
-import { DENIED_RESOLVED_ADDRESSES, isPrivateAddress } from '/opt/grunt-sandbox/agent-core.mjs';
-import { createResolvedAddressGuard } from '/opt/grunt-sandbox/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/resolved-address-guard.js';
-import { NetworkConfigSchema } from '/opt/grunt-sandbox/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-config.js';
+import { DENIED_RESOLVED_ADDRESSES, isPrivateAddress } from '/opt/otherbench-sandbox/agent-core.mjs';
+import { createResolvedAddressGuard } from '/opt/otherbench-sandbox/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/resolved-address-guard.js';
+import { NetworkConfigSchema } from '/opt/otherbench-sandbox/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/sandbox-config.js';
 
 const NAME = 'name.example';
 const PORT = 443;
@@ -18,7 +18,7 @@ const PORT = 443;
 // The network config the agent starts the runtime with, through the runtime's own schema.
 const parsed = NetworkConfigSchema.safeParse({ allowedDomains: INPUT.hosts, deniedDomains: [], allowLocalBinding: false, deniedResolvedAddresses: DENIED_RESOLVED_ADDRESSES });
 
-// The runtime's guard for a name's resolved addresses, with Grunt's ranges and without them. Neither knows this
+// The runtime's guard for a name's resolved addresses, with OtherBench's ranges and without them. Neither knows this
 // VM's own addresses here (the runtime refuses those too, whatever they are): the question is the ranges.
 const withRanges = createResolvedAddressGuard({ deniedResolvedAddresses: DENIED_RESOLVED_ADDRESSES, localAddresses: () => [] });
 const runtimeAlone = createResolvedAddressGuard({ localAddresses: () => [] });
@@ -32,11 +32,11 @@ const out = {
   agentDiffers: [],
   /** Not public, yet the runtime would dial it. */
   letThrough: [],
-  /** Public, and refused because of Grunt's ranges (the runtime alone would dial it). */
+  /** Public, and refused because of OtherBench's ranges (the runtime alone would dial it). */
   refusedByRanges: [],
-  /** Public, and refused by the runtime whatever Grunt says (its cloud metadata addresses). */
+  /** Public, and refused by the runtime whatever OtherBench says (its cloud metadata addresses). */
   refusedByRuntimeAnyway: [],
-  /** Not public: how many the runtime refuses by itself, and how many only because of Grunt's ranges. */
+  /** Not public: how many the runtime refuses by itself, and how many only because of OtherBench's ranges. */
   privateRefusedByRuntimeAlone: 0,
   privateRefusedByRanges: 0,
   hosts: {},

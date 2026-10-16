@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { openDatabase } from '../src/db.js';
 import { MIGRATIONS, runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';
-import { artifactsOnBranch, branchOf } from '@grunt/core/domain/artifacts.js';
-import type { ChangeRow } from '@grunt/core/domain/sync.js';
-import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
-import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
+import { artifactsOnBranch, branchOf } from '@otherbench/core/domain/artifacts.js';
+import type { ChangeRow } from '@otherbench/core/domain/sync.js';
+import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
+import { bindToolImageParts } from '@otherbench/core/domain/tool-images.js';
 import { BOUND_ATTACHMENT_SQL } from '../src/repos/sync.js';
 
 interface Node {
@@ -340,7 +340,7 @@ describe('sync (Task 50)', () => {
   it('a sub-project that arrives before its parent keeps its parent, and a deleted parent leaves it top level on both machines', () => {
     const a = node('a');
     const b = node('b');
-    a.store.projects.create({ id: 'top', name: 'Grunt', workspace: null, defaultProfileId: null });
+    a.store.projects.create({ id: 'top', name: 'OtherBench', workspace: null, defaultProfileId: null });
     a.store.projects.create({ id: 'sub', name: 'Desktop', workspace: null, defaultProfileId: null, parentId: 'top' });
 
     // The child's row first: parent_id has no foreign key, so it applies and keeps the link.
@@ -443,7 +443,7 @@ describe('sync (Task 50)', () => {
     expect(b.store.artifacts.versions('ok').map((v) => v.id)).toEqual(['v-fine']);
   });
 
-  it('refuses a version row whose live declaration Grunt could not have made, and takes a valid one', () => {
+  it('refuses a version row whose live declaration OtherBench could not have made, and takes a valid one', () => {
     const b = node('b');
     seedProfile(b);
     chat(b, 'c');
@@ -474,8 +474,8 @@ describe('sync (Task 50)', () => {
     seedProfile(b);
     chat(b, 'c');
     b.store.artifacts.create({ id: 'ok', chatId: 'c', slug: 'ok', kind: 'html', language: null, createdAt: 1 });
-    // A relayed tool name, no "params", keys not sorted, whitespace: valid, but not as Grunt writes it.
-    const raw = '{ "calls": [ { "tool": "mcp__grunt_0123456789abcdef__s__lookup", "id": "value", "args": { "z": 1, "a": { "y": 2, "b": 3 } } } ] }';
+    // A relayed tool name, no "params", keys not sorted, whitespace: valid, but not as OtherBench writes it.
+    const raw = '{ "calls": [ { "tool": "mcp__otherbench_0123456789abcdef__s__lookup", "id": "value", "args": { "z": 1, "a": { "y": 2, "b": 3 } } } ] }';
     const result = b.store.sync.apply([
       {
         tbl: 'artifact_version', id: 'v1', op: 'upsert', hlc: '9999999999999-0000-a',
@@ -1333,7 +1333,7 @@ describe('what a synced message and file row may hold (the caps the local path h
   });
   const result = (n: Node, id: string): unknown[] => (n.store.messages.get(id)!.parts.find((p) => p.type === 'tool-result') as { result: unknown[] }).result;
 
-  it('keeps nothing but the reference Grunt itself mints: a bad id, type or extra field is dropped, base64 never survives, 50 at most', () => {
+  it('keeps nothing but the reference OtherBench itself mints: a bad id, type or extra field is dropped, base64 never survives, 50 at most', () => {
     const b = machine();
     const blob = Buffer.alloc(3 * 1024 * 1024).toString('base64');
     const many = Array.from({ length: 52 }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mimeType: 'image/png' }));
@@ -1392,7 +1392,7 @@ describe('what a synced message and file row may hold (the caps the local path h
     expect(JSON.parse(offered.row['parts'] as string)).toEqual([part]);
   });
 
-  it('refuses a file row that Grunt could never have made', () => {
+  it('refuses a file row that OtherBench could never have made', () => {
     const b = machine();
     const table: [string, ChangeRow][] = [
       ['tool image that is not a raster', fileRow('f1', 'm-a', { mime: 'text/html' })],

@@ -1,5 +1,5 @@
 import PptxGenJS from 'pptxgenjs';
-import { xmlSafe, type Bullet, type PresentationSpec, type SlideColumn, type SlideSpec } from '@grunt/core/domain/office-spec.js';
+import { xmlSafe, type Bullet, type PresentationSpec, type SlideColumn, type SlideSpec } from '@otherbench/core/domain/office-spec.js';
 
 /**
  * A `presentation` artifact as a .pptx (spec 2026-10-12-office-files §4):
@@ -75,7 +75,7 @@ export async function renderPptx(spec: PresentationSpec, title: string): Promise
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.title = xmlSafe(title);
-  pptx.author = 'Grunt';
+  pptx.author = 'OtherBench';
   const accent = (spec.theme?.accent ?? `#${DEFAULT_ACCENT}`).slice(1).toUpperCase();
   for (const s of spec.slides) addSlide(pptx, s, accent);
   // stream() is the only pptxgenjs 4.0.1 path that deflates: write() with any other outputType

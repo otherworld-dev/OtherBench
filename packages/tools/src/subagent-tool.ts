@@ -1,8 +1,8 @@
-import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
-import { eligibleSubagentProfiles, runSubagentTool, SUBAGENT_TOOL_PARAMETERS, subagentToolDescription } from '@grunt/core/domain/subagent.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import { SUBAGENT_TOOL_NAME } from '@otherbench/core/domain/parts.js';
+import { eligibleSubagentProfiles, runSubagentTool, SUBAGENT_TOOL_PARAMETERS, subagentToolDescription } from '@otherbench/core/domain/subagent.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 
 /**
  * The `subagent` tool for API engines (spec 2026-10-12-api-subagents-design).

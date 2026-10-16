@@ -99,7 +99,7 @@ describe('reading PowerPoint files', () => {
   it('notes a slide part over the part cap once, however many ids point at it', () => {
     const slide = slideXml(sp(null, ap('x'.repeat(5000))));
     const text = extractOfficeText(pptx([{ xml: slide }], Array(50).fill(1)), { maxPartBytes: 4000 });
-    expect(text).toMatch(/^\[Grunt skipped ppt\/slides\/slide1\.xml: [^\]]*\]$/);
+    expect(text).toMatch(/^\[OtherBench skipped ppt\/slides\/slide1\.xml: [^\]]*\]$/);
   });
 
   it('clamps a hostile paragraph level instead of losing the slide', () => {
@@ -112,12 +112,12 @@ describe('reading PowerPoint files', () => {
 describe('reading hostile PowerPoint files', () => {
   const FAST_MS = 5000;
   const CAP = 100_000;
-  /** Runs `fn`, checks it was fast, and reports the time when GRUNT_TIMINGS is set. */
+  /** Runs `fn`, checks it was fast, and reports the time when OTHERBENCH_TIMINGS is set. */
   function timed<T>(label: string, fn: () => T): T {
     const start = performance.now();
     const result = fn();
     const ms = performance.now() - start;
-    if (process.env['GRUNT_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
+    if (process.env['OTHERBENCH_TIMINGS']) console.log(`[timing] ${label}: ${ms.toFixed(0)} ms`);
     expect(ms).toBeLessThan(FAST_MS);
     return result;
   }
@@ -163,7 +163,7 @@ describe('reading hostile PowerPoint files', () => {
   it('notes one oversize slide once however its rels spell the name', () => {
     const file = variantsDeck(slideXml(sp(null, ap('x'.repeat(40_000)))), 200);
     const text = timed('200 case variants of an oversize slide', () => extractOfficeText(file, { maxPartBytes: 30_000 }))!;
-    expect(text).toMatch(/^\[Grunt skipped ppt\/slides\/slide1\.xml: [^\]]*\]$/);
+    expect(text).toMatch(/^\[OtherBench skipped ppt\/slides\/slide1\.xml: [^\]]*\]$/);
   });
 
   it('reads one slide once however its rels spell the name, so the total cap is not reached', () => {
@@ -190,8 +190,8 @@ describe('reading hostile PowerPoint files', () => {
     ]);
     const text = timed('300 oversize slides', () => extractOfficeText(file, { maxPartBytes: 20_000 }))!;
     expect(text.length).toBeLessThan(3500);
-    expect(text.match(/\[Grunt skipped ppt\//g)).toHaveLength(10);
-    expect(text).toContain('[Grunt skipped 290 more parts as well.]');
+    expect(text.match(/\[OtherBench skipped ppt\//g)).toHaveLength(10);
+    expect(text).toContain('[OtherBench skipped 290 more parts as well.]');
   });
 
   it('reads thousands of slides that share one notes part, each with its own rels', () => {

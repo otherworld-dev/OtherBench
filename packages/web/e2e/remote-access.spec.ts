@@ -16,13 +16,13 @@ import { expect, request as playwrightRequest, test, type APIRequestContext, typ
  */
 
 const webDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-/** Its own port; GRUNT_E2E_REMOTE_PORT moves it when 4781 is taken. */
-const PORT = Number(process.env.GRUNT_E2E_REMOTE_PORT ?? 4781);
+/** Its own port; OTHERBENCH_E2E_REMOTE_PORT moves it when 4781 is taken. */
+const PORT = Number(process.env.OTHERBENCH_E2E_REMOTE_PORT ?? 4781);
 const BASE = `https://127.0.0.1:${PORT}`;
 const PASSWORD = 'e2e remote password';
 const TOKEN = 'e2e-remote-token';
-const root = mkdtempSync(join(tmpdir(), 'grunt-remote-e2e-'));
-const db = join(root, 'grunt.db');
+const root = mkdtempSync(join(tmpdir(), 'otherbench-remote-e2e-'));
+const db = join(root, 'otherbench.db');
 let server: ChildProcess | null = null;
 let api: APIRequestContext;
 let chatTitle = '';
@@ -46,7 +46,7 @@ test.beforeAll(async () => {
   server = spawn(process.execPath, ['../server/dist/cli.js', 'serve', '--port', String(PORT), '--db', db, '--public-url', BASE, '--tls', 'auto', '--trust-proxy', '127.0.0.1'], {
     cwd: webDir,
     stdio: 'ignore',
-    env: { ...process.env, GRUNT_TOKEN: TOKEN },
+    env: { ...process.env, OTHERBENCH_TOKEN: TOKEN },
   });
   api = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${TOKEN}` } });
   const deadline = Date.now() + 15_000;
@@ -91,7 +91,7 @@ async function signIn(page: Page, password = PASSWORD): Promise<void> {
 
 test('(a) the login page comes first; a wrong password says so; the right one loads the app, and a reload stays signed in', async ({ page }) => {
   await page.goto(BASE);
-  await expect(page.getByRole('link', { name: "Download Grunt's certificate" })).toBeVisible();
+  await expect(page.getByRole('link', { name: "Download OtherBench's certificate" })).toBeVisible();
 
   await signIn(page, 'not the password at all');
   await expect(page.getByRole('alert')).toHaveText('Wrong password.');
@@ -110,7 +110,7 @@ test('(b) a reply streams over the cookie, and an attached image preview loads',
   const textbox = page.getByRole('textbox', { name: /message/i });
   await textbox.fill('Hello over HTTPS');
   await textbox.press('Enter');
-  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from Grunt/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from OtherBench/)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 20_000 });
 
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
@@ -190,7 +190,7 @@ test('(g) under a flood of wrong passwords a clean address still signs in, a new
     // A sign-in with "Keep me signed in" leaves a remembered-device cookie in this context's jar.
     expect((await attempt(remembered, PASSWORD, undefined, true)).status).toBe(200);
     const jar = await remembered.storageState();
-    expect(jar.cookies.some((c) => c.name === '__Host-grunt_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
+    expect(jar.cookies.some((c) => c.name === '__Host-otherbench_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
 
     // Addresses that keep guessing (4 tries each, short of a lock) spend what any address may and are then refused...
     let guessersRefused = false;

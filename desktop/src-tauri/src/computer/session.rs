@@ -44,18 +44,18 @@ use super::{act, keys, Consent, Desktop, Dialog, Where, NO_SESSION, OFF_REASON, 
 use crate::rpc::{self, Reply, Request, Writer};
 
 const BUSY: &str = "Another chat is controlling this computer, or asking to. Stop it first.";
-const DECLINED: &str = "The user didn't let Grunt control the computer.";
-const UNANSWERED: &str = "Nobody answered the desktop app's question in time, so Grunt didn't take control.";
-const NOT_ASKED: &str = "The desktop app couldn't ask whether Grunt may control the computer.";
+const DECLINED: &str = "The user didn't let OtherBench control the computer.";
+const UNANSWERED: &str = "Nobody answered the desktop app's question in time, so OtherBench didn't take control.";
+const NOT_ASKED: &str = "The desktop app couldn't ask whether OtherBench may control the computer.";
 const STOPPED_FIRST: &str = "Control was stopped before it started, so nothing was started.";
-const NO_HOTKEY: &str = "Grunt couldn't register its stop hotkey (Ctrl+Alt+Backspace), so it didn't take control.";
-const NO_INDICATOR: &str = "Grunt couldn't show that it is controlling the computer, so it didn't take control.";
-const NO_TOKEN: &str = "Grunt couldn't make a session token, so it didn't take control.";
+const NO_HOTKEY: &str = "OtherBench couldn't register its stop hotkey (Ctrl+Alt+Backspace), so it didn't take control.";
+const NO_INDICATOR: &str = "OtherBench couldn't show that it is controlling the computer, so it didn't take control.";
+const NO_TOKEN: &str = "OtherBench couldn't make a session token, so it didn't take control.";
 const UNREADABLE: &str = "The desktop app couldn't read that request.";
 const STILL_RUNNING: &str = "An action for that chat had not stopped yet; it was told to stop.";
 const NOT_ANNOUNCED: &str = "The start of that session had not finished yet; it was ended.";
-const NO_CURSOR: &str = "The cursor is not on the screen Grunt last looked at.";
-const TOO_BIG: &str = "The screenshot is larger than Grunt can send.";
+const NO_CURSOR: &str = "The cursor is not on the screen OtherBench last looked at.";
+const TOO_BIG: &str = "The screenshot is larger than OtherBench can send.";
 
 /// How long things may take. The defaults are the wire's; tests shorten them.
 #[derive(Debug, Clone, Copy)]
@@ -390,7 +390,7 @@ pub fn clean_title(title: &str) -> String {
 /// buttons say or do (Windows draws them).
 pub fn dialog_text(title: &str) -> String {
     format!(
-        "Let Grunt control this computer for the chat named '\u{2068}{}\u{2069}'?\n\nIt will ask before using each app. Stop any time with Ctrl+Alt+Backspace.",
+        "Let OtherBench control this computer for the chat named '\u{2068}{}\u{2069}'?\n\nIt will ask before using each app. Stop any time with Ctrl+Alt+Backspace.",
         clean_title(title)
     )
 }
@@ -713,7 +713,7 @@ impl Inner {
     }
 
     /// `computer.close`, or the pipes are gone: end everything at once, act on
-    /// nothing more, and say computer use is off until Grunt restarts.
+    /// nothing more, and say computer use is off until OtherBench restarts.
     fn close_all(self: &Arc<Self>) {
         {
             let mut st = self.state();

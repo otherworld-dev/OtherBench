@@ -39,7 +39,7 @@ test('send, regenerate, switch back, edit an earlier message, switch back', asyn
     .not.toBe('');
 
   // Two turns, so the first user message is genuinely "earlier".
-  await expect(thread.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(thread.getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
   await expect(page.getByLabel('streaming')).toHaveCount(0);
   await box.fill('second question');
   await box.press('Enter');
@@ -118,7 +118,7 @@ test('switching branches keeps a resolved compare choice, and the next message i
 
   await box.fill('k1');
   await box.press('Enter');
-  await expect(thread.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(thread.getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
   await idle();
 
   // k2 as a compare turn, keep B.

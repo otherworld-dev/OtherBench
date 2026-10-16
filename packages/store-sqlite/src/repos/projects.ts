@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { NewProject, Project, ProjectRepo } from '@grunt/core/ports/store.js';
-import { toStoredWorkspace } from '@grunt/core/domain/workspace.js';
+import type { NewProject, Project, ProjectRepo } from '@otherbench/core/ports/store.js';
+import { toStoredWorkspace } from '@otherbench/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { WORKSPACE_COLUMNS, foldersFromRow, foldersToRow, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
@@ -59,7 +59,7 @@ export class SqliteProjectRepo implements ProjectRepo {
     return this.crud.get(id);
   }
 
-  /** Same order as `compareProjects` (@grunt/core/domain/projects.js). */
+  /** Same order as `compareProjects` (@otherbench/core/domain/projects.js). */
   list(): Project[] {
     const rows = this.db
       .prepare('SELECT * FROM project ORDER BY sort_order ASC, name COLLATE NOCASE ASC, id ASC')

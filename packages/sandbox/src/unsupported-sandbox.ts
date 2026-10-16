@@ -1,4 +1,4 @@
-import { SandboxError, type Sandbox, type SandboxRunResult, type SandboxStatus } from '@grunt/core/ports/sandbox.js';
+import { SandboxError, type Sandbox, type SandboxRunResult, type SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 
 const MESSAGE = "The sandbox isn't available on this platform yet.";
 

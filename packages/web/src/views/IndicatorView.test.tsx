@@ -28,7 +28,7 @@ describe('IndicatorView', () => {
     window.history.replaceState({}, '', '/?view=indicator&title=Budget%20sheet');
     render(<IndicatorView />);
     const bar = screen.getByTestId('computer-indicator');
-    expect(bar).toHaveTextContent('Grunt is controlling this computer');
+    expect(bar).toHaveTextContent('OtherBench is controlling this computer');
     expect(bar).toHaveTextContent('Budget sheet');
     await vi.waitFor(() => expect(emit).not.toBeNull());
     expect(onDesktopEvent).toHaveBeenCalledWith('computer-indicator', expect.any(Function));

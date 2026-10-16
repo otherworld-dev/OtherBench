@@ -1,9 +1,9 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ImportPreview, ImportReport, ImportStatus } from '@grunt/core/types/claude-import.js';
-import type { Project } from '@grunt/core/ports/store.js';
-import type { Connection, Profile } from '@grunt/core/types/config.js';
+import type { ImportPreview, ImportReport, ImportStatus } from '@otherbench/core/types/claude-import.js';
+import type { Project } from '@otherbench/core/ports/store.js';
+import type { Connection, Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
@@ -19,7 +19,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
 });
 
 import { ApiError, api } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { defaultImportProfileId, IMPORT_POLL_MS, ImportPanel } from './ImportPanel.js';
 
 const claudeImport = vi.mocked(api.claudeImport);
@@ -67,7 +67,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     memoryChat: { title: 'What claude.ai remembered', notes: 49, existing: false },
     filesNotIncluded: 672,
     dropped: {},
-    importFolder: '/data/grunt.db.imported/claude',
+    importFolder: '/data/otherbench.db.imported/claude',
     ...over,
   };
 }
@@ -79,21 +79,21 @@ function report(over: Partial<ImportReport> = {}): ImportReport {
     emptyChats: 44,
     artifacts: { imported: 1, existing: 0, failed: [] },
     projects: { created: ['Home Stuff'], merged: ['PhD'], existing: [], failed: [], skipped: 5 },
-    docs: { written: 2, folders: [{ project: 'Home Stuff', path: '/data/grunt.db.imported/claude/Home Stuff-019f3c80', attached: true, workspace: false }] },
+    docs: { written: 2, folders: [{ project: 'Home Stuff', path: '/data/otherbench.db.imported/claude/Home Stuff-019f3c80', attached: true, workspace: false }] },
     fileErrors: [{ title: '/people/x.md', error: 'EACCES' }],
     memory: { model: 'Claude Opus', about: { status: 'drafted', text: 'I run a small company.' }, note: { status: 'failed', reason: 'cut off' }, projects: [] },
-    memoryFiles: '/data/grunt.db.imported/claude/memory',
+    memoryFiles: '/data/otherbench.db.imported/claude/memory',
     memoryChat: { title: 'What claude.ai remembered', notes: 49, imported: true },
     filesNotIncluded: 672,
     dropped: {},
-    importFolder: '/data/grunt.db.imported/claude',
+    importFolder: '/data/otherbench.db.imported/claude',
     ...over,
   };
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({
     connections: [connection('ollama', 'ollama'), connection('cc', 'claude_code')],
     profiles: [profile('qwen', 'Qwen', 'ollama', { isDefault: true }), profile('opus', 'Claude Opus', 'cc'), profile('old', 'Old', 'cc', { archivedAt: 1 })],
   });
@@ -109,7 +109,7 @@ afterEach(() => {
 
 describe('defaultImportProfileId', () => {
   it('prefers a Claude profile, then the default, then the first live one', () => {
-    const { profiles, connections } = useGruntStore.getState();
+    const { profiles, connections } = useOtherBenchStore.getState();
     expect(defaultImportProfileId(profiles, connections)).toBe('opus');
     expect(defaultImportProfileId(profiles.filter((p) => p.id !== 'opus'), connections)).toBe('qwen');
     expect(defaultImportProfileId([profile('x', 'X', 'ollama')], connections)).toBe('x');
@@ -139,7 +139,7 @@ describe('ImportPanel', () => {
     expect(screen.getByLabelText('Profile for imported chats')).toHaveValue('opus');
     expect(screen.queryByRole('option', { name: 'Old' })).toBeNull();
     expect(screen.getByLabelText('Condense memory')).toBeChecked();
-    expect(panel).toHaveTextContent("Condense claude.ai's memory into Grunt's with Claude Opus");
+    expect(panel).toHaveTextContent("Condense claude.ai's memory into OtherBench's with Claude Opus");
     expect(screen.getByRole('button', { name: 'Import 440 chats' })).toBeEnabled();
   });
 
@@ -189,7 +189,7 @@ describe('ImportPanel', () => {
     expect(reportView).toHaveTextContent('New projects: Home Stuff');
     expect(reportView).toHaveTextContent('claude.ai’s 49 memory notes are in the chat “What claude.ai remembered”, which recall searches');
     expect(reportView).toHaveTextContent('Merged into your projects: PhD');
-    expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/grunt.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only; its chats see them once the project or chat has a workspace folder');
+    expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/otherbench.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only; its chats see them once the project or chat has a workspace folder');
     expect(reportView).toHaveTextContent('Memory (with Claude Opus): About you drafted, below; learned note failed: cut off');
     expect(screen.getByRole('alert')).toHaveTextContent('Clash: UNIQUE constraint failed');
     expect(screen.getByRole('alert')).toHaveTextContent('/people/x.md: EACCES');
@@ -212,11 +212,11 @@ describe('ImportPanel', () => {
   });
 
   it('shows why a failed import stopped', async () => {
-    claudeImport.status.mockResolvedValue({ ...IDLE, state: 'failed', error: 'Grunt was shut down during the import.', report: report() });
+    claudeImport.status.mockResolvedValue({ ...IDLE, state: 'failed', error: 'OtherBench was shut down during the import.', report: report() });
     render(<ImportPanel />);
     const view = await screen.findByTestId('import-report');
     expect(view).toHaveTextContent('The import stopped');
-    expect(view).toHaveTextContent('Grunt was shut down during the import.');
+    expect(view).toHaveTextContent('OtherBench was shut down during the import.');
     await waitFor(() => expect(screen.getByLabelText('Export folder')).toBeInTheDocument());
   });
 });
@@ -242,7 +242,7 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
   });
 
   it("imports the Cowork sessions when ticked, with each space's chosen project", async () => {
-    useGruntStore.setState({ projects: [{ id: 'proj-phd', name: 'PhD' } as Project, { id: 'proj-personal', name: 'Personal' } as Project] });
+    useOtherBenchStore.setState({ projects: [{ id: 'proj-phd', name: 'PhD' } as Project, { id: 'proj-personal', name: 'Personal' } as Project] });
     claudeImport.start.mockResolvedValue({ ...IDLE, state: 'running', phase: 'projects', total: 10 });
     const user = await checkFolder({
       chats: { total: 2, existing: 0, newer: 0, filed: 0, messages: 4, branched: 0 },

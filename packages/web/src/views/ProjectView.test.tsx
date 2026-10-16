@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Project } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Project } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../desktop/bridge.js', () => ({ isDesktop: () => false, pickFolder: vi.fn() }));
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -18,7 +18,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { ApiError, api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ProjectView } from './ProjectView.js';
 
 const profile: Profile = {
@@ -40,8 +40,8 @@ function project(over: Partial<Project> & { id: string }): Project {
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ profiles: [profile] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ profiles: [profile] });
   vi.mocked(api.projects.create).mockReset();
   vi.mocked(api.projects.patch).mockReset();
 });
@@ -51,13 +51,13 @@ describe('ProjectView, creating', () => {
   it('creates the project with everything on the page in one request, then closes', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    vi.mocked(api.projects.create).mockResolvedValue(project({ id: 'p-new', name: 'Grunt' }));
+    vi.mocked(api.projects.create).mockResolvedValue(project({ id: 'p-new', name: 'OtherBench' }));
     render(<ProjectView page={{ mode: 'create' }} onClose={onClose} />);
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), ' Grunt ');
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), ' OtherBench ');
     await user.type(screen.getByRole('textbox', { name: 'Description' }), 'Local workbench');
     await user.type(screen.getByRole('textbox', { name: 'Instructions' }), 'British English.');
-    await user.type(screen.getByRole('textbox', { name: 'Main folder' }), '/home/me/grunt');
+    await user.type(screen.getByRole('textbox', { name: 'Main folder' }), '/home/me/otherbench');
     await user.type(screen.getByRole('textbox', { name: 'Folder path to add' }), '/home/me/notes');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Access to the new folder' }), 'readwrite');
     await user.click(screen.getByRole('button', { name: 'Add' }));
@@ -66,14 +66,14 @@ describe('ProjectView, creating', () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(api.projects.create).toHaveBeenCalledWith({
-      name: 'Grunt',
+      name: 'OtherBench',
       description: 'Local workbench',
       instructions: 'British English.',
-      workspaceRoot: '/home/me/grunt',
+      workspaceRoot: '/home/me/otherbench',
       defaultProfileId: 'profile-1',
       folders: [{ path: '/home/me/notes', access: 'readwrite' }],
     });
-    expect(useGruntStore.getState().projects.map((p) => p.id)).toContain('p-new');
+    expect(useOtherBenchStore.getState().projects.map((p) => p.id)).toContain('p-new');
   });
 
   it('asks for a name before sending anything', async () => {
@@ -90,7 +90,7 @@ describe('ProjectView, creating', () => {
     vi.mocked(api.projects.create).mockRejectedValue(new ApiError(400, '"folders[0].path" must be a folder\'s absolute path.'));
     render(<ProjectView page={{ mode: 'create' }} onClose={onClose} />);
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Grunt');
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'OtherBench');
     await user.type(screen.getByRole('textbox', { name: 'Instructions' }), 'Keep me.');
     await user.click(screen.getByRole('button', { name: 'Create project' }));
 
@@ -104,7 +104,7 @@ describe('ProjectView, creating', () => {
     const user = userEvent.setup();
     vi.mocked(api.projects.create).mockImplementation(() => new Promise(() => {}));
     render(<ProjectView page={{ mode: 'create' }} onClose={vi.fn()} />);
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Grunt');
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'OtherBench');
     await user.dblClick(screen.getByRole('button', { name: 'Create project' }));
     expect(api.projects.create).toHaveBeenCalledTimes(1);
   });
@@ -168,7 +168,7 @@ describe('ProjectView, closing', () => {
     let reject!: (err: unknown) => void;
     vi.mocked(api.projects.create).mockImplementation(() => new Promise((_resolve, rej) => (reject = rej)));
     render(<ProjectView page={{ mode: 'create' }} onClose={vi.fn()} />);
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Grunt');
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'OtherBench');
     const create = screen.getByRole('button', { name: 'Create project' });
     create.focus();
     await user.keyboard('{Enter}');
@@ -186,7 +186,7 @@ describe('ProjectView, closing', () => {
 
   it('falls back to its return-focus target when what opened it is gone (a menu item)', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [project({ id: 'p1', name: 'Alpha' })] });
+    useOtherBenchStore.setState({ projects: [project({ id: 'p1', name: 'Alpha' })] });
     const heading = document.createElement('button');
     heading.id = 'heading-p1';
     document.body.append(heading);
@@ -218,7 +218,7 @@ describe('ProjectView, editing', () => {
   it('opens filled in from the project and saves only what changed', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [project({ id: 'p1', name: 'Alpha', description: 'Old', instructions: 'Be brief.', workspaceRoot: '/srv/alpha', defaultProfileId: 'profile-1' })],
     });
     vi.mocked(api.projects.patch).mockResolvedValue(project({ id: 'p1', name: 'Alpha', instructions: 'Be thorough.' }));
@@ -236,11 +236,11 @@ describe('ProjectView, editing', () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(api.projects.patch).toHaveBeenCalledWith('p1', { instructions: 'Be thorough.' });
-    expect(useGruntStore.getState().projects[0]!.instructions).toBe('Be thorough.');
+    expect(useOtherBenchStore.getState().projects[0]!.instructions).toBe('Be thorough.');
   });
 
   it("says where the main folder is when it's on another machine, instead of showing it as unset", () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [
         project({
           id: 'p1',
@@ -262,7 +262,7 @@ describe('ProjectView, editing', () => {
   it('Save with nothing changed sends nothing and closes', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    useGruntStore.setState({ projects: [project({ id: 'p1', name: 'Alpha' })] });
+    useOtherBenchStore.setState({ projects: [project({ id: 'p1', name: 'Alpha' })] });
     render(<ProjectView page={{ mode: 'edit', projectId: 'p1' }} onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
@@ -284,16 +284,16 @@ describe('ProjectView, sub-projects (spec 2026-10-15-sub-projects-design §5)', 
   it("creates a sub-project with the parent New sub-project… chose, showing what it gets from the parent", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    useGruntStore.setState({
-      projects: [project({ id: 'p-top', name: 'Grunt', instructions: 'British English.', workspaceRoot: '/srv/grunt', defaultProfileId: 'profile-1' })],
+    useOtherBenchStore.setState({
+      projects: [project({ id: 'p-top', name: 'OtherBench', instructions: 'British English.', workspaceRoot: '/srv/otherbench', defaultProfileId: 'profile-1' })],
     });
     vi.mocked(api.projects.create).mockResolvedValue(project({ id: 'p-sub', name: 'Desktop', parentId: 'p-top' }));
     render(<ProjectView page={{ mode: 'create', parentId: 'p-top' }} onClose={onClose} />);
 
     expect(screen.getByRole('combobox', { name: 'Parent' })).toHaveValue('p-top');
-    expect(screen.getByTestId('inherited-instructions')).toHaveTextContent('From Grunt, sent before these: British English.');
-    expect(screen.getByTestId('inherited-folder')).toHaveTextContent("Empty, so new chats start in Grunt's folder: /srv/grunt");
-    expect(screen.getByTestId('inherited-profile')).toHaveTextContent("Grunt's default: Everyday");
+    expect(screen.getByTestId('inherited-instructions')).toHaveTextContent('From OtherBench, sent before these: British English.');
+    expect(screen.getByTestId('inherited-folder')).toHaveTextContent("Empty, so new chats start in OtherBench's folder: /srv/otherbench");
+    expect(screen.getByTestId('inherited-profile')).toHaveTextContent("OtherBench's default: Everyday");
 
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Desktop');
     await user.click(screen.getByRole('button', { name: 'Create project' }));
@@ -302,7 +302,7 @@ describe('ProjectView, sub-projects (spec 2026-10-15-sub-projects-design §5)', 
   });
 
   it('offers only other top-level projects, and locks the parent of a project that has sub-projects', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [project({ id: 'a', name: 'Alpha' }), project({ id: 'b', name: 'Beta' }), project({ id: 'a1', name: 'Alpha one', parentId: 'a' })],
     });
     render(<ProjectView page={{ mode: 'edit', projectId: 'b' }} onClose={vi.fn()} />);

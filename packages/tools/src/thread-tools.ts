@@ -12,8 +12,8 @@ import {
   runPlanCommand,
   runTodoCommand,
   type AskFn,
-} from '@grunt/core/domain/thread-tools.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+} from '@otherbench/core/domain/thread-tools.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 
 // Thread tools for API engines (spec 2026-10-12-thread-cards-design §5).
 // Source `thread`: the broker allows them by policy, and they go through the

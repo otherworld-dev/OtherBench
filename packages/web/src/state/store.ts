@@ -1,11 +1,11 @@
 import { create } from 'zustand';
-import type { ScheduleTarget } from '@grunt/core/domain/schedule.js';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
-import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
-import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@grunt/core/types/events.js';
-import type { RecordedUsage } from '@grunt/core/types/usage.js';
+import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
+import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
+import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
+import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import {
   closeTab as closePaneTab,
   focusPane as focusPaneIn,
@@ -44,7 +44,7 @@ export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
 
-export interface GruntState {
+export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
   connections: Connection[];
   models: ModelInfo[];
@@ -260,7 +260,7 @@ function withPanes(next: PaneState): { paneState: PaneState; activeChatId: strin
 const initialPanes = loadPaneState();
 
 /** localStorage key: whether the docked inspector is collapsed. Per device. */
-export const INSPECTOR_COLLAPSED_STORAGE_KEY = 'grunt.inspectorCollapsed';
+export const INSPECTOR_COLLAPSED_STORAGE_KEY = 'otherbench.inspectorCollapsed';
 
 export function loadInspectorCollapsed(): boolean {
   try {
@@ -287,7 +287,7 @@ function computerSessionOf(lastAction: unknown): { lastAction?: string } {
   return typeof lastAction === 'string' ? { lastAction } : {};
 }
 
-export const useGruntStore = create<GruntState>()((set) => ({
+export const useOtherBenchStore = create<OtherBenchState>()((set) => ({
   connections: [],
   models: [],
   profiles: [],
@@ -648,10 +648,10 @@ export const useGruntStore = create<GruntState>()((set) => ({
 }));
 
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
-export const selectPendingApprovalCount = (s: GruntState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
+export const selectPendingApprovalCount = (s: OtherBenchState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
 // Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
-useGruntStore.subscribe((state, previous) => {
+useOtherBenchStore.subscribe((state, previous) => {
   if (state.paneState !== previous.paneState) savePaneState(state.paneState);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
 });

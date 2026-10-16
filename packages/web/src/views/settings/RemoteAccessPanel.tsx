@@ -15,21 +15,21 @@ function HttpsDetails({ remote }: { remote: Remote }): JSX.Element {
       {tls.mode === 'auto' && (
         <>
           <p>
-            Grunt's own certificate, valid until {tls.notAfter !== undefined ? date(tls.notAfter) : 'unknown'}, for {(tls.names ?? []).join(', ')}.
+            OtherBench's own certificate, valid until {tls.notAfter !== undefined ? date(tls.notAfter) : 'unknown'}, for {(tls.names ?? []).join(', ')}.
           </p>
           <p>
             Its certificate authority's fingerprint (SHA-256): <code className="break-all font-mono text-xs">{tls.caFingerprint}</code>
           </p>
           <p>
-            <a href={serverUrl('/grunt-ca.crt')} download className="underline">
-              Download Grunt's certificate
+            <a href={serverUrl('/otherbench-ca.crt')} download className="underline">
+              Download OtherBench's certificate
             </a>{' '}
             to trust it on another device, and check its fingerprint against the one the server printed when it started.
           </p>
         </>
       )}
       {tls.mode === 'files' && <p>Your own certificate, valid until {tls.notAfter !== undefined ? date(tls.notAfter) : 'unknown'}.</p>}
-      {tls.mode === 'proxy' && <p>An HTTPS proxy in front of Grunt.</p>}
+      {tls.mode === 'proxy' && <p>An HTTPS proxy in front of OtherBench.</p>}
       {trustProxies.length > 0 && (
         <p>
           Trusted proxy addresses:{' '}
@@ -47,7 +47,7 @@ function HttpsDetails({ remote }: { remote: Remote }): JSX.Element {
 
 /**
  * Settings → Remote access (spec 2026-10-12-remote-access §5): only offered
- * in sign-in mode. How this device is signed in, the addresses Grunt answers
+ * in sign-in mode. How this device is signed in, the addresses OtherBench answers
  * on, how HTTPS works, and Sign out everywhere.
  */
 export function RemoteAccessPanel(): JSX.Element {

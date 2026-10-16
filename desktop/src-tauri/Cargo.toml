@@ -1,7 +1,7 @@
 [package]
-name = "grunt-desktop"
+name = "otherbench-desktop"
 version = "0.1.0"
-description = "Grunt desktop shell"
+description = "OtherBench desktop shell"
 edition = "2021"
 publish = false
 

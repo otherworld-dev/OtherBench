@@ -4,7 +4,7 @@
 //!
 //! It ships switched OFF: `computer.hello` reports `available: false` unless
 //! the Windows driver is built in (it is, on Windows) AND the shell was
-//! started with GRUNT_COMPUTER_USE=1, which only Adam sets, for his live
+//! started with OTHERBENCH_COMPUTER_USE=1, which only Adam sets, for his live
 //! check. With the switch off the shell has no driver at all (`Shell::new`
 //! gets `None`), so no input, capture or window call can be reached.
 //!
@@ -41,16 +41,16 @@ pub use facts::{Facts, Identity};
 pub use session::{Limits, Shell};
 
 /// Set to "1" to switch computer use on in this shell. Off when unset.
-pub const SWITCH_ENV: &str = "GRUNT_COMPUTER_USE";
-pub const OFF_REASON: &str = "Computer use is off in this Grunt desktop app.";
+pub const SWITCH_ENV: &str = "OTHERBENCH_COMPUTER_USE";
+pub const OFF_REASON: &str = "Computer use is off in this OtherBench desktop app.";
 /// The answer to a request for a chat that has no live session (or names another token).
-pub const NO_SESSION: &str = "Grunt is not controlling this computer for that chat.";
+pub const NO_SESSION: &str = "OtherBench is not controlling this computer for that chat.";
 /// Registered only while a chat is in control.
 pub const STOP_HOTKEY: &str = "Ctrl+Alt+Backspace";
 /// The indicator bar's window label (capabilities/indicator.json) and the event it listens for.
 pub const INDICATOR: &str = "computer-indicator";
 
-/// The Windows driver is compiled in on Windows. It still only runs with GRUNT_COMPUTER_USE=1.
+/// The Windows driver is compiled in on Windows. It still only runs with OTHERBENCH_COMPUTER_USE=1.
 const DRIVER_BUILT: bool = cfg!(windows);
 
 pub fn switched_on(value: Option<&str>) -> bool {
@@ -207,7 +207,7 @@ pub trait Desktop: Send + Sync {
     fn indicator(&self, title: &str) -> Result<(), String>;
     /// Takes the indicator bar away (and the tray's line).
     fn hide_indicator(&self);
-    /// The channel to the server is gone for good: say computer use is off until Grunt restarts.
+    /// The channel to the server is gone for good: say computer use is off until OtherBench restarts.
     fn channel_off(&self);
     /// The indicator's line for the last action (never typed text).
     fn indicator_action(&self, label: &str);
@@ -247,10 +247,10 @@ pub fn stop_from_shell(app: &tauri::AppHandle, why: &'static str) {
     }
 }
 
-/// Grunt is quitting: end every session and tell the server, before the
+/// OtherBench is quitting: end every session and tell the server, before the
 /// pipes close. Runs off the main thread (whose event loop the hotkey and
 /// window calls need) and is waited for at most two seconds, so nothing a
-/// worker holds can keep Grunt from quitting.
+/// worker holds can keep OtherBench from quitting.
 pub fn shutdown(app: &tauri::AppHandle) {
     use tauri::Manager;
     if let Some(shell) = app.try_state::<Arc<Shell>>() {
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn ships_switched_off() {
-        assert!(!enabled(), "GRUNT_COMPUTER_USE must not be set where tests run");
+        assert!(!enabled(), "OTHERBENCH_COMPUTER_USE must not be set where tests run");
         assert!(switched_on(Some("1")));
         for v in [None, Some(""), Some("0"), Some("true"), Some("yes"), Some(" 1")] {
             assert!(!switched_on(v), "{v:?}");

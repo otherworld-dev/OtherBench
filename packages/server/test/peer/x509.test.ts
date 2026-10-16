@@ -16,7 +16,7 @@ import {
 } from '../../src/peer/x509.js';
 
 const DAY = 86_400_000;
-const CA_CN = 'Grunt local CA test 2026-10-12';
+const CA_CN = 'OtherBench local CA test 2026-10-12';
 
 /** A CA and a server certificate it signed, the way `--tls auto` makes them. */
 function chain(names: { dns: string[]; ips: string[] }, days = 800) {
@@ -36,7 +36,7 @@ function chain(names: { dns: string[]; ips: string[] }, days = 800) {
   });
   const server = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const certDer = certificate({
-    subjectCn: names.dns[0] ?? names.ips[0] ?? 'grunt',
+    subjectCn: names.dns[0] ?? names.ips[0] ?? 'otherbench',
     issuerCn: CA_CN,
     publicKey: server.publicKey,
     signingKey: ca.privateKey,
@@ -78,14 +78,14 @@ function handshake(port: number, caPem: string, servername?: string): Promise<st
 
 describe('certificate builders', () => {
   it('make a CA and a server certificate that Node reads the way browsers need', () => {
-    const { ca, cert } = chain({ dns: ['grunt.test'], ips: ['127.0.0.1', '::1'] });
+    const { ca, cert } = chain({ dns: ['otherbench.test'], ips: ['127.0.0.1', '::1'] });
 
     expect(ca.ca).toBe(true);
     expect(cert.ca).toBe(false);
     expect(cert.issuer).toBe(`CN=${CA_CN}`);
     expect(cert.checkIssued(ca)).toBe(true);
     expect(cert.verify(ca.publicKey)).toBe(true);
-    expect(cert.checkHost('grunt.test')).toBe('grunt.test');
+    expect(cert.checkHost('otherbench.test')).toBe('otherbench.test');
     expect(cert.checkHost('other.test')).toBeUndefined();
     expect(cert.checkIP('127.0.0.1')).toBe('127.0.0.1');
     expect(cert.checkIP('::1')).toBe('::1');
@@ -104,16 +104,16 @@ describe('certificate builders', () => {
     expect(ipBytes('::1').toString('hex')).toBe('00000000000000000000000000000001');
     expect(ipBytes('fd00::5:6').toString('hex')).toBe('fd000000000000000000000000050006');
     expect(ipBytes('::ffff:10.0.0.1').toString('hex')).toBe('00000000000000000000ffff0a000001');
-    expect(() => ipBytes('grunt.lan')).toThrow(/not an IP address/);
+    expect(() => ipBytes('otherbench.lan')).toThrow(/not an IP address/);
   });
 
   it('still make the node identity with basicConstraints and nothing else', () => {
     const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-    const der = selfSignedCertificate(publicKey, privateKey, { commonName: 'grunt-n', notBefore: new Date(Date.now() - DAY), notAfter: new Date(Date.now() + DAY) });
+    const der = selfSignedCertificate(publicKey, privateKey, { commonName: 'otherbench-n', notBefore: new Date(Date.now() - DAY), notAfter: new Date(Date.now() + DAY) });
     const cert = new X509Certificate(der);
 
-    expect(cert.subject).toBe('CN=grunt-n');
-    expect(cert.issuer).toBe('CN=grunt-n');
+    expect(cert.subject).toBe('CN=otherbench-n');
+    expect(cert.issuer).toBe('CN=otherbench-n');
     expect(cert.ca).toBe(false);
     expect(cert.subjectAltName).toBeUndefined();
     expect(cert.keyUsage ?? []).toEqual([]);
@@ -123,19 +123,19 @@ describe('certificate builders', () => {
 
 describe('a TLS handshake that trusts only the CA', () => {
   it('passes for a SAN DNS name and a SAN IP, and fails for a name not in the SANs', async () => {
-    const { caPem, certPem, keyPem } = chain({ dns: ['grunt.test'], ips: ['127.0.0.1'] });
+    const { caPem, certPem, keyPem } = chain({ dns: ['otherbench.test'], ips: ['127.0.0.1'] });
     const port = await listen(keyPem, certPem);
 
-    expect(await handshake(port, caPem, 'grunt.test')).toBe('ok');
+    expect(await handshake(port, caPem, 'otherbench.test')).toBe('ok');
     expect(await handshake(port, caPem)).toBe('ok');
     expect(await handshake(port, caPem, 'other.test')).toBe('ERR_TLS_CERT_ALTNAME_INVALID');
   });
 
   it('fails against a different CA', async () => {
-    const { certPem, keyPem } = chain({ dns: ['grunt.test'], ips: [] });
-    const other = chain({ dns: ['grunt.test'], ips: [] });
+    const { certPem, keyPem } = chain({ dns: ['otherbench.test'], ips: [] });
+    const other = chain({ dns: ['otherbench.test'], ips: [] });
     const port = await listen(keyPem, certPem);
 
-    expect(await handshake(port, other.caPem, 'grunt.test')).not.toBe('ok');
+    expect(await handshake(port, other.caPem, 'otherbench.test')).not.toBe('ok');
   });
 });

@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { isCompareSet } from '@grunt/core/domain/tree.js';
-import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@grunt/core/domain/turn.js';
-import type { Part } from '@grunt/core/types/messages.js';
+import { isCompareSet } from '@otherbench/core/domain/tree.js';
+import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
+import type { Part } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
@@ -216,7 +216,7 @@ export function turnsRoutes(container: Container): Hono {
     container.events?.emit({ type: 'turn-started', chatId: message.chatId, messageIds: [messageId] });
     void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
       container.memory?.noteTurnCompleted(message.chatId);
-      console.error(`[grunt-server] retry ${messageId} failed outside its own error handling:`, err);
+      console.error(`[otherbench-server] retry ${messageId} failed outside its own error handling:`, err);
     });
 
     return c.json({ messageId }, 202);

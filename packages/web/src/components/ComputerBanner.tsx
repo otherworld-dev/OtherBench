@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { oneLine } from '../viewer/browser.js';
 
 /**
@@ -15,7 +15,7 @@ import { oneLine } from '../viewer/browser.js';
  * `<bdi>`. The session carries no app, so the banner names none.
  */
 export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
-  const session = useGruntStore((s) => s.computerSessions[chat.id]);
+  const session = useOtherBenchStore((s) => s.computerSessions[chat.id]);
   const [busy, setBusy] = useState(false);
   if (!session) return null;
   const lastAction = oneLine(session.lastAction);
@@ -25,7 +25,7 @@ export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
     try {
       await api.chats.stopComputer(chat.id);
     } catch (err) {
-      console.error('[grunt-web] failed to stop computer use:', err);
+      console.error('[otherbench-web] failed to stop computer use:', err);
     } finally {
       setBusy(false);
     }
@@ -39,7 +39,7 @@ export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
     >
       <span aria-hidden="true">{'\u{1F5B1}'}</span>
       <span className="min-w-0 flex-1">
-        Grunt is controlling this computer.
+        OtherBench is controlling this computer.
         {lastAction !== '' && (
           <span data-testid="computer-banner-last" className="ml-2 text-xs break-words text-[var(--text-muted)]">
             Last: <bdi>{lastAction}</bdi>

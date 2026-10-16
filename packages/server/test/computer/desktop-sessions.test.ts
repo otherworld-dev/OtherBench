@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
-import type { ComputerAction, ComputerAnswer, ComputerExpectation } from '@grunt/core/ports/computer.js';
-import { FAKE_COMPUTER_APP } from '@grunt/core/testing/fake-computer.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import { expectationOf, parseAction } from '@otherbench/core/domain/computer-apps.js';
+import type { ComputerAction, ComputerAnswer, ComputerExpectation } from '@otherbench/core/ports/computer.js';
+import { FAKE_COMPUTER_APP } from '@otherbench/core/testing/fake-computer.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { DesktopChannelOptions } from '../../src/computer/desktop-channel.js';
 import {
   DESKTOP_BUSY_REASON,
@@ -159,7 +159,7 @@ describe("the driver's start that throws", () => {
     shell.override = silentOn('computer.start', 'computer.end');
 
     await expect(sessions.ensureSession('c', 'Budget')).rejects.toThrow(
-      "The desktop app didn't answer the request to control this computer in time, so nothing was started. Grunt couldn't confirm that the desktop app cancelled it."
+      "The desktop app didn't answer the request to control this computer in time, so nothing was started. OtherBench couldn't confirm that the desktop app cancelled it."
     );
     expect(sessions.activeChat()).toBeNull();
     expect(sessions.holder()).toBeNull();
@@ -177,8 +177,8 @@ describe("the driver's start that throws", () => {
     expect(sessions.activeChat()).toBe('d');
     // What reached the log is one clean line each time, with nothing of the channel's own in it.
     for (const call of logged.mock.calls) {
-      expect(String(call[0])).toMatch(/^\[grunt-server\] couldn't confirm that the desktop app ended computer use for chat c: /);
-      expect(String(call[0])).not.toMatch(/GRUNT-RPC|computer\.end|\n/);
+      expect(String(call[0])).toMatch(/^\[otherbench-server\] couldn't confirm that the desktop app ended computer use for chat c: /);
+      expect(String(call[0])).not.toMatch(/OTHERBENCH-RPC|computer\.end|\n/);
     }
   });
 
@@ -205,7 +205,7 @@ describe('an action the shell does not answer in time', () => {
     const answer = await sessions.act('c', TYPE, EXPECT);
     expect(answer).toEqual({
       ok: false,
-      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known. Grunt has ended the control session, so nothing more is done.",
+      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known. OtherBench has ended the control session, so nothing more is done.",
     });
     expect(endedChats(shell)).toEqual(['c']);
     expect(shell.sessions.has('c')).toBe(false);
@@ -285,7 +285,7 @@ describe('the shell is the source of truth: what the server believed is dropped 
       expect(await driver.act('c', TYPE, expect_ as ComputerExpectation), JSON.stringify(expect_)).toEqual({ ok: false, reason: DESKTOP_NO_EXPECTATION_REASON });
     }
     expect(shell.methods()).toHaveLength(before);
-    // The session is untouched: that was Grunt's own mistake, not the shell's.
+    // The session is untouched: that was OtherBench's own mistake, not the shell's.
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: true });
   });
 
@@ -347,10 +347,10 @@ describe('the shell is the source of truth: what the server believed is dropped 
     await expectAllLost(made, made.shell.lines.length);
   });
 
-  it('a GRUNT-RPC frame that is not one: the same', async () => {
+  it('a OTHERBENCH-RPC frame that is not one: the same', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const made = await inControl();
-    made.shell.fromShell.write('GRUNT-RPC {"id": oops\n');
+    made.shell.fromShell.write('OTHERBENCH-RPC {"id": oops\n');
     await vi.waitFor(() => expect(made.channel.closed).toBe(true));
     expect(made.shell.notified).toEqual([{ method: 'computer.close', params: {} }]);
     await expectAllLost(made, made.shell.lines.length);
@@ -386,7 +386,7 @@ describe('the shell is the source of truth: what the server believed is dropped 
     expect(await made.sessions.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
     // Said in the server's log, in its own words.
     expect(String(logged.mock.calls[0]![0])).toBe(
-      "[grunt-server] couldn't confirm that the desktop app ended computer use for chat c: The desktop app went away before it confirmed that the control session ended."
+      "[otherbench-server] couldn't confirm that the desktop app ended computer use for chat c: The desktop app went away before it confirmed that the control session ended."
     );
   });
 });

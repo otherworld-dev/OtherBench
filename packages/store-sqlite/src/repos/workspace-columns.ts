@@ -1,5 +1,5 @@
-import { parseFolders } from '@grunt/core/domain/workspace.js';
-import type { ExtraFolder, Workspace } from '@grunt/core/types/workspace.js';
+import { parseFolders } from '@otherbench/core/domain/workspace.js';
+import type { ExtraFolder, Workspace } from '@otherbench/core/types/workspace.js';
 import type { SqlBindValue } from './crud.js';
 
 /**

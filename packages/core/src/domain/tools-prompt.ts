@@ -11,7 +11,7 @@ export function availableToolsPrompt(names: readonly string[]): string {
   return `# Your tools\nThe tools you can use right now: ${names.join(', ')}. This list is current: if an earlier message in this chat says one of these wasn't available, your tools have changed since, so use it.`;
 }
 
-/** Whether a turn's system prompt names its tools: not for Claude Code, which runs its own tools, not Grunt's. */
+/** Whether a turn's system prompt names its tools: not for Claude Code, which runs its own tools, not OtherBench's. */
 export function namesItsTools(kind: ConnectionKind): boolean {
   return kind !== 'claude_code';
 }

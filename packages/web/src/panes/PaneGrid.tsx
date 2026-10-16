@@ -1,8 +1,8 @@
 import { Fragment, useState, type DragEvent, type JSX } from 'react';
-import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
+import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { Splitter } from './Splitter.js';
@@ -26,13 +26,13 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
   // A viewer item popped out into its own tab (Deck #826), or a project's home page, holds the pane instead of a chat.
   const view = isViewTab(chatId) ? parseViewTab(chatId) : null;
   const projectId = parseProjectTab(chatId);
-  const projectName = useGruntStore((s) =>
+  const projectName = useOtherBenchStore((s) =>
     projectId === null ? null : (projectDisplayNameById(s.projects, projectId) ?? (s.projectsLoaded ? 'Missing project' : 'Loading…'))
   );
-  const chat = useGruntStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
-  const focusPane = useGruntStore((s) => s.focusPane);
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
-  const toggleMaximised = useGruntStore((s) => s.toggleMaximised);
+  const chat = useOtherBenchStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
+  const focusPane = useOtherBenchStore((s) => s.focusPane);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
+  const toggleMaximised = useOtherBenchStore((s) => s.toggleMaximised);
   const [dropActive, setDropActive] = useState(false);
   useChatSync(isChatTab(chatId) ? chatId : null, focused);
 
@@ -111,8 +111,8 @@ interface SplitProps {
 
 /** A split from the layout tree: its children side by side or stacked, with a draggable divider between each pair. */
 function Split({ layout, node, renderPane, only }: SplitProps): JSX.Element {
-  const stored = useGruntStore((s) => ('split' in node ? s.paneState.sizes[splitKey(layout, node.id)] : undefined));
-  const setSplitSizes = useGruntStore((s) => s.setSplitSizes);
+  const stored = useOtherBenchStore((s) => ('split' in node ? s.paneState.sizes[splitKey(layout, node.id)] : undefined));
+  const setSplitSizes = useOtherBenchStore((s) => s.setSplitSizes);
   const [dragging, setDragging] = useState<number[] | null>(null);
   if (!('split' in node)) return renderPane(node.pane);
 
@@ -159,8 +159,8 @@ function Split({ layout, node, renderPane, only }: SplitProps): JSX.Element {
  * it. A maximised pane, or a narrow window, shows just the focused pane.
  */
 export function PaneGrid({ narrow }: { narrow: boolean }): JSX.Element {
-  const paneState = useGruntStore((s) => s.paneState);
-  const activeChatId = useGruntStore((s) => s.activeChatId);
+  const paneState = useOtherBenchStore((s) => s.paneState);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
   const multi = !narrow && paneState.panes.length > 1;
   const solo = narrow || paneState.maximised;
 

@@ -15,7 +15,7 @@ describe('sandboxResourcesDir', () => {
   });
 
   it('finds sandbox/ beside the bundled server', () => {
-    const bundle = mkdtempSync(join(tmpdir(), 'grunt-bundle-'));
+    const bundle = mkdtempSync(join(tmpdir(), 'otherbench-bundle-'));
     try {
       mkdirSync(join(bundle, 'sandbox'));
       writeFileSync(join(bundle, 'sandbox', 'agent.mjs'), '');
@@ -26,7 +26,7 @@ describe('sandboxResourcesDir', () => {
   });
 
   it('says where it looked when the files are missing', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'grunt-nowhere-'));
+    const empty = mkdtempSync(join(tmpdir(), 'otherbench-nowhere-'));
     try {
       expect(() => sandboxResourcesDir(join(empty, 'dist'))).toThrow(/agent\.mjs/);
     } finally {

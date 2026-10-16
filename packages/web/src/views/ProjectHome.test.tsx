@@ -1,8 +1,8 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -17,7 +17,7 @@ import { ApiError, api } from '../state/api.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { projectTabId } from '../state/projectTab.js';
 import { StartChatError, startChat } from '../state/startChat.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ProjectHome, resetPendingStartsForTests } from './ProjectHome.js';
 
 const project = (over: Partial<Project> = {}): Project => ({
@@ -36,8 +36,8 @@ const emptyMemory = { memory: { projectId: 'p1', body: '', updatedAt: 0, updated
 beforeEach(() => {
   resetPendingStartsForTests();
   window.localStorage.clear();
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
   vi.mocked(api.memory.get).mockResolvedValue(emptyMemory);
 });
 
@@ -48,17 +48,17 @@ afterEach(() => {
 
 describe('ProjectHome', () => {
   it('shows the name and description, and Settings… opens the project settings page', async () => {
-    useGruntStore.setState({ projects: [project({ description: 'Local workbench' })] });
+    useOtherBenchStore.setState({ projects: [project({ description: 'Local workbench' })] });
     render(<ProjectHome projectId="p1" />);
     expect(screen.getByRole('heading', { level: 2, name: 'Alpha' })).toBeInTheDocument();
     expect(screen.getByText('Local workbench')).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Settings…' }));
-    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
+    expect(useOtherBenchStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
   });
 
   it("lists the project's unarchived chats, pinned in the project first, with time and status; a click shows the chat", async () => {
     const now = Date.now();
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [project()],
       chats: [
         chat('c1', { updatedAt: now - 2 * 3_600_000 }),
@@ -76,22 +76,22 @@ describe('ProjectHome', () => {
     expect(screen.getByTestId('home-chat-status-c1')).toHaveAttribute('data-status', 'working');
 
     await userEvent.setup().click(screen.getByRole('button', { name: /^Chat c1/ }));
-    expect(useGruntStore.getState().activeChatId).toBe('c1');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
   });
 
   it('says plainly what is empty', async () => {
-    useGruntStore.setState({ projects: [project()] });
+    useOtherBenchStore.setState({ projects: [project()] });
     render(<ProjectHome projectId="p1" />);
     expect(screen.getByText('No chats yet')).toBeInTheDocument();
     expect(screen.getByText('No instructions')).toBeInTheDocument();
     expect(screen.getByText('No folder')).toBeInTheDocument();
-    expect(screen.getByText("Grunt's default profile")).toBeInTheDocument();
+    expect(screen.getByText("OtherBench's default profile")).toBeInTheDocument();
     expect(await screen.findByText('No memory yet')).toBeInTheDocument();
     expect(screen.getByText('Not saved yet')).toBeInTheDocument();
   });
 
   it('shows the folder, extra folders and default profile when set', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [
         project({
           workspace: { kind: 'machine', nodeId: 'n', root: '/w' },
@@ -124,7 +124,7 @@ describe('ProjectHome', () => {
 
   it('offers Show more / Show less only when the text is really cut, going by its rendered height', async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [project({ instructions: Array.from({ length: 20 }, (_, i) => `Rule ${i}`).join('\n') })] });
+    useOtherBenchStore.setState({ projects: [project({ instructions: Array.from({ length: 20 }, (_, i) => `Rule ${i}`).join('\n') })] });
     let restore = measureClamped(false);
     render(<ProjectHome projectId="p1" />);
     expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
@@ -132,7 +132,7 @@ describe('ProjectHome', () => {
     cleanup();
 
     restore = measureClamped(true);
-    useGruntStore.setState({ projects: [project({ instructions: 'Two lines\nthat wrap a lot in a narrow pane' })] });
+    useOtherBenchStore.setState({ projects: [project({ instructions: 'Two lines\nthat wrap a lot in a narrow pane' })] });
     render(<ProjectHome projectId="p1" />);
     await user.click(screen.getByRole('button', { name: 'Show more' }));
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
@@ -141,7 +141,7 @@ describe('ProjectHome', () => {
 
   it('opens cut text when focus moves into it, so a hidden link is never focused out of sight', async () => {
     vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: '## Goals\n\nSee [the notes](https://example.com/notes).\n', updatedAt: Date.now() } });
-    useGruntStore.setState({ projects: [project()] });
+    useOtherBenchStore.setState({ projects: [project()] });
     const restore = measureClamped(true);
     render(<ProjectHome projectId="p1" />);
     const link = await screen.findByRole('link', { name: 'the notes' });
@@ -155,7 +155,7 @@ describe('ProjectHome', () => {
 
   it("shows the memory and who last changed it, or that it couldn't load", async () => {
     vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: 'Uses npm workspaces', updatedAt: Date.now() - 5 * 60_000 } });
-    useGruntStore.setState({ projects: [project()] });
+    useOtherBenchStore.setState({ projects: [project()] });
     render(<ProjectHome projectId="p1" />);
     expect(await screen.findByText('Uses npm workspaces')).toBeInTheDocument();
     expect(screen.getByText('Updated 5 min ago by you')).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe('ProjectHome', () => {
   it('counts a memory of only the template headings as empty, and shows real memory as formatted Markdown', async () => {
     const template = '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n\n## Open questions\n';
     vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: template } });
-    useGruntStore.setState({ projects: [project()] });
+    useOtherBenchStore.setState({ projects: [project()] });
     render(<ProjectHome projectId="p1" />);
     expect(await screen.findByText('No memory yet')).toBeInTheDocument();
     expect(screen.queryByText('## Goals')).toBeNull();
@@ -188,11 +188,11 @@ describe('ProjectHome', () => {
   });
 
   it('says a missing project no longer exists, and Close closes its tab', async () => {
-    useGruntStore.getState().setProjects([]);
+    useOtherBenchStore.getState().setProjects([]);
     render(<ProjectHome projectId="p1" />);
     expect(screen.getByText(/This project no longer exists/)).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
-    expect(useGruntStore.getState().paneState.tabs).toEqual([]);
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
   });
 
   describe('start a chat', () => {
@@ -200,7 +200,7 @@ describe('ProjectHome', () => {
 
     it('sends on Enter and shows the new chat; Shift+Enter adds a line; blank does nothing', async () => {
       const user = userEvent.setup();
-      useGruntStore.setState({ projects: [project()] });
+      useOtherBenchStore.setState({ projects: [project()] });
       vi.mocked(startChat).mockResolvedValue(chat('c9'));
       render(<ProjectHome projectId="p1" />);
 
@@ -212,12 +212,12 @@ describe('ProjectHome', () => {
       await user.type(box(), '{Enter}');
 
       expect(startChat).toHaveBeenCalledWith({ projectId: 'p1', text: 'first line\nsecond' });
-      await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c9'));
+      await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c9'));
     });
 
     it('keeps the text and shows the error on failure, and a retry sends into the chat already made', async () => {
       const user = userEvent.setup();
-      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] }); // startChat adds the chat it made
+      useOtherBenchStore.setState({ projects: [project()], chats: [chat('c9')] }); // startChat adds the chat it made
       vi.mocked(startChat).mockRejectedValueOnce(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.'))).mockResolvedValueOnce(chat('c9'));
       render(<ProjectHome projectId="p1" />);
 
@@ -227,14 +227,14 @@ describe('ProjectHome', () => {
 
       await user.type(box(), '{Enter}');
       expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', chat: expect.objectContaining({ id: 'c9' }), text: 'hello' });
-      await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c9'));
+      await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c9'));
     });
 
     it('puts the new chat in the pane the page was in, keeping focus where it went during a slow send', async () => {
       const user = userEvent.setup();
       let resolve!: (c: Chat) => void;
       vi.mocked(startChat).mockImplementation(() => new Promise((r) => (resolve = r)));
-      useGruntStore.setState({
+      useOtherBenchStore.setState({
         projects: [project()],
         chats: [chat('b', { projectId: null })],
         paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [projectTabId('p1')], panes: [projectTabId('p1'), 'b'], focusedPane: 0 },
@@ -243,10 +243,10 @@ describe('ProjectHome', () => {
       render(<ProjectHome projectId="p1" />);
 
       await user.type(box(), 'hello{Enter}');
-      act(() => useGruntStore.getState().focusPane(1));
+      act(() => useOtherBenchStore.getState().focusPane(1));
       await act(async () => resolve(chat('c9')));
 
-      const { paneState, activeChatId } = useGruntStore.getState();
+      const { paneState, activeChatId } = useOtherBenchStore.getState();
       expect(paneState.panes).toEqual(['c9', 'b']);
       expect(activeChatId).toBe('b');
     });
@@ -255,20 +255,20 @@ describe('ProjectHome', () => {
       const user = userEvent.setup();
       let resolve!: (c: Chat) => void;
       vi.mocked(startChat).mockImplementation(() => new Promise((r) => (resolve = r)));
-      useGruntStore.setState({ projects: [project()], chats: [chat('b', { projectId: null })] });
+      useOtherBenchStore.setState({ projects: [project()], chats: [chat('b', { projectId: null })] });
       render(<ProjectHome projectId="p1" />);
 
       await user.type(box(), 'hello{Enter}');
-      act(() => useGruntStore.getState().setActiveChatId('b'));
+      act(() => useOtherBenchStore.getState().setActiveChatId('b'));
       await act(async () => resolve(chat('c9')));
 
-      expect(useGruntStore.getState().paneState.panes).toEqual(['b']);
-      expect(useGruntStore.getState().activeChatId).toBe('b');
+      expect(useOtherBenchStore.getState().paneState.panes).toEqual(['b']);
+      expect(useOtherBenchStore.getState().activeChatId).toBe('b');
     });
 
     it('still retries into the chat already made after the page was left and reopened', async () => {
       const user = userEvent.setup();
-      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] });
+      useOtherBenchStore.setState({ projects: [project()], chats: [chat('c9')] });
       vi.mocked(startChat).mockRejectedValueOnce(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.'))).mockResolvedValueOnce(chat('c9'));
       const { unmount } = render(<ProjectHome projectId="p1" />);
       await user.type(box(), 'hello{Enter}');
@@ -282,18 +282,18 @@ describe('ProjectHome', () => {
 
     it('makes a new chat when the one a failed send made has since been deleted, moved or used', async () => {
       const user = userEvent.setup();
-      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] });
+      useOtherBenchStore.setState({ projects: [project()], chats: [chat('c9')] });
       vi.mocked(startChat).mockRejectedValue(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.')));
       render(<ProjectHome projectId="p1" />);
       await user.type(box(), 'hello{Enter}');
       await screen.findByRole('alert');
 
       for (const after of [[], [chat('c9', { projectId: 'other' })], [chat('c9', { headMessageId: 'm1' })], [chat('c9', { archivedAt: 5 })]]) {
-        useGruntStore.setState({ chats: after });
+        useOtherBenchStore.setState({ chats: after });
         await user.type(box(), '{Enter}');
         expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', text: 'hello' });
         // The failed send that follows makes c9 pending again for the next case.
-        useGruntStore.setState({ chats: [chat('c9')] });
+        useOtherBenchStore.setState({ chats: [chat('c9')] });
         await waitFor(() => expect(screen.getByRole('textbox', { name: 'Start a chat in Alpha' })).not.toHaveAttribute('readonly'));
       }
     });
@@ -302,7 +302,7 @@ describe('ProjectHome', () => {
 
 describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6)', () => {
   it("a parent lists its sub-projects with their chat counts, each opening its page", async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [project(), project({ id: 'p-sub', name: 'Desktop', parentId: 'p1' }), project({ id: 'p-other', name: 'Other' })],
       chats: [chat('own'), chat('s1', { projectId: 'p-sub' }), chat('s2', { projectId: 'p-sub' })],
     });
@@ -314,11 +314,11 @@ describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6
     expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
 
     await userEvent.setup().click(within(list).getByRole('button', { name: /Desktop/ }));
-    expect(useGruntStore.getState().paneState.tabs).toContain(projectTabId('p-sub'));
+    expect(useOtherBenchStore.getState().paneState.tabs).toContain(projectTabId('p-sub'));
   });
 
   it("a sub-project's page lists its own chats and links to its parent; a project without sub-projects has no list", async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [project(), project({ id: 'p-sub', name: 'Desktop', parentId: 'p1' })],
       chats: [chat('s1', { projectId: 'p-sub' })],
     });
@@ -326,6 +326,6 @@ describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6
     expect(screen.queryByRole('region', { name: 'Sub-projects' })).toBeNull();
     expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
     await userEvent.setup().click(screen.getByTestId('home-parent'));
-    expect(useGruntStore.getState().paneState.tabs).toContain(projectTabId('p1'));
+    expect(useOtherBenchStore.getState().paneState.tabs).toContain(projectTabId('p1'));
   });
 });

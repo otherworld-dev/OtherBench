@@ -1,12 +1,12 @@
 import { useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import { compareProjects, PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
+import { compareProjects, PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import { folderPath } from '../components/FolderList.js';
-import type { Project } from '@grunt/core/ports/store.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
-import { useGruntStore, type ProjectPageState } from '../state/store.js';
+import { useOtherBenchStore, type ProjectPageState } from '../state/store.js';
 import { FolderDraftList } from './project/FolderDraftList.js';
 import { awayFolderWhere } from './project/folders.js';
 import { createBody, draftFromProject, draftProblem, emptyDraft, isDirty, patchBody, type ProjectDraft } from './project/draft.js';
@@ -27,7 +27,7 @@ export interface ProjectViewProps {
  * edits one. Nothing is sent until Create/Save.
  */
 export function ProjectView({ page, onClose }: ProjectViewProps): JSX.Element {
-  const project = useGruntStore((s) => (page.mode === 'edit' ? (s.projects.find((p) => p.id === page.projectId) ?? null) : null));
+  const project = useOtherBenchStore((s) => (page.mode === 'edit' ? (s.projects.find((p) => p.id === page.projectId) ?? null) : null));
   if (page.mode === 'edit' && !project) return <MissingProject onClose={onClose} />;
   const parentId = page.mode === 'create' ? page.parentId : undefined;
   return <ProjectForm project={project} parentId={parentId} returnFocus={page.returnFocus} onClose={onClose} />;
@@ -73,9 +73,9 @@ function Inherited({ testId, children }: { testId: string; children: string }): 
  * where focus goes on close when the element that opened the page is gone.
  */
 function ProjectForm({ project, parentId, returnFocus, onClose }: { project: Project | null; parentId?: string | undefined; returnFocus?: string | undefined; onClose: () => void }): JSX.Element {
-  const profiles = useGruntStore((s) => s.profiles);
-  const projects = useGruntStore((s) => s.projects);
-  const upsertProject = useGruntStore((s) => s.upsertProject);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const projects = useOtherBenchStore((s) => s.projects);
+  const upsertProject = useOtherBenchStore((s) => s.upsertProject);
   const serverPlatform = useServerPlatform();
   const [initial] = useState<ProjectDraft>(() => (project ? draftFromProject(project) : emptyDraft(parentId)));
   const [draft, setDraft] = useState<ProjectDraft>(initial);
@@ -269,7 +269,7 @@ function ProjectForm({ project, parentId, returnFocus, onClose }: { project: Pro
                     id="project-folder"
                     value={draft.folder}
                     onChange={(e) => set('folder', e.target.value)}
-                    placeholder={serverPlatform === 'win32' ? 'E:\\Git\\Grunt' : '/home/user/project'}
+                    placeholder={serverPlatform === 'win32' ? 'E:\\Git\\OtherBench' : '/home/user/project'}
                     className={`${FIELD} font-mono text-xs`}
                   />
                   {canPick && (

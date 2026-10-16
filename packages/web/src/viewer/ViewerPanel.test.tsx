@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 
 vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => false), revealPath: vi.fn(), openSite: vi.fn(async () => {}) }));
 vi.mock('./ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
@@ -12,7 +12,7 @@ vi.mock('../state/api.js', async (importOriginal) => ({
 
 import { openSite } from '../desktop/bridge.js';
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { viewTabId } from './items.js';
 import { useViewerStore, viewerFor } from './state.js';
 import { ViewerPanel } from './ViewerPanel.js';
@@ -22,7 +22,7 @@ const viewer = () => viewerFor(useViewerStore.getState().viewers, 'c1');
 
 beforeEach(() => {
   useViewerStore.setState({ viewers: {} });
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   vi.mocked(api.view.roots).mockResolvedValue({ roots: [{ path: 'C:\\ws', label: 'ws', access: 'readwrite', workspace: true }, { path: 'D:\\refs', label: 'refs', access: 'read', workspace: false }] });
   vi.mocked(api.view.dir).mockImplementation(async (_c, path) =>
     path === 'C:\\ws'
@@ -44,10 +44,10 @@ describe('ViewerPanel', () => {
     vi.mocked(api.artifacts.list).mockClear();
     const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 1 };
     const reply = (parts: unknown[]) => ({ id: 'r1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts, status: 'streaming', error: null, producedBy: null, createdAt: 2 });
-    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1' } as never], messages: { u1: mine, r1: reply([]) } as never });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1' } as never], messages: { u1: mine, r1: reply([]) } as never });
     render(<ViewerPanel chat={chat} />);
     await waitFor(() => expect(api.artifacts.list).toHaveBeenCalledTimes(1));
-    act(() => useGruntStore.setState({ messages: { u1: mine, r1: reply([{ type: 'text', text: 'x' }]) } as never }));
+    act(() => useOtherBenchStore.setState({ messages: { u1: mine, r1: reply([{ type: 'text', text: 'x' }]) } as never }));
     await waitFor(() => expect(api.artifacts.list).toHaveBeenCalledTimes(2));
   });
 
@@ -79,7 +79,7 @@ describe('ViewerPanel', () => {
     expect(openSite).toHaveBeenCalledWith('https://example.com');
 
     await user.click(screen.getByRole('button', { name: 'Open as tab' }));
-    expect(useGruntStore.getState().paneState.tabs).toEqual(['c1', viewTabId('c1', { kind: 'file', path: 'docs/c.md' })]);
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c1', viewTabId('c1', { kind: 'file', path: 'docs/c.md' })]);
     // Popped out, not in both places: the chat's panel closes.
     expect(viewer().open).toBe(false);
     useViewerStore.getState().setOpen('c1', true);

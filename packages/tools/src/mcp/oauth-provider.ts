@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { UnauthorizedError, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import type { McpOAuthStore, RegisteredClient } from './oauth-store.js';
 import { parseHttpUrl, resourceCovers, sameIssuer } from './url.js';
 
@@ -43,7 +43,7 @@ export function hasAuthorizationHeader(row: Pick<McpServer, 'headerRefs'>): bool
   return Object.keys(row.headerRefs).some((name) => name.toLowerCase() === 'authorization');
 }
 
-/** An http server Grunt may sign in to: it has a URL `url.ts` accepts (no userinfo, no backslash) and no fixed Authorization header. */
+/** An http server OtherBench may sign in to: it has a URL `url.ts` accepts (no userinfo, no backslash) and no fixed Authorization header. */
 export function signInCapable(row: Pick<McpServer, 'transport' | 'url' | 'headerRefs'>): boolean {
   return row.transport === 'http' && row.url !== null && parseHttpUrl(row.url) !== null && !hasAuthorizationHeader(row);
 }
@@ -78,10 +78,10 @@ export function accountFromIdToken(idToken: string | undefined): string | null {
   }
 }
 
-/** Grunt's dynamic-registration metadata: a public client (PKCE, no secret) for one redirect address. */
+/** OtherBench's dynamic-registration metadata: a public client (PKCE, no secret) for one redirect address. */
 export function clientMetadataFor(redirectUri: string): OAuthClientMetadata {
   return {
-    client_name: 'Grunt',
+    client_name: 'OtherBench',
     redirect_uris: [redirectUri],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
@@ -111,7 +111,7 @@ export interface HeldRegistration {
  * not to whatever the row says by the time the request finishes. Defaults to
  * the row's current URL.
  */
-export type GruntOAuthMode =
+export type OtherBenchOAuthMode =
   | { kind: 'background'; resource?: string }
   | { kind: 'sign-in'; redirectUri: string; state: string; onAuthorizationUrl: (url: URL) => void; resource?: string; held?: HeldRegistration };
 
@@ -132,7 +132,7 @@ export type GruntOAuthMode =
  * is signed out or signed in again they are dropped. The manager builds a new
  * connection (and provider) after each of those.
  */
-export class GruntOAuthProvider implements OAuthClientProvider {
+export class OtherBenchOAuthProvider implements OAuthClientProvider {
   private verifier: string | null = null;
   private discovery: OAuthDiscoveryState | undefined;
   private readonly generation: number;
@@ -144,7 +144,7 @@ export class GruntOAuthProvider implements OAuthClientProvider {
   constructor(
     private readonly serverId: string,
     private readonly oauth: McpOAuthStore,
-    private readonly mode: GruntOAuthMode
+    private readonly mode: OtherBenchOAuthMode
   ) {
     this.generation = oauth.generation(serverId);
   }
@@ -294,7 +294,7 @@ export class GruntOAuthProvider implements OAuthClientProvider {
    */
   saveDiscoveryState(state: OAuthDiscoveryState): void {
     if (parseHttpUrl(String(state.authorizationServerUrl)) === null) {
-      throw new McpOAuthMetadataError("This server's sign-in provider has an address Grunt won't use.");
+      throw new McpOAuthMetadataError("This server's sign-in provider has an address OtherBench won't use.");
     }
     const issuer = state.authorizationServerMetadata?.issuer;
     if (issuer !== undefined && !sameIssuer(issuer, String(state.authorizationServerUrl))) {

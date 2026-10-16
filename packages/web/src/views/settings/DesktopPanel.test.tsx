@@ -9,7 +9,7 @@ vi.mock('../../desktop/bridge.js', () => ({
 }));
 
 import { autostart, setHotkey } from '../../desktop/bridge.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 import { DesktopPanel } from './DesktopPanel.js';
 
 const mockedIsEnabled = vi.mocked(autostart.isEnabled);
@@ -26,14 +26,14 @@ describe('DesktopPanel', () => {
 
     render(<DesktopPanel />);
 
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: /start grunt when i sign in/i })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /start otherbench when i sign in/i })).toBeChecked());
   });
 
   it('toggling turns start-at-login on and off', async () => {
     mockedIsEnabled.mockResolvedValue(false);
     mockedSet.mockResolvedValue(undefined);
     render(<DesktopPanel />);
-    const box = await screen.findByRole('checkbox', { name: /start grunt when i sign in/i });
+    const box = await screen.findByRole('checkbox', { name: /start otherbench when i sign in/i });
     await waitFor(() => expect(box).toBeEnabled());
 
     await userEvent.click(box);
@@ -48,7 +48,7 @@ describe('DesktopPanel', () => {
     mockedIsEnabled.mockResolvedValue(false);
     mockedSet.mockRejectedValue(new Error('registry says no'));
     render(<DesktopPanel />);
-    const box = await screen.findByRole('checkbox', { name: /start grunt when i sign in/i });
+    const box = await screen.findByRole('checkbox', { name: /start otherbench when i sign in/i });
     await waitFor(() => expect(box).toBeEnabled());
 
     await userEvent.click(box);
@@ -59,7 +59,7 @@ describe('DesktopPanel', () => {
 
   it('saving a new hotkey registers it and remembers it; a taken one says so and puts the old one back', async () => {
     window.localStorage.clear();
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     mockedIsEnabled.mockResolvedValue(false);
     const user = userEvent.setup();
     render(<DesktopPanel />);
@@ -70,7 +70,7 @@ describe('DesktopPanel', () => {
     await user.clear(field);
     await user.type(field, 'Ctrl+Shift+Space');
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(window.localStorage.getItem('grunt.hotkey')).toBe('Ctrl+Shift+Space'));
+    await waitFor(() => expect(window.localStorage.getItem('otherbench.hotkey')).toBe('Ctrl+Shift+Space'));
     expect(screen.queryByTestId('hotkey-error')).not.toBeInTheDocument();
 
     vi.mocked(setHotkey).mockRejectedValueOnce('HotKey already registered').mockResolvedValueOnce(undefined);
@@ -79,7 +79,7 @@ describe('DesktopPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByTestId('hotkey-error')).toHaveTextContent("Couldn't use Ctrl+C: HotKey already registered");
     expect(vi.mocked(setHotkey)).toHaveBeenLastCalledWith('Ctrl+Shift+Space');
-    expect(window.localStorage.getItem('grunt.hotkey')).toBe('Ctrl+Shift+Space');
+    expect(window.localStorage.getItem('otherbench.hotkey')).toBe('Ctrl+Shift+Space');
   });
 
   it('notification toggles start on, and turning one off is saved for next time', async () => {
@@ -94,7 +94,7 @@ describe('DesktopPanel', () => {
 
     await user.click(replies);
     expect(replies).not.toBeChecked();
-    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: false, approvals: true, scheduled: true });
+    expect(JSON.parse(window.localStorage.getItem('otherbench.notifications')!)).toEqual({ replies: false, approvals: true, scheduled: true });
   });
 
   it('has a Scheduled runs toggle, on by default, saved when turned off', async () => {
@@ -105,14 +105,14 @@ describe('DesktopPanel', () => {
     const scheduled = screen.getByRole('checkbox', { name: 'Scheduled runs' });
     expect(scheduled).toBeChecked();
     await user.click(scheduled);
-    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: true, approvals: true, scheduled: false });
+    expect(JSON.parse(window.localStorage.getItem('otherbench.notifications')!)).toEqual({ replies: true, approvals: true, scheduled: false });
   });
 
-  it('explains that closing the window keeps Grunt running in the tray', () => {
+  it('explains that closing the window keeps OtherBench running in the tray', () => {
     mockedIsEnabled.mockResolvedValue(false);
 
     render(<DesktopPanel />);
 
-    expect(screen.getByText(/closing the window keeps grunt running in the tray/i)).toBeInTheDocument();
+    expect(screen.getByText(/closing the window keeps otherbench running in the tray/i)).toBeInTheDocument();
   });
 });

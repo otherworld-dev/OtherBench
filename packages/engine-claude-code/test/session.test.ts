@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonMessage, EngineMeta } from '@grunt/core/types/messages.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import type { CanonMessage, EngineMeta } from '@otherbench/core/types/messages.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { pickSession, samePath, SessionClaims } from '../src/session.js';
 
 let t = 0;

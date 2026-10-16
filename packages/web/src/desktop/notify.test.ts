@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { DEFAULT_NOTIFY_PREFS, loadNotifyPrefs, Notifier, NOTIFY_STORAGE_KEY, saveNotifyPrefs, type NotifyPrefs } from './notify.js';
 
 function setup(over: { focused?: boolean; prefs?: NotifyPrefs } = {}) {
@@ -76,11 +76,11 @@ describe('Notifier', () => {
     expect(show).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to "Grunt" for a chat it doesn\'t know, and hands out the last notified chat once', async () => {
+  it('falls back to "OtherBench" for a chat it doesn\'t know, and hands out the last notified chat once', async () => {
     const { notifier, show } = setup();
     expect(notifier.takeLastChat()).toBeNull();
     await notifier.handle({ ...finished('m9'), chatId: 'unknown' });
-    expect(show).toHaveBeenLastCalledWith('Grunt', 'Reply finished', 'unknown');
+    expect(show).toHaveBeenLastCalledWith('OtherBench', 'Reply finished', 'unknown');
     expect(notifier.takeLastChat()).toBe('unknown');
     expect(notifier.takeLastChat()).toBeNull();
   });
@@ -100,7 +100,7 @@ describe('Notifier and scheduled runs', () => {
     expect(show.mock.calls).toEqual([['Weekly report', 'Finished', 'c1']]);
   });
 
-  it('words each outcome, and opens just Grunt when there is no chat', async () => {
+  it('words each outcome, and opens just OtherBench when there is no chat', async () => {
     const { notifier, show } = setup();
     await notifier.handle(runFinished({ runId: 'r1', status: 'error', detail: 'Rate limited.' }));
     await notifier.handle(runFinished({ runId: 'r2', status: 'timed_out', detail: 'Stopped after 30 minutes.' }));

@@ -1,6 +1,6 @@
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Connection } from '@grunt/core/types/config.js';
-import type { PlanUsage } from '@grunt/core/types/usage.js';
+import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { Connection } from '@otherbench/core/types/config.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
 
 /** Sends `claude_code` connections to the Claude Code engine and everything else to the AI SDK engine. */
 export class RoutingChatEngine implements ChatEngine {

@@ -30,7 +30,7 @@ export const CHANGES_MAX_CHARS = 8_000;
 
 /** Added to the user's message in the request only (never stored) while Plan mode is on. */
 export const PLAN_MODE_NOTE =
-  "(Grunt: Plan mode is on for this message. Look around as much as you need, but before you change anything (files, commands, anything with side effects) set out your plan with the propose_plan tool and wait for the user's approval. Until they approve it, tools that change things are refused.)";
+  "(OtherBench: Plan mode is on for this message. Look around as much as you need, but before you change anything (files, commands, anything with side effects) set out your plan with the propose_plan tool and wait for the user's approval. Until they approve it, tools that change things are refused.)";
 export const PLAN_REFUSAL = "Plan mode is on: set out your plan with propose_plan and wait for the user's approval before changing anything.";
 export const PLAN_APPROVED = 'The user approved the plan. Go ahead with it; tools that change things still need their usual approvals.';
 export const DECLINED_QUESTION = 'The user skipped your question. Carry on without their answer: use your judgement, and say in your reply what you assumed.';
@@ -279,7 +279,7 @@ export function createPlanGate(): PlanGate {
   };
 }
 
-/** A thread tool's refusal of its input, as every Grunt tool reports an error. */
+/** A thread tool's refusal of its input, as every OtherBench tool reports an error. */
 export interface ThreadToolError {
   error: true;
   code: 'invalid_input';

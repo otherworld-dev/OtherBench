@@ -1,7 +1,7 @@
 // Adds project memory (spec 2026-10-03-project-memory-design §1): one current
 // note per project and its version history (both cascade with the project),
 // the per-chat summariser cursor and opt-out, and `app_setting`, a key/value
-// table (JSON values) for app-wide settings. Grunt had no settings storage
+// table (JSON values) for app-wide settings. OtherBench had no settings storage
 // before this; `memoryProfileId` is its first key. `source_chat_id` has no
 // foreign key on purpose: a note keeps naming the chat it came from after
 // that chat is deleted (the UI shows "a deleted chat"). Existing chats get

@@ -1,5 +1,5 @@
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 
 /**
  * Fabricates the local stubs for a just-created turn's messages so the

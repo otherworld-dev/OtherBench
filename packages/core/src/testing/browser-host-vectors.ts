@@ -19,7 +19,7 @@ export interface BrowserHostVector {
   denied: boolean;
   /** The profile's `browserBlockedHosts` for this row. */
   blockedHosts?: string[];
-  /** `GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` for this row. */
+  /** `OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS` for this row. */
   allowLoopbackPorts?: number[];
 }
 

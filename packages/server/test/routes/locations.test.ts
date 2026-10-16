@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
@@ -22,7 +22,7 @@ let nextcloud: string;
 let events: AppEvent[];
 
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-locations-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-locations-route-test-'));
   nextcloud = join(dataDir, 'Nextcloud');
   await mkdir(join(nextcloud, 'phd'), { recursive: true });
   store = new InMemoryStore('node-pc');
@@ -148,15 +148,15 @@ describe('inferring and adopting a location from another machine', () => {
   }
 
   it('infer suggests the shared location and counts what adopting it would move', async () => {
-    pcChat('a', 'E:\\Git\\Grunt');
+    pcChat('a', 'E:\\Git\\OtherBench');
     pcChat('b', 'E:\\Git\\Other\\src');
     pcChat('c', 'E:\\Nextcloud\\x');
-    const here = join(dataDir, 'Git', 'Grunt');
+    const here = join(dataDir, 'Git', 'OtherBench');
 
-    const res = await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\Grunt', toPath: here }));
+    const res = await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\OtherBench', toPath: here }));
 
-    expect(res).toEqual({ mapping: { fromRoot: PC_GIT, toRoot: join(dataDir, 'Git'), tail: ['Grunt'], name: 'Git' }, existing: null, affected: 2 });
-    expect(await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\Grunt', toPath: join(dataDir, 'Elsewhere') }))).toEqual({
+    expect(res).toEqual({ mapping: { fromRoot: PC_GIT, toRoot: join(dataDir, 'Git'), tail: ['OtherBench'], name: 'Git' }, existing: null, affected: 2 });
+    expect(await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\OtherBench', toPath: join(dataDir, 'Elsewhere') }))).toEqual({
       mapping: null,
       existing: null,
       affected: 0,
@@ -166,17 +166,17 @@ describe('inferring and adopting a location from another machine', () => {
   it("infer finds a location that already has either machine's root", async () => {
     store.locations.create({ id: 'git', name: 'Git' });
     store.locations.setPath({ locationId: 'git', nodeId: 'node-laptop', path: 'e:\\git' });
-    const res = await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\Grunt', toPath: join(dataDir, 'Git', 'Grunt') }));
+    const res = await json(await send('POST', '/api/locations/infer', { nodeId: 'node-laptop', fromPath: 'E:\\Git\\OtherBench', toPath: join(dataDir, 'Git', 'OtherBench') }));
     expect(res).toMatchObject({ existing: { id: 'git', name: 'Git' } });
   });
 
   it("adopt creates the location with both machines' roots and moves exactly the chats and projects under the other machine's root", async () => {
-    pcChat('a', 'E:\\Git\\Grunt');
+    pcChat('a', 'E:\\Git\\OtherBench');
     pcChat('b', 'E:\\Gitlab\\x');
-    store.chats.create({ id: 'mine', title: 'm', profileId: 'profile-1', headMessageId: null, workspace: { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\Grunt' }, pinned: false, archivedAt: null });
+    store.chats.create({ id: 'mine', title: 'm', profileId: 'profile-1', headMessageId: null, workspace: { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\OtherBench' }, pinned: false, archivedAt: null });
     store.projects.create({ id: 'proj', name: 'P', workspace: { kind: 'machine', nodeId: 'node-laptop', root: PC_GIT }, defaultProfileId: null });
     const toRoot = join(dataDir, 'Git');
-    await mkdir(join(toRoot, 'Grunt'), { recursive: true });
+    await mkdir(join(toRoot, 'OtherBench'), { recursive: true });
     events.length = 0;
 
     const res = await send('POST', '/api/locations/adopt', { name: 'Git', nodeId: 'node-laptop', fromRoot: PC_GIT, toRoot });
@@ -188,11 +188,11 @@ describe('inferring and adopting a location from another machine', () => {
       { locationId: location.id, nodeId: 'node-pc', path: toRoot },
       { locationId: location.id, nodeId: 'node-laptop', path: PC_GIT },
     ]));
-    expect(store.chats.get('a')!.workspace).toEqual({ kind: 'location', locationId: location.id, subpath: 'Grunt' });
+    expect(store.chats.get('a')!.workspace).toEqual({ kind: 'location', locationId: location.id, subpath: 'OtherBench' });
     expect(store.chats.get('b')!.workspace).toEqual({ kind: 'machine', nodeId: 'node-laptop', root: 'E:\\Gitlab\\x' });
-    expect(store.chats.get('mine')!.workspace).toEqual({ kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\Grunt' });
+    expect(store.chats.get('mine')!.workspace).toEqual({ kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\OtherBench' });
     expect(store.projects.get('proj')!.workspace).toEqual({ kind: 'location', locationId: location.id, subpath: '' });
-    expect(await json(await send('GET', '/api/chats/a'))).toMatchObject({ workspaceStatus: { status: 'ok', root: join(toRoot, 'Grunt') } });
+    expect(await json(await send('GET', '/api/chats/a'))).toMatchObject({ workspaceStatus: { status: 'ok', root: join(toRoot, 'OtherBench') } });
     expect(events.filter((e) => e.type === 'chat-updated').map((e) => (e as { chat: Chat }).chat.id)).toEqual(['a']);
   });
 
@@ -236,7 +236,7 @@ describe('chat folders', () => {
     store.locations.create({ id: 'git', name: 'Git' });
     store.locations.setPath({ locationId: 'git', nodeId: 'node-laptop', path: '/home/adam/git' });
     store.chats.create({ id: 'remote', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: { kind: 'machine', nodeId: 'node-laptop', root: '/home/adam/x' }, pinned: false, archivedAt: null });
-    store.chats.create({ id: 'nopath', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: { kind: 'location', locationId: 'git', subpath: 'grunt' }, pinned: false, archivedAt: null });
+    store.chats.create({ id: 'nopath', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: { kind: 'location', locationId: 'git', subpath: 'otherbench' }, pinned: false, archivedAt: null });
 
     expect(await json(await send('GET', '/api/chats/remote'))).toMatchObject({
       workspaceRoot: null,
@@ -244,7 +244,7 @@ describe('chat folders', () => {
     });
     expect(await json(await send('GET', '/api/chats/nopath'))).toMatchObject({
       workspaceRoot: null,
-      workspaceStatus: { status: 'unresolved', reason: 'no-location-path', hint: { nodeId: 'node-laptop', path: '/home/adam/git/grunt' } },
+      workspaceStatus: { status: 'unresolved', reason: 'no-location-path', hint: { nodeId: 'node-laptop', path: '/home/adam/git/otherbench' } },
     });
   });
 

@@ -10,7 +10,7 @@ export interface PublicUrl {
 }
 
 /**
- * One `--public-url`: what a browser types to reach Grunt. https only, with
+ * One `--public-url`: what a browser types to reach OtherBench. https only, with
  * no path, query, fragment or user name (spec, "Turning sign-in on").
  */
 export function parsePublicUrl(raw: string): PublicUrl {

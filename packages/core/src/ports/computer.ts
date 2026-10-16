@@ -38,11 +38,11 @@ export interface ComputerTarget {
   /** The process holds UI access (it can drive other apps' windows). */
   uiAccess: boolean;
   /**
-   * A Grunt window: Grunt's own process, any process descended from it (its
+   * An OtherBench window: OtherBench's own process, any process descended from it (its
    * webview children, whose dropdowns, context menus and devtools are
-   * top-level windows of their own), or any window owned by a Grunt window.
+   * top-level windows of their own), or any window owned by an OtherBench window.
    */
-  grunt: boolean;
+  otherbench: boolean;
   /**
    * The window is a common file dialog (Open, Save), hosts a shell file view,
    * or is a menu owned by one. It belongs to an ordinary app's process but

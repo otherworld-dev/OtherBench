@@ -3,14 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
-import { BrowserManager } from '@grunt/tools/browser/manager.js';
-import { McpServerManager } from '@grunt/tools/mcp/manager.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import { BrowserManager } from '@otherbench/tools/browser/manager.js';
+import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { FakeFactory, fakeProxy } from '../../../tools/test/browser/fakes.js';
 import { createApp } from '../../src/app.js';
 import { parseApprovalChoice } from '../../src/routes/tools.js';
@@ -21,7 +21,7 @@ const FIXTURE_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '
 
 let store: InMemoryStore;
 let secrets: FakeSecretStore;
-let toolProvider: GruntToolProvider;
+let toolProvider: OtherBenchToolProvider;
 let mcpManager: McpServerManager;
 let container: Container;
 
@@ -32,7 +32,7 @@ beforeEach(() => {
   const turnRunner = new TurnRunner(store, engine);
   const broker = new PermissionBroker(store);
   mcpManager = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 });
-  toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  toolProvider = new OtherBenchToolProvider(store, broker, mcpManager);
   container = {
     store,
     secrets,
@@ -398,10 +398,10 @@ describe('MCP server routes', () => {
 describe('Import from Claude Desktop', () => {
   let dir: string;
   // A command no machine has: the import's MCP sync must never start anything real.
-  const NO_SUCH = 'grunt-test-no-such-command';
+  const NO_SUCH = 'otherbench-test-no-such-command';
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'grunt-desktop-import-'));
-    vi.stubEnv('GRUNT_CLAUDE_DESKTOP_CONFIG', join(dir, 'claude_desktop_config.json'));
+    dir = mkdtempSync(join(tmpdir(), 'otherbench-desktop-import-'));
+    vi.stubEnv('OTHERBENCH_CLAUDE_DESKTOP_CONFIG', join(dir, 'claude_desktop_config.json'));
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -421,7 +421,7 @@ describe('Import from Claude Desktop', () => {
   const postImport = (body: unknown) =>
     app().request('/api/mcp-servers/import/claude-desktop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-  it('lists the servers it finds by name, never with their values, marking ones Grunt has and ones it cannot use', async () => {
+  it('lists the servers it finds by name, never with their values, marking ones OtherBench has and ones it cannot use', async () => {
     config();
     store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await app().request('/api/mcp-servers/import/claude-desktop');
@@ -624,7 +624,7 @@ describe('Approval routes', () => {
     store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
     const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
     container.toolProvider = provider;
     const requests: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
@@ -653,7 +653,7 @@ describe('Approval routes', () => {
     store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
     const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
     container.toolProvider = provider;
     const requests: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
@@ -741,7 +741,7 @@ describe('Approval routes', () => {
     store.chats.create({ id: 'chat-c', title: 'C', profileId: 'profile-c', headMessageId: null, pinned: false, archivedAt: null } as never);
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true };
     const driver = new FakeComputerDriver();
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { computer: driver });
     container.toolProvider = provider;
     const requests: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
@@ -794,7 +794,7 @@ describe('parseApprovalChoice: sandbox network grants', () => {
     expect(() => parseApprovalChoice({ choice: 'always', constraint: { host } })).toThrow('"constraint.host" must be 1-253 characters.');
   });
 
-  it('refuses a constraint that mixes keys, and one with a key Grunt does not know', () => {
+  it('refuses a constraint that mixes keys, and one with a key OtherBench does not know', () => {
     expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', commandExact: 'ls' } })).toThrow('"constraint" must set only one key.');
     expect(() => parseApprovalChoice({ choice: 'always', constraint: { pathPrefix: 'src', commandPrefix: 'git' } })).toThrow('"constraint" must set only one key.');
     expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', extra: 1 } })).toThrow('"constraint" has an unknown key "extra".');

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { defaultAvailability } from '@grunt/core/domain/availability.js';
-import { CHAT_FIELDS } from '@grunt/core/domain/sync.js';
-import type { ConnectionKind } from '@grunt/core/types/config.js';
+import { defaultAvailability } from '@otherbench/core/domain/availability.js';
+import { CHAT_FIELDS } from '@otherbench/core/domain/sync.js';
+import type { ConnectionKind } from '@otherbench/core/types/config.js';
 import type { Migration } from './types.js';
 
 const CHAT_FIELD_NAMES = Object.keys(CHAT_FIELDS);

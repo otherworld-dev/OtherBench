@@ -1,4 +1,4 @@
-import { runStoreContract } from '@grunt/core/testing/store-contract.js';
+import { runStoreContract } from '@otherbench/core/testing/store-contract.js';
 import { openDatabase } from '../src/db.js';
 import { runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';

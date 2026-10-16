@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
+import { sandboxHostProblem } from '@otherbench/core/domain/network-hosts.js';
 
 /** Small, dependency-free request-body validators shared by the route modules. Each throws a 400 `HTTPException` (Hono's built-in error type, which the app's default error handling already converts to a proper JSON response) on a bad value. */
 
@@ -129,7 +129,7 @@ function looksWindowsAbsolute(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
 }
 
-/** Matches the shape Git Bash/MSYS mangles a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. Mirrors the client's `gitBashMangledMatch` (lib/workspaceRoot.ts). */
+/** Matches the shape Git Bash/MSYS mangles a Windows drive path into (e.g. `E:\Git\OtherBench` -> `/e/Git/OtherBench`) -- capture group 1 is the drive letter. Mirrors the client's `gitBashMangledMatch` (lib/workspaceRoot.ts). */
 function gitBashMangledMatch(value: string): RegExpMatchArray | null {
   return value.match(/^\/([a-zA-Z])(\/|$)/);
 }
@@ -141,7 +141,7 @@ function gitBashMangledMatch(value: string): RegExpMatchArray | null {
  * tool call for that chat is contained within -- and `containPath` itself
  * treats a NON-absolute root as relative to the SERVER PROCESS's own cwd
  * (`resolve()`), not as an error. Without a gate here, an unvalidated ".."
- * silently becomes "every sibling directory of wherever `grunt serve`
+ * silently becomes "every sibling directory of wherever `otherbench serve`
  * happened to be launched from", and "demo-workspace" becomes some
  * arbitrary subdirectory of it. The web client's own validator
  * (`validateWorkspaceRoot`, packages/web/src/lib/workspaceRoot.ts) is thorough, but it is
@@ -169,7 +169,7 @@ export function optionalWorkspaceRoot(value: unknown, field: string): string | n
         message: `"${field}" looks like a Git-Bash-style path ("${trimmed}") -- this server runs on Windows and needs the native form, e.g. "${drive}:\\...".`,
       });
     }
-    throw new HTTPException(400, { message: `"${field}" must be a native absolute Windows path, e.g. "E:\\Git\\Grunt" -- got "${trimmed}".` });
+    throw new HTTPException(400, { message: `"${field}" must be a native absolute Windows path, e.g. "E:\\Git\\OtherBench" -- got "${trimmed}".` });
   }
 
   if (!trimmed.startsWith('/')) {

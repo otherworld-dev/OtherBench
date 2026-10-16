@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { McpServer, McpServerOAuth, McpServerRepo } from '@grunt/core/ports/store.js';
+import type { McpServer, McpServerOAuth, McpServerRepo } from '@otherbench/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, fromJson, fromJsonNullable, toBool, toJson, toJsonNullable } from './util.js';
 

@@ -7,7 +7,7 @@ import { startOAuthEchoServer } from '../../tools/test/fixtures/oauth-echo-serve
  * MCP sign-in (spec 2026-10-12-mcp-oauth-design §8) against the fake OAuth
  * provider fixture, started here on a free port. No model is involved. The
  * e2e server's redirect address is http://127.0.0.1:<its port>/oauth/callback,
- * so the fixture's /authorize sends the new tab straight back to Grunt.
+ * so the fixture's /authorize sends the new tab straight back to OtherBench.
  */
 let fixture: Awaited<ReturnType<typeof startOAuthEchoServer>>;
 test.beforeAll(async () => {
@@ -39,7 +39,7 @@ test('signs in to a hosted MCP server through the browser, never shows a token, 
   await expect(status).toHaveText('This server needs you to sign in.');
 
   const [tab] = await Promise.all([page.context().waitForEvent('page'), signIn.getByRole('button', { name: 'Sign in…' }).click()]);
-  await expect(tab.locator('body')).toContainText(`Signed in to ${name}. You can close this tab and go back to Grunt.`);
+  await expect(tab.locator('body')).toContainText(`Signed in to ${name}. You can close this tab and go back to OtherBench.`);
   await tab.close();
 
   await expect(status).toContainText('Signed in as e2e@example.com since', { timeout: 15_000 });
@@ -69,7 +69,7 @@ test('finishes a sign-in from the address another device ended on', async ({ pag
   // As a phone would see it: the redirect to 127.0.0.1 ends on a page that won't load. A
   // new tab opened with noopener doesn't pass its redirects through Playwright's routing, so
   // answer the provider's /authorize here: read where it redirects, and show the dead page
-  // instead of following it (Grunt's callback is never reached; the code stays unused).
+  // instead of following it (OtherBench's callback is never reached; the code stays unused).
   const ended = { url: '' };
   const isAuthorize = (url: URL): boolean => url.pathname === '/authorize' && url.origin === new URL(fixture.url).origin;
   await page.context().route(isAuthorize, async (route) => {

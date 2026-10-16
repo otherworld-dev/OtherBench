@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { formatInZone, type ScheduleTarget } from '@grunt/core/domain/schedule.js';
-import type { ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
+import { formatInZone, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { api, ApiError } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ScheduleEditor } from './schedules/ScheduleEditor.js';
 
 /** How often the open overlay re-reads the list, on top of every schedule event. */
@@ -52,7 +52,7 @@ function ScheduleHistory({ schedule, refreshKey, onOpen }: { schedule: ScheduleV
         if (!cancelled) setRuns(r);
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load a schedule history:', err);
+        console.error('[otherbench-web] failed to load a schedule history:', err);
         if (!cancelled) setFailed(true);
       });
     return () => {
@@ -99,9 +99,9 @@ interface SchedulesViewProps {
  * Delete. Re-reads the list on open, on every schedule event and every 30 s.
  */
 export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Element {
-  const version = useGruntStore((s) => s.schedulesVersion);
-  const profiles = useGruntStore((s) => s.profiles);
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
+  const version = useOtherBenchStore((s) => s.schedulesVersion);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const [schedules, setSchedules] = useState<ScheduleView[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -119,7 +119,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
         setNow(Date.now());
       })
       .catch((err: unknown) => {
-        console.error('[grunt-web] failed to load schedules:', err);
+        console.error('[otherbench-web] failed to load schedules:', err);
         setFailed(true);
       });
   }, []);
@@ -164,7 +164,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
     // The active run, not the last: a slot it overran is recorded after it.
     const messageId = s.activeRun?.messageId;
     if (!messageId) return;
-    await api.turns.cancel(messageId).catch((err: unknown) => console.error('[grunt-web] failed to stop a scheduled run:', err));
+    await api.turns.cancel(messageId).catch((err: unknown) => console.error('[otherbench-web] failed to stop a scheduled run:', err));
   }
 
   async function togglePaused(s: ScheduleView): Promise<void> {

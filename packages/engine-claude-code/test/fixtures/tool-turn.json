@@ -80,7 +80,7 @@
   {
     "type": "system",
     "subtype": "init",
-    "cwd": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws",
+    "cwd": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws",
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
     "tools": [
       "Task",
@@ -798,9 +798,9 @@
     "product_feedback_disabled": false,
     "uuid": "c0e60b9b-5d4e-4786-985a-1c392ae293fb",
     "memory_paths": {
-      "auto": "C:\\Users\\Adam\\.claude\\projects\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\memory\\"
+      "auto": "C:\\Users\\Adam\\.claude\\projects\\C--Users-Adam-AppData-Local-Temp-otherbench-probe-ws\\memory\\"
     },
-    "scratchpad_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\claude\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\e2b76790-3d1e-445c-9186-ee9dc0b109ba\\scratchpad",
+    "scratchpad_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\claude\\C--Users-Adam-AppData-Local-Temp-otherbench-probe-ws\\e2b76790-3d1e-445c-9186-ee9dc0b109ba\\scratchpad",
     "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-23af3ab9794bd0d8656ff81c00f12cce",
     "fast_mode_state": "off",
     "per_turn_effort_active": false,
@@ -1167,7 +1167,7 @@
       "index": 1,
       "delta": {
         "type": "input_json_delta",
-        "partial_json": "Temp\\\\grunt"
+        "partial_json": "Temp\\\\otherbench"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -1229,7 +1229,7 @@
           "id": "toolu_01GxtTifmtsbqZh5CujoKBJW",
           "name": "Read",
           "input": {
-            "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt"
+            "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt"
           },
           "caller": {
             "type": "direct"
@@ -1263,7 +1263,7 @@
     "request_id": "req_011CfdxFkMmZsoBhL4ixHoFX",
     "wire_tool_inputs": {
       "toolu_01GxtTifmtsbqZh5CujoKBJW": {
-        "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt"
+        "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt"
       }
     }
   },
@@ -1329,7 +1329,7 @@
     "tool_use_result": {
       "type": "text",
       "file": {
-        "filePath": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt",
+        "filePath": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt",
         "content": "hello\n",
         "numLines": 2,
         "startLine": 1,
@@ -1344,7 +1344,7 @@
       "index": 2,
       "delta": {
         "type": "input_json_delta",
-        "partial_json": "{\"command\": \"echo grunt-probe"
+        "partial_json": "{\"command\": \"echo otherbench-probe"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -1386,7 +1386,7 @@
       "index": 2,
       "delta": {
         "type": "input_json_delta",
-        "partial_json": " grunt"
+        "partial_json": " otherbench"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -1434,8 +1434,8 @@
           "id": "toolu_01QFio4PfQmPqCmpWEv4G3Xt",
           "name": "Bash",
           "input": {
-            "command": "echo grunt-probe",
-            "description": "Echo the text grunt-probe"
+            "command": "echo otherbench-probe",
+            "description": "Echo the text otherbench-probe"
           },
           "caller": {
             "type": "direct"
@@ -1469,8 +1469,8 @@
     "request_id": "req_011CfdxFkMmZsoBhL4ixHoFX",
     "wire_tool_inputs": {
       "toolu_01QFio4PfQmPqCmpWEv4G3Xt": {
-        "command": "echo grunt-probe",
-        "description": "Echo the text grunt-probe"
+        "command": "echo otherbench-probe",
+        "description": "Echo the text otherbench-probe"
       }
     }
   },
@@ -1541,7 +1541,7 @@
         {
           "tool_use_id": "toolu_01QFio4PfQmPqCmpWEv4G3Xt",
           "type": "tool_result",
-          "content": "grunt-probe",
+          "content": "otherbench-probe",
           "is_error": false
         }
       ]
@@ -1551,7 +1551,7 @@
     "uuid": "99cae33b-039e-4eb8-b898-1250a605e457",
     "timestamp": "2026-10-02T19:21:28.278Z",
     "tool_use_result": {
-      "stdout": "grunt-probe",
+      "stdout": "otherbench-probe",
       "stderr": "",
       "interrupted": false,
       "isImage": false,
@@ -1974,7 +1974,7 @@
       "index": 2,
       "delta": {
         "type": "input_json_delta",
-        "partial_json": "Temp\\\\grunt"
+        "partial_json": "Temp\\\\otherbench"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -2107,7 +2107,7 @@
           "name": "Edit",
           "input": {
             "replace_all": false,
-            "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt",
+            "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt",
             "old_string": "hello\n",
             "new_string": "hello\nworld"
           },
@@ -2143,7 +2143,7 @@
     "request_id": "req_011CfdxG5aunBgzZLvppXUCS",
     "wire_tool_inputs": {
       "toolu_01TMQ9B1xjXS4KiCxmsPu287": {
-        "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt",
+        "file_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt",
         "old_string": "hello\n",
         "new_string": "hello\nworld"
       }
@@ -2216,7 +2216,7 @@
         {
           "tool_use_id": "toolu_01TMQ9B1xjXS4KiCxmsPu287",
           "type": "tool_result",
-          "content": "The file C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+          "content": "The file C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
         }
       ]
     },
@@ -2225,7 +2225,7 @@
     "uuid": "22f67697-e7bf-430f-9e4e-601f5b5ba2d9",
     "timestamp": "2026-10-02T19:21:31.476Z",
     "tool_use_result": {
-      "filePath": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws\\hello.txt",
+      "filePath": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws\\hello.txt",
       "oldString": "hello\n",
       "newString": "hello\nworld",
       "originalFile": "hello\n",
@@ -2594,7 +2594,7 @@
       "index": 1,
       "delta": {
         "type": "text_delta",
-        "text": "echo grunt-probe"
+        "text": "echo otherbench-probe"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -2622,7 +2622,7 @@
       "index": 1,
       "delta": {
         "type": "text_delta",
-        "text": ": \"grunt-"
+        "text": ": \"otherbench-"
       }
     },
     "session_id": "e2b76790-3d1e-445c-9186-ee9dc0b109ba",
@@ -2779,7 +2779,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Done! I've completed all three tasks:\n\n1. **Read hello.txt** - The file contained \"hello\"\n2. **Ran `echo grunt-probe`** - Output: \"grunt-probe\"\n3. **Appended \"world\" to hello.txt** - The file now contains:\n   ```\n   hello\n   world\n   ```"
+          "text": "Done! I've completed all three tasks:\n\n1. **Read hello.txt** - The file contained \"hello\"\n2. **Ran `echo otherbench-probe`** - Output: \"otherbench-probe\"\n3. **Appended \"world\" to hello.txt** - The file now contains:\n   ```\n   hello\n   world\n   ```"
         }
       ],
       "container": null,
@@ -2956,7 +2956,7 @@
     "num_turns": 4,
     "subtype": "success",
     "api_error_status": null,
-    "result": "Done! I've completed all three tasks:\n\n1. **Read hello.txt** - The file contained \"hello\"\n2. **Ran `echo grunt-probe`** - Output: \"grunt-probe\"\n3. **Appended \"world\" to hello.txt** - The file now contains:\n   ```\n   hello\n   world\n   ```",
+    "result": "Done! I've completed all three tasks:\n\n1. **Read hello.txt** - The file contained \"hello\"\n2. **Ran `echo otherbench-probe`** - Output: \"otherbench-probe\"\n3. **Appended \"world\" to hello.txt** - The file now contains:\n   ```\n   hello\n   world\n   ```",
     "ttft_ms": 3077,
     "type": "result",
     "duration_ms": 11708,

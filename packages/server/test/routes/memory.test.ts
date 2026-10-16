@@ -2,11 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, emptyMemoryBody } from '@grunt/core/domain/memory.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, emptyMemoryBody } from '@otherbench/core/domain/memory.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { MemoryServices } from '../../src/memory/index.js';
@@ -29,7 +29,7 @@ let clock: ManualClock;
 let respond: (req: EngineRequest) => EngineEvent[];
 
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-memory-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-memory-route-test-'));
   const store = new InMemoryStore();
   respond = () => reply(note({ goals: '- From the model' }));
   const engine: ChatEngine = {

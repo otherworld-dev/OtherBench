@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Project } from '@grunt/core/ports/store.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 import { viewTabId } from '../viewer/items.js';
 import { closeTab, DEFAULT_PANE_STATE, forgetProject } from './panes.js';
 import { isChatTab, parseProjectTab, projectTabId } from './projectTab.js';
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 
 const project = (id: string): Project => ({
   id, name: `Project ${id}`, description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1,
@@ -55,28 +55,28 @@ describe('project tabs in the pane state', () => {
 describe('removeProject', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   });
 
   it("closes the project's tab and clears the active id when its page was focused", () => {
-    useGruntStore.setState({ projects: [project('p1')], paneState: DEFAULT_PANE_STATE, activeChatId: null });
-    useGruntStore.getState().openTab(projectTabId('p1'));
-    expect(useGruntStore.getState().activeChatId).toBe('project:p1');
+    useOtherBenchStore.setState({ projects: [project('p1')], paneState: DEFAULT_PANE_STATE, activeChatId: null });
+    useOtherBenchStore.getState().openTab(projectTabId('p1'));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('project:p1');
 
-    useGruntStore.getState().removeProject('p1');
+    useOtherBenchStore.getState().removeProject('p1');
 
-    expect(useGruntStore.getState().paneState.tabs).toEqual([]);
-    expect(useGruntStore.getState().activeChatId).toBeNull();
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
+    expect(useOtherBenchStore.getState().activeChatId).toBeNull();
   });
 
   it('closes the tab of a project deleted elsewhere when the new project list arrives', () => {
-    useGruntStore.getState().setProjects([project('p1'), project('p2')]);
-    useGruntStore.getState().openTab(projectTabId('p1'));
-    useGruntStore.getState().openTab(projectTabId('p2'));
+    useOtherBenchStore.getState().setProjects([project('p1'), project('p2')]);
+    useOtherBenchStore.getState().openTab(projectTabId('p1'));
+    useOtherBenchStore.getState().openTab(projectTabId('p2'));
 
-    useGruntStore.getState().setProjects([project('p2')]);
+    useOtherBenchStore.getState().setProjects([project('p2')]);
 
-    expect(useGruntStore.getState().paneState.tabs).toEqual([projectTabId('p2')]);
-    expect(useGruntStore.getState().activeChatId).toBe(projectTabId('p2'));
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual([projectTabId('p2')]);
+    expect(useOtherBenchStore.getState().activeChatId).toBe(projectTabId('p2'));
   });
 });

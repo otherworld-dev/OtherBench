@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import type { OfficeKind } from '@grunt/core/domain/office-spec.js';
+import type { OfficeKind } from '@otherbench/core/domain/office-spec.js';
 import { renderOfficeFileInProcess } from './render.js';
 
 /**

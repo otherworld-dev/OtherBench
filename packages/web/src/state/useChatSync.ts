@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { api } from './api.js';
 import { SseClient } from './sse.js';
-import { useGruntStore, type StreamConnectionStatus } from './store.js';
+import { useOtherBenchStore, type StreamConnectionStatus } from './store.js';
 
 /**
  * Keeps one chat's message tree and SSE stream in sync with the store:
@@ -13,11 +13,11 @@ import { useGruntStore, type StreamConnectionStatus } from './store.js';
 export function useChatSync(chatId: string | null, reportStatus = true): void {
   // Another machine's changes may have added to this chat, or a turn this
   // window didn't start ran in it: reload its messages (the stream stays as it is).
-  const syncRevision = useGruntStore((s) => s.syncRevision);
-  const chatReload = useGruntStore((s) => (chatId ? (s.chatReloads[chatId] ?? 0) : 0));
+  const syncRevision = useOtherBenchStore((s) => s.syncRevision);
+  const chatReload = useOtherBenchStore((s) => (chatId ? (s.chatReloads[chatId] ?? 0) : 0));
   // The server picks the machine a stream comes from when it opens (this one,
   // or relayed from the one the chat runs on), so a change reopens it.
-  const runsOn = useGruntStore((s) => (chatId ? s.chats.find((c) => c.id === chatId)?.runsOn : undefined));
+  const runsOn = useOtherBenchStore((s) => (chatId ? s.chats.find((c) => c.id === chatId)?.runsOn : undefined));
   // With several panes open, only the focused one drives the header's
   // connection status. Focus moving between panes must not reconnect a
   // stream, so this is read through refs rather than restarting the effect.
@@ -26,7 +26,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
   reportRef.current = reportStatus;
 
   useEffect(() => {
-    if (reportStatus) useGruntStore.getState().setStreamStatus(statusRef.current);
+    if (reportStatus) useOtherBenchStore.getState().setStreamStatus(statusRef.current);
   }, [reportStatus]);
 
   useEffect(() => {
@@ -35,9 +35,9 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     api.chats
       .messages(chatId)
       .then(({ messages, headMessageId, usage }) => {
-        if (!cancelled) useGruntStore.getState().loadMessages(chatId, messages, headMessageId, usage);
+        if (!cancelled) useOtherBenchStore.getState().loadMessages(chatId, messages, headMessageId, usage);
       })
-      .catch((err: unknown) => console.error(`[grunt-web] failed to reload messages for chat ${chatId}:`, err));
+      .catch((err: unknown) => console.error(`[otherbench-web] failed to reload messages for chat ${chatId}:`, err));
     return () => {
       cancelled = true;
     };
@@ -48,10 +48,10 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     if (!chatId) return;
 
     let cancelled = false;
-    const loadMessages = useGruntStore.getState().loadMessages;
-    const applyHello = useGruntStore.getState().applyHello;
-    const applyTurnEvent = useGruntStore.getState().applyTurnEvent;
-    const setStreamStatus = useGruntStore.getState().setStreamStatus;
+    const loadMessages = useOtherBenchStore.getState().loadMessages;
+    const applyHello = useOtherBenchStore.getState().applyHello;
+    const applyTurnEvent = useOtherBenchStore.getState().applyTurnEvent;
+    const setStreamStatus = useOtherBenchStore.getState().setStreamStatus;
     const report = (status: StreamConnectionStatus): void => {
       statusRef.current = status;
       if (reportRef.current) setStreamStatus(status);
@@ -64,7 +64,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         loadMessages(chatId, messages, headMessageId, usage);
       })
       .catch((err: unknown) => {
-        console.error(`[grunt-web] failed to load messages for chat ${chatId}:`, err);
+        console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
       });
 
     const client = new SseClient({

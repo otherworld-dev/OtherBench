@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import { ApiError, api } from '../../state/api.js';
-import { useGruntStore } from '../../state/store.js';
+import { useOtherBenchStore } from '../../state/store.js';
 
 interface Draft {
   displayName: string;
@@ -52,7 +52,7 @@ interface ModelRowProps {
  * One model's editable row. Discovery (`POST /connections/:id/discover-models`,
  * driven from the Connections panel's "Discover models" button) declares
  * capability flags conservatively (`false`/unknown) for most connection
- * kinds -- Grunt has no reliable handshake for "do you accept images"
+ * kinds -- OtherBench has no reliable handshake for "do you accept images"
  * against an arbitrary endpoint. Ollama is the one exception: its native
  * API genuinely reports per-model capabilities, so discovery seeds real
  * `true`/`false` values for it (`AiSdkChatEngine.seedOllamaCapabilities`,
@@ -102,7 +102,7 @@ function ModelRow({ model, connectionName, onSaved }: ModelRowProps): JSX.Elemen
       });
       onSaved(updated);
     } catch (err) {
-      console.error(`[grunt-web] failed to save model ${model.id}:`, err);
+      console.error(`[otherbench-web] failed to save model ${model.id}:`, err);
       setError(errorMessage(err, 'Save failed -- please try again.'));
     } finally {
       setSaving(false);
@@ -241,15 +241,15 @@ function ModelRow({ model, connectionName, onSaved }: ModelRowProps): JSX.Elemen
 /**
  * Models panel (task: settings UI, brief item 2). Per connection, lists
  * every discovered (or manually added) model and lets the user edit what
- * Grunt cannot reliably detect on its own: capability flags, context/output
+ * OtherBench cannot reliably detect on its own: capability flags, context/output
  * limits, and pricing. Reuses the global `models`/`connections` store, so a
  * "Discover models" run from the Connections panel is already reflected
  * here without a refetch.
  */
 export function ModelsPanel(): JSX.Element {
-  const connections = useGruntStore((s) => s.connections);
-  const models = useGruntStore((s) => s.models);
-  const upsertModel = useGruntStore((s) => s.upsertModel);
+  const connections = useOtherBenchStore((s) => s.connections);
+  const models = useOtherBenchStore((s) => s.models);
+  const upsertModel = useOtherBenchStore((s) => s.upsertModel);
 
   const [connectionFilter, setConnectionFilter] = useState<string>('all');
 

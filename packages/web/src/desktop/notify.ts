@@ -1,8 +1,8 @@
-import type { ScheduleRunStatus } from '@grunt/core/domain/schedule.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
+import type { ScheduleRunStatus } from '@otherbench/core/domain/schedule.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 
 /** localStorage key for the notification toggles. Per device, like the window it notifies from. */
-export const NOTIFY_STORAGE_KEY = 'grunt.notifications';
+export const NOTIFY_STORAGE_KEY = 'otherbench.notifications';
 
 /** Which events raise a desktop notification (Settings → Desktop). */
 export interface NotifyPrefs {
@@ -10,7 +10,7 @@ export interface NotifyPrefs {
   replies: boolean;
   /** A tool call, question or plan is waiting for the user. */
   approvals: boolean;
-  /** A scheduled run ended or didn't start; shown even while Grunt is focused. */
+  /** A scheduled run ended or didn't start; shown even while OtherBench is focused. */
   scheduled: boolean;
 }
 
@@ -42,7 +42,7 @@ export function saveNotifyPrefs(prefs: NotifyPrefs): void {
 export interface NotifierDeps {
   /** Whether the main window has focus right now; nothing is shown while it does. */
   isFocused(): Promise<boolean>;
-  /** `chatId` lets a click open the chat (Windows); null opens just Grunt. */
+  /** `chatId` lets a click open the chat (Windows); null opens just OtherBench. */
   show(title: string, body: string, chatId: string | null): Promise<void>;
   /** The chat's title for the notification's heading, or null if it isn't loaded. */
   chatTitle(chatId: string): string | null;
@@ -75,7 +75,7 @@ function scheduledRunBody(status: ScheduleRunStatus, detail: string | null): str
  * nobody was watching it, once per run; the run's own reply doesn't also
  * raise "Reply finished". On Windows clicking
  * the notification opens its chat; elsewhere clicks aren't reported, so it
- * also remembers the last chat it notified about, and opening Grunt from the
+ * also remembers the last chat it notified about, and opening OtherBench from the
  * tray goes there (`takeLastChat`).
  */
 export class Notifier {
@@ -119,7 +119,7 @@ export class Notifier {
     if (this.sent.has(key) || (await this.deps.isFocused()) || this.sent.has(key)) return;
     this.sent.add(key);
     this.lastChatId = e.chatId;
-    await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'Grunt', body, e.chatId);
+    await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'OtherBench', body, e.chatId);
   }
 
   /** The chat last notified about, once: opening from the tray consumes it. */

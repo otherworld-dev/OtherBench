@@ -2,22 +2,22 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
-import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { SandboxRunRequest, SandboxRunResult } from '@grunt/core/ports/sandbox.js';
-import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { DEFAULT_SANDBOX_HOSTS, type Connection, type ResolvedProfile, type ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { SandboxRunRequest, SandboxRunResult } from '@otherbench/core/ports/sandbox.js';
+import { FakeSandbox, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import { DEFAULT_SANDBOX_HOSTS, type Connection, type ResolvedProfile, type ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 import { SANDBOX_RUN_COMMAND_DESCRIPTION, SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION } from '../src/sandbox-tool.js';
 
 const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 let ws: string;
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-sandbox-tool-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-sandbox-tool-'));
 });
 afterEach(() => rmSync(ws, { recursive: true, force: true }));
 
@@ -28,17 +28,17 @@ const isError = (r: unknown, code?: string): boolean =>
 
 function setup(sandbox: FakeSandbox | null = new FakeSandbox({ ready: true })) {
   const store = new InMemoryStore();
-  const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp, sandbox ? { sandbox } : {});
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, sandbox ? { sandbox } : {});
   const events: ToolApprovalEvent[] = [];
   provider.onApprovalEvent((e) => events.push(e));
   return { store, provider, events };
 }
-async function runCommand(provider: GruntToolProvider, p: ToolPolicy): Promise<ToolSpec> {
+async function runCommand(provider: OtherBenchToolProvider, p: ToolPolicy): Promise<ToolSpec> {
   const tool = (await provider.listTools(p)).find((t) => t.name === 'run_command');
   if (!tool) throw new Error('run_command is not listed');
   return tool;
 }
-const answerEvery = (provider: GruntToolProvider, choice: 'once' | 'chat' | 'deny'): void => {
+const answerEvery = (provider: OtherBenchToolProvider, choice: 'once' | 'chat' | 'deny'): void => {
   provider.onApprovalEvent((e) => {
     if (e.type === 'request') provider.resolveApproval(e.request.id, { choice });
   });
@@ -58,7 +58,7 @@ class AskingSandbox extends FakeSandbox {
   }
 }
 
-describe('GruntToolProvider and the sandbox', () => {
+describe('OtherBenchToolProvider and the sandbox', () => {
   it('offers exactly one run_command: the sandboxed one when the shell runs in the sandbox, else the host one', async () => {
     const { provider } = setup();
     for (const [shellRuns, source] of [['sandbox', 'sandbox'], ['host', 'shell'], [undefined, 'shell']] as const) {
@@ -103,7 +103,7 @@ describe('GruntToolProvider and the sandbox', () => {
     expect(tool.description).not.toMatch(/\/mnt/);
     const result = await tool.execute({ command: 'ls' }, ctx({ folders: [{ root: 'D:\\Refs', access: 'readwrite' }] }));
     expect(sandbox.requests[0]).toMatchObject({ fs: 'off', workspaceRoot: null, folders: [] });
-    expect(result).toMatchObject({ exitCode: 0, cwd: '/home/grunt/chats/chat-1' });
+    expect(result).toMatchObject({ exitCode: 0, cwd: '/home/otherbench/chats/chat-1' });
     // With file access the description is the one that names the folders.
     expect((await runCommand(provider, policy({ fs: 'read' }))).description).toBe(SANDBOX_RUN_COMMAND_DESCRIPTION);
   });
@@ -227,7 +227,7 @@ describe('GruntToolProvider and the sandbox', () => {
     expect(await (await runCommand(provider, policy())).execute({ command: 'ls' }, ctx())).toEqual({ error: true, code: 'not_set_up', message: "The sandbox isn't set up on Gigabyte." });
   });
 
-  it('says so when this Grunt has no sandbox at all, and never falls back to the host shell', async () => {
+  it('says so when this OtherBench has no sandbox at all, and never falls back to the host shell', async () => {
     const { provider } = setup(null);
     // `echo` would succeed on the host: the refusal proves nothing ran there.
     expect(await (await runCommand(provider, policy())).execute({ command: 'echo hi' }, ctx())).toEqual({
@@ -260,7 +260,7 @@ describe('GruntToolProvider and the sandbox', () => {
     expect(provider.relayTools(policy({ shell: false }))).toEqual([]);
   });
 
-  it('relayTools carries no run_command at all when this Grunt has no sandbox: there is no host fallback', () => {
+  it('relayTools carries no run_command at all when this OtherBench has no sandbox: there is no host fallback', () => {
     const { provider } = setup(null);
     expect(provider.relayTools(policy())).toEqual([]);
     expect(provider.relayTools(policy({ shellRuns: 'host' }))).toEqual([]);

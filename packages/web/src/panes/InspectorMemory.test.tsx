@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MEMORY_FORMAT_ERROR, emptyMemoryBody, type MemoryUpdateOutcome, type ProjectMemoryView } from '@grunt/core/domain/memory.js';
-import type { Chat, Project, ProjectMemory } from '@grunt/core/ports/store.js';
+import { MEMORY_FORMAT_ERROR, emptyMemoryBody, type MemoryUpdateOutcome, type ProjectMemoryView } from '@otherbench/core/domain/memory.js';
+import type { Chat, Project, ProjectMemory } from '@otherbench/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -15,7 +15,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { ApiError, api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { InspectorMemory } from './InspectorMemory.js';
 
 const m = vi.mocked(api.memory);
@@ -61,8 +61,8 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ chats: [chat()] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ chats: [chat()] });
   m.get.mockReset().mockResolvedValue(view());
   m.save.mockReset();
   m.versions.mockReset().mockResolvedValue([]);

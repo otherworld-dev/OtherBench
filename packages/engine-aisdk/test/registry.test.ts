@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
+import type { Connection, ConnectionKind } from '@otherbench/core/types/config.js';
 import { ProviderRegistry, ConfigError } from '../src/registry.js';
 
 let counter = 0;

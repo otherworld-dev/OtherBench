@@ -1,11 +1,11 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { WorkspaceStatus } from '@grunt/core/types/workspace.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api, type InferLocationResult, type LocationView } from '../state/api.js';
 import { isReachablePeer, machineName } from '../state/machines.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 
 type Unresolved = Extract<WorkspaceStatus, { status: 'unresolved' }>;
 
@@ -43,8 +43,8 @@ export function WorkspacePrompt({ chat }: { chat: Chat }): JSX.Element | null {
 }
 
 function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unresolved }): JSX.Element {
-  const upsertChat = useGruntStore((s) => s.upsertChat);
-  const machines = useGruntStore((s) => s.machines);
+  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
+  const machines = useOtherBenchStore((s) => s.machines);
   // The folder is where it should be on another machine that's reachable: the chat can run there.
   const runOn = unresolved.hint && unresolved.hint.nodeId !== chat.runsOn && isReachablePeer(machines, unresolved.hint.nodeId) ? unresolved.hint.nodeId : null;
   const serverPlatform = useServerPlatform();
@@ -70,7 +70,7 @@ function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unreso
       .then((list) => {
         if (!cancelled) setLocations(list);
       })
-      .catch((err: unknown) => console.error('[grunt-web] failed to load locations:', err));
+      .catch((err: unknown) => console.error('[otherbench-web] failed to load locations:', err));
     return () => {
       cancelled = true;
     };

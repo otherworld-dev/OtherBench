@@ -1,11 +1,11 @@
-// The sandbox through Grunt itself, on this Windows machine (spec
+// The sandbox through OtherBench itself, on this Windows machine (spec
 // 2026-10-12-sandbox-design §6, "Live"): starts the built server on a scratch
 // database, sets the sandbox up through the API (the repair path when the
 // distro exists), then runs a real run_command from an API (mock) profile and,
 // if Claude Code is logged in here, from a Claude Code chat (one short haiku turn).
 //
 // `node packages/server/scripts/sandbox-live.mjs`, after `npm run build`. Exits non-zero on any failure.
-// GRUNT_SANDBOX_LIVE_CLAUDE=0 skips the Claude Code part (it spends a turn of the Claude login).
+// OTHERBENCH_SANDBOX_LIVE_CLAUDE=0 skips the Claude Code part (it spends a turn of the Claude login).
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -16,12 +16,12 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const dir = mkdtempSync(join(tmpdir(), 'grunt-sandbox-live-'));
-const workspace = mkdtempSync(join(tmpdir(), 'grunt-sandbox-live-ws-'));
+const dir = mkdtempSync(join(tmpdir(), 'otherbench-sandbox-live-'));
+const workspace = mkdtempSync(join(tmpdir(), 'otherbench-sandbox-live-ws-'));
 const token = randomBytes(32).toString('hex');
 
-const child = spawn(process.execPath, [join(serverDir, 'dist', 'cli.js'), 'serve', '--port', '0', '--announce', '--db', join(dir, 'grunt.db')], {
-  env: { ...process.env, GRUNT_TOKEN: token },
+const child = spawn(process.execPath, [join(serverDir, 'dist', 'cli.js'), 'serve', '--port', '0', '--announce', '--db', join(dir, 'otherbench.db')], {
+  env: { ...process.env, OTHERBENCH_TOKEN: token },
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -34,8 +34,8 @@ const log = (line) => console.log(`[sandbox-live] ${line}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isSandboxResult = (r) => (typeof r === 'string' ? r : JSON.stringify(r)).includes('"sandbox":true');
 /**
- * run_command. Claude Code calls the relayed one `mcp__grunt_<hex>__run_command`, but the engine stores its
- * parts under Grunt's name (the relay renames map), so the parts say run_command for both engines.
+ * run_command. Claude Code calls the relayed one `mcp__otherbench_<hex>__run_command`, but the engine stores its
+ * parts under OtherBench's name (the relay renames map), so the parts say run_command for both engines.
  */
 const isRunCommand = (name) => name === 'run_command';
 
@@ -88,18 +88,18 @@ async function main() {
   const policy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
   const mock = await api('POST', '/profiles', { name: 'Sandboxed mock', connectionId: mockConn.id, modelId: 'mock-standard', toolPolicy: policy });
   const chat = await api('POST', '/chats', { title: 'Sandbox live', profileId: mock.id, workspaceRoot: workspace });
-  const mockReply = await reply(chat.id, '#run uname -s && echo made-by-grunt > grunt-live.txt', mock.id, 5 * 60_000);
+  const mockReply = await reply(chat.id, '#run uname -s && echo made-by-otherbench > otherbench-live.txt', mock.id, 5 * 60_000);
   const mockResult = mockReply.parts.find((p) => p.type === 'tool-result');
   if (!mockResult || !isSandboxResult(mockResult.result)) fail(`no sandboxed result: ${JSON.stringify(mockReply.parts)}`);
   if (!JSON.stringify(mockResult.result).includes('Linux')) fail(`uname didn't say Linux: ${JSON.stringify(mockResult.result)}`);
-  const written = join(workspace, 'grunt-live.txt');
-  if (!existsSync(written) || readFileSync(written, 'utf8') !== 'made-by-grunt\n') fail('the file the command wrote is not in the workspace');
+  const written = join(workspace, 'otherbench-live.txt');
+  if (!existsSync(written) || readFileSync(written, 'utf8') !== 'made-by-otherbench\n') fail('the file the command wrote is not in the workspace');
   log(`API profile: run_command ran in the sandbox: ${mockResult.result}`);
 
-  // 3. A Claude Code chat's run_command, through Grunt's relay, when Claude Code is logged in here.
-  // It spends a turn of the Claude login: GRUNT_SANDBOX_LIVE_CLAUDE=0 leaves it out.
-  if (process.env.GRUNT_SANDBOX_LIVE_CLAUDE === '0') {
-    log('SKIPPED Claude Code: GRUNT_SANDBOX_LIVE_CLAUDE=0');
+  // 3. A Claude Code chat's run_command, through OtherBench's relay, when Claude Code is logged in here.
+  // It spends a turn of the Claude login: OTHERBENCH_SANDBOX_LIVE_CLAUDE=0 leaves it out.
+  if (process.env.OTHERBENCH_SANDBOX_LIVE_CLAUDE === '0') {
+    log('SKIPPED Claude Code: OTHERBENCH_SANDBOX_LIVE_CLAUDE=0');
     return;
   }
   const ccConn = await api('POST', '/connections', { name: 'Claude Code', kind: 'claude_code' });
@@ -135,13 +135,13 @@ if (child.exitCode === null) {
   if (code === 0) report(new Failure("the server didn't exit within 30 s of its stdin closing"));
   code = 1;
 }
-// Grunt unmounts the workspace as it stops, if that finishes within its shutdown wait (cli.ts SHUTDOWN_WAIT_MS);
+// OtherBench unmounts the workspace as it stops, if that finishes within its shutdown wait (cli.ts SHUTDOWN_WAIT_MS);
 // otherwise WSL drops the mount when it stops the idle distro. Said, not failed: wsl.exe can be slow on a busy machine.
 const linux = `/mnt/${realpathSync.native(workspace).replace(/^([A-Za-z]):/, (_, d) => d.toLowerCase()).replace(/\\/g, '/')}`;
 const wslExe = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'wsl.exe');
-const mounts = spawnSync(wslExe, ['-d', 'grunt-sandbox', '-u', 'root', '--exec', '/usr/bin/findmnt', '-l', '-n', '-o', 'TARGET'], { encoding: 'utf8' });
+const mounts = spawnSync(wslExe, ['-d', 'otherbench-sandbox', '-u', 'root', '--exec', '/usr/bin/findmnt', '-l', '-n', '-o', 'TARGET'], { encoding: 'utf8' });
 const stillMounted = mounts.stdout.split(/\r?\n/).some((line) => line.trim() === linux);
-log(stillMounted ? `${linux} was still mounted after Grunt stopped: waiting for WSL to stop the distro` : 'Grunt unmounted the workspace as it stopped');
+log(stillMounted ? `${linux} was still mounted after OtherBench stopped: waiting for WSL to stop the distro` : 'OtherBench unmounted the workspace as it stopped');
 for (const folder of [dir, workspace]) {
   try {
     // A folder still mounted in the VM can't be deleted on Windows (EPERM) until the mount goes: up to a minute.

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { isSandboxError, type Sandbox } from '@grunt/core/ports/sandbox.js';
-import { isAptPackageName, notAnAptPackageName } from '@grunt/sandbox/setup.js';
+import { isSandboxError, type Sandbox } from '@otherbench/core/ports/sandbox.js';
+import { isAptPackageName, notAnAptPackageName } from '@otherbench/sandbox/setup.js';
 import type { Container } from '../container.js';
 
 const MAX_PACKAGES = 50;
@@ -19,7 +19,7 @@ export function parsePackages(value: unknown): string[] {
 }
 
 function sandboxOf(container: Container): Sandbox {
-  if (!container.sandbox) throw new HTTPException(404, { message: 'This Grunt has no sandbox.' });
+  if (!container.sandbox) throw new HTTPException(404, { message: 'This OtherBench has no sandbox.' });
   return container.sandbox;
 }
 
@@ -50,7 +50,7 @@ export function sandboxRoutes(container: Container): Hono {
     // One job at a time: while setup (or a package install) runs, this is the running one, not a second.
     if (before.state === 'setting_up') return c.json(before, 202);
     // A background job: the UI polls GET /api/sandbox for its progress.
-    void sandbox.setup().catch((err: unknown) => console.error('[grunt-server] sandbox setup failed:', err));
+    void sandbox.setup().catch((err: unknown) => console.error('[otherbench-server] sandbox setup failed:', err));
     return c.json(await sandbox.status(), 202);
   });
 

@@ -34,7 +34,7 @@ export type Part =
    * vision support (task 21 decision #3: "the user must be told which
    * happened, not silently downgraded"). Never produced by a `ChatEngine`,
    * and deliberately dropped by `toModelMessages` (engine-aisdk/convert.ts)
-   * rather than replayed into any provider -- it describes what Grunt did,
+   * rather than replayed into any provider -- it describes what OtherBench did,
    * not something the model said, so forwarding it as conversation history
    * would misattribute it as assistant output.
    */

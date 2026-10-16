@@ -16,8 +16,8 @@ let workspaceRoot: string;
 let otherFolder: string;
 
 test.beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), 'grunt-e2e-folders-ws-'));
-  otherFolder = mkdtempSync(join(tmpdir(), 'grunt-e2e-folders-other-'));
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'otherbench-e2e-folders-ws-'));
+  otherFolder = mkdtempSync(join(tmpdir(), 'otherbench-e2e-folders-other-'));
   writeFileSync(join(otherFolder, 'notes.txt'), 'THE MAP IS IN THE OTHER FOLDER');
 });
 

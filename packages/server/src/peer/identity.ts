@@ -1,7 +1,7 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fingerprintOf } from '@grunt/core/domain/pairing.js';
+import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
 import { certificatePem, selfSignedCertificate } from './x509.js';
 
 /** This node's TLS identity on the peer listener (v2 spec §3). */
@@ -21,7 +21,7 @@ function generate(nodeId: string): NodeIdentity {
   const notAfter = new Date(now);
   notAfter.setUTCFullYear(now.getUTCFullYear() + VALID_YEARS);
   const der = selfSignedCertificate(publicKey, privateKey, {
-    commonName: `grunt-${nodeId}`,
+    commonName: `otherbench-${nodeId}`,
     // A day early, so a peer whose clock runs behind doesn't see it as not yet valid.
     notBefore: new Date(now.getTime() - 86_400_000),
     notAfter,

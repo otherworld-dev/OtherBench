@@ -5,13 +5,13 @@ import type {
   DiscoveredModel,
   EngineEvent,
   EngineRequest,
-} from '@grunt/core/ports/chat-engine.js';
-import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { ASK_TOOL, PLAN_APPROVED, PLAN_TOOL, TODO_TOOL, UNATTENDED_PLAN, STOPPED_ASK, type TodoItem } from '@grunt/core/domain/thread-tools.js';
-import type { Connection } from '@grunt/core/types/config.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { Usage } from '@grunt/core/types/usage.js';
+} from '@otherbench/core/ports/chat-engine.js';
+import { SUBAGENT_TOOL_NAME } from '@otherbench/core/domain/parts.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { ASK_TOOL, PLAN_APPROVED, PLAN_TOOL, TODO_TOOL, UNATTENDED_PLAN, STOPPED_ASK, type TodoItem } from '@otherbench/core/domain/thread-tools.js';
+import type { Connection } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { Usage } from '@otherbench/core/types/usage.js';
 
 /** Sleeps `ms` milliseconds, resolving early (never rejecting) if `signal` aborts first. */
 export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
@@ -44,7 +44,7 @@ const realSleep: SleepFn = (ms, signal) =>
 // Exactly 32 words -- "roughly 30 tokens" under the word-count-as-token
 // estimate this mock uses (see `estimateTokens`).
 const DEFAULT_REPLY =
-  'Here is a mock reply from Grunt, streamed in small chunks so tokens arrive live ' +
+  'Here is a mock reply from OtherBench, streamed in small chunks so tokens arrive live ' +
   'in the chat pane, complete with a bit of **markdown** and a `code span` for good measure.';
 
 // Exactly 20 words, so splitting into 20 chunks yields one word per chunk --
@@ -119,7 +119,7 @@ export const OFFICE_SAMPLES: Record<string, { id: string; title: string; content
 const LIVE_PAGE = `<!doctype html>
 <meta charset="utf-8">
 <title>Live dashboard</title>
-<script src="grunt-live.js"></script>
+<script src="otherbench-live.js"></script>
 <p>Value: <span id="out">waiting</span> · n: <span id="n">-</span></p>
 <p>Blocked: <span id="csp"></span></p>
 <button id="leave" type="button">Leave</button>
@@ -127,7 +127,7 @@ const LIVE_PAGE = `<!doctype html>
 document.addEventListener('securitypolicyviolation', function (e) { document.getElementById('csp').textContent += e.effectiveDirective + ' '; });
 document.getElementById('leave').addEventListener('click', function () { location.href = 'about:blank'; });
 fetch('https://example.invalid/').catch(function () {});
-grunt.live('value', { key: 'b' }).then(
+otherbench.live('value', { key: 'b' }).then(
   function (r) { document.getElementById('out').textContent = r.json.value; document.getElementById('n').textContent = String(r.json.n); },
   function (e) { document.getElementById('out').textContent = 'error: ' + e.code; }
 );
@@ -704,7 +704,7 @@ export class MockChatEngine implements ChatEngine {
 
   /**
    * Routes `#tool` through a REAL `read_file` `ToolSpec` when the caller
-   * supplied one via `req.tools` (task 26: `GruntToolProvider`'s gated
+   * supplied one via `req.tools` (task 26: `OtherBenchToolProvider`'s gated
    * output, threaded here exactly as `engine-aisdk`'s `buildToolSet` would
    * for a real model's tool call), rather than fabricating a result --
    * this is what lets the mock provider exercise the genuine approval flow
@@ -765,7 +765,7 @@ export class MockChatEngine implements ChatEngine {
     return [
       {
         modelId: 'mock-standard',
-        displayName: 'Grunt Mock Model',
+        displayName: 'OtherBench Mock Model',
         contextWindow: 128_000,
         supportsVision: true,
         supportsTools: true,

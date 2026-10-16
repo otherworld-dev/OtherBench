@@ -2,12 +2,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
-import { DEFAULT_SANDBOX_HOSTS } from '@grunt/core/types/config.js';
-import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { canonicalHost } from '@otherbench/core/domain/network-hosts.js';
+import { DEFAULT_SANDBOX_HOSTS } from '@otherbench/core/types/config.js';
+import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
 import { createApp } from '../../src/app.js';
 import { sandboxHostProblem } from '../../src/validation.js';
 import { ComputerSessions } from '../../src/computer/sessions.js';
@@ -23,7 +23,7 @@ let dataDir: string;
 // mis-wired blobStore would 500 every DELETE test instead of exercising
 // anything real (task 32 fix round 1, Minor #8).
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-profiles-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-profiles-route-test-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);

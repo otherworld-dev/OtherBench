@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Workspace } from '@grunt/core/types/workspace.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Workspace } from '@otherbench/core/types/workspace.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { MAX_VIEW_TEXT_BYTES } from '../../src/routes/view.js';
@@ -16,8 +16,8 @@ let ws: string;
 let outside: string;
 
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-view-ws-'));
-  outside = mkdtempSync(join(tmpdir(), 'grunt-view-out-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-view-ws-'));
+  outside = mkdtempSync(join(tmpdir(), 'otherbench-view-out-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);

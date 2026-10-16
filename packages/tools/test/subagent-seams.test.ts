@@ -2,21 +2,21 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
-import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { toolContextFor } from '@grunt/core/domain/tool-context.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Grant } from '@grunt/core/ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent } from '@grunt/core/ports/tool-provider.js';
-import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { FakeSandbox, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Grant } from '@otherbench/core/ports/store.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent } from '@otherbench/core/ports/tool-provider.js';
+import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 import { SANDBOX_NETWORK_SPEC } from '../src/sandbox-tool.js';
 
 // The integration seams between API sub-agents and the sandbox, thread cards
 // (Plan mode) and scheduled tasks (unattended runs), through the real
-// TurnRunner, SubagentRunner, GruntToolProvider and PermissionBroker: what
+// TurnRunner, SubagentRunner, OtherBenchToolProvider and PermissionBroker: what
 // limits a reply limits every sub-agent it starts.
 
 const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
@@ -30,7 +30,7 @@ const isError = (r: unknown, code?: string): boolean =>
 
 let ws: string;
 beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-subagent-seams-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-subagent-seams-'));
   writeFileSync(join(ws, 'notes.txt'), 'hello');
 });
 afterEach(() => rmSync(ws, { recursive: true, force: true }));
@@ -109,7 +109,7 @@ async function turn(o: TurnOptions = {}) {
   const other = o.other ? row('p-other', 'Other', policy(o.other)) : null;
   if (other) store.profiles.create(other);
   const broker = new PermissionBroker(store);
-  const provider = new GruntToolProvider(store, broker, emptyMcp, o.sandbox ? { sandbox: o.sandbox } : {});
+  const provider = new OtherBenchToolProvider(store, broker, emptyMcp, o.sandbox ? { sandbox: o.sandbox } : {});
   const cards: ApprovalRequest[] = [];
   provider.onApprovalEvent((e: ToolApprovalEvent) => {
     if (e.type !== 'request') return;
@@ -257,7 +257,7 @@ describe("a sub-agent's grants", () => {
     store.profiles.create(main);
     store.profiles.create(other);
     store.grants.create({ id: 'g-other', chatId: null, profileId: 'p-other', toolName: 'write_file', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
     const cards: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
       if (e.type !== 'request') return;
@@ -334,7 +334,7 @@ describe("a sub-agent's grants", () => {
 });
 
 describe("a sub-agent and the chat's Auto mode", () => {
-  it("never runs in auto mode: its request has it off whatever the chat's toggle says, and its write still raises Grunt's own card", async () => {
+  it("never runs in auto mode: its request has it off whatever the chat's toggle says, and its write still raises OtherBench's own card", async () => {
     const { seen, cards } = await turn({ autoMode: true, answer: 'deny' });
     // The parent reply's request follows the chat (only Claude Code reads it); the sub-agent's is always off.
     expect(seen.parentRequest!.autoMode).toBe(true);

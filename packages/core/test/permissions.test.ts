@@ -53,7 +53,7 @@ function expectAsk(decision: Decision): Extract<Decision, { kind: 'ask' }> {
 // containPath to resolve something that actually exists (path constraints
 // are now compared after resolution, not as raw strings -- see
 // domain/permissions.ts).
-const realBase = mkdtempSync(join(tmpdir(), 'grunt-permissions-'));
+const realBase = mkdtempSync(join(tmpdir(), 'otherbench-permissions-'));
 const realWs = join(realBase, 'ws');
 mkdirSync(join(realWs, 'src'), { recursive: true });
 writeFileSync(join(realWs, 'secret.env'), 'API_KEY=hunter2');
@@ -82,7 +82,7 @@ describe('PermissionBroker', () => {
     const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
     const artifact = { name: 'artifact', description: '', parameters: {}, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
     expect(broker.decide(artifact, {}, always, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
-    // Artifacts are Grunt's, not the user's MCP config: the MCP switch doesn't touch them.
+    // Artifacts are OtherBench's, not the user's MCP config: the MCP switch doesn't touch them.
     expect(broker.decide(artifact, {}, { ...always, agentMcp: false }, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
     expect(broker.decide(artifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
   });
@@ -119,7 +119,7 @@ describe('PermissionBroker', () => {
     const broker = new PermissionBroker(new InMemoryStore());
     const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };
     const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
-    const lookalike = { name: 'mcp__grunt__artifact', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => null };
+    const lookalike = { name: 'mcp__otherbench__artifact', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => null };
     expect(broker.decide(lookalike, {}, always, ctx)).toMatchObject({ kind: 'ask' });
     expect(broker.decide(lookalike, {}, { ...always, agentMcp: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'MCP tools are disabled by policy.' });
   });

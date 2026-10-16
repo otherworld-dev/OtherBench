@@ -3,7 +3,7 @@
  * request, stream and image fetch in the web client gets its URL and
  * headers from.
  *
- * Browser mode (`grunt serve` + a browser) keeps the defaults: same-origin
+ * Browser mode (`otherbench serve` + a browser) keeps the defaults: same-origin
  * `/api`, no token, so every request is byte-identical to what the client
  * sent before this module existed. The desktop shell serves this bundle
  * from its own webview origin instead and hands over the sidecar server's
@@ -11,7 +11,7 @@
  */
 
 export interface TransportConfig {
-  /** Origin of the Grunt server, e.g. `http://127.0.0.1:51234`; `''` for same-origin. */
+  /** Origin of the OtherBench server, e.g. `http://127.0.0.1:51234`; `''` for same-origin. */
   baseUrl: string;
   /** Bearer token for every `/api` call, or `null` when the server enforces none. */
   token: string | null;
@@ -27,7 +27,7 @@ export function apiUrl(path: string): string {
   return `${config.baseUrl}/api${path}`;
 }
 
-/** A URL on the Grunt server outside `/api` (the viewer's `/view/` links, Deck #826). */
+/** A URL on the OtherBench server outside `/api` (the viewer's `/view/` links, Deck #826). */
 export function serverUrl(path: string): string {
   return `${config.baseUrl}${path}`;
 }

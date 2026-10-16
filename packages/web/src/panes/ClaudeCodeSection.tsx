@@ -1,6 +1,6 @@
 import { useMemo, useState, type JSX } from 'react';
-import type { EngineMeta } from '@grunt/core/types/messages.js';
-import { useGruntStore } from '../state/store.js';
+import type { EngineMeta } from '@otherbench/core/types/messages.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useSectionSummary } from './InspectorSection.js';
 
 export function resumeCommand(meta: EngineMeta): string {
@@ -55,7 +55,7 @@ function serverLabel(group: McpServerGroup): string {
 
 /** The chat's latest Claude Code session: what it ran on, what it could use, and how to pick it up in a terminal. */
 export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const messages = useGruntStore((s) => s.messages);
+  const messages = useOtherBenchStore((s) => s.messages);
   const [copied, setCopied] = useState(false);
   const meta = useMemo(() => {
     const withMeta = Object.values(messages).filter((m) => m.chatId === chatId && m.engineMeta);
@@ -72,7 +72,7 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
       await navigator.clipboard.writeText(resumeCommand(meta!));
       setCopied(true);
     } catch (err) {
-      console.error('[grunt-web] failed to copy resume command:', err);
+      console.error('[otherbench-web] failed to copy resume command:', err);
     }
   }
 

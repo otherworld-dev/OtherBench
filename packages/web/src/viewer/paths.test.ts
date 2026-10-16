@@ -33,8 +33,8 @@ describe('artifactOutcomeOf', () => {
     expect(artifactOutcomeOf(outcome)).toMatchObject({ command: 'create' });
     for (const no of [null, 'oops', { error: true }, { ...outcome, command: 'view' }, [{ type: 'image' }]]) expect(artifactOutcomeOf(no)).toBeNull();
     expect(isArtifactTool('artifact')).toBe(true);
-    // Both engines report Grunt's tool as `artifact`; a server named grunt is just an MCP server.
-    expect(isArtifactTool('mcp__grunt__artifact')).toBe(false);
+    // Both engines report OtherBench's tool as `artifact`; a server named otherbench is just an MCP server.
+    expect(isArtifactTool('mcp__otherbench__artifact')).toBe(false);
     expect(isArtifactTool('read_file')).toBe(false);
   });
 });

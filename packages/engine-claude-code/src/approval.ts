@@ -1,18 +1,18 @@
 import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
-import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
-import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
-import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@grunt/core/domain/thread-tools.js';
-import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
-import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
-import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
-import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ToolPolicy, ToolSource } from '@grunt/core/types/config.js';
-import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
+import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@otherbench/core/domain/agent-tools.js';
+import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
+import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
+import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
+import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
+import { containPath, containPathIn, type ContainedIn } from '@otherbench/core/domain/paths.js';
+import type { ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolPolicy, ToolSource } from '@otherbench/core/types/config.js';
+import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 
 /**
  * `about`: the line that says whose words a refusal's `reason` may hold, when
- * they may not be Grunt's own (the tool provider sets it for a computer call
+ * they may not be OtherBench's own (the tool provider sets it for a computer call
  * refused in the desktop app's words). It is what Claude Code is told first
  * (`denialText`): a refusal reaches the model as the result of its tool call.
  */
@@ -33,30 +33,30 @@ export function denialText(decision: { reason: string; about?: string }): string
  * go to Claude Code's classifier instead of a card.
  */
 /**
- * `opts.own`: the call is to one of this process's own Grunt tools -- the
- * engine matched the exact per-process name (grunt-server.ts), never a name
+ * `opts.own`: the call is to one of this process's own OtherBench tools -- the
+ * engine matched the exact per-process name (otherbench-server.ts), never a name
  * alone. One of artifact, recall or plan, or `{ relay }`: a tool relayed from one of
- * Grunt's MCP servers, carrying the ToolSpec an API model would get for it
+ * OtherBench's MCP servers, carrying the ToolSpec an API model would get for it
  * (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2).
  */
 export type Gate = (
   toolName: string,
   input: Record<string, unknown>,
   signal?: AbortSignal,
-  opts?: { mayDefer?: boolean; own?: GruntTool | { relay: ToolSpec }; toolUseId?: string }
+  opts?: { mayDefer?: boolean; own?: OtherBenchTool | { relay: ToolSpec }; toolUseId?: string }
 ) => Promise<GateDecision>;
 
-/** Grunt's own tools on its per-process server, as the broker knows them. */
-export type GruntTool = 'artifact' | 'recall' | 'plan';
+/** OtherBench's own tools on its per-process server, as the broker knows them. */
+export type OtherBenchTool = 'artifact' | 'recall' | 'plan';
 
-const OWN_TOOLS: Record<GruntTool, { name: string; description: string; source: ToolSource }> = {
-  artifact: { name: ARTIFACT_TOOL, description: 'Grunt artifact tool', source: 'artifact' },
-  recall: { name: RECALL_TOOL, description: 'Grunt recall tool', source: 'recall' },
-  plan: { name: PLAN_TOOL, description: 'Grunt plan tool', source: 'thread' },
+const OWN_TOOLS: Record<OtherBenchTool, { name: string; description: string; source: ToolSource }> = {
+  artifact: { name: ARTIFACT_TOOL, description: 'OtherBench artifact tool', source: 'artifact' },
+  recall: { name: RECALL_TOOL, description: 'OtherBench recall tool', source: 'recall' },
+  plan: { name: PLAN_TOOL, description: 'OtherBench plan tool', source: 'thread' },
 };
 
 /** When the engine was given no way to put a question to the user. */
-const NO_ASK_REASON = "Grunt can't put a question to the user here. Use your judgement, carry on, and say in your reply what you assumed.";
+const NO_ASK_REASON = "OtherBench can't put a question to the user here. Use your judgement, carry on, and say in your reply what you assumed.";
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 
@@ -90,7 +90,7 @@ function staticPrefix(pattern: string): string {
  * For Claude Code's file tools only (classifyAgentTool category file-read /
  * file-write; every other tool's args pass through untouched), every present
  * path key is trimmed (as Claude Code does) and resolved through
- * `containPath` -- the same gate Grunt's fs tools use. `~` paths are refused
+ * `containPath` -- the same gate OtherBench's fs tools use. `~` paths are refused
  * (Claude Code expands them to the home dir), and so are `/c/...` paths on
  * Windows (see isDriveLetterPosixPath). The first path key also becomes
  * a workspace-relative forward-slash `path`, so `pathPrefix` grants and card
@@ -171,8 +171,8 @@ export function createGate(deps: {
   };
 
   const decide: Gate = async (toolName, input, callSignal, opts) => {
-    // Grunt's own tools have no path arguments; each is checked as
-    // Grunt's (the profile's switch, no card), never as an MCP tool. A
+    // OtherBench's own tools have no path arguments; each is checked as
+    // OtherBench's (the profile's switch, no card), never as an MCP tool. A
     // relayed tool is checked exactly as an API model's call to it would be.
     const own = opts?.own;
     const relay = typeof own === 'object' ? own.relay : undefined;
@@ -191,7 +191,7 @@ export function createGate(deps: {
     const signal = callSignal ? AbortSignal.any([deps.ctx.signal, callSignal]) : deps.ctx.signal;
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
-      // With no folder (a clean chat) only Grunt's own tools, web tools and
+      // With no folder (a clean chat) only OtherBench's own tools, web tools and
       // Claude Code's internal ones (TodoWrite, AskUserQuestion) may go on.
       const category = classifyAgentTool(toolName).category;
       if (!workspaceRoot && !own && category !== 'web' && category !== 'internal') return { allow: false, reason: NO_FOLDER_REASON };
@@ -219,9 +219,9 @@ export function createGate(deps: {
       const deferAsk = deps.autoMode === true && opts?.mayDefer === true;
       const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal }, { deferAsk });
       if ('deferred' in outcome && outcome.deferred === true) {
-        return deferAsk ? { defer: true } : { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
+        return deferAsk ? { defer: true } : { allow: false, reason: 'OtherBench could not check this tool call: unexpected deferral.' };
       }
-      if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
+      if (!('allowed' in outcome)) return { allow: false, reason: 'OtherBench could not check this tool call: unrecognised approval outcome.' };
       if (!outcome.allowed) return { allow: false, reason: outcome.reason, ...(typeof outcome.about === 'string' ? { about: outcome.about } : {}) };
       // A relayed tool that describes its calls (the browser, computer use): keep what was approved, so only that runs.
       if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
@@ -248,23 +248,23 @@ export function createGate(deps: {
 }
 
 /**
- * Claude Code's name for the computer tool relayed on a Grunt server
- * (`mcp__grunt_<hex>__computer`): what `safely` has to go on when the gate
+ * Claude Code's name for the computer tool relayed on an OtherBench server
+ * (`mcp__otherbench_<hex>__computer`): what `safely` has to go on when the gate
  * itself threw before it could say which tool the call was for.
  */
-const RELAYED_COMPUTER_TOOL_NAME = /^mcp__grunt_[0-9a-f]+__computer$/;
+const RELAYED_COMPUTER_TOOL_NAME = /^mcp__otherbench_[0-9a-f]+__computer$/;
 
 /**
  * A check that threw, as the denial Claude Code is handed. The error's words
- * are not Grunt's own (they can quote anything a tool or the desktop app
+ * are not OtherBench's own (they can quote anything a tool or the desktop app
  * said): one clean line of at most 300 characters. For a computer call they
  * go under the line that says they may be from the screen (core's builder,
  * as the relay's error results do), which `denialText` puts first.
  */
 function couldNotCheck(err: unknown, computer: boolean): Extract<GateDecision, { allow: false }> {
   const said = desktopTextForResult(err instanceof Error ? err.message : String(err)) || 'no reason was given';
-  if (!computer) return { allow: false, reason: `Grunt could not check this tool call: ${said}` };
-  const { about, message } = screenContentError('computer_failed', `Grunt could not check this tool call: ${said}`);
+  if (!computer) return { allow: false, reason: `OtherBench could not check this tool call: ${said}` };
+  const { about, message } = screenContentError('computer_failed', `OtherBench could not check this tool call: ${said}`);
   return { allow: false, reason: message, about };
 }
 
@@ -277,7 +277,7 @@ async function safely(gate: Gate, toolName: string, input: Record<string, unknow
 }
 
 /**
- * The hook answer for a call Grunt hands to Claude Code's auto-mode classifier.
+ * The hook answer for a call OtherBench hands to Claude Code's auto-mode classifier.
  * It is an EMPTY result: no hookSpecificOutput, no permissionDecision. The live
  * probe (test/fixtures/README.md) showed that `permissionDecision: 'defer'`
  * does not hand off -- it pauses the turn (terminal_reason 'tool_deferred') --
@@ -296,7 +296,7 @@ export function preToolUseHook(gate: Gate): HookCallback {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: decision.allow ? 'allow' : 'deny',
-        permissionDecisionReason: decision.allow ? 'Approved in Grunt' : denialText(decision),
+        permissionDecisionReason: decision.allow ? 'Approved in OtherBench' : denialText(decision),
         // AskUserQuestion's answers ride on the input (the CLI's "hook satisfied user interaction via updatedInput").
         ...(decision.allow && decision.updatedInput ? { updatedInput: decision.updatedInput } : {}),
       },
@@ -309,7 +309,7 @@ export function canUseToolFor(gate: Gate): CanUseTool {
   return async (toolName, input, options) => {
     const decision = await safely(gate, toolName, input, options?.signal, options?.toolUseID ? { toolUseId: options.toolUseID } : undefined);
     // Unreachable (the gate defers only for mayDefer), but fail closed.
-    if ('defer' in decision) return { behavior: 'deny', message: 'Grunt could not check this tool call.' };
+    if ('defer' in decision) return { behavior: 'deny', message: 'OtherBench could not check this tool call.' };
     return decision.allow ? { behavior: 'allow', updatedInput: decision.updatedInput ?? input } : { behavior: 'deny', message: denialText(decision) };
   };
 }
@@ -319,7 +319,7 @@ const MAX_TOOL_NAME = 200;
 
 /**
  * Auto mode only: records each call Claude Code's classifier blocked in
- * Grunt's audit trail (grantedBy `deny:auto`, the classifier's reason as the
+ * OtherBench's audit trail (grantedBy `deny:auto`, the classifier's reason as the
  * summary). The payload comes from Claude Code, so it is coerced here. It
  * never changes the outcome and never throws.
  */

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -10,7 +10,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 
 import { api, type PeersOverview } from '../state/api.js';
 import { alsoActive, machineName, remoteUnreachable, streamStatusText } from '../state/machines.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { UnreachableBanner } from './UnreachableBanner.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
@@ -29,7 +29,7 @@ function machines(status: 'reachable' | 'unreachable' | 'unknown'): PeersOvervie
 }
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   vi.mocked(api.chats.patch).mockReset();
 });
 
@@ -81,17 +81,17 @@ describe('where a chat runs', () => {
 
 describe('UnreachableBanner', () => {
   it('shows nothing while the machine is reachable, or for a chat that runs here', () => {
-    useGruntStore.setState({ machines: machines('reachable') });
+    useOtherBenchStore.setState({ machines: machines('reachable') });
     const { container, unmount } = render(<UnreachableBanner chat={chat()} />);
     expect(container).toBeEmptyDOMElement();
     unmount();
-    useGruntStore.setState({ machines: machines('unreachable') });
+    useOtherBenchStore.setState({ machines: machines('unreachable') });
     render(<UnreachableBanner chat={chat({ runsOn: 'node-laptop' })} />);
     expect(screen.queryByTestId('unreachable-banner')).toBeNull();
   });
 
   it('offers to run the chat here, which moves it to this machine', async () => {
-    useGruntStore.setState({ machines: machines('unreachable'), chats: [chat()] });
+    useOtherBenchStore.setState({ machines: machines('unreachable'), chats: [chat()] });
     vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
     render(<UnreachableBanner chat={chat()} />);
 
@@ -99,11 +99,11 @@ describe('UnreachableBanner', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run here' }));
 
     await waitFor(() => expect(api.chats.patch).toHaveBeenCalledWith('c', { runsOn: 'node-laptop' }));
-    await waitFor(() => expect(useGruntStore.getState().chats[0]!.runsOn).toBe('node-laptop'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.runsOn).toBe('node-laptop'));
   });
 
   it('says where the chat runs once it has moved, until dismissed', async () => {
-    useGruntStore.setState({ machines: machines('unreachable'), chats: [chat()] });
+    useOtherBenchStore.setState({ machines: machines('unreachable'), chats: [chat()] });
     vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
     const { rerender } = render(<UnreachableBanner chat={chat()} />);
 
@@ -118,7 +118,7 @@ describe('UnreachableBanner', () => {
   });
 
   it("doesn't carry the note over to another chat shown in the same place", async () => {
-    useGruntStore.setState({ machines: machines('unreachable'), chats: [chat()] });
+    useOtherBenchStore.setState({ machines: machines('unreachable'), chats: [chat()] });
     vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
     const { rerender } = render(<UnreachableBanner chat={chat()} />);
 

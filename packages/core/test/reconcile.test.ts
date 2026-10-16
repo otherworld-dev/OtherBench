@@ -131,7 +131,7 @@ describe('reconcileInterruptedTurns', () => {
     expect(after?.parts).toEqual(parts);
   });
 
-  it("turns a sub-agent that was queued or running when Grunt died into an error, leaving finished ones alone", () => {
+  it("turns a sub-agent that was queued or running when OtherBench died into an error, leaving finished ones alone", () => {
     const store = new InMemoryStore();
     seedChatChain(store, 'chat-a');
     const card = (callId: string, status: 'queued' | 'running' | 'complete'): Part => ({

@@ -5,7 +5,7 @@ import { NO_PROJECT_KEY } from './sidebarGroups.js';
 export type GroupSort = 'manual' | 'recent';
 
 /** localStorage key: JSON object of group key -> GroupSort, for groups set away from their default. Per device, like collapse state. */
-export const GROUP_SORT_STORAGE_KEY = 'grunt.groupSort';
+export const GROUP_SORT_STORAGE_KEY = 'otherbench.groupSort';
 
 /** No project is a dumping ground nobody orders by hand, so it starts by recent activity; projects start manual. */
 export function defaultGroupSort(key: string): GroupSort {

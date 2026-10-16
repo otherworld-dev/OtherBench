@@ -1,4 +1,4 @@
-import { V4_NOT_PUBLIC, V6_GLOBAL_NOT_PUBLIC } from '@grunt/core/domain/browser-hosts.js';
+import { V4_NOT_PUBLIC, V6_GLOBAL_NOT_PUBLIC } from '@otherbench/core/domain/browser-hosts.js';
 // Plain ESM that ships into the VM; vitest loads it as it is.
 import { DENIED_RESOLVED_ADDRESSES } from '../resources/agent-core.mjs';
 

@@ -54,7 +54,7 @@ const PAIRING_SCRYPT = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
  * gives a different key.
  */
 export function pairingKey(code: string, fpA: string, fpB: string): Promise<Buffer> {
-  const salt = `grunt-pairing|${[fpA, fpB].sort().join('|')}`;
+  const salt = `otherbench-pairing|${[fpA, fpB].sort().join('|')}`;
   return new Promise((resolve, reject) => {
     scrypt(normalisePairingCode(code), salt, 32, PAIRING_SCRYPT, (err, key) => (err ? reject(err) : resolve(key)));
   });

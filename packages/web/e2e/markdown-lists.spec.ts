@@ -13,7 +13,7 @@ import { BASE_URL } from '../playwright.config.js';
 let ws: string;
 
 test.beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-lists-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-e2e-lists-'));
   writeFileSync(join(ws, 'lists.md'), '# Lists\n\n3. Third\n4. Fourth\n\n- Apples\n  - Green\n- [ ] Task\n\nMixed:\n\n1. Outer\n   - Middle\n     1. Inner\n\nSame type:\n\n1. Top\n   1. Sub\n');
 });
 

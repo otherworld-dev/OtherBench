@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Grunt",
+  "productName": "OtherBench",
   "version": "0.1.0",
-  "identifier": "dev.otherworld.grunt",
+  "identifier": "dev.otherworld.otherbench",
   "build": {
     "frontendDist": "../../packages/web/dist",
     "devUrl": "http://localhost:5173",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Grunt",
+        "title": "OtherBench",
         "width": 1280,
         "height": 820,
         "minWidth": 800,
@@ -23,7 +23,7 @@
       },
       {
         "label": "quick",
-        "title": "Grunt quick chat",
+        "title": "OtherBench quick chat",
         "url": "index.html?view=quick",
         "width": 560,
         "height": 380,

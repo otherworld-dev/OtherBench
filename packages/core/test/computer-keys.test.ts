@@ -97,13 +97,13 @@ describe('computer keys', () => {
     }
     for (const notText of [undefined, null, 42, ['ctrl', 's'], { text: 'ctrl+s' }]) expect(canonical(notText)).toBeNull();
     // What comes back never carries the hidden characters it was sent.
-    expect(reason('evil\u202ekey')).toBe('"evilkey" isn\'t a key name Grunt knows.');
+    expect(reason('evil\u202ekey')).toBe('"evilkey" isn\'t a key name OtherBench knows.');
     expect(reason(`${'x'.repeat(30)}\u202e${'y'.repeat(30)}`)).not.toMatch(/\u202e/);
   });
 
   it('takes one combination per action', () => {
     for (const keys of ['ctrl+a ctrl+c', 'ctrl+Escape c m d Return', 'Return Return', 'ctrl+a\tctrl+c', 'ctrl+a\nctrl+c']) {
-      expect(reason(keys), JSON.stringify(keys)).toBe('Grunt sends one key combination per action. Send each one as its own action.');
+      expect(reason(keys), JSON.stringify(keys)).toBe('OtherBench sends one key combination per action. Send each one as its own action.');
     }
     // Whitespace Rust and JavaScript disagree about is not a separator at all.
     expect(canonical('super\u0085r')).toBeNull();
@@ -111,11 +111,11 @@ describe('computer keys', () => {
     expect(canonical('ctrl+a\u00a0ctrl+c')).toBeNull();
   });
 
-  it("refuses Grunt's own shortcuts, however they are written", () => {
+  it("refuses OtherBench's own shortcuts, however they are written", () => {
     expect(canonical('ctrl+shift+space')).toBe('ctrl+shift+space');
     for (const reserved of [['ctrl+shift+space'], ['Ctrl+Shift+Space'], ['CommandOrControl+Shift+Space'], ['Shift + Control + SPACE'], ['alt+f1', 'CTRL+SHIFT+SPACE']]) {
-      expect(reason('ctrl+shift+space', reserved), reserved.join(' | ')).toMatch(/Grunt's own shortcuts/);
-      expect(reason('Space+Shift+Control_R', reserved), reserved.join(' | ')).toMatch(/Grunt's own shortcuts/);
+      expect(reason('ctrl+shift+space', reserved), reserved.join(' | ')).toMatch(/OtherBench's own shortcuts/);
+      expect(reason('Space+Shift+Control_R', reserved), reserved.join(' | ')).toMatch(/OtherBench's own shortcuts/);
     }
     expect(canonical('ctrl+shift+g', ['Ctrl+Shift+KeyG'])).toBeNull();
     expect(canonical('ctrl+1', ['Control+Digit1'])).toBeNull();
@@ -128,7 +128,7 @@ describe('computer keys', () => {
   });
 
   it('sends no key at all while it has not been told what the shortcuts are', () => {
-    const unknown = "Grunt doesn't know the desktop app's shortcuts yet; no key was pressed.";
+    const unknown = "OtherBench doesn't know the desktop app's shortcuts yet; no key was pressed.";
     expect(SHORTCUTS_UNKNOWN_REASON).toBe(unknown);
     // A modifier combination and a bare key alike: the quick-chat hotkey is free text and can be a bare F9.
     for (const keys of ['ctrl+s', 'shift+Tab', 'alt+Left', 'ctrl+shift+s', 'Shift_R+F10', 's+CONTROL', 'Return', 'F5', 'F9', 'Escape', 'a', 'Tab', 'Delete']) {

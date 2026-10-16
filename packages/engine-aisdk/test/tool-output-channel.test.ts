@@ -4,12 +4,12 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
-import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
-import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ConnectionKind, ResolvedProfile } from '@grunt/core/types/config.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ConnectionKind, ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { AiSdkChatEngine } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 import { IMAGE_OMITTED_NOTE } from '../src/tool-images.js';
@@ -21,7 +21,7 @@ import { expectOnlyInToolResults, expectWellFormed, googleResponses, zonesAnthro
  * a chat window put on the screen; text with it, a window's title and an error
  * from the desktop app can carry the same. If any of it reached a model as
  * text or an image of the user's turn, or in the system prompt, it would read
- * as the person's or Grunt's own words.
+ * as the person's or OtherBench's own words.
  *
  * So, for every provider path the engine has: a phrase an attacker put on the
  * screen is planted in the text beside a screenshot, in an error string and in

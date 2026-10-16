@@ -1,6 +1,6 @@
-# Grunt
+# OtherBench
 
-Grunt is a local, multi-model chat workbench. It runs as one Node server
+OtherBench is a local, multi-model chat workbench. It runs as one Node server
 (REST API + SSE streaming) with a React web UI, and lets you:
 
 - Chat through **profiles** — a profile pairs a model (on a **connection**:
@@ -15,16 +15,40 @@ Grunt is a local, multi-model chat workbench. It runs as one Node server
   yes, at whatever scope they choose (once, this chat, or always for a
   specific command/path).
 
-Grunt runs either as `grunt serve` plus a browser, or as a desktop app (a
+OtherBench runs either as `otherbench serve` plus a browser, or as a desktop app (a
 Tauri shell around the same UI and server — early days, see
 [Desktop app](#desktop-app) below).
 
+### Formerly Grunt
+
+OtherBench was called Grunt until October 2026. Upgrading keeps your chats
+and settings, with a few one-off steps:
+
+- **Data.** The first start with the default database moves `~/.grunt` to
+  `~/.otherbench` and renames `grunt.db` (along with its `-wal`,
+  `.attachments` and `.imported` siblings) to `otherbench.db`. Quit Grunt
+  first, as the server will refuse to start and tell you why whilst Grunt is
+  still running. Nothing is moved once `~/.otherbench` exists, or when you
+  name a database with `--db`.
+- **Desktop app.** The app has a new identifier (`dev.otherworld.otherbench`),
+  so it installs alongside Grunt rather than over it. Its first start moves the
+  window's saved preferences across, after which you can uninstall Grunt and
+  turn "Start at sign-in" back on if you used it.
+- **Environment variables** are now `OTHERBENCH_*` (for example
+  `OTHERBENCH_COMPUTER_USE`) and the old `GRUNT_*` names are no longer read.
+- **Sandbox.** The WSL distro is now `otherbench-sandbox`. Press Set up in
+  Settings to create it, then remove the old one with
+  `wsl --unregister grunt-sandbox`.
+- **Remote access.** Browsers that were signed in will need to sign in again,
+  as the cookies were renamed. Paired machines carry on syncing even if only
+  one of them has been updated.
+
 ## Prerequisites
 
-- **Node.js 24 or later.** Grunt uses Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html)
+- **Node.js 24 or later.** OtherBench uses Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html)
   module for persistence — no native SQLite binding, no build step. This
   needs to be the Node build's bundled SQLite compiled with **FTS5** support:
-  Grunt's chat search (`GET /api/search`) is FTS5-backed with no fallback, so
+  OtherBench's chat search (`GET /api/search`) is FTS5-backed with no fallback, so
   if `node:sqlite` on your machine lacks FTS5, search will error. It's
   present on the Node 24.16.0 build this was developed and verified against;
   if you hit `no such module: fts5` when searching, that's what's missing.
@@ -43,7 +67,7 @@ Tauri shell around the same UI and server — early days, see
 
 ```sh
 git clone <this-repo>
-cd grunt
+cd otherbench
 npm install
 npm run build
 ```
@@ -62,19 +86,19 @@ UI from the same origin — open that URL in a browser. Useful flags (all
 optional):
 
 ```
-npm run serve -- --port 8080 --db ./my-grunt.db --host 0.0.0.0 --token secret123
+npm run serve -- --port 8080 --db ./my-otherbench.db --host 0.0.0.0 --token secret123
 ```
 
 - `--db <path>` — where the SQLite database lives (defaults to
-  `~/.grunt/grunt.db`). Provider API keys are stored separately, encrypted,
+  `~/.otherbench/otherbench.db`). Provider API keys are stored separately, encrypted,
   next to it (`secrets.json`) — see `docs/HANDOVER.md` for the exact
   guarantees that does and doesn't give you.
-- `--host` — Grunt **refuses to start** on a non-loopback host unless you
+- `--host` — OtherBench **refuses to start** on a non-loopback host unless you
   also pass `--token`, since that would otherwise expose the whole API
   (including a way to read provider keys) to anything that can reach it.
   Leave `--host` unset for ordinary local use.
 
-A `grunt` CLI (`grunt serve ...`, same thing) is also declared as this
+A `otherbench` CLI (`otherbench serve ...`, same thing) is also declared as this
 package's bin and gets linked into `node_modules/.bin` by `npm install` —
 but that link is only created once `packages/server/dist/cli.js` already
 exists, so on a first install (before the first build) it won't be there
@@ -85,10 +109,10 @@ always works and needs neither.
 ## Desktop app
 
 `desktop/` is a Tauri v2 shell. The web UI is bundled into the app (not
-loaded from a URL), and the Grunt server runs as a hidden child process on a
+loaded from a URL), and the OtherBench server runs as a hidden child process on a
 random loopback port with a per-launch token. Closing the app stops the
 server; so does the app crashing, since the server exits when its stdin
-closes. It uses the same `~/.grunt/grunt.db` as `npm run serve`, and only one
+closes. It uses the same `~/.otherbench/otherbench.db` as `npm run serve`, and only one
 of the two can have it open at a time (`<db>.lock`).
 
 Extra prerequisites: Rust (stable, via `rustup`) and, on Windows, the MSVC
@@ -96,35 +120,35 @@ Build Tools (C++ workload) plus WebView2 (preinstalled on Windows 11).
 
 ```sh
 npm install
-npm run app:dev -w @grunt/desktop        # dev: Vite dev server + hot reload
+npm run app:dev -w @otherbench/desktop        # dev: Vite dev server + hot reload
 cd desktop && npx tauri build --debug --no-bundle   # a runnable build with the UI embedded
 ```
 
 Run from the checkout like this, the app finds `node` on `PATH` and the
-server in `packages/server/dist` (`GRUNT_NODE` / `GRUNT_SERVER_SCRIPT`
+server in `packages/server/dist` (`OTHERBENCH_NODE` / `OTHERBENCH_SERVER_SCRIPT`
 override both).
 
 To make a Windows installer that carries its own server and Node runtime:
 
 ```sh
-npm run app:installer -w @grunt/desktop
+npm run app:installer -w @otherbench/desktop
 ```
 
 It builds everything, bundles the server into one file (`npm run bundle -w
-@grunt/server`, with the Claude Code runtime and PDF reader beside it),
+@otherbench/server`, with the Claude Code runtime and PDF reader beside it),
 smoke-tests the bundle, and writes
-`desktop/src-tauri/target/release/bundle/nsis/Grunt_<version>_x64-setup.exe`
+`desktop/src-tauri/target/release/bundle/nsis/OtherBench_<version>_x64-setup.exe`
 (about 100 MB). The installer is per-user and unsigned, so Windows
 SmartScreen warns before it runs (*More info* → *Run anyway*).
 
 ## Two machines
 
-Two Grunt installs can share chats, and a chat can run on whichever machine
+Two OtherBench installs can share chats, and a chat can run on whichever machine
 has its folder.
 
 1. **Pair them.** On one machine, Settings → Machines → *Show a code*. On the
    other, Settings → Machines → *Add a machine*: enter the address shown
-   (`host:4748`) and the code. The first time Grunt listens for other
+   (`host:4748`) and the code. The first time OtherBench listens for other
    machines, Windows asks whether to allow it: allow it on **Private**
    networks only. Pairing pins each machine's certificate, so something in
    between can't pass itself off as either.
@@ -139,31 +163,31 @@ has its folder.
 Chats, messages, profiles, connections (with their keys, unless a
 connection is set to keep its key on its machine), projects and locations
 sync both ways. Grants, MCP servers and the audit log stay on each machine.
-`grunt serve` takes `--peer-port` and `--peer-host` to choose where it
+`otherbench serve` takes `--peer-port` and `--peer-host` to choose where it
 listens for paired machines.
 
 ## Use it from another device
 
-`grunt serve` can run on an always-on box and be used from a laptop's or a
+`otherbench serve` can run on an always-on box and be used from a laptop's or a
 phone's browser, behind a password and HTTPS. The desktop app and the
 loopback browser mode don't change.
 
 1. **Set a password** on the box, at least 12 characters:
 
    ```sh
-   grunt password            # or: node packages/server/dist/cli.js password
+   otherbench password            # or: node packages/server/dist/cli.js password
    ```
 
-   It goes in `login.json` beside `secrets.json` (`~/.grunt/` by default; pass
+   It goes in `login.json` beside `secrets.json` (`~/.otherbench/` by default; pass
    the same `--db` as `serve`). Run it again any time, even while the server
    runs, to change it; every signed-in device is then signed out. Or, signed
    in, Settings → Remote access → *Change password*.
 
 2. **Start the server with the address the browser will type**, and an HTTPS
-   route. With Grunt's own certificate:
+   route. With OtherBench's own certificate:
 
    ```sh
-   grunt serve --host 0.0.0.0 --public-url https://192.168.1.20:4747 --public-url https://box.lan:4747 --tls auto
+   otherbench serve --host 0.0.0.0 --public-url https://192.168.1.20:4747 --public-url https://box.lan:4747 --tls auto
    ```
 
    `--public-url` can be given more than once; each is `https://host[:port]`.
@@ -172,8 +196,8 @@ loopback browser mode don't change.
    HTTPS proxy in front (`--trust-proxy <its IP>`).
 
 3. **Trust the certificate** on each device (with `--tls auto`). First, on
-   the box, note the SHA-256 fingerprint `grunt serve` prints. Then:
-   - **Windows:** open `https://<public url>/grunt-ca.crt` (accept the one
+   the box, note the SHA-256 fingerprint `otherbench serve` prints. Then:
+   - **Windows:** open `https://<public url>/otherbench-ca.crt` (accept the one
      warning), open the file, *Install Certificate* → *Current User* →
      *Trusted Root Certification Authorities*. Edge and Chrome use it. If
      Firefox still warns, import the file under its own *Settings* →
@@ -201,11 +225,11 @@ loopback browser mode don't change.
    every device out. Settings → Remote access shows the addresses and the
    certificate and has *Sign out everywhere*.
 
-Behind a proxy, Grunt listens in plain HTTP and the proxy does TLS. It must
+Behind a proxy, OtherBench listens in plain HTTP and the proxy does TLS. It must
 pass the original `Host` (or `127.0.0.1:<port>`) and set `X-Forwarded-For`:
 
-- **Caddy:** `grunt.example.com { reverse_proxy 127.0.0.1:4747 }`, with
-  `--public-url https://grunt.example.com --trust-proxy 127.0.0.1`.
+- **Caddy:** `otherbench.example.com { reverse_proxy 127.0.0.1:4747 }`, with
+  `--public-url https://otherbench.example.com --trust-proxy 127.0.0.1`.
 - **nginx:** `proxy_set_header Host $host; proxy_set_header X-Forwarded-For
   $proxy_add_x_forwarded_for; proxy_buffering off;`.
 - **Tailscale:** `tailscale serve --bg http://127.0.0.1:4747`, with
@@ -231,7 +255,7 @@ those), while a browser you signed in on with *Keep me signed in on this
 device* is remembered (a cookie that is not a sign-in by itself) and goes
 straight to the password check; five wrong passwords from it and it is
 forgotten for a day. Signing out forgets that browser. These limits live in
-memory, so restarting Grunt resets them. Changing the password or *Sign out everywhere* makes Grunt forget every
+memory, so restarting OtherBench resets them. Changing the password or *Sign out everywhere* makes OtherBench forget every
 remembered browser.
 
 ## Claude Code
@@ -245,19 +269,19 @@ A **Claude Code** connection runs turns through your local Claude Code install
   endpoint's models through Claude Code. Pick a tool-capable model.
 
 Claude Code profiles need a workspace folder on the chat. Claude Code's own
-tools (Read, Edit, Bash, ...) replace Grunt's fs/shell/MCP tools for those
-turns, and Grunt's profile policy decides every call: under "ask on mutate",
+tools (Read, Edit, Bash, ...) replace OtherBench's fs/shell/MCP tools for those
+turns, and OtherBench's profile policy decides every call: under "ask on mutate",
 reads inside the workspace are allowed automatically and edits, shell commands,
 web and MCP calls get an approval card. Your `~/.claude` settings, CLAUDE.md
 files and MCP servers apply, and so do the workspace's own `.claude` settings,
 hooks and skills, `.mcp.json` and CLAUDE.md, with no trust prompt -- only use
 folders you trust as workspaces. Chats are real Claude Code sessions: the
 Inspector shows a `claude --resume` command to continue one in a terminal
-(changes made there don't come back into Grunt).
+(changes made there don't come back into OtherBench).
 
 ## Try it with no API key — the mock provider
 
-Grunt ships a keyless **mock provider** (`kind: "mock"`) specifically so you
+OtherBench ships a keyless **mock provider** (`kind: "mock"`) specifically so you
 can evaluate the whole app — streaming, tool calls, approvals, compare —
 without any real credentials.
 
@@ -323,26 +347,26 @@ actual file to read. `workspaceRoot` has to be a proper **native, absolute**
 path — on Linux/macOS:
 
 ```sh
-mkdir -p /tmp/grunt-demo && echo "the treasure is buried under the oak tree" > /tmp/grunt-demo/notes.txt
+mkdir -p /tmp/otherbench-demo && echo "the treasure is buried under the oak tree" > /tmp/otherbench-demo/notes.txt
 
 curl -X POST http://127.0.0.1:4747/api/chats \
   -H "Content-Type: application/json" \
-  -d '{"title":"Mock demo","profileId":"PROFILE_ID","workspaceRoot":"/tmp/grunt-demo"}'
+  -d '{"title":"Mock demo","profileId":"PROFILE_ID","workspaceRoot":"/tmp/otherbench-demo"}'
 ```
 
-On Windows, use a drive-letter path — e.g. `C:\Users\you\grunt-demo`
+On Windows, use a drive-letter path — e.g. `C:\Users\you\otherbench-demo`
 (escape backslashes as `\\` in the JSON body, or use forward slashes,
-`C:/Users/you/grunt-demo`, which Node accepts just as well). **If you're in
+`C:/Users/you/otherbench-demo`, which Node accepts just as well). **If you're in
 Git Bash, don't pass `pwd`'s own output directly** — `pwd` prints
-`/c/Users/you/grunt-demo`, and the server (an ordinary Windows Node
-process) resolves that as `C:\c\Users\you\grunt-demo`, one directory level
+`/c/Users/you/otherbench-demo`, and the server (an ordinary Windows Node
+process) resolves that as `C:\c\Users\you\otherbench-demo`, one directory level
 that doesn't exist, and every read fails with `ENOENT` (checked: this is
 exactly what happens, not a hypothetical). Use `pwd -W` instead, which
 prints the drive-letter form:
 
 ```sh
-mkdir -p ~/grunt-demo && echo "the treasure is buried under the oak tree" > ~/grunt-demo/notes.txt
-WORKSPACE="$(cd ~/grunt-demo && pwd -W)"
+mkdir -p ~/otherbench-demo && echo "the treasure is buried under the oak tree" > ~/otherbench-demo/notes.txt
+WORKSPACE="$(cd ~/otherbench-demo && pwd -W)"
 
 curl -X POST http://127.0.0.1:4747/api/chats \
   -H "Content-Type: application/json" \

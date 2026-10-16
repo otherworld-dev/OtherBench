@@ -1,9 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import { useGruntStore } from '../state/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { Thread } from './Thread.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
 
@@ -88,7 +88,7 @@ function variantMessage(id: string, parentId: string, overrides: Partial<CanonMe
 }
 
 function reset(): void {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   mockedSetHead.mockReset();
   mockedRetry.mockReset();
   mockedRegenerate.mockReset();
@@ -103,7 +103,7 @@ function reset(): void {
  * `chat.headMessageId`.
  */
 function ThreadForChat({ chatId }: { chatId: string }): ReturnType<typeof Thread> {
-  const chat = useGruntStore((s) => s.chats.find((c) => c.id === chatId) ?? null);
+  const chat = useOtherBenchStore((s) => s.chats.find((c) => c.id === chatId) ?? null);
   return <Thread chat={chat} />;
 }
 
@@ -113,7 +113,7 @@ describe('Thread', () => {
 
   it('shows and hides the viewer beside the chat, remembered per chat', async () => {
     useViewerStore.setState({ viewers: {} });
-    useGruntStore.setState({ chats: [makeChat()] });
+    useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
     const user = userEvent.setup();
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
@@ -127,12 +127,12 @@ describe('Thread', () => {
   });
 
   it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
-    useGruntStore.setState({ chats: [makeChat()] });
+    useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
     expect(screen.queryByTestId('computer-banner')).toBeNull();
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'click at 1, 2' }));
-    expect(screen.getByTestId('computer-banner')).toHaveTextContent('Grunt is controlling this computer.');
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'click at 1, 2' }));
+    expect(screen.getByTestId('computer-banner')).toHaveTextContent('OtherBench is controlling this computer.');
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
     expect(screen.queryByTestId('computer-banner')).toBeNull();
   });
 
@@ -141,10 +141,10 @@ describe('Thread', () => {
     useViewerStore.getState().setOpen('chat-1', true);
     const browserCall = (id: string, chatId: string) =>
       ({ id, chatId, parentId: null, role: 'assistant', parts: [{ type: 'tool-call', id: `t-${id}`, name: 'browser', args: {} }], status: 'complete', error: null, producedBy: null, createdAt: 1 }) as unknown as CanonMessage;
-    useGruntStore.setState({ chats: [makeChat(), makeChat({ id: 'chat-2' })], messages: { other: browserCall('other', 'chat-2') } });
+    useOtherBenchStore.setState({ chats: [makeChat(), makeChat({ id: 'chat-2' })], messages: { other: browserCall('other', 'chat-2') } });
     render(<ThreadForChat chatId="chat-1" />);
     expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'false');
-    act(() => useGruntStore.setState((s) => ({ messages: { ...s.messages, mine: browserCall('mine', 'chat-1') } })));
+    act(() => useOtherBenchStore.setState((s) => ({ messages: { ...s.messages, mine: browserCall('mine', 'chat-1') } })));
     expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'true');
   });
 
@@ -160,9 +160,9 @@ describe('Thread', () => {
     const rootB = makeMessage('root-b', 'chat-b');
     const rootC = makeMessage('root-c', 'chat-c');
 
-    useGruntStore.getState().loadMessages('chat-a', [rootA], null);
-    useGruntStore.getState().loadMessages('chat-b', [rootB], null);
-    useGruntStore.getState().loadMessages('chat-c', [rootC], null);
+    useOtherBenchStore.getState().loadMessages('chat-a', [rootA], null);
+    useOtherBenchStore.getState().loadMessages('chat-b', [rootB], null);
+    useOtherBenchStore.getState().loadMessages('chat-c', [rootC], null);
 
     const chatA = makeChat({ id: 'chat-a', headMessageId: 'root-a' });
 
@@ -177,7 +177,7 @@ describe('Thread', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
     const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
     // Head is on the USER message -- nothing has been kept yet.
     const chat = makeChat({ headMessageId: 'root' });
 
@@ -194,7 +194,7 @@ describe('Thread', () => {
   it('a single-profile reply renders automatically even though head only advances to the user message', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const reply = variantMessage('reply', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'the only reply' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
     const chat = makeChat({ headMessageId: 'root' });
 
     render(<Thread chat={chat} />);
@@ -207,7 +207,7 @@ describe('Thread', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
     const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
     const chat = makeChat({ headMessageId: 'variant-b' });
 
     const user = userEvent.setup();
@@ -231,8 +231,8 @@ describe('Thread', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
     const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
-    useGruntStore.getState().setChats([makeChat({ headMessageId: 'root' })]);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId: 'root' })]);
     mockedSetHead.mockResolvedValue(makeChat({ headMessageId: 'variant-b' }));
 
     const user = userEvent.setup();
@@ -253,8 +253,8 @@ describe('Thread', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
     const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
-    useGruntStore.getState().setChats([makeChat({ headMessageId: 'variant-b' })]);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId: 'variant-b' })]);
     mockedSetHead.mockRejectedValue(new Error('Bad Request'));
 
     const user = userEvent.setup();
@@ -266,7 +266,7 @@ describe('Thread', () => {
 
     await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'variant-a'));
     // Reverted back to variant-b once the server rejected the switch.
-    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('variant-b'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('variant-b'));
     expect(screen.getByRole('alert')).toHaveTextContent(/couldn't keep|failed to keep/i);
   });
 
@@ -279,7 +279,7 @@ describe('Thread', () => {
       parts: [{ type: 'text', text: 'partial before failing' }],
     });
     const healthy = variantMessage('healthy', 'root', { createdAt: 2, status: 'streaming', parts: [{ type: 'text', text: 'still going' }] });
-    useGruntStore.getState().loadMessages('chat-1', [root, failing, healthy], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, failing, healthy], null);
     mockedRetry.mockResolvedValue({ messageId: 'failing' });
     const chat = makeChat({ headMessageId: 'root' });
 
@@ -291,10 +291,10 @@ describe('Thread', () => {
 
     expect(mockedRetry).toHaveBeenCalledWith('failing');
     // Reset locally: the failed attempt's stale content/error is cleared and status re-armed to streaming.
-    await waitFor(() => expect(useGruntStore.getState().messages['failing']?.status).toBe('streaming'));
-    expect(useGruntStore.getState().messages['failing']?.parts).toEqual([]);
+    await waitFor(() => expect(useOtherBenchStore.getState().messages['failing']?.status).toBe('streaming'));
+    expect(useOtherBenchStore.getState().messages['failing']?.parts).toEqual([]);
     // The sibling is completely unaffected.
-    expect(useGruntStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
+    expect(useOtherBenchStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
   });
 });
 
@@ -311,13 +311,13 @@ describe('Thread auto-scroll', () => {
 
   function addReply(id: string, text: string): void {
     act(() => {
-      useGruntStore.getState().loadMessages('chat-1', [variantMessage(id, 'root', { parts: [{ type: 'text', text }] })], null);
+      useOtherBenchStore.getState().loadMessages('chat-1', [variantMessage(id, 'root', { parts: [{ type: 'text', text }] })], null);
     });
   }
 
   function setup(): HTMLElement {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
-    useGruntStore.getState().loadMessages('chat-1', [root], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root], null);
     render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
     return screen.getByTestId('thread-scroll');
   }
@@ -354,7 +354,7 @@ describe('Thread auto-scroll', () => {
     fireEvent.scroll(scroller);
     scroller.scrollTop = 600;
     act(() => {
-      useGruntStore.getState().loadMessages('chat-1', [variantMessage('r1', 'root', { status: 'streaming', parts: [{ type: 'text', text: 'hello world' }] })], null);
+      useOtherBenchStore.getState().loadMessages('chat-1', [variantMessage('r1', 'root', { status: 'streaming', parts: [{ type: 'text', text: 'hello world' }] })], null);
     });
     expect(scroller.scrollTop).toBe(1000);
   });
@@ -365,7 +365,7 @@ describe('Thread auto-scroll', () => {
     stubScroller(scroller, 590);
     fireEvent.scroll(scroller);
     act(() => {
-      useGruntStore.setState((st) => ({
+      useOtherBenchStore.setState((st) => ({
         extras: {
           ...st.extras,
           r1: {
@@ -389,7 +389,7 @@ describe('Thread auto-scroll', () => {
       tops.set(this, v);
     });
     try {
-      useGruntStore.getState().loadMessages('chat-1', [makeMessage('root', 'chat-1')], null);
+      useOtherBenchStore.getState().loadMessages('chat-1', [makeMessage('root', 'chat-1')], null);
       render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
       expect(screen.getByTestId('thread-scroll').scrollTop).toBe(1000);
     } finally {
@@ -404,19 +404,19 @@ describe('Thread composer per chat', () => {
   afterEach(cleanup);
 
   it('does not carry the Auto save state or profile selection from one chat to the next', async () => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     const conn = { id: 'cc', name: 'cc', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null } as never;
     const oll = { id: 'oll', name: 'oll', kind: 'ollama', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null } as never;
-    useGruntStore.getState().setConnections([conn, oll]);
+    useOtherBenchStore.getState().setConnections([conn, oll]);
     const prof = (id: string, connectionId: string) => ({
       id, name: id, description: null, colour: null, connectionId, modelId: 'm', systemPrompt: null, params: {},
       toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null,
     }) as never;
-    useGruntStore.getState().setProfiles([prof('ccp', 'cc'), prof('ollp', 'oll')]);
+    useOtherBenchStore.getState().setProfiles([prof('ccp', 'cc'), prof('ollp', 'oll')]);
     const a = makeChat({ id: 'a', profileId: 'ccp', workspaceRoot: '/ws' });
     const b = makeChat({ id: 'b', profileId: 'ccp', workspaceRoot: '/ws' });
     const c = makeChat({ id: 'c', profileId: 'ollp' });
-    useGruntStore.getState().setChats([a, b, c]);
+    useOtherBenchStore.getState().setChats([a, b, c]);
     vi.mocked(api.chats.patch).mockReturnValue(new Promise<Chat>(() => {}));
     const view = render(<Thread chat={a} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Auto mode' }));
@@ -431,7 +431,7 @@ describe('Thread composer per chat', () => {
   it('renders the pane header above (outside) the scroller, before and after the first message', () => {
     const view = render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: null })} />);
     expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('prompt');
-    useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
+    useOtherBenchStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
     view.rerender(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
     const strip = screen.getByRole('region', { name: 'Conversation' });
     const scroller = screen.getByTestId('thread-scroll');
@@ -448,7 +448,7 @@ describe('Thread composer per chat', () => {
     }
     vi.stubGlobal('ResizeObserver', FakeRO);
     try {
-      useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
+      useOtherBenchStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
       render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
       const scroller = screen.getByTestId('thread-scroll');
       Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
@@ -475,8 +475,8 @@ describe('Thread approval prompts that were discarded server-side', () => {
   function setup(): void {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const reply = variantMessage('reply', 'root', { status: 'streaming' });
-    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
-    useGruntStore.getState().applyTurnEvent({
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
+    useOtherBenchStore.getState().applyTurnEvent({
       messageId: 'reply',
       type: 'approval-request',
       request: { id: 'req-1', chatId: 'chat-1', messageId: 'reply', toolName: 'write_file', risk: 'mutate', source: 'fs', args: { path: 'a.txt' }, summary: 'write_file(a.txt)' },
@@ -510,7 +510,7 @@ describe('Thread approval prompts that were discarded server-side', () => {
     setup();
     render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
-    act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'cancelled' }));
+    act(() => useOtherBenchStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'cancelled' }));
     expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
   });
 });
@@ -522,8 +522,8 @@ describe('Thread question and plan cards', () => {
   function setup(): void {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const reply = variantMessage('reply', 'root', { status: 'streaming' });
-    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
-    useGruntStore.getState().applyTurnEvent({
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
+    useOtherBenchStore.getState().applyTurnEvent({
       messageId: 'reply',
       type: 'ask-request',
       ask: { kind: 'question', toolName: 'ask_user', id: 'ask-1', chatId: 'chat-1', messageId: 'reply', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] },
@@ -554,13 +554,13 @@ describe('Thread question and plan cards', () => {
 
   it("shows a question card, a plan card, a computer card and the computer banner together, each answered on its own (integration)", async () => {
     setup();
-    useGruntStore.getState().applyTurnEvent({
+    useOtherBenchStore.getState().applyTurnEvent({
       messageId: 'reply',
       type: 'ask-request',
       ask: { kind: 'plan', toolName: 'propose_plan', id: 'plan-1', chatId: 'chat-1', messageId: 'reply', plan: '1. Open the sheet' },
     });
     const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
-    useGruntStore.getState().applyTurnEvent({
+    useOtherBenchStore.getState().applyTurnEvent({
       messageId: 'reply',
       type: 'approval-request',
       request: {
@@ -568,9 +568,9 @@ describe('Thread question and plan cards', () => {
         args: { action: 'left_click', coordinate: [10, 20], app, appName: 'FakeApp.exe', appTitle: 'Fake', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' },
       },
     });
-    useGruntStore.setState({ chats: [makeChat({ headMessageId: 'reply' })] });
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'reply' })] });
     render(<ThreadForChat chatId="chat-1" />);
-    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'screenshot' }));
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'screenshot' }));
 
     expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
     expect(screen.getByTestId('ask-card-plan-1')).toHaveAttribute('data-kind', 'plan');
@@ -609,22 +609,22 @@ describe('Thread error mid-step', () => {
   it('keeps the approval card and the Stop button while the server is still streaming after an error event, and drops the card on the terminal status', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
     const reply = variantMessage('reply', 'root', { status: 'streaming' });
-    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
     const chat = makeChat({ headMessageId: 'reply' });
     render(<Thread chat={chat} />);
     act(() => {
-      useGruntStore.getState().applyTurnEvent({
+      useOtherBenchStore.getState().applyTurnEvent({
         messageId: 'reply',
         type: 'approval-request',
         request: { id: 'req-1', chatId: 'chat-1', messageId: 'reply', toolName: 'write_file', risk: 'mutate', source: 'fs', args: {}, summary: 'write_file(a.txt)' },
       });
-      useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'error', error: { kind: 'rate_limit', message: 'overloaded', retryable: true } });
+      useOtherBenchStore.getState().applyTurnEvent({ messageId: 'reply', type: 'error', error: { kind: 'rate_limit', message: 'overloaded', retryable: true } });
     });
 
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
 
-    act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'error' }));
+    act(() => useOtherBenchStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'error' }));
     expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
   });
 });
@@ -642,11 +642,11 @@ describe('Thread regenerate, edit and branch switching', () => {
     });
   const usr = (id: string, parentId: string | null, createdAt: number, text = `text of ${id}`): CanonMessage =>
     makeMessage(id, 'chat-1', { role: 'user', parentId, createdAt, parts: [{ type: 'text', text }] });
-  const load = (...ms: CanonMessage[]): void => useGruntStore.getState().loadMessages('chat-1', ms, null);
+  const load = (...ms: CanonMessage[]): void => useOtherBenchStore.getState().loadMessages('chat-1', ms, null);
   const regen = { regenerated: true, profileId: 'p1', profileName: 'Default', connectionId: 'c1', modelId: 'model-x' };
 
   function seedProfile(): void {
-    useGruntStore.getState().setProfiles([
+    useOtherBenchStore.getState().setProfiles([
       {
         id: 'p1', name: 'Default', description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
         params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
@@ -655,7 +655,7 @@ describe('Thread regenerate, edit and branch switching', () => {
   }
 
   function mount(headMessageId: string) {
-    useGruntStore.getState().setChats([makeChat({ headMessageId })]);
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId })]);
     return render(<ThreadForChat chatId="chat-1" />);
   }
 
@@ -667,9 +667,9 @@ describe('Thread regenerate, edit and branch switching', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
 
     await waitFor(() => expect(mockedRegenerate).toHaveBeenCalledWith('chat-1', 'a1'));
-    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('a2'));
-    expect(useGruntStore.getState().messages['a2']).toMatchObject({ parentId: 'u1', role: 'assistant', status: 'streaming' });
-    expect(useGruntStore.getState().messages['a2']?.producedBy).toMatchObject({ profileId: 'p1', regenerated: true });
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('a2'));
+    expect(useOtherBenchStore.getState().messages['a2']).toMatchObject({ parentId: 'u1', role: 'assistant', status: 'streaming' });
+    expect(useOtherBenchStore.getState().messages['a2']?.producedBy).toMatchObject({ profileId: 'p1', regenerated: true });
     // No compare tab strip -- a regenerated pair is browsed with the switcher.
     expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
     expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2');
@@ -681,7 +681,7 @@ describe('Thread regenerate, edit and branch switching', () => {
     mount('u1');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/regenerate/i);
-    expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('u1');
+    expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('u1');
   });
 
   it('switches branches: the thread shows that branch down to its tip and head moves there', async () => {
@@ -717,14 +717,14 @@ describe('Thread regenerate, edit and branch switching', () => {
     mockedSetHead.mockRejectedValue(new Error('refused'));
     mount('a2');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
-    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('a2'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('a2'));
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 
   it('Edit opens the message inline; saving posts a sibling user message under the same parent with the chat profile, and moves head to it', async () => {
     seedProfile();
     load(usr('u1', null, 1, 'first'), asst('a1', 'u1', 2), usr('u2', 'a1', 3, 'second'), asst('a2', 'u2', 4));
-    useGruntStore.getState().setChats([makeChat({ headMessageId: 'a2' })]);
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId: 'a2' })]);
     mockedCreate.mockResolvedValue({ userMessageId: 'u2b', assistantMessageIds: ['a2b'] });
     mockedSetHead.mockResolvedValue(makeChat());
     render(<ThreadForChat chatId="chat-1" />);
@@ -741,11 +741,11 @@ describe('Thread regenerate, edit and branch switching', () => {
     await waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith('chat-1', { parentId: 'a1', parts: [{ type: 'text', text: 'second, reworded' }], profileIds: ['p1'] })
     );
-    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('u2b'));
-    expect(useGruntStore.getState().messages['u2b']).toMatchObject({ parentId: 'a1', role: 'user' });
-    expect(useGruntStore.getState().messages['a2b']).toMatchObject({ parentId: 'u2b', role: 'assistant' });
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('u2b'));
+    expect(useOtherBenchStore.getState().messages['u2b']).toMatchObject({ parentId: 'a1', role: 'user' });
+    expect(useOtherBenchStore.getState().messages['a2b']).toMatchObject({ parentId: 'u2b', role: 'assistant' });
     // The original is still in the tree, reachable by the switcher on the edited message.
-    expect(useGruntStore.getState().messages['u2']).toBeDefined();
+    expect(useOtherBenchStore.getState().messages['u2']).toBeDefined();
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument());
     expect(within(screen.getByTestId('thread-scroll')).getByText('second, reworded')).toBeInTheDocument();
     const switchers = screen.getAllByTestId('branch-switcher');
@@ -803,7 +803,7 @@ describe('Thread regenerate, edit and branch switching', () => {
   });
 
   const twoProfiles = (): void =>
-    useGruntStore.getState().setProfiles(
+    useOtherBenchStore.getState().setProfiles(
       ['p1', 'p2'].map((id) => ({
         id, name: `Profile ${id}`, description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
         params: {}, toolPolicy: { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const }, isDefault: false, archivedAt: null,
@@ -986,7 +986,7 @@ describe('Thread regenerate, edit and branch switching', () => {
   });
 
   it('Edit skips an answering profile that has since been archived', async () => {
-    useGruntStore.getState().setProfiles(
+    useOtherBenchStore.getState().setProfiles(
       ['p1', 'p2'].map((id) => ({
         id, name: `Profile ${id}`, description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
         params: {}, toolPolicy: { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const }, isDefault: false,

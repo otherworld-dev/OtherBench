@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { liveCallHash } from '@grunt/core/domain/live-artifacts.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import type { LiveCall } from '@grunt/core/ports/store.js';
-import type { LiveRunRequest, ToolContext } from '@grunt/core/ports/tool-provider.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import { liveCallHash } from '@otherbench/core/domain/live-artifacts.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import type { LiveCall } from '@otherbench/core/ports/store.js';
+import type { LiveRunRequest, ToolContext } from '@otherbench/core/ports/tool-provider.js';
+import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { liveToolRisks } from '../src/artifact-tool.js';
 import { McpServerManager } from '../src/mcp/manager.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 
 /** Live artifacts (spec 2026-10-12-live-artifacts) against the real fixture over stdio. */
 const LIVE_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-server.js');
@@ -21,7 +21,7 @@ const waitCall: LiveCall = { id: 'wait', tool: 'mcp__Live__wait', args: { ms: 20
 
 let store: InMemoryStore;
 let manager: McpServerManager;
-let provider: GruntToolProvider;
+let provider: OtherBenchToolProvider;
 
 const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'off', shell: false, mcpServerIds: [SERVER], approvalMode: 'always_ask', ...over });
 const statusReq = (calls: LiveCall[], over: Record<string, unknown> = {}) => ({
@@ -38,7 +38,7 @@ beforeEach(async () => {
   store.mcpServers.create({ id: SERVER, name: 'Live', transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
   const broker = new PermissionBroker(store);
   manager = new McpServerManager(store, new FakeSecretStore(), { initialBackoffMs: 50, maxBackoffMs: 100 });
-  provider = new GruntToolProvider(store, broker, manager, { liveTimeoutMs: 300 });
+  provider = new OtherBenchToolProvider(store, broker, manager, { liveTimeoutMs: 300 });
   await manager.sync();
   await vi.waitFor(
     () => {
@@ -52,7 +52,7 @@ afterEach(async () => {
   await manager.shutdown();
 });
 
-describe('GruntToolProvider live calls', () => {
+describe('OtherBenchToolProvider live calls', () => {
   it('is not_approved and audited deny:policy before allowLive; afterwards it returns data audited live:<grant id>', async () => {
     expect(await run(lookupCall, { key: 'b' })).toEqual({ ok: false, code: 'not_approved', message: "You haven't allowed this live artifact's calls on this machine." });
     expect(store.audit.list('chat-1').map((a) => a.grantedBy)).toEqual(['deny:policy']);
@@ -225,7 +225,7 @@ describe('GruntToolProvider live calls', () => {
 
   it('audits the first rate_limited refusal a minute per artifact and counts the rest onto its next audited row', async () => {
     let t = 1_000_000;
-    provider = new GruntToolProvider(store, new PermissionBroker(store), manager, { liveTimeoutMs: 300, now: () => t });
+    provider = new OtherBenchToolProvider(store, new PermissionBroker(store), manager, { liveTimeoutMs: 300, now: () => t });
     provider.allowLive(statusReq([waitCall, lookupCall]));
     // Four calls in flight fill the artifact's slots, so every lookup is rate_limited.
     const waits = Array.from({ length: 4 }, () => run(waitCall, { ms: 2000 }, { fresh: true }));

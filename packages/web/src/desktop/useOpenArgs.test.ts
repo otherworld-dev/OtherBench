@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', () => ({
   api: { chats: { create: vi.fn() }, attachments: { fromPath: vi.fn() } },
 }));
 
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { handleOpenArgs } from './useOpenArgs.js';
 
 const mockedCreate = vi.mocked(api.chats.create);
@@ -27,38 +27,38 @@ function chat(id: string, over: Partial<Chat> = {}): Chat {
 
 describe('handleOpenArgs', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
-    useGruntStore.setState({ profiles: [profile('p-old', { archivedAt: 5, isDefault: true }), profile('p-other'), profile('p-default', { isDefault: true })] });
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    useOtherBenchStore.setState({ profiles: [profile('p-old', { archivedAt: 5, isDefault: true }), profile('p-other'), profile('p-default', { isDefault: true })] });
     mockedCreate.mockReset();
     mockedFromPath.mockReset();
   });
 
   it('--open-folder opens a new chat working in that folder, with the default profile', async () => {
     mockedCreate.mockResolvedValue(chat('c1', { workspaceRoot: 'E:\\Work' }));
-    await handleOpenArgs(['grunt.exe', '--open-folder', 'E:\\Work']);
+    await handleOpenArgs(['otherbench.exe', '--open-folder', 'E:\\Work']);
     expect(mockedCreate).toHaveBeenCalledWith({ profileId: 'p-default', workspaceRoot: 'E:\\Work' });
-    expect(useGruntStore.getState().activeChatId).toBe('c1');
-    expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['c1']);
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
+    expect(useOtherBenchStore.getState().chats.map((c) => c.id)).toEqual(['c1']);
   });
 
   it('--send opens a new chat with each file attached, carrying on past one that fails', async () => {
     mockedCreate.mockResolvedValue(chat('c2'));
     mockedFromPath.mockRejectedValueOnce(new Error('not an image')).mockResolvedValue({} as never);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await handleOpenArgs(['grunt.exe', '--send', 'E:\\notes.txt', 'E:\\shot.png']);
+    await handleOpenArgs(['otherbench.exe', '--send', 'E:\\notes.txt', 'E:\\shot.png']);
     expect(mockedFromPath.mock.calls).toEqual([
       ['c2', 'E:\\notes.txt'],
       ['c2', 'E:\\shot.png'],
     ]);
-    expect(useGruntStore.getState().activeChatId).toBe('c2');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c2');
     errors.mockRestore();
   });
 
   it('does nothing without arguments, or without a profile to use', async () => {
-    await handleOpenArgs(['grunt.exe', '--minimized']);
-    useGruntStore.setState({ profiles: [] });
+    await handleOpenArgs(['otherbench.exe', '--minimized']);
+    useOtherBenchStore.setState({ profiles: [] });
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await handleOpenArgs(['grunt.exe', '--open-folder', 'E:\\Work']);
+    await handleOpenArgs(['otherbench.exe', '--open-folder', 'E:\\Work']);
     expect(mockedCreate).not.toHaveBeenCalled();
     errors.mockRestore();
   });

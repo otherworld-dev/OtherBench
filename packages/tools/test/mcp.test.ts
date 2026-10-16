@@ -37,9 +37,9 @@ describe('McpClient over stdio', () => {
     expect(client.status).toBe('ok');
     expect(client.tools.map((t) => t.name).sort()).toEqual(['crash', 'echo']);
 
-    const result = await client.callTool('echo', { text: 'hello-grunt' });
+    const result = await client.callTool('echo', { text: 'hello-otherbench' });
     expect(result.isError).toBe(false);
-    expect(JSON.stringify(result.content)).toContain('hello-grunt');
+    expect(JSON.stringify(result.content)).toContain('hello-otherbench');
   });
 
   it(
@@ -85,8 +85,8 @@ describe('McpClient over stdio', () => {
   (process.platform === 'win32' ? it : it.skip)(
     'resolves and spawns an npx-style bare command name on Windows',
     async () => {
-      const shimDir = mkdtempSync(join(tmpdir(), 'grunt-mcp-shim-'));
-      const shimName = 'grunt-mcp-fixture-launcher';
+      const shimDir = mkdtempSync(join(tmpdir(), 'otherbench-mcp-shim-'));
+      const shimName = 'otherbench-mcp-fixture-launcher';
       // `%*` forwards every arg the resolved shim is invoked with -- McpClient
       // passes none here, the fixture path is baked into the shim itself,
       // mirroring how `npx <package>` bakes the package name into what it

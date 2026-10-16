@@ -1,9 +1,9 @@
 /**
- * The JSON lines between Grunt and its sandbox agent (resources/agent-core.mjs,
+ * The JSON lines between OtherBench and its sandbox agent (resources/agent-core.mjs,
  * which mirrors these shapes: change both together). The agent runs inside
  * the VM, so what it sends is data, checked field by field, never trusted.
  *
- * What the agent holds Grunt to: run ids are safe non-negative integers (a run's
+ * What the agent holds OtherBench to: run ids are safe non-negative integers (a run's
  * id names its temp folder), one run is in flight at a time, and `timeoutMs` is
  * a finite number above zero (the agent caps it at 600000).
  */

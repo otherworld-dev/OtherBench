@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { ProfileRepo } from '@grunt/core/ports/store.js';
-import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import type { ProfileRepo } from '@otherbench/core/ports/store.js';
+import type { ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
 import { fromBool, fromJson, toBool, toJson } from './util.js';

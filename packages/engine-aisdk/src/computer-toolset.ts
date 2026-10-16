@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai';
-import { isComputerAction } from '@grunt/core/domain/computer-apps.js';
+import { isComputerAction } from '@otherbench/core/domain/computer-apps.js';
 
 /**
  * Messages made safe to send with Anthropic's computer toolset among the

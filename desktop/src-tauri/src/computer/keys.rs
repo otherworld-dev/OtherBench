@@ -21,7 +21,7 @@ pub struct Key {
     pub name: &'static str,
     pub vk: u16,
     pub extended: bool,
-    /// The physical key a global shortcut names, to compare with Grunt's own.
+    /// The physical key a global shortcut names, to compare with OtherBench's own.
     pub code: Code,
 }
 
@@ -166,7 +166,7 @@ pub fn refuse_own(combo: &Combo, own: &[String]) -> Result<(), String> {
             return Err("The desktop app couldn't read one of its own shortcuts, so it presses no key combinations; nothing was pressed.".into());
         };
         if shortcut.mods == combo.mods && shortcut.key == combo.key.code {
-            return Err(format!("Grunt never sends {}: it's one of Grunt's own shortcuts. Nothing was pressed.", combo.text));
+            return Err(format!("OtherBench never sends {}: it's one of OtherBench's own shortcuts. Nothing was pressed.", combo.text));
         }
     }
     Ok(())

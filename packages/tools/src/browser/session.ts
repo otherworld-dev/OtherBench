@@ -1,4 +1,4 @@
-/** The credentials the browser uses to reach Grunt's egress proxy (one user per chat). */
+/** The credentials the browser uses to reach OtherBench's egress proxy (one user per chat). */
 export interface ProxyCredentials {
   server: string;
   username: string;

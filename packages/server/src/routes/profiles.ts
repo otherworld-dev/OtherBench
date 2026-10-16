@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
-import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
-import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
+import { normaliseHost } from '@otherbench/core/domain/browser-hosts.js';
+import type { ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
+import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
 import { clearProjectDefaultProfile } from './projects.js';
@@ -204,7 +204,7 @@ export function profilesRoutes(container: Container): Hono {
     clearMemoryProfile(container.store, id);
     // Best effort, and before the sweep below, which can fail the request on purpose.
     for (const chatId of chatIds) {
-      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[otherbench-server] couldn't release the sandbox of chat ${chatId}:`, err));
     }
     // Its chats went with it, inside the database. One of them may be in control of the computer:
     // its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).

@@ -61,7 +61,7 @@ export type SubagentErrorCode =
   | 'cancelled'
   | 'subagents_unavailable';
 
-/** A `subagent` call's error result, in the `{ error: true, code, message }` shape every Grunt tool uses. */
+/** A `subagent` call's error result, in the `{ error: true, code, message }` shape every OtherBench tool uses. */
 export interface SubagentToolError {
   error: true;
   code: SubagentErrorCode;
@@ -418,7 +418,7 @@ export function subagentSystemPrompt(
 
 // --- results ----------------------------------------------------------------
 
-const UNSHOWABLE_RESULT_TEXT = "[a result Grunt couldn't show]";
+const UNSHOWABLE_RESULT_TEXT = "[a result OtherBench couldn't show]";
 
 function cutText(text: string): string {
   if (text.length <= SUBAGENT_RESULT_COPY_MAX_CHARS) return text;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, expectationOf, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_OTHERBENCH_UI_REASON, expectationOf, OTHERBENCH_UI_TITLE } from '../src/domain/computer-apps.js';
 import type { ComputerAction, ComputerExpectation } from '../src/ports/computer.js';
 import {
   FAKE_COMPUTER_APP,
@@ -64,8 +64,8 @@ describe('FakeComputerDriver', () => {
 
   it('answers a refused start without starting a session', async () => {
     const driver = new FakeComputerDriver();
-    driver.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
-    expect(await driver.ensureSession('c1', 'Chat')).toEqual({ ok: false, reason: "The user didn't let Grunt control the computer." });
+    driver.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
+    expect(await driver.ensureSession('c1', 'Chat')).toEqual({ ok: false, reason: "The user didn't let OtherBench control the computer." });
     expect(driver.hasSession('c1')).toBe(false);
   });
 
@@ -149,14 +149,14 @@ describe('FakeComputerDriver', () => {
     expect(driver.actions).toHaveLength(1);
   });
 
-  it("does nothing in the approved window once it shows Grunt's own UI, as the shell checks before every step", async () => {
+  it("does nothing in the approved window once it shows OtherBench's own UI, as the shell checks before every step", async () => {
     const driver = await started();
     const click: ComputerAction = { action: 'left_click', coordinate: [5, 5] };
-    // The same window, process and run: only its title changed (the browser went to Grunt after the card).
-    driver.pointTarget = fakeComputerTarget({ title: `${GRUNT_UI_TITLE} - Google Chrome` });
-    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
-    driver.changeForeground(fakeComputerTarget({ title: GRUNT_UI_TITLE }));
-    expect(await driver.act('c1', { action: 'type', text: 'hi' }, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
+    // The same window, process and run: only its title changed (the browser went to OtherBench after the card).
+    driver.pointTarget = fakeComputerTarget({ title: `${OTHERBENCH_UI_TITLE} - Google Chrome` });
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_OTHERBENCH_UI_REASON });
+    driver.changeForeground(fakeComputerTarget({ title: OTHERBENCH_UI_TITLE }));
+    expect(await driver.act('c1', { action: 'type', text: 'hi' }, EXPECT)).toEqual({ ok: false, reason: COMPUTER_OTHERBENCH_UI_REASON });
     // Or once it is the browser's undocked developer tools.
     driver.pointTarget = fakeComputerTarget({ title: 'DevTools - example.com/' });
     expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_DEVTOOLS_REASON });
@@ -214,7 +214,7 @@ describe('FakeComputerDriver', () => {
       { action: 'left_click', coordinate: [1.5, 2] },
       { action: 'left_click', coordinate: [1, 2], text: 'extra' },
       { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down' },
-      // Refused combinations and Grunt's own shortcut.
+      // Refused combinations and OtherBench's own shortcut.
       { action: 'key', text: 'ctrl+escape' },
       { action: 'key', text: 'alt+tab' },
       { action: 'key', text: 'alt+f4' },

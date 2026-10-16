@@ -47,7 +47,7 @@ describe('toolContextFor', () => {
   // Integration: thread cards and sub-agents each made this function. Every
   // field either needs is in one context, so a sub-agent's call can't lose the
   // plan gate or the unattended flag, nor a planned turn its sub-agent host.
-  // `live` is the one field left out: only GruntToolProvider.runLiveCall sets it.
+  // `live` is the one field left out: only OtherBenchToolProvider.runLiveCall sets it.
   it('carries every field at once: plan gate, unattended, folders, call id, sub-agent host and tag', () => {
     const plan = createPlanGate();
     const host: SubagentHost = { run: async () => 'ok' };

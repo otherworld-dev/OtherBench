@@ -22,7 +22,7 @@ import { extractOfficeText } from './office/extract.js';
 export const MAX_EXTRACTED_TEXT_CHARS = 100_000;
 
 const PLAIN_TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.csv', '.tsv', '.txt', '.json', '.log']);
-/** Read as text only: Grunt never makes a macro-enabled file. */
+/** Read as text only: OtherBench never makes a macro-enabled file. */
 const OFFICE_EXTENSIONS = new Set(['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm']);
 const OFFICE_MIME = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -52,7 +52,7 @@ function extractOffice(data: Buffer): string | null {
     return extractOfficeText(data, { maxChars: MAX_EXTRACTED_TEXT_CHARS });
   } catch (err) {
     // Any error, not only ZipError/XmlError: a hostile part can also throw a RangeError.
-    console.error('[grunt-server] Office text extraction failed; storing the attachment with no extracted text:', err);
+    console.error('[otherbench-server] Office text extraction failed; storing the attachment with no extracted text:', err);
     return null;
   }
 }
@@ -88,7 +88,7 @@ async function extractPdfText(data: Buffer): Promise<string | null> {
     // Uploading the FILE must still succeed -- extraction is a best-effort
     // enhancement, not a precondition -- so the attachment is still created,
     // just with `extractedText: null` (the same outcome as a genuine image).
-    console.error('[grunt-server] PDF text extraction failed; storing the attachment with no extracted text:', err);
+    console.error('[otherbench-server] PDF text extraction failed; storing the attachment with no extracted text:', err);
     return null;
   }
 }

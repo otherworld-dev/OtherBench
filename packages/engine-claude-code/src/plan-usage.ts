@@ -1,6 +1,6 @@
-import type { PlanUsage, PlanWindow } from '@grunt/core/types/usage.js';
+import type { PlanUsage, PlanWindow } from '@otherbench/core/types/usage.js';
 
-/** The plan-wide windows Grunt shows, in order, with their labels. `seven_day_oauth_apps` is left out: it counts other apps, not Claude Code. */
+/** The plan-wide windows OtherBench shows, in order, with their labels. `seven_day_oauth_apps` is left out: it counts other apps, not Claude Code. */
 const WINDOWS: readonly (readonly [string, string])[] = [
   ['five_hour', '5-hour'],
   ['seven_day', 'Weekly'],
@@ -21,9 +21,9 @@ function window(id: string, label: string, raw: unknown): PlanWindow | null {
 }
 
 /**
- * Grunt's reading of the SDK's experimental usage answer (the data behind
+ * OtherBench's reading of the SDK's experimental usage answer (the data behind
  * Claude Code's /usage), or null when the login has no plan limits or the
- * answer has no window Grunt understands. The SDK may change this shape
+ * answer has no window OtherBench understands. The SDK may change this shape
  * without notice, so every field is checked here rather than trusted.
  */
 export function toPlanUsage(answer: unknown, fetchedAt: number): PlanUsage | null {

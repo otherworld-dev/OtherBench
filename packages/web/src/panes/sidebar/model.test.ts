@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
@@ -282,19 +282,19 @@ describe('titleMatches', () => {
 
 describe('buildSidebar with sub-projects (spec 2026-10-15-sub-projects-design §4)', () => {
   const sub = (id: string, name: string, parentId: string, sortOrder = 0): Project => ({ ...project(id, name, sortOrder), parentId });
-  const projects = [project('g', 'Grunt', 0), sub('d', 'Desktop', 'g', 1), sub('s', 'Sync', 'g', 0), project('p', 'PhD', 1)];
+  const projects = [project('g', 'OtherBench', 0), sub('d', 'Desktop', 'g', 1), sub('s', 'Sync', 'g', 0), project('p', 'PhD', 1)];
   const chats = [chat('g1', { projectId: 'g' }), chat('d1', { projectId: 'd' }), chat('d2', { projectId: 'd' }), chat('s1', { projectId: 's', pinned: true }), chat('loose')];
 
   it('nests sub-projects inside their parent, in order, and counts their chats in the parent', () => {
     const model = buildSidebar(chats, projects, null);
     expect(model.groups.map((g) => g.key)).toEqual(['g', 'p', NO_PROJECT_KEY]);
-    const grunt = model.groups[0]!;
-    expect(grunt.children.map((c) => c.key)).toEqual(['s', 'd']);
-    expect(ids(grunt.chats)).toEqual(['g1']);
-    expect(ids(grunt.children[1]!.chats).sort()).toEqual(['d1', 'd2']);
+    const otherbench = model.groups[0]!;
+    expect(otherbench.children.map((c) => c.key)).toEqual(['s', 'd']);
+    expect(ids(otherbench.chats)).toEqual(['g1']);
+    expect(ids(otherbench.children[1]!.chats).sort()).toEqual(['d1', 'd2']);
     // Its own chat, Desktop's two and Sync's pinned one.
-    expect(grunt.total).toBe(4);
-    expect(grunt.children[1]!.total).toBe(2);
+    expect(otherbench.total).toBe(4);
+    expect(otherbench.children[1]!.total).toBe(2);
     expect(model.groups[1]!.children).toEqual([]);
     expect(allGroups(model).map((g) => g.key)).toEqual(['g', 's', 'd', 'p', NO_PROJECT_KEY]);
   });

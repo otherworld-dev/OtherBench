@@ -4,7 +4,7 @@ import { formatRelativeTime } from '../../lib/relativeTime.js';
 import { ApiError, api, type PairingView, type PeerView, type PeersOverview } from '../../state/api.js';
 
 export const FIREWALL_NOTE =
-  'The first time Grunt listens for other machines, Windows asks whether to allow it: allow it on Private networks only.';
+  'The first time OtherBench listens for other machines, Windows asks whether to allow it: allow it on Private networks only.';
 
 const BUTTON = 'btn px-2 py-1';
 const PRIMARY = 'btn btn-primary px-2.5 py-1';
@@ -171,7 +171,7 @@ export function MachinesPanel(): JSX.Element {
       setPairing(open);
       setNow(Date.now());
     } catch (err) {
-      console.error('[grunt-web] failed to load machines:', err);
+      console.error('[otherbench-web] failed to load machines:', err);
       setError(failure(err));
     }
   }, []);
@@ -230,7 +230,7 @@ export function MachinesPanel(): JSX.Element {
     <section className="max-w-2xl space-y-4 text-sm">
       <h3 className="text-sm font-semibold">Machines</h3>
       <p className="text-[var(--text-muted)]">
-        Pair this machine with another running Grunt to share chats between them and run a chat on whichever machine has its folder.
+        Pair this machine with another running OtherBench to share chats between them and run a chat on whichever machine has its folder.
       </p>
 
       {overview && (

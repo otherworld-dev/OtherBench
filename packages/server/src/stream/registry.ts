@@ -1,7 +1,7 @@
-import { subagentPartEvents } from '@grunt/core/domain/parts.js';
-import type { TurnEvent, TurnRunner } from '@grunt/core/domain/turn.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
+import { subagentPartEvents } from '@otherbench/core/domain/parts.js';
+import type { TurnEvent, TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
 
 export interface StreamBuffer {
   chatId: string;

@@ -1,6 +1,6 @@
-import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@grunt/core/domain/browser-hosts.js';
-import { asciiLower } from '@grunt/core/domain/card-text.js';
-import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@otherbench/core/domain/browser-hosts.js';
+import { asciiLower } from '@otherbench/core/domain/card-text.js';
+import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
 import { BrowserBusyError, PageMovedError, StaleRefError, type ActionGuard } from './session.js';
 import { MAX_NOTE_CHARS, MAX_TARGET_CHARS, cutSnapshot, pageText, refLines } from './snapshot.js';
@@ -159,8 +159,8 @@ function withScheme(url: string): string {
 
 /**
  * The address `open` will go to and the website it is on, both from the one
- * WHATWG parse that Grunt's host rules use: `href` is the canonical form of
- * what Grunt judged, so what the browser loads is what the card named. Null
+ * WHATWG parse that OtherBench's host rules use: `href` is the canonical form of
+ * what OtherBench judged, so what the browser loads is what the card named. Null
  * when the address has no usable http(s) website.
  */
 function openTarget(raw: string): { href: string; site: string } | null {
@@ -187,7 +187,7 @@ function failure(code: string, message: string): { error: true; code: string; me
  * An error whose message can carry words from a page or the browser engine
  * (what an engine error said, where the page moved to): the line every page
  * result carries goes first, naming the page's site (`site`, or an unknown
- * page when there is none). Grunt's own fixed sentences (`failure`) need none.
+ * page when there is none). OtherBench's own fixed sentences (`failure`) need none.
  */
 export function pageFailure(code: string, message: string, site: string | null): { about: string; error: true; code: string; message: string } {
   return { about: aboutPage(site ?? 'an unknown page'), error: true, code, message };
@@ -300,7 +300,7 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     guard = reads ? { site: host } : { site: host, navId: nav };
   }
   if (call.command === 'open') {
-    // Go to the address Grunt judged, and only if it is on the website the call was approved for.
+    // Go to the address OtherBench judged, and only if it is on the website the call was approved for.
     const target = openTarget(call.url!);
     if (target === null || target.site !== host) return failure('bad_call', NO_APPROVAL);
     call.url = target.href;

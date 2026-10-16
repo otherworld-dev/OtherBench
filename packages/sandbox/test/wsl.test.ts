@@ -6,7 +6,7 @@ const EXE = 'C:\\Windows\\System32\\wsl.exe';
 
 describe('decodeWslOutput', () => {
   it("reads wsl.exe's own UTF-16LE output, with or without a BOM", () => {
-    expect(decodeWslOutput(Buffer.from('Ubuntu\r\ngrunt-sandbox\r\n', 'utf16le'))).toBe('Ubuntu\r\ngrunt-sandbox\r\n');
+    expect(decodeWslOutput(Buffer.from('Ubuntu\r\notherbench-sandbox\r\n', 'utf16le'))).toBe('Ubuntu\r\notherbench-sandbox\r\n');
     expect(decodeWslOutput(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('WSL version: 2.7.3.0', 'utf16le')]))).toBe('WSL version: 2.7.3.0');
   });
 
@@ -87,7 +87,7 @@ describe('createWslRunner', () => {
 
   it('starts long-lived programs as the given user with --exec', () => {
     const { calls, runner } = recorder(() => undefined);
-    runner.spawn('grunt', ['/opt/grunt-sandbox/node/bin/node', '/opt/grunt-sandbox/agent.mjs']);
-    expect(calls[0]!.args).toEqual(['-d', DISTRO, '-u', 'grunt', '--exec', '/opt/grunt-sandbox/node/bin/node', '/opt/grunt-sandbox/agent.mjs']);
+    runner.spawn('otherbench', ['/opt/otherbench-sandbox/node/bin/node', '/opt/otherbench-sandbox/agent.mjs']);
+    expect(calls[0]!.args).toEqual(['-d', DISTRO, '-u', 'otherbench', '--exec', '/opt/otherbench-sandbox/node/bin/node', '/opt/otherbench-sandbox/agent.mjs']);
   });
 });

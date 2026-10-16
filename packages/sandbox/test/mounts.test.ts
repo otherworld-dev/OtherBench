@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MountNeed, PlannedMount } from '@grunt/core/domain/sandbox-paths.js';
+import type { MountNeed, PlannedMount } from '@otherbench/core/domain/sandbox-paths.js';
 import { MOUNT_SCRIPT, MountManager, wslMountRunner, type MountRunner } from '../src/mounts.js';
 import { FakeWsl } from './helpers.js';
 
@@ -23,24 +23,24 @@ const rw = (windowsPath: string): MountNeed => ({ windowsPath, writable: true })
 describe('MountManager', () => {
   it("mounts a chat's folders, parents first", async () => {
     const r = recordingRunner();
-    await new MountManager(r, () => {}).set('chat-1', [rw('E:\\Git\\Grunt'), ro('E:\\Git'), ro('D:\\Refs')]);
-    expect(r.log).toEqual(['mount ro /mnt/d/Refs', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
+    await new MountManager(r, () => {}).set('chat-1', [rw('E:\\Git\\App'), ro('E:\\Git'), ro('D:\\Refs')]);
+    expect(r.log).toEqual(['mount ro /mnt/d/Refs', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/App']);
   });
 
   it('shares a folder between chats, remounting it read-write while one needs that, and back', async () => {
     const r = recordingRunner();
     const m = new MountManager(r, () => {});
-    await m.set('chat-1', [ro('E:\\Git\\Grunt')]);
-    await m.set('chat-2', [rw('E:\\Git\\Grunt')]);
+    await m.set('chat-1', [ro('E:\\Git\\App')]);
+    await m.set('chat-2', [rw('E:\\Git\\App')]);
     await m.remove('chat-2');
     await m.remove('chat-1');
     expect(r.log).toEqual([
-      'mount ro /mnt/e/Git/Grunt',
-      'unmount /mnt/e/Git/Grunt',
-      'mount rw /mnt/e/Git/Grunt',
-      'unmount /mnt/e/Git/Grunt',
-      'mount ro /mnt/e/Git/Grunt',
-      'unmount /mnt/e/Git/Grunt',
+      'mount ro /mnt/e/Git/App',
+      'unmount /mnt/e/Git/App',
+      'mount rw /mnt/e/Git/App',
+      'unmount /mnt/e/Git/App',
+      'mount ro /mnt/e/Git/App',
+      'unmount /mnt/e/Git/App',
     ]);
     expect(m.mounted).toEqual([]);
   });
@@ -48,11 +48,11 @@ describe('MountManager', () => {
   it('unmounts deepest first and leaves what another chat still needs', async () => {
     const r = recordingRunner();
     const m = new MountManager(r, () => {});
-    await m.set('chat-1', [ro('E:\\Git'), rw('E:\\Git\\Grunt'), ro('D:\\Refs')]);
+    await m.set('chat-1', [ro('E:\\Git'), rw('E:\\Git\\App'), ro('D:\\Refs')]);
     await m.set('chat-2', [ro('D:\\Refs')]);
     r.log.length = 0;
     await m.remove('chat-1');
-    expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'unmount /mnt/e/Git']);
+    expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'unmount /mnt/e/Git']);
     expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/d/Refs']);
   });
 
@@ -130,11 +130,11 @@ describe('MountManager', () => {
   it('after resync() a new parent still lifts the folder inside it and puts it back', async () => {
     const r = recordingRunner();
     const m = new MountManager(r, () => {});
-    await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+    await m.set('chat-1', [rw('E:\\Git\\App')]);
     m.resync();
     r.log.length = 0;
     await m.set('chat-2', [ro('E:\\Git')]);
-    expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
+    expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/App']);
   });
 
   it('after resync() a folder that will not mount again refuses the chat, and is tried again on the next change', async () => {
@@ -166,66 +166,66 @@ describe('MountManager', () => {
     it('takes the inner mount off, mounts the parent, then mounts the inner one again', async () => {
       const r = recordingRunner();
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       await m.set('chat-2', [ro('E:\\Git')]);
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
-      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['ro /mnt/e/Git', 'rw /mnt/e/Git/Grunt']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/App']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['ro /mnt/e/Git', 'rw /mnt/e/Git/App']);
     });
 
     it('moves every inner mount, and leaves mounts elsewhere alone', async () => {
       const r = recordingRunner();
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt'), rw('E:\\Git\\Other'), ro('E:\\Gitter'), ro('D:\\Refs')]);
+      await m.set('chat-1', [rw('E:\\Git\\App'), rw('E:\\Git\\Other'), ro('E:\\Gitter'), ro('D:\\Refs')]);
       r.log.length = 0;
       await m.set('chat-2', [ro('E:\\Git')]);
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Other', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt', 'mount rw /mnt/e/Git/Other']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'unmount /mnt/e/Git/Other', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/App', 'mount rw /mnt/e/Git/Other']);
     });
 
     it("doesn't mount the inner folder again once nothing needs it", async () => {
       const r = recordingRunner();
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       // chat-1 is gone from the plan by the time the parent goes on (its set() replaced its needs).
       await m.set('chat-1', [ro('E:\\Git')]);
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'mount ro /mnt/e/Git']);
       expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/e/Git']);
     });
 
     it("refuses with mount_failed, mounting nothing, when the inner mount is busy", async () => {
-      const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git/Grunt' });
+      const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git/App' });
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git') });
       expect(r.log).toEqual([]);
-      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/e/Git/App']);
     });
 
     it('puts the inner mount back, then refuses, when the parent will not mount', async () => {
       const r = recordingRunner({ mount: (x) => x.linuxPath === '/mnt/e/Git' });
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount rw /mnt/e/Git/Grunt']);
-      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/e/Git/Grunt']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'mount rw /mnt/e/Git/App']);
+      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/e/Git/App']);
     });
 
     it("refuses when the inner mount can't be put back", async () => {
       let broken = false;
-      const r = recordingRunner({ mount: (x) => broken && x.linuxPath === '/mnt/e/Git/Grunt' });
+      const r = recordingRunner({ mount: (x) => broken && x.linuxPath === '/mnt/e/Git/App' });
       const m = new MountManager(r, () => {});
-      await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [rw('E:\\Git\\App')]);
       broken = true;
-      await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git\\Grunt') });
+      await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git\\App') });
       // chat-2's request is dropped again, and the inner folder (chat-1's) is not mounted: what is mounted says so.
       expect(m.mounted.map((x) => x.linuxPath)).toEqual([]);
       broken = false;
       // The next change mounts the inner folder again, since it is still wanted.
       await m.set('chat-3', [ro('D:\\Refs')]);
-      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`).sort()).toEqual(['ro /mnt/d/Refs', 'rw /mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`).sort()).toEqual(['ro /mnt/d/Refs', 'rw /mnt/e/Git/App']);
     });
   });
 
@@ -253,13 +253,13 @@ describe('MountManager', () => {
       const r = treeRunner();
       const warn = vi.fn();
       const m = new MountManager(r, warn);
-      await m.set('chat-1', [ro('E:\\Git'), rw('E:\\Git\\Grunt')]);
-      await m.set('chat-2', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-1', [ro('E:\\Git'), rw('E:\\Git\\App')]);
+      await m.set('chat-2', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       await m.remove('chat-1');
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'unmount /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
-      expect([...r.mounts]).toEqual(['/mnt/e/Git/Grunt']);
-      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'unmount /mnt/e/Git', 'mount rw /mnt/e/Git/App']);
+      expect([...r.mounts]).toEqual(['/mnt/e/Git/App']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/App']);
       expect(warn).not.toHaveBeenCalled();
     });
   });
@@ -314,21 +314,21 @@ describe('MountManager', () => {
     it("keeps another chat's read-write folder read-write when a parent mount for a chat fails", async () => {
       const r = recordingRunner({ mount: (x) => x.linuxPath === '/mnt/e/Git' });
       const m = new MountManager(r, () => {});
-      await m.set('chat-a', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-a', [rw('E:\\Git\\App')]);
       r.log.length = 0;
-      // chat-b's rw E:\Git covers E:\Git\Grunt, so the attempt takes chat-a's mount off; it comes back as it was.
+      // chat-b's rw E:\Git covers E:\Git\App, so the attempt takes chat-a's mount off; it comes back as it was.
       await expect(m.set('chat-b', [rw('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
-      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount rw /mnt/e/Git/Grunt']);
-      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+      expect(r.log).toEqual(['unmount /mnt/e/Git/App', 'mount rw /mnt/e/Git/App']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/App']);
     });
 
     it("keeps another chat's read-write folder read-write when the parent is spelled in another case", async () => {
       const r = recordingRunner({ mount: (x) => x.linuxPath.toLowerCase() === '/mnt/e/git' });
       const m = new MountManager(r, () => {});
-      await m.set('chat-a', [rw('E:\\Git\\Grunt')]);
+      await m.set('chat-a', [rw('E:\\Git\\App')]);
       r.log.length = 0;
       await expect(m.set('chat-b', [rw('e:\\git')])).rejects.toMatchObject({ code: 'mount_failed' });
-      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/App']);
     });
 
     it('refuses a chat when a read-write mount over its folders will not come off', async () => {
@@ -339,7 +339,7 @@ describe('MountManager', () => {
       await m.remove('chat-1');
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('/mnt/e/Git'));
       expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git']);
-      await expect(m.set('chat-2', [ro('E:\\Git\\Grunt')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git') });
+      await expect(m.set('chat-2', [ro('E:\\Git\\App')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git') });
       await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
       expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git']);
     });

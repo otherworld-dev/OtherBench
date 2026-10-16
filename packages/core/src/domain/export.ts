@@ -10,7 +10,7 @@ import { activePath, extendToTip, isCompareSet, siblingsOf } from './tree.js';
  */
 
 /** The `format` field of a JSON export, so a reader can recognise one. */
-export const CHAT_EXPORT_FORMAT = 'grunt-chat-export';
+export const CHAT_EXPORT_FORMAT = 'otherbench-chat-export';
 export const CHAT_EXPORT_VERSION = 1;
 
 /** Tool arguments and results longer than this are cut in the Markdown export (the JSON keeps them whole). */
@@ -85,8 +85,8 @@ function asText(value: unknown): string {
   }
 }
 
-/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__grunt_<hex>__computer`), as the thread tells it. */
-const COMPUTER_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?computer$/;
+/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__otherbench_<hex>__computer`), as the thread tells it. */
+const COMPUTER_TOOL_NAME = /^(?:mcp__otherbench_[0-9a-f]+__)?computer$/;
 
 function partToMarkdown(part: Part, attachmentName: (id: string) => string | null): string {
   switch (part.type) {
@@ -135,7 +135,7 @@ export function chatToMarkdown(chat: Chat, messages: CanonMessage[], attachments
   const names = new Map(attachments.map((a) => [a.id, a.filename]));
   const attachmentName = (id: string): string | null => names.get(id) ?? null;
 
-  const out: string[] = [`# ${chat.title}`, '', `*Exported from Grunt on ${exportedAt.toISOString()}. ${path.length} message${path.length === 1 ? '' : 's'}.*`];
+  const out: string[] = [`# ${chat.title}`, '', `*Exported from OtherBench on ${exportedAt.toISOString()}. ${path.length} message${path.length === 1 ? '' : 's'}.*`];
   for (const m of path) {
     out.push('', `## ${heading(m)}`, '');
     let siblings: CanonMessage[] = [m];

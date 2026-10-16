@@ -1,9 +1,9 @@
-import { normaliseWindowsPath, planMounts, toSandboxPath, type MountNeed, type PlannedMount } from '@grunt/core/domain/sandbox-paths.js';
-import { SandboxError } from '@grunt/core/ports/sandbox.js';
+import { normaliseWindowsPath, planMounts, toSandboxPath, type MountNeed, type PlannedMount } from '@otherbench/core/domain/sandbox-paths.js';
+import { SandboxError } from '@otherbench/core/ports/sandbox.js';
 import type { WslRunner } from './wsl.js';
 
 /** Root-owned in the distro; checks its own arguments (resources/mount.sh). */
-export const MOUNT_SCRIPT = '/opt/grunt-sandbox/mount.sh';
+export const MOUNT_SCRIPT = '/opt/otherbench-sandbox/mount.sh';
 
 /** Mounts and unmounts one folder in the VM; both throw on failure. */
 export interface MountRunner {

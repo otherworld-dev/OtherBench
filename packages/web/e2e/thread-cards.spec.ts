@@ -85,7 +85,7 @@ test('#ask: the question card marks the tab, survives a reload, and its answer r
 });
 
 test('#plan: Plan mode refuses the write without a card, takes changes, then approval lets the write ask as usual', async ({ page, request }) => {
-  const ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-plan-'));
+  const ws = mkdtempSync(join(tmpdir(), 'otherbench-e2e-plan-'));
   try {
     const title = `Cards plan ${suffix()}`;
     await seed(request, title, { workspaceRoot: ws, toolPolicy: { fs: 'readwrite', shell: false, mcpServerIds: [], approvalMode: 'always_ask' } });

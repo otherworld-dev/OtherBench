@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import { BrowserManager } from '../../src/browser/manager.js';
 import { aboutPage, browserTool } from '../../src/browser/tool.js';
 import { FakeFactory, fakeProxy } from './fakes.js';
@@ -32,7 +32,7 @@ describe('acting only on the page that was approved', () => {
   it("wants the page a call was described on: a call without it, or with another site's, has no approval", async () => {
     const s = setup();
     await s.call({ command: 'open', url: 'https://example.com/' });
-    const none = { error: true, code: 'bad_call', message: 'Grunt has no approval for this call.' };
+    const none = { error: true, code: 'bad_call', message: 'OtherBench has no approval for this call.' };
     expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1 }, s.ctx())).toEqual(none);
     expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1, nav: 'x' }, s.ctx())).toEqual(none);
     expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1, nav: { id: s.session().navigationId(), url: 'https://example.com/' } }, s.ctx())).toEqual(none);

@@ -20,7 +20,7 @@ import {
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-agent-core-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-agent-core-'));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -205,7 +205,7 @@ describe('the sandbox agent', () => {
       },
     });
     expect(call[4]).toBe(dir);
-    expect(call[5]).toEqual({ commandId: 'grunt-run-1', commandText: call[0] });
+    expect(call[5]).toEqual({ commandId: 'otherbench-run-1', commandText: call[0] });
     expect(h.runtime.cleanupAfterCommand).toHaveBeenCalledTimes(1);
     expect(existsSync(tmp)).toBe(false);
     // Only the run's own folder goes; the runtime's sockets live on.
@@ -258,7 +258,7 @@ describe('the sandbox agent', () => {
     expect(h.done(1)!.exitCode).not.toBe(0);
   });
 
-  it('kills a command when Grunt cancels it', async () => {
+  it('kills a command when OtherBench cancels it', async () => {
     const h = harness();
     await h.init();
     const running = h.run(1, 'setTimeout(() => {}, 60000)');
@@ -270,7 +270,7 @@ describe('the sandbox agent', () => {
     expect(h.done(1)!.exitCode).not.toBe(0);
   });
 
-  it("asks Grunt about a host the runtime asks about, and gives the runtime Grunt's answer", async () => {
+  it("asks OtherBench about a host the runtime asks about, and gives the runtime OtherBench's answer", async () => {
     let answer: boolean | null = null;
     const h = harness({
       wrapWithSandboxArgv: vi.fn(async (): Promise<Wrapped> => {
@@ -602,7 +602,7 @@ describe('the sandbox agent, input from the host', () => {
     await h.init();
     const first = h.run(1, '0');
     await vi.waitFor(() => expect(h.done(1)).toBeDefined(), { timeout: 5000 });
-    // Grunt sends the next run the moment it sees done.
+    // OtherBench sends the next run the moment it sees done.
     await h.run(2, '0');
     expect(h.done(2)).toBeDefined();
     expect(repliesFor(h, 2).filter((m) => m.type === 'failed')).toEqual([]);
@@ -656,7 +656,7 @@ describe('the sandbox agent, links in the temp folder', () => {
   // symlink elsewhere.)
   let outside: string;
   beforeEach(() => {
-    outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    outside = mkdtempSync(join(tmpdir(), 'otherbench-agent-outside-'));
     writeFileSync(join(outside, 'keep.txt'), 'precious');
   });
   afterEach(() => rmSync(outside, { recursive: true, force: true }));
@@ -873,7 +873,7 @@ describe('the sandbox agent, protected files', () => {
   });
 
   it('never follows a link: a protected folder swapped for one is taken away, and nothing is written where it led', async () => {
-    const outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'otherbench-agent-outside-'));
     try {
       writeFileSync(join(outside, 'settings.json'), 'theirs');
       put('.claude/settings.json', 'mine');
@@ -901,7 +901,7 @@ describe('the sandbox agent, protected files', () => {
   });
 
   it('puts back a link that was there, if the command replaced it', async () => {
-    const outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'otherbench-agent-outside-'));
     try {
       symlinkSync(outside, at('.idea'), 'junction');
       const h = harness();
@@ -1027,7 +1027,7 @@ describe('the sandbox agent, protected files', () => {
     expect(readFileSync(at('mine.txt'), 'utf8')).toBe('mine');
   });
 
-  it("says when it couldn't put a file back, and names the folder as unguarded so Grunt stops using it", async () => {
+  it("says when it couldn't put a file back, and names the folder as unguarded so OtherBench stops using it", async () => {
     put('.git/config', '[core]\n');
     const h = harness({}, { createFile: async () => Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })) });
     await h.init();
@@ -1037,7 +1037,7 @@ describe('the sandbox agent, protected files', () => {
     expect(String(done['note'])).toContain("The sandbox couldn't check or undo changes to .git (EACCES: permission denied)");
   });
 
-  it('tells Grunt the restore has started, once, before it reports the run', async () => {
+  it('tells OtherBench the restore has started, once, before it reports the run', async () => {
     const h = harness();
     await h.init();
     await runIn(h, 1, '0');
@@ -1116,7 +1116,7 @@ describe('the sandbox agent, private destinations', () => {
     for (const whole of ['::/0', '::/1', '::/2', '::/3', '::/80', '::/96', '64:ff9b::/96', '2002::/16']) expect(DENIED_RESOLVED_ADDRESSES).not.toContain(whole);
   });
 
-  it('resolves the host and goes on to ask Grunt when every address is public', async () => {
+  it('resolves the host and goes on to ask OtherBench when every address is public', async () => {
     const h = harness({}, { lookup: resolvingTo('93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946') });
     await h.init();
     void h.ask({ host: 'pypi.org', port: 443 });
@@ -1136,7 +1136,7 @@ describe('the sandbox agent, private destinations', () => {
     ['a Teredo address', '2001::1'],
     ['an IPv6 address outside global unicast', 'fb00::1'],
     ['a public IPv4 address in the deprecated ::a.b.c.d form', '::8.8.8.8'],
-  ])('refuses a name that resolves to %s, without asking Grunt', async (_name, address) => {
+  ])('refuses a name that resolves to %s, without asking OtherBench', async (_name, address) => {
     const h = harness({}, { lookup: resolvingTo(address) });
     await h.init();
     await expect(h.ask({ host: 'rebind.example.com', port: 443 })).resolves.toBe(false);
@@ -1155,7 +1155,7 @@ describe('the sandbox agent, private destinations', () => {
     expect(asksSent(h)).toEqual([]);
   });
 
-  it('goes on to ask Grunt for a name with many addresses, all public, some behind NAT64 and 6to4', async () => {
+  it('goes on to ask OtherBench for a name with many addresses, all public, some behind NAT64 and 6to4', async () => {
     const h = harness({}, { lookup: resolvingTo('93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946', '64:ff9b::5db8:d822', '2002:5db8:d822::1', '::ffff:93.184.216.34') });
     await h.init();
     void h.ask({ host: 'pypi.org', port: 443 });
@@ -1171,14 +1171,14 @@ describe('the sandbox agent, private destinations', () => {
       },
     ],
     ['finds nothing', async () => []],
-  ])('refuses a name whose lookup %s, without asking Grunt', async (_name, lookup) => {
+  ])('refuses a name whose lookup %s, without asking OtherBench', async (_name, lookup) => {
     const h = harness({}, { lookup: lookup as Lookup });
     await h.init();
     await expect(h.ask({ host: 'nowhere.example.com', port: 443 })).resolves.toBe(false);
     expect(asksSent(h)).toEqual([]);
   });
 
-  it('refuses a name that takes too long to resolve, without asking Grunt', async () => {
+  it('refuses a name that takes too long to resolve, without asking OtherBench', async () => {
     const h = harness({}, { lookup: () => new Promise(() => undefined) });
     await h.init();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

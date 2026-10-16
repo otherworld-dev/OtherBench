@@ -45,7 +45,7 @@ writeFileSync(join(scratch, 'hello.txt'), 'hello\n');
   git('remote', 'add', 'origin', join(scratch, 'remote.git'));
 }
 
-// Same scrubbing as Grunt's buildChildEnv for the Claude backend.
+// Same scrubbing as OtherBench's buildChildEnv for the Claude backend.
 const env = {};
 for (const [k, v] of Object.entries(process.env)) {
   if (v === undefined) continue;
@@ -155,7 +155,7 @@ const autoModel = models.some((m) => m.value === 'haiku' && m.supportsAutoMode) 
 const noAutoModel = models.find((m) => !m.supportsAutoMode)?.value ?? null;
 
 const PONG = 'Reply with exactly: pong';
-const ROUTINE = 'Read hello.txt, then use Bash to run: echo grunt-probe. Reply with the command output.';
+const ROUTINE = 'Read hello.txt, then use Bash to run: echo otherbench-probe. Reply with the command output.';
 // Both look risky to a classifier but are inert even if allowed:
 //  1. curl targets 127.0.0.1:1 (nothing listens; connection refused), output goes to /dev/null, and nothing is piped to a shell.
 //  2. the force-push goes to `origin`, a throwaway bare repo inside the scratch dir (created above, outside any real repo), never a real remote.

@@ -131,7 +131,7 @@ export function toolImageBound(row: { chatId: unknown; messageId: unknown; mime:
 }
 
 /**
- * Whether a row from another machine has the shape of a file Grunt itself
+ * Whether a row from another machine has the shape of a file OtherBench itself
  * makes: an id as the saver and the upload route make it, a name of sane
  * length with no control characters, a mime that is a plain type string, a
  * size that is a whole number from 0 to `maxBytes`. (The caller adds the rules
@@ -307,7 +307,7 @@ export async function keepToolImages(
  * carry an image or bulk data made safe.
  *
  * A tool image reference stays only if it is exactly what `TurnRunner` mints
- * (type, an attachment id of the shape Grunt makes, an allowlisted raster
+ * (type, an attachment id of the shape OtherBench makes, an allowlisted raster
  * type; nothing else is kept from the item) AND its attachment row is here AND
  * is bound to this chat and this very message (`toolImageBound`); its mime is
  * then the row's, never the part's. At most `MAX_TOOL_IMAGES_PER_MESSAGE` stay

@@ -574,8 +574,8 @@ describe('the binding checks fail closed on anything that is not what they expec
     expect(toolImageBound({ ...good, size: Number.POSITIVE_INFINITY }, 'c', 'm')).toBe(false);
   });
 
-  it('isAttachmentId and attachmentRowShapeOk accept what Grunt makes and nothing path-like, long or mistyped', () => {
-    // Every shape Grunt mints: an upload's UUID, an imported Cowork image (`<line uuid>:image:<n>`), and the short ids tests use.
+  it('isAttachmentId and attachmentRowShapeOk accept what OtherBench makes and nothing path-like, long or mistyped', () => {
+    // Every shape OtherBench mints: an upload's UUID, an imported Cowork image (`<line uuid>:image:<n>`), and the short ids tests use.
     const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:12';
     for (const ok of ['3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f', imported, 'u1:image:1', 'att-1', 'A_b-9', 'x'.repeat(128)]) expect(isAttachmentId(ok), ok).toBe(true);
     const refused = [

@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLAUDE_ROOT_PARENT } from '@grunt/core/domain/claude-import.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Profile } from '@grunt/core/types/config.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { CLAUDE_ROOT_PARENT } from '@otherbench/core/domain/claude-import.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Profile } from '@otherbench/core/types/config.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { ClaudeImportService } from '../../src/import/claude-import.js';
@@ -35,7 +35,7 @@ function makeProfile(over: Partial<Profile> & { id: string }): Profile {
 }
 
 beforeEach(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'grunt-import-route-test-'));
+  dataDir = await mkdtemp(join(tmpdir(), 'otherbench-import-route-test-'));
   exportDir = join(dataDir, 'export');
   await mkdir(join(exportDir, 'conversations'), { recursive: true });
   await mkdir(join(dataDir, 'empty'));

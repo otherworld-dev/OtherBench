@@ -1,6 +1,6 @@
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { api, type PeersOverview } from './api.js';
-import { useGruntStore, type StreamConnectionStatus } from './store.js';
+import { useOtherBenchStore, type StreamConnectionStatus } from './store.js';
 
 /**
  * This machine and its paired machines, as the UI needs them to show where
@@ -10,8 +10,8 @@ import { useGruntStore, type StreamConnectionStatus } from './store.js';
 export function refreshMachines(): void {
   Promise.resolve()
     .then(() => api.peers.overview())
-    .then((overview) => useGruntStore.getState().setMachines(overview))
-    .catch((err: unknown) => console.error('[grunt-web] failed to load machines:', err));
+    .then((overview) => useOtherBenchStore.getState().setMachines(overview))
+    .catch((err: unknown) => console.error('[otherbench-web] failed to load machines:', err));
 }
 
 /** A machine's name: this one, a paired one, or a generic one for a machine no longer paired. */
@@ -48,7 +48,7 @@ export function streamStatusText(status: StreamConnectionStatus, chat: Pick<Chat
 
 /**
  * Other machines with a reply running in another chat in this chat's folder
- * (the same location and subfolder). Grunt can't lock files across machines,
+ * (the same location and subfolder). OtherBench can't lock files across machines,
  * so the workspace says so (v2 spec, "Concurrent work in the same folder").
  */
 export function alsoActive(machines: PeersOverview | null, chats: Chat[], chat: Pick<Chat, 'id' | 'workspace'>): { machine: string; chatId: string; title: string }[] {

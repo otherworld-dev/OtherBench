@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { McpServer } from '@grunt/core/ports/store.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
 import { freshDb } from '../helpers.js';
 import { SqliteMcpServerRepo } from '../../src/repos/mcp-servers.js';
 

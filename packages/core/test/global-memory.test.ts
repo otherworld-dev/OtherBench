@@ -80,17 +80,17 @@ describe('currentFocusLine', () => {
 });
 
 describe('projectIndexPrompt', () => {
-  const HEAD = "# The user's projects\nOther projects in Grunt, for context only. If you need more than this, ask.";
+  const HEAD = "# The user's projects\nOther projects in OtherBench, for context only. If you need more than this, ask.";
 
   it("lists each project with its description and current focus, marking the chat's own", () => {
     const block = projectIndexPrompt([
       { name: 'Website', description: 'The marketing site.', currentFocus: 'pricing page redesign', current: false },
-      { name: 'Grunt', description: 'Local workbench', currentFocus: null, current: true },
+      { name: 'OtherBench', description: 'Local workbench', currentFocus: null, current: true },
       { name: 'PhD', description: '', currentFocus: 'chapter 3', current: false },
       { name: 'Bare', description: '', currentFocus: null, current: false },
     ]);
     expect(block).toBe(
-      `${HEAD}\n\n<user-projects>\n- Website: The marketing site. Current focus: pricing page redesign\n- Grunt (this chat's project): Local workbench\n- PhD: Current focus: chapter 3\n- Bare\n</user-projects>`
+      `${HEAD}\n\n<user-projects>\n- Website: The marketing site. Current focus: pricing page redesign\n- OtherBench (this chat's project): Local workbench\n- PhD: Current focus: chapter 3\n- Bare\n</user-projects>`
     );
   });
 
@@ -104,13 +104,13 @@ describe('projectIndexPrompt', () => {
 
   it('points at the recall tool instead of asking when the chat can look things up', () => {
     const block = projectIndexPrompt([{ name: 'Website', description: '', currentFocus: null, current: false }], true)!;
-    expect(block).toContain('Other projects in Grunt, for context only. If you need more than this, look it up with the recall tool.');
+    expect(block).toContain('Other projects in OtherBench, for context only. If you need more than this, look it up with the recall tool.');
     expect(block).not.toContain('ask.');
   });
 
   it("is null when the chat's own project is the only one, or there are none", () => {
     expect(projectIndexPrompt([])).toBeNull();
-    expect(projectIndexPrompt([{ name: 'Grunt', description: 'x', currentFocus: null, current: true }])).toBeNull();
+    expect(projectIndexPrompt([{ name: 'OtherBench', description: 'x', currentFocus: null, current: true }])).toBeNull();
   });
 
   it('defuses anything that could close the fence early', () => {

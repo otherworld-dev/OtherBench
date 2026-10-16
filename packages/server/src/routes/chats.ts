@@ -3,16 +3,16 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { chatToJson, chatToMarkdown, exportFilename } from '@grunt/core/domain/export.js';
-import { projectParentOf } from '@grunt/core/domain/projects.js';
-import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import { CLAUDE_EFFORTS, isClaudeEffort } from '@grunt/core/types/config.js';
-import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { RecordedUsage } from '@grunt/core/types/usage.js';
-import { scratchFolderName } from '@grunt/engine-claude-code/engine.js';
-import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
+import { chatToJson, chatToMarkdown, exportFilename } from '@otherbench/core/domain/export.js';
+import { projectParentOf } from '@otherbench/core/domain/projects.js';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import { CLAUDE_EFFORTS, isClaudeEffort } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { RecordedUsage } from '@otherbench/core/types/usage.js';
+import { scratchFolderName } from '@otherbench/engine-claude-code/engine.js';
+import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
@@ -233,15 +233,15 @@ export function chatsRoutes(container: Container): Hono {
     getChatOrThrow(container, id);
     // A chat in control of the computer stops controlling it, and its reply is cancelled
     // (spec 2026-10-12-computer-use-design section 1). `stop` logs a driver it can't tell; the chat is deleted all the same.
-    await container.computer?.stop(id).catch((err: unknown) => console.error(`[grunt-server] couldn't stop computer use for chat ${id}:`, err));
+    await container.computer?.stop(id).catch((err: unknown) => console.error(`[otherbench-server] couldn't stop computer use for chat ${id}:`, err));
     container.store.chats.delete(id);
     container.memory?.cancel(id);
     // Its sandbox agent, mounts and home folder in the VM go with it (spec 2026-10-12-sandbox-design). Best effort,
     // and before the sweep below, which can fail the request on purpose.
-    await container.sandbox?.release(id).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${id}:`, err));
+    await container.sandbox?.release(id).catch((err: unknown) => console.error(`[otherbench-server] couldn't release the sandbox of chat ${id}:`, err));
     // The chat's browser goes with it (spec 2026-10-12-model-browser-design §5).
     // Not awaited: a browser still starting would hold the response up.
-    void container.browser?.close(id).catch((err: unknown) => console.error(`[grunt-server] couldn't close the browser of chat ${id}:`, err));
+    void container.browser?.close(id).catch((err: unknown) => console.error(`[otherbench-server] couldn't close the browser of chat ${id}:`, err));
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
     // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked
@@ -254,7 +254,7 @@ export function chatsRoutes(container: Container): Hono {
     // the chat is already gone, so a locked file only leaves an empty folder behind.
     if (container.claudeScratchRoot) {
       await rm(join(container.claudeScratchRoot, scratchFolderName(id)), { recursive: true, force: true }).catch((err: unknown) =>
-        console.error(`[grunt-server] couldn't remove the scratch folder of chat ${id}:`, err)
+        console.error(`[otherbench-server] couldn't remove the scratch folder of chat ${id}:`, err)
       );
     }
     return c.body(null, 204);
@@ -464,7 +464,7 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     // text unconditionally, rather than falling through to `truncateTitle`
     // whenever `generated` happens to be non-empty.
     if (timedOut && !finished) {
-      console.warn(`[grunt] auto-title for chat ${chatId} timed out after ${budgetMs / 1000}s; using the first message as the title.`);
+      console.warn(`[otherbench] auto-title for chat ${chatId} timed out after ${budgetMs / 1000}s; using the first message as the title.`);
       container.store.chats.update(chatId, { title: fallback });
       return;
     }
@@ -472,12 +472,12 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     const title = truncateTitle(generated);
     container.store.chats.update(chatId, { title: title.length > 0 ? title : fallback });
   } catch (err) {
-    console.warn(`[grunt] auto-title for chat ${chatId} failed (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); using the first message as the title.`);
+    console.warn(`[otherbench] auto-title for chat ${chatId} failed (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); using the first message as the title.`);
     try {
       container.store.chats.update(chatId, { title: fallback });
     } catch (updateErr) {
       // The chat was deleted meanwhile, or the server is shutting down: nothing to title.
-      console.warn(`[grunt] auto-title for chat ${chatId} could not be saved:`, updateErr);
+      console.warn(`[otherbench] auto-title for chat ${chatId} could not be saved:`, updateErr);
     }
   }
 }

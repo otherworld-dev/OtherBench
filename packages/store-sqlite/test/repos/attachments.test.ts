@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Attachment } from '@grunt/core/ports/store.js';
+import type { Attachment } from '@otherbench/core/ports/store.js';
 import { freshDb, seedChatChain } from '../helpers.js';
 import { SqliteAttachmentRepo } from '../../src/repos/attachments.js';
 

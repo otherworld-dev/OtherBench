@@ -1,10 +1,10 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { ModelInfo } from '@grunt/core/types/config.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { ModelInfo } from '@otherbench/core/types/config.js';
 import type { MessageExtras } from '../state/reducer.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { VariantTabs } from './VariantTabs.js';
 
 function variant(id: string, overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -44,7 +44,7 @@ function extrasFor(usage: Partial<Record<string, MessageExtras>>): Record<string
 }
 
 describe('VariantTabs', () => {
-  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+  beforeEach(() => useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true));
   afterEach(cleanup);
 
   it('renders one tab per variant', () => {
@@ -171,7 +171,7 @@ describe('VariantTabs', () => {
   });
 
   it('after a reload (no stream usage), shows the recorded tokens, cost at the recorded price and measured latency (#819)', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       recordedUsage: {
         a: {
           tokensIn: 1_000_000, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, latencyMs: 2500,

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { ConnectionKind } from '@grunt/core/types/config.js';
-import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
-import { IMAGE_NOT_KEPT, IMAGE_NOT_KEPT_LIMIT } from '@grunt/core/domain/tool-images.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { ConnectionKind } from '@otherbench/core/types/config.js';
+import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
+import { IMAGE_NOT_KEPT, IMAGE_NOT_KEPT_LIMIT } from '@otherbench/core/domain/tool-images.js';
 import { toModelMessages } from '../src/convert.js';
 import {
   EARLIER_SCREENSHOT_NOTE,

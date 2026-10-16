@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { SUBAGENT_SHELL_LINE } from '@grunt/core/domain/subagent.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { Connection, Profile, ToolPolicy } from '@grunt/core/types/config.js';
-import { GruntToolProvider } from '../src/provider.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { SUBAGENT_SHELL_LINE } from '@otherbench/core/domain/subagent.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { Connection, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
+import { OtherBenchToolProvider } from '../src/provider.js';
 
 const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false, recall: false, ...over });
@@ -26,12 +26,12 @@ function setup() {
   store.profiles.create(profile('p-cc', 'Coder', 'cc'));
   store.profiles.create(profile('p-old', 'Old one', 'api', { archivedAt: 1 }));
   store.profiles.create(profile('p-pc', 'PC Llama', 'pc'));
-  const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp);
   return { store, provider };
 }
 
 /** What the provider lists for a policy, without the thread tools every profile gets (integration: thread cards). */
-async function listed(provider: GruntToolProvider, p: ToolPolicy): Promise<ToolSpec[]> {
+async function listed(provider: OtherBenchToolProvider, p: ToolPolicy): Promise<ToolSpec[]> {
   return (await provider.listTools(p)).filter((t) => t.source !== 'thread');
 }
 

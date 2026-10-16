@@ -507,7 +507,7 @@ describe('runMigrations', () => {
       db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
       db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
       db.exec(`INSERT INTO project (id, name, workspace_root, created_at, updated_at) VALUES ('proj-ws', 'A', '/git', 1, 1), ('proj-none', 'B', NULL, 1, 1)`);
-      db.exec(`INSERT INTO chat (id, title, profile_id, workspace_root, created_at, updated_at) VALUES ('ws', 'A', 'p1', '/git/grunt', 1, 1), ('none', 'B', 'p1', NULL, 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, workspace_root, created_at, updated_at) VALUES ('ws', 'A', 'p1', '/git/otherbench', 1, 1), ('none', 'B', 'p1', NULL, 1, 1)`);
       db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('m1', 'ws', NULL, 'user', '[]', 'complete', 1)`);
 
       runMigrations(db);
@@ -519,7 +519,7 @@ describe('runMigrations', () => {
       const chats = db.prepare(`SELECT id, workspace_root, workspace_node, workspace_location_id, runs_on FROM chat ORDER BY id`).all();
       expect(chats).toEqual([
         { id: 'none', workspace_root: null, workspace_node: null, workspace_location_id: null, runs_on: self },
-        { id: 'ws', workspace_root: '/git/grunt', workspace_node: self, workspace_location_id: null, runs_on: self },
+        { id: 'ws', workspace_root: '/git/otherbench', workspace_node: self, workspace_location_id: null, runs_on: self },
       ]);
       expect(db.prepare(`SELECT id, workspace_node FROM project ORDER BY id`).all()).toEqual([
         { id: 'proj-none', workspace_node: null },
@@ -585,8 +585,8 @@ describe('runMigrations', () => {
      * the raw .db (and .db-wal) file for the secret after migrating.
      */
     function seedLegacyDbWithPlaintextSecret(): { dbPath: string; walPath: string; db: DatabaseSync } {
-      dir = mkdtempSync(join(tmpdir(), 'grunt-migration-003-'));
-      const dbPath = join(dir, 'grunt.db');
+      dir = mkdtempSync(join(tmpdir(), 'otherbench-migration-003-'));
+      const dbPath = join(dir, 'otherbench.db');
       const db = openDatabase(dbPath);
       runMigrations(db, [MIGRATIONS[0]!]);
       db.exec(`INSERT INTO mcp_server (id, name, transport, env, header_refs)

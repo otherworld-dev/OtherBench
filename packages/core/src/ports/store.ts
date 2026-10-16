@@ -80,7 +80,7 @@ export interface Chat {
   /**
    * Claude Code auto mode for this chat's turns (spec
    * 2026-10-03-claude-code-auto-mode-design): Claude Code's classifier decides
-   * routine tool calls instead of a Grunt card. Off by default; read fresh by
+   * routine tool calls instead of an OtherBench card. Off by default; read fresh by
    * TurnRunner on every turn. Other engines ignore it.
    */
   autoMode: boolean;
@@ -401,7 +401,7 @@ export interface AttachmentRepo {
    * True if at least one attachment row (in any chat -- upload dedupes by
    * content hash, so the same blob can be referenced from several chats,
    * see `BlobStore`) still has this sha256. Used by the blob GC sweep
-   * (`@grunt/store-sqlite/blob-gc.js`) to decide whether a blob on disk is
+   * (`@otherbench/store-sqlite/blob-gc.js`) to decide whether a blob on disk is
    * garbage: a blob is only ever removed once nothing references it.
    */
   isReferenced(sha256: string): boolean;
@@ -409,7 +409,7 @@ export interface AttachmentRepo {
    * Every distinct sha256 referenced by at least one attachment row, across
    * every chat. Used by the startup blob sweep, which walks what is
    * physically on disk and needs the full referenced set to diff against --
-   * see `@grunt/store-sqlite/blob-gc.js`'s `sweepOrphanedBlobs`.
+   * see `@otherbench/store-sqlite/blob-gc.js`'s `sweepOrphanedBlobs`.
    */
   referencedShas(): Set<string>;
 }
@@ -469,7 +469,7 @@ export interface UsageRepo {
  * `mcp:<id>:oauth:*` (`McpOAuthStore`, packages/tools/src/mcp/oauth-store.ts).
  */
 export interface McpServerOAuth {
-  /** A client ID registered by hand with the server's sign-in provider. Null: Grunt registers itself. */
+  /** A client ID registered by hand with the server's sign-in provider. Null: OtherBench registers itself. */
   clientId: string | null;
   /** SecretStore reference of that client's secret, if it has one. Never the value. */
   clientSecretRef: string | null;

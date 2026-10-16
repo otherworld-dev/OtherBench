@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import { formatInZone } from '@grunt/core/domain/schedule.js';
+import { formatInZone } from '@otherbench/core/domain/schedule.js';
 import { BASE_URL } from '../playwright.config.js';
 
 /**

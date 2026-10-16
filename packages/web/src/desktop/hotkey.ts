@@ -2,7 +2,7 @@
 export const DEFAULT_HOTKEY = 'Ctrl+Alt+G';
 
 /** localStorage key for the hotkey. Per device: a global shortcut belongs to the machine. */
-export const HOTKEY_STORAGE_KEY = 'grunt.hotkey';
+export const HOTKEY_STORAGE_KEY = 'otherbench.hotkey';
 
 export function loadHotkey(): string {
   try {

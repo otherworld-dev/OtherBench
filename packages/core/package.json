@@ -1,5 +1,5 @@
 {
-  "name": "@grunt/core",
+  "name": "@otherbench/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",

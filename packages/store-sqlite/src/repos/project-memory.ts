@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { MEMORY_VERSIONS_KEPT } from '@grunt/core/domain/memory.js';
-import type { MemoryAuthor, ProjectMemory, ProjectMemoryRepo, ProjectMemoryVersion } from '@grunt/core/ports/store.js';
+import { MEMORY_VERSIONS_KEPT } from '@otherbench/core/domain/memory.js';
+import type { MemoryAuthor, ProjectMemory, ProjectMemoryRepo, ProjectMemoryVersion } from '@otherbench/core/ports/store.js';
 import { clockOf, type SyncClock } from './clock.js';
 
 function toMemory(row: Record<string, unknown>): ProjectMemory {

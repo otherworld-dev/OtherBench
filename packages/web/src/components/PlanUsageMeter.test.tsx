@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanUsage } from '@grunt/core/types/usage.js';
+import type { PlanUsage } from '@otherbench/core/types/usage.js';
 
 vi.mock('../state/api.js', () => ({ api: { claude: { planUsage: vi.fn() } } }));
 

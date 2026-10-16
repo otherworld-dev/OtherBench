@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import { COMPUTER_DESKTOP_ONLY_REASON } from '@grunt/core/domain/computer-apps.js';
-import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import { COMPUTER_DESKTOP_ONLY_REASON } from '@otherbench/core/domain/computer-apps.js';
+import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import type { Hono } from 'hono';
 import { createApp } from '../../src/app.js';
 import { cancelChatReplies, ComputerSessions } from '../../src/computer/sessions.js';
@@ -26,7 +26,7 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 // on the peer listener. The desktop is FakeComputerDriver.
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
-const PUBLIC_HOST = 'grunt.test:4747';
+const PUBLIC_HOST = 'otherbench.test:4747';
 const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
 const STOP = ['POST', '/api/chats/c1/computer/stop'] as const;
 const STATUS = ['GET', '/api/computer/status'] as const;
@@ -46,7 +46,7 @@ let events: AppEventBus;
 let fx: RemoteFixture;
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-computer-remote-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-computer-remote-'));
   const store = new InMemoryStore();
   store.chats.create({ id: 'c1', title: 'Budget', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
   const turnRunner = new TurnRunner(store, idle);
@@ -122,7 +122,7 @@ describe('computer use routes in sign-in mode', () => {
     for (const [method, path] of ROUTES) {
       const res = await call(app, method, path);
       expect(res.status, `${method} ${path}`).toBe(401);
-      for (const headers of [{ Cookie: '__Host-grunt_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, { Authorization: 'Bearer guess' }] as Record<string, string>[]) {
+      for (const headers of [{ Cookie: '__Host-otherbench_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, { Authorization: 'Bearer guess' }] as Record<string, string>[]) {
         expect((await call(app, method, path, headers)).status, `${method} ${path} ${JSON.stringify(headers)}`).toBe(401);
       }
     }
@@ -200,7 +200,7 @@ describe('computer use routes and the Host check', () => {
     await holding();
     const app = createApp(container, { remote: fx.remote, hostCheckPort: () => 4747 });
     const cookie = await signIn(app, { Host: PUBLIC_HOST });
-    for (const host of ['evil.example:4747', 'evil.example', 'grunt.test:9999', 'grunt.test.evil.example:4747']) {
+    for (const host of ['evil.example:4747', 'evil.example', 'otherbench.test:9999', 'otherbench.test.evil.example:4747']) {
       for (const [method, path] of ROUTES) {
         expect((await call(app, method, path, { Host: host, Cookie: cookie })).status, `${host} ${method} ${path}`).toBe(421);
       }

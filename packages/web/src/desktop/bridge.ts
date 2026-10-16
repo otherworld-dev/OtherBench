@@ -58,7 +58,7 @@ export async function setTrayStatus(pendingApprovals: number, machines: string[]
   await invoke('set_tray_status', { pendingApprovals, machines });
 }
 
-/** Whether the main window has focus. Always true in a browser, where Grunt never notifies. */
+/** Whether the main window has focus. Always true in a browser, where OtherBench never notifies. */
 export async function isMainWindowFocused(): Promise<boolean> {
   if (!isDesktop()) return true;
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -85,7 +85,7 @@ export async function saveDownload(blob: Blob, name: string): Promise<string | n
   if (!isDesktop()) return null;
   const { invoke } = await import('@tauri-apps/api/core');
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return invoke<string>('save_download', bytes, { headers: { 'x-grunt-name': encodeURIComponent(name) } });
+  return invoke<string>('save_download', bytes, { headers: { 'x-otherbench-name': encodeURIComponent(name) } });
 }
 
 /** Makes `accelerator` the global quick-chat hotkey. Rejects with the reason (unparsable, or taken by another app). */
@@ -152,7 +152,7 @@ export const autostart = {
   },
 };
 
-/** Opens a website from a chat: its own isolated window in the desktop app, a new tab with no link back to Grunt in a browser. */
+/** Opens a website from a chat: its own isolated window in the desktop app, a new tab with no link back to OtherBench in a browser. */
 export async function openSite(url: string): Promise<void> {
   if (!isDesktop()) {
     window.open(url, '_blank', 'noopener,noreferrer');

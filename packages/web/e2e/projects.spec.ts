@@ -25,7 +25,7 @@ test.beforeEach(async ({ request }) => {
 
 test('a project with a folder: a chat from its + inherits the folder, then moves to No project', async ({ page }) => {
   const projectName = `E2E Project ${randomUUID().slice(0, 8)}`;
-  const folder = mkdtempSync(join(tmpdir(), 'grunt-e2e-project-'));
+  const folder = mkdtempSync(join(tmpdir(), 'otherbench-e2e-project-'));
   try {
     await page.goto('/');
     const nav = page.getByRole('navigation', { name: 'Chats' });

@@ -1,5 +1,5 @@
 import type { DragEvent, JSX } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 import { PinIcon } from '../../components/icons.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
 import { StatusDot } from '../../components/StatusDot.js';
@@ -7,7 +7,7 @@ import { formatAge, formatRelativeTime } from '../../lib/relativeTime.js';
 import type { ChatStatus } from '../../state/chatStatus.js';
 
 /** `dataTransfer` type a dragged chat row carries; its value is the chat id. */
-export const CHAT_DRAG_MIME = 'application/x-grunt-chat';
+export const CHAT_DRAG_MIME = 'application/x-otherbench-chat';
 
 /** Where a menu was opened from: the ⋯ button toggles, the context gestures always open. */
 export type MenuSource = 'button' | 'context';

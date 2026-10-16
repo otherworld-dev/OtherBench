@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -16,7 +16,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { WorkspacePrompt } from './WorkspacePrompt.js';
 
 const HERE = 'C:\\Users\\Adam\\Nextcloud';
@@ -48,7 +48,7 @@ function chat(over: Partial<Chat>): Chat {
 const resolved = chat({ workspaceRoot: `${HERE}\\phd`, workspaceStatus: { status: 'ok', root: `${HERE}\\phd` } });
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   vi.mocked(api.health).mockReset().mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
   vi.mocked(api.locations.list).mockReset().mockResolvedValue([{ id: 'nc', name: 'Nextcloud', paths: [{ locationId: 'nc', nodeId: 'node-pc', path: 'E:\\Nextcloud' }] }]);
   vi.mocked(api.locations.setPath).mockReset();
@@ -74,7 +74,7 @@ describe('WorkspacePrompt', () => {
       workspaceStatus: { status: 'unresolved', reason: 'no-location-path', hint: { nodeId: 'node-pc', path: 'E:\\Nextcloud\\phd' } },
     });
     vi.mocked(api.locations.setPath).mockResolvedValue({ id: 'nc', name: 'Nextcloud', paths: [] });
-    useGruntStore.setState({ chats: [c] });
+    useOtherBenchStore.setState({ chats: [c] });
     render(<WorkspacePrompt chat={c} />);
 
     expect(await screen.findByText('Where is Nextcloud on this machine?')).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe('WorkspacePrompt', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(api.locations.setPath).toHaveBeenCalledWith('nc', HERE));
-    await waitFor(() => expect(useGruntStore.getState().chats[0]!.workspaceStatus).toEqual({ status: 'ok', root: `${HERE}\\phd` }));
+    await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.workspaceStatus).toEqual({ status: 'ok', root: `${HERE}\\phd` }));
   });
 
   it("another machine's folder: a matching folder here offers a location, which adopts every chat from there", async () => {
@@ -129,14 +129,14 @@ describe('WorkspacePrompt', () => {
   });
 
   it('offers to run the chat on the machine that has the folder, when that machine is reachable', async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       machines: {
         self: { id: 'node-laptop', name: 'Laptop', fingerprint: 'A' },
         listening: { running: true, addresses: [] },
         peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
       },
     });
-    const c = chat({ workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'E:\\Git\\Grunt' } } });
+    const c = chat({ workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'E:\\Git\\OtherBench' } } });
     vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-pc' }));
     render(<WorkspacePrompt chat={c} />);
 

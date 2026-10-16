@@ -41,14 +41,14 @@ export function fromBool(value: number): boolean {
  */
 export function atomic<T>(db: DatabaseSync, fn: () => T): T {
   const nested = db.isTransaction;
-  db.exec(nested ? 'SAVEPOINT grunt_atomic' : 'BEGIN');
+  db.exec(nested ? 'SAVEPOINT otherbench_atomic' : 'BEGIN');
   try {
     const result = fn();
-    db.exec(nested ? 'RELEASE grunt_atomic' : 'COMMIT');
+    db.exec(nested ? 'RELEASE otherbench_atomic' : 'COMMIT');
     return result;
   } catch (err) {
     // SQLite may have rolled back already (a full disk, an I/O error): a second ROLLBACK would hide `err`.
-    if (db.isTransaction) db.exec(nested ? 'ROLLBACK TO grunt_atomic; RELEASE grunt_atomic' : 'ROLLBACK');
+    if (db.isTransaction) db.exec(nested ? 'ROLLBACK TO otherbench_atomic; RELEASE otherbench_atomic' : 'ROLLBACK');
     throw err;
   }
 }

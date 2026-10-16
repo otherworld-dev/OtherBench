@@ -3,9 +3,9 @@ import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { ARTIFACT_KINDS, ARTIFACT_TOOL, ARTIFACT_TOOL_DESCRIPTION } from '@grunt/core/domain/artifacts.js';
-import { RECALL_TOOL, RECALL_TOOL_DESCRIPTION } from '@grunt/core/domain/recall.js';
-import { PLAN_TOOL, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_PARAMETERS } from '@grunt/core/domain/thread-tools.js';
+import { ARTIFACT_KINDS, ARTIFACT_TOOL, ARTIFACT_TOOL_DESCRIPTION } from '@otherbench/core/domain/artifacts.js';
+import { RECALL_TOOL, RECALL_TOOL_DESCRIPTION } from '@otherbench/core/domain/recall.js';
+import { PLAN_TOOL, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_PARAMETERS } from '@otherbench/core/domain/thread-tools.js';
 
 const SHAPE = {
   command: z.enum(['create', 'update', 'rewrite', 'view']),
@@ -22,12 +22,12 @@ const SHAPE = {
 };
 
 /**
- * One tool on Grunt's server: its JSON input schema as Claude Code is shown
+ * One tool on OtherBench's server: its JSON input schema as Claude Code is shown
  * it, and the call itself. Raw JSON schemas, rather than the SDK's zod-only
- * `tool()` helper, so the server can also carry tools relayed from Grunt's
+ * `tool()` helper, so the server can also carry tools relayed from OtherBench's
  * MCP servers with their own schemas (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2).
  */
-export interface GruntServerTool {
+export interface OtherBenchServerTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -35,21 +35,21 @@ export interface GruntServerTool {
 }
 
 /**
- * A fresh name for one process's Grunt server. The gate lets that server's
- * artifact, recall and plan tools through as Grunt's, so the name must be one a project's
- * MCP config can't take: any fixed name (`grunt`) could be registered by a
+ * A fresh name for one process's OtherBench server. The gate lets that server's
+ * artifact, recall and plan tools through as OtherBench's, so the name must be one a project's
+ * MCP config can't take: any fixed name (`otherbench`) could be registered by a
  * repo's `.mcp.json`, and its tool would get the same pass.
  */
-export function gruntServerName(): string {
-  return `grunt_${randomBytes(8).toString('hex')}`;
+export function otherBenchServerName(): string {
+  return `otherbench_${randomBytes(8).toString('hex')}`;
 }
 
-/** Claude Code's name for Grunt's tool `tool` on the server `server`. */
-export function gruntToolName(server: string, tool: string): string {
+/** Claude Code's name for OtherBench's tool `tool` on the server `server`. */
+export function otherBenchToolName(server: string, tool: string): string {
   return `mcp__${server}__${tool}`;
 }
 
-/** The running reply's executor for one of Grunt's tools, or undefined when none is running or the profile turns the tool off. */
+/** The running reply's executor for one of OtherBench's tools, or undefined when none is running or the profile turns the tool off. */
 type Current = () => ((args: unknown) => Promise<unknown>) | undefined;
 
 /** Runs a call on the current executor; the outcome goes back as JSON, an error flagged so Claude Code reads it as one. */
@@ -65,13 +65,13 @@ function jsonSchemaOf(shape: z.ZodRawShape): Record<string, unknown> {
   return z.toJSONSchema(z.object(shape)) as Record<string, unknown>;
 }
 
-/** The `artifact` tool as Claude Code sees it, from Grunt's in-process MCP server (Deck #896). */
-export function gruntArtifactTool(current: Current): GruntServerTool {
+/** The `artifact` tool as Claude Code sees it, from OtherBench's in-process MCP server (Deck #896). */
+export function otherBenchArtifactTool(current: Current): OtherBenchServerTool {
   return {
     name: ARTIFACT_TOOL,
     description: ARTIFACT_TOOL_DESCRIPTION,
     inputSchema: jsonSchemaOf(SHAPE),
-    call: (args) => answer(current, args, 'Artifacts are turned off for this profile, or no Grunt reply is running.'),
+    call: (args) => answer(current, args, 'Artifacts are turned off for this profile, or no OtherBench reply is running.'),
   };
 }
 
@@ -84,12 +84,12 @@ const RECALL_SHAPE = {
 };
 
 /** The `recall` tool as Claude Code sees it, on the same server as the artifact tool (spec 2026-10-09-recall-design). */
-export function gruntRecallTool(current: Current): GruntServerTool {
+export function otherBenchRecallTool(current: Current): OtherBenchServerTool {
   return {
     name: RECALL_TOOL,
     description: RECALL_TOOL_DESCRIPTION,
     inputSchema: jsonSchemaOf(RECALL_SHAPE),
-    call: (args) => answer(current, args, 'Searching past chats is turned off for this profile, or no Grunt reply is running.'),
+    call: (args) => answer(current, args, 'Searching past chats is turned off for this profile, or no OtherBench reply is running.'),
   };
 }
 
@@ -103,13 +103,13 @@ async function answerText(current: Current, args: unknown, off: string): Promise
   return { content: [{ type: 'text' as const, text }], isError };
 }
 
-/** `propose_plan` as Claude Code sees it, on Grunt's server, only while the reply is planning (spec 2026-10-12-thread-cards-design §6). */
-export function gruntPlanTool(current: Current): GruntServerTool {
+/** `propose_plan` as Claude Code sees it, on OtherBench's server, only while the reply is planning (spec 2026-10-12-thread-cards-design §6). */
+export function otherBenchPlanTool(current: Current): OtherBenchServerTool {
   return {
     name: PLAN_TOOL,
     description: PLAN_TOOL_DESCRIPTION,
     inputSchema: PLAN_TOOL_PARAMETERS,
-    call: (args) => answerText(current, args, 'Plan mode is off for this reply, or no Grunt reply is running.'),
+    call: (args) => answerText(current, args, 'Plan mode is off for this reply, or no OtherBench reply is running.'),
   };
 }
 
@@ -118,13 +118,13 @@ function errorResult(text: string): CallToolResult {
 }
 
 /**
- * Grunt's MCP server for one Claude Code process, named by `gruntServerName`:
+ * OtherBench's MCP server for one Claude Code process, named by `otherBenchServerName`:
  * an in-process MCP server answering `tools/list` and `tools/call` itself.
  * Every tool is always loaded (never deferred behind tool search, which a
  * clean chat doesn't have). A call to an unknown tool, or one that throws,
  * comes back as an error result rather than failing the request.
  */
-export function gruntMcpServer(name: string, tools: GruntServerTool[]): McpSdkServerConfigWithInstance {
+export function otherBenchMcpServer(name: string, tools: OtherBenchServerTool[]): McpSdkServerConfigWithInstance {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const instance = new McpServer({ name, version: '1.0.0' }, { capabilities: { tools: {} } });
   instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -132,7 +132,7 @@ export function gruntMcpServer(name: string, tools: GruntServerTool[]): McpSdkSe
   }));
   instance.server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const tool = byName.get(request.params.name);
-    if (!tool) return errorResult(`Grunt has no tool called "${request.params.name}".`);
+    if (!tool) return errorResult(`OtherBench has no tool called "${request.params.name}".`);
     try {
       return await tool.call(request.params.arguments ?? {});
     } catch (err) {

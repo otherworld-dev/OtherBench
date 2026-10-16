@@ -1,5 +1,5 @@
 //! Websites opened from a chat (Deck #826): each in its own window, labelled
-//! so that no capability matches it, so the page gets no IPC into Grunt.
+//! so that no capability matches it, so the page gets no IPC into OtherBench.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -14,7 +14,7 @@ pub fn site_url(raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw.trim()).map_err(|_| format!("Not a web address: {raw}"))?;
     match url.scheme() {
         "http" | "https" => Ok(url),
-        other => Err(format!("Only http and https addresses open in Grunt, not {other}:")),
+        other => Err(format!("Only http and https addresses open in OtherBench, not {other}:")),
     }
 }
 

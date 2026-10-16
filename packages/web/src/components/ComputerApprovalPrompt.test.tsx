@@ -1,7 +1,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 
 const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
@@ -109,8 +109,8 @@ describe('the computer-use approval card', () => {
   it('offers only Allow once and Deny for a listed program, and says why', () => {
     render(<ApprovalPrompt request={request(described(CMD, { appName: 'cmd.exe', appRisk: 'high' }))} onResolve={vi.fn()} />);
     const line = screen.getByTestId('computer-high-risk');
-    expect(line).toHaveTextContent('Grunt asks every time here.');
-    expect(line).toHaveTextContent("This app can run commands or change system settings, or Grunt couldn't fully identify it.");
+    expect(line).toHaveTextContent('OtherBench asks every time here.');
+    expect(line).toHaveTextContent("This app can run commands or change system settings, or OtherBench couldn't fully identify it.");
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
     expect(card()).not.toHaveTextContent('"Always allow"');
   });
@@ -120,7 +120,7 @@ describe('the computer-use approval card', () => {
     render(<ApprovalPrompt request={request(described(CHROME, { appName: 'chrome.exe', appTitle: 'New Tab - Google Chrome' }))} onResolve={onResolve} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow chrome.exe']);
     expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
-      "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't."
+      "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. OtherBench's own app is refused here, but another OtherBench this browser can reach isn't."
     );
     expect(screen.getByTestId('computer-app-kind').querySelector('bdi')?.textContent).toBe('chrome.exe');
     expect(screen.queryByTestId('computer-high-risk')).toBeNull();
@@ -133,7 +133,7 @@ describe('the computer-use approval card', () => {
     render(<ApprovalPrompt request={request(described(VSCODE, { appName: 'Code.exe', appTitle: 'main.ts - Visual Studio Code' }))} onResolve={onResolve} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow Code.exe']);
     expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
-      "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included."
+      "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, OtherBench included."
     );
     await userEvent.setup().click(screen.getByRole('button', { name: 'Allow for this chat' }));
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'chat' });
@@ -144,7 +144,7 @@ describe('the computer-use approval card', () => {
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
     expect(screen.queryByTestId('computer-app-kind')).toBeNull();
     expect(screen.getByTestId('computer-high-risk')).toHaveTextContent(
-      "Grunt asks every time here. Browsers and IDEs can be allowed for longer, but Grunt couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
+      "OtherBench asks every time here. Browsers and IDEs can be allowed for longer, but OtherBench couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
     );
     cleanup();
     // Its Save As dialog.
@@ -164,7 +164,7 @@ describe('the computer-use approval card', () => {
   it('keeps a terminal once-only even when the arguments claim it is ordinary', () => {
     render(<ApprovalPrompt request={request(described(TERMINAL, { appName: 'WindowsTerminal.exe', appRisk: 'normal', appShellView: false }))} onResolve={vi.fn()} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
-    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent("This app can run commands or change system settings, or Grunt couldn't fully identify it.");
+    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent("This app can run commands or change system settings, or OtherBench couldn't fully identify it.");
     expect(screen.queryByTestId('computer-app-kind')).toBeNull();
   });
 
@@ -178,7 +178,7 @@ describe('the computer-use approval card', () => {
   it("says when it is an ordinary app's file dialog, and offers only Allow once", () => {
     render(<ApprovalPrompt request={request(described(EXCEL, { appRisk: 'high', appShellView: true }))} onResolve={vi.fn()} />);
     expect(screen.getByTestId('computer-high-risk')).toHaveTextContent(
-      'Grunt asks every time here. This is a file dialog or file view, where any file can be opened or run.'
+      'OtherBench asks every time here. This is a file dialog or file view, where any file can be opened or run.'
     );
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
   });
@@ -188,7 +188,7 @@ describe('the computer-use approval card', () => {
     delete args['appShellView'];
     render(<ApprovalPrompt request={request(args)} onResolve={vi.fn()} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
-    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent("or Grunt couldn't fully identify it.");
+    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent("or OtherBench couldn't fully identify it.");
   });
 
   it('warns about a path with characters outside plain ASCII, shows it whole inside a <bdi>, and is once-only', () => {
@@ -197,7 +197,7 @@ describe('the computer-use approval card', () => {
     expect(path.textContent).toBe(RTL_PATH);
     expect(path.querySelector('bdi')?.textContent).toBe(RTL_PATH);
     expect(screen.getByTestId('computer-app-unusual')).toHaveTextContent(
-      "This path has characters outside the plain Latin alphabet, so it may look like another program's. Grunt asks every time for it."
+      "This path has characters outside the plain Latin alphabet, so it may look like another program's. OtherBench asks every time for it."
     );
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
     // One "asks every time" line, not two.
@@ -259,7 +259,7 @@ describe('the computer-use approval card', () => {
 
   it('offers no approval at all when the app is not a valid key', () => {
     render(<ApprovalPrompt request={request(described('relative\\EXCEL.EXE'))} onResolve={vi.fn()} />);
-    expect(screen.getByTestId('computer-headline')).toHaveTextContent("Grunt couldn't tell which app this action would use.");
+    expect(screen.getByTestId('computer-headline')).toHaveTextContent("OtherBench couldn't tell which app this action would use.");
     expect(screen.queryByTestId('computer-app-path')).toBeNull();
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny']);
   });

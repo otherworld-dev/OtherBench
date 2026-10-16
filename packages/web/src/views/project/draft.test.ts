@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Project } from '@grunt/core/ports/store.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 import { createBody, draftFromProject, draftProblem, emptyDraft, isDirty, patchBody, type ProjectDraft } from './draft.js';
 
 const machine = (root: string) => ({ kind: 'machine' as const, nodeId: 'n1', root });
@@ -55,19 +55,19 @@ describe('draftFromProject', () => {
 describe('createBody', () => {
   it('trims the name, description and folder, maps empties to null, and sends every other folder', () => {
     const draft: ProjectDraft = {
-      name: '  Grunt ',
+      name: '  OtherBench ',
       description: ' Local ',
       instructions: '  keep as typed  ',
-      folder: ' /home/me/grunt ',
+      folder: ' /home/me/otherbench ',
       folders: [{ entry: { path: '/home/me/notes', access: 'read' }, display: '/home/me/notes' }],
       defaultProfileId: '',
       parentId: '',
     };
     expect(createBody(draft)).toEqual({
-      name: 'Grunt',
+      name: 'OtherBench',
       description: 'Local',
       instructions: '  keep as typed  ',
-      workspaceRoot: '/home/me/grunt',
+      workspaceRoot: '/home/me/otherbench',
       defaultProfileId: null,
       folders: [{ path: '/home/me/notes', access: 'read' }],
     });
@@ -115,7 +115,7 @@ describe('patchBody and isDirty', () => {
 
 describe('draftProblem', () => {
   it('needs a name, and checks the limits and the folder', () => {
-    const ok = { ...emptyDraft(), name: 'Grunt' };
+    const ok = { ...emptyDraft(), name: 'OtherBench' };
     expect(draftProblem(ok, 'linux')).toBeNull();
     expect(draftProblem({ ...ok, name: '   ' }, 'linux')).toBe('Give the project a name.');
     expect(draftProblem({ ...ok, name: 'x'.repeat(81) }, 'linux')).toBe('The name can be at most 80 characters.');

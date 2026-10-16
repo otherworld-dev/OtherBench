@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { runRelayed } from '../src/relay.js';
 import { ApprovalTickets, MAX_TICKETS, ticketKey } from '../src/tickets.js';
 

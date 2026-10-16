@@ -27,12 +27,12 @@ const MCP_SERVERS: ContractMcpServer[] = [
 /**
  * Shared behavioural contract for every `ToolProvider`. Run UNMODIFIED against
  * `FakeToolProvider` (packages/core/test/fakes.test.ts) and the real
- * `GruntToolProvider` (packages/tools/test/tool-provider-contract.test.ts), so
+ * `OtherBenchToolProvider` (packages/tools/test/tool-provider-contract.test.ts), so
  * the fake the server tests lean on cannot drift from the real gate.
  *
  * The factory is handed the MCP servers the contract needs (`ToolProviderContractSetup`)
  * and must return a provider that exposes exactly those as connected MCP servers, plus
- * Grunt's built-in tools (named `read_file`, `write_file`, `run_command`; fs read:
+ * OtherBench's built-in tools (named `read_file`, `write_file`, `run_command`; fs read:
  * read-risk `source: 'fs'`; fs write: mutate-risk `source: 'fs'`; shell: a
  * `source: 'shell'` tool). When the policy's `shellRuns` is `'sandbox'`, `run_command`
  * must be the provider's sandboxed one (`source: 'sandbox'`) backed by a sandbox that
@@ -94,7 +94,7 @@ export function runToolProviderContract(
     let provider: ToolProvider;
 
     beforeEach(async () => {
-      ws = await mkdtemp(join(tmpdir(), 'grunt-tp-contract-'));
+      ws = await mkdtemp(join(tmpdir(), 'otherbench-tp-contract-'));
       await writeFile(join(ws, 'contract.txt'), 'hello from the contract\n');
       provider = await factory({ mcpServers: MCP_SERVERS });
     });

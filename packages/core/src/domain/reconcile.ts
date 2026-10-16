@@ -1,8 +1,8 @@
 import type { Store } from '../ports/store.js';
 import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
 
-/** Written on a sub-agent card that was still queued or running when Grunt's process died. */
-export const SUBAGENT_INTERRUPTED_MESSAGE = 'Grunt restarted while this sub-agent was working.';
+/** Written on a sub-agent card that was still queued or running when OtherBench's process died. */
+export const SUBAGENT_INTERRUPTED_MESSAGE = 'OtherBench restarted while this sub-agent was working.';
 
 /**
  * The parts with every unfinished sub-agent card turned into an error with
@@ -22,13 +22,13 @@ export function interruptSubagents(parts: Part[], message: string = SUBAGENT_INT
 /**
  * Recorded on every message `reconcileInterruptedTurns` moves out of
  * `streaming`, so both the UI and any code checking `error.kind` can tell
- * this apart from a real provider failure -- this was Grunt's own process
+ * this apart from a real provider failure -- this was OtherBench's own process
  * dying, not the model or the connection.
  */
 export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
   kind: 'transient',
   message:
-    'This response was interrupted when Grunt restarted before the turn finished. ' +
+    'This response was interrupted when OtherBench restarted before the turn finished. ' +
     'Any partial output above is still there, but retrying will clear it and start over.',
   retryable: true,
 };
@@ -55,7 +55,7 @@ export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
  *
  * Called once, synchronously after a `Store` is opened and before anything
  * else can start a new turn (see `createContainer` in
- * packages/server/src/container.ts). This assumes a single Grunt server
+ * packages/server/src/container.ts). This assumes a single OtherBench server
  * process per database: `TurnRunner.controllers` -- the only thing that
  * could still be driving a `streaming` row -- lives only in that process's
  * memory, so it is necessarily empty the instant a fresh process opens its

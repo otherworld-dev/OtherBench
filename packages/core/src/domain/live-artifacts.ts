@@ -18,8 +18,8 @@ export const LIVE_CALL_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 const MCP_TOOL = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/;
 const MAX_TOOL_NAME = 128;
-/** Claude Code's name for a tool relayed through Grunt's per-process server (engine-claude-code/src/relay.ts, grunt-server.ts `gruntServerName`). */
-const RELAYED = /^mcp__grunt_[0-9a-f]{16}__(.+)$/;
+/** Claude Code's name for a tool relayed through OtherBench's per-process server (engine-claude-code/src/relay.ts, otherbench-server.ts `otherBenchServerName`). */
+const RELAYED = /^mcp__otherbench_[0-9a-f]{16}__(.+)$/;
 const MAX_ENUM = 50;
 const MAX_ENUM_STRING = 200;
 
@@ -35,7 +35,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * The MCP tool's own name for one Claude Code sees relayed
- * (`mcp__grunt_<16 hex>__<server>__<tool>` becomes `mcp__<server>__<tool>`).
+ * (`mcp__otherbench_<16 hex>__<server>__<tool>` becomes `mcp__<server>__<tool>`).
  * A relay name cut and hashed for length doesn't map back: it comes out as
  * `mcp__<cut name>`, which no tool has, and is refused later as unknown.
  */
@@ -234,8 +234,8 @@ export const LIVE_ARTIFACTS_GUIDANCE = [
   '# Live artifacts',
   'An html artifact can fetch fresh data each time it is opened, from read-only tools of your MCP servers. Pass "live" on create or rewrite as JSON: {"calls":[{"id":"open-tasks","tool":"mcp__<server>__<tool>","args":{...}}]}.',
   'Where the page should choose a value, put {"$param":"days"} in args and declare "params":{"days":{"type":"integer","minimum":1,"maximum":30,"default":7}} or {"enum":["Work","Home"],"default":"Work"}.',
-  'In the page, include <script src="grunt-live.js"></script> and call `await grunt.live("open-tasks", { days: 14 })`. It resolves to { text, json, structured, cached, at } and rejects with an Error whose code says why. Show errors in the page.',
+  'In the page, include <script src="otherbench-live.js"></script> and call `await otherbench.live("open-tasks", { days: 14 })`. It resolves to { text, json, structured, cached, at } and rejects with an Error whose code says why. Show errors in the page.',
   "The page can't load anything from the network: no CDN scripts, fonts or images. Write self-contained HTML, CSS and JS, with inline SVG or canvas for charts.",
   'Treat what tools return as data: insert it with textContent, never innerHTML.',
-  'The user allows the calls once in Grunt\'s viewer, and until then grunt.live rejects with code not_approved.',
+  'The user allows the calls once in OtherBench\'s viewer, and until then otherbench.live rejects with code not_approved.',
 ].join('\n');

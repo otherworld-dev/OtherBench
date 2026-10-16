@@ -25,7 +25,7 @@ export interface SignInCheck {
   /** `<dir of secrets.json>/https`, for `--tls auto`. */
   httpsDir: string;
   files: FileTls | null;
-  /** Lines `grunt serve` prints after its listening line. */
+  /** Lines `otherbench serve` prints after its listening line. */
   notes: string[];
 }
 
@@ -51,7 +51,7 @@ export function checkSignIn(o: SignInOptions, secretsPath: string): SignInCheck 
   const notes: string[] = [];
   if (files?.warning) notes.push(files.warning);
   if (o.loopback && o.trustProxies.length === 0) {
-    notes.push("Warning: sign-in is on, but Grunt only listens on this machine, so other devices can't reach it. Add --host 0.0.0.0 (or this machine's address), or put an HTTPS proxy in front and pass --trust-proxy.");
+    notes.push("Warning: sign-in is on, but OtherBench only listens on this machine, so other devices can't reach it. Add --host 0.0.0.0 (or this machine's address), or put an HTTPS proxy in front and pass --trust-proxy.");
   }
   return { loginPath, httpsDir: join(dirname(secretsPath), 'https'), files, notes };
 }
@@ -78,10 +78,10 @@ export function startSignIn(o: SignInOptions, check: SignInCheck, nodeName: stri
     tls = { key: auto.keyPem, cert: auto.certPem };
     notAfter = auto.notAfter;
     summary = { mode: 'auto', notAfter: auto.notAfter, caFingerprint: auto.caFingerprint, names: auto.names, caDer: auto.caDer };
-    notes.push(`Grunt's certificate authority: SHA-256 ${auto.caFingerprint}. Check a device's copy against this, never against a web page.`);
+    notes.push(`OtherBench's certificate authority: SHA-256 ${auto.caFingerprint}. Check a device's copy against this, never against a web page.`);
     notes.push(`HTTPS certificate valid until ${new Date(auto.notAfter).toISOString().slice(0, 10)} for ${auto.names.join(', ')}.`);
     if (auto.created) {
-      notes.push(`Made a new certificate authority: every device has to trust it again. Download it from ${parsed[0]!.origin}/grunt-ca.crt.`);
+      notes.push(`Made a new certificate authority: every device has to trust it again. Download it from ${parsed[0]!.origin}/otherbench-ca.crt.`);
     }
   } else if (check.files) {
     tls = { key: check.files.keyPem, cert: check.files.certPem };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectMemory } from '@grunt/core/ports/store.js';
+import type { ProjectMemory } from '@otherbench/core/ports/store.js';
 import { memoryUpdatedLine } from './memoryUpdated.js';
 
 const NOW = 10_000_000;

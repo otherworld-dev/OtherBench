@@ -1,8 +1,8 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { McpServer } from '@grunt/core/ports/store.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 
 vi.mock('../../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}) }));
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -133,7 +133,7 @@ describe('McpSignIn', () => {
 
     confirm.mockReturnValueOnce(false);
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
-    expect(confirm).toHaveBeenCalledWith('Grunt will forget this sign-in. The provider still lists Grunt as allowed until you remove it there.');
+    expect(confirm).toHaveBeenCalledWith('OtherBench will forget this sign-in. The provider still lists OtherBench as allowed until you remove it there.');
     expect(api.mcpServers.signOut).not.toHaveBeenCalled();
 
     confirm.mockReturnValueOnce(true);

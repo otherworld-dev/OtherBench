@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
 
 const streams = vi.hoisted(() => [] as { url: string; closed: boolean }[]);
 
@@ -25,7 +25,7 @@ vi.mock('./api.js', () => ({
   },
 }));
 
-import { useGruntStore } from './store.js';
+import { useOtherBenchStore } from './store.js';
 import { useChatSync } from './useChatSync.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
@@ -37,24 +37,24 @@ function chat(id: string, over: Partial<Chat> = {}): Chat {
 
 describe('useChatSync', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     streams.length = 0;
   });
 
   it("reopens the chat's stream when the machine it runs on changes", () => {
-    useGruntStore.setState({ chats: [chat('c1')] });
+    useOtherBenchStore.setState({ chats: [chat('c1')] });
     renderHook(() => useChatSync('c1'));
     expect(streams).toEqual([{ url: '/api/chats/c1/stream', closed: false }]);
 
     // The server picks the machine to stream from when the stream opens.
-    act(() => useGruntStore.getState().upsertChat(chat('c1', { runsOn: 'node-laptop' })));
+    act(() => useOtherBenchStore.getState().upsertChat(chat('c1', { runsOn: 'node-laptop' })));
     expect(streams).toEqual([
       { url: '/api/chats/c1/stream', closed: true },
       { url: '/api/chats/c1/stream', closed: false },
     ]);
 
     // Anything else about the chat changing leaves the stream alone.
-    act(() => useGruntStore.getState().upsertChat(chat('c1', { runsOn: 'node-laptop', title: 'Renamed' })));
+    act(() => useOtherBenchStore.getState().upsertChat(chat('c1', { runsOn: 'node-laptop', title: 'Renamed' })));
     expect(streams).toHaveLength(2);
   });
 });

@@ -1,5 +1,5 @@
 import type { DragEvent, JSX, ReactNode } from 'react';
-import { PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
+import { PROJECT_NAME_MAX } from '@otherbench/core/domain/projects.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
 import { STATUS_LABELS, StatusDot } from '../../components/StatusDot.js';
 import type { ChatStatus } from '../../state/chatStatus.js';
@@ -7,7 +7,7 @@ import { groupDomId } from '../../state/sidebarGroups.js';
 import { CHAT_DRAG_MIME, isContextMenuKey, positionIn, type DropPosition, type MenuSource } from './ChatRow.js';
 
 /** `dataTransfer` type a dragged project heading carries; its value is the project id. */
-export const PROJECT_DRAG_MIME = 'application/x-grunt-project';
+export const PROJECT_DRAG_MIME = 'application/x-otherbench-project';
 
 /**
  * Reordering projects by dragging their headings: this heading can be dragged,

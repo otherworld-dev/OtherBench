@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react';
  * explicit open or close is stored; a section with no entry follows its own
  * default. Per device, like the sidebar's collapsed groups.
  */
-export const INSPECTOR_SECTIONS_STORAGE_KEY = 'grunt.inspectorSections';
+export const INSPECTOR_SECTIONS_STORAGE_KEY = 'otherbench.inspectorSections';
 
 let choices: Readonly<Record<string, boolean>> | null = null;
 const listeners = new Set<() => void>();

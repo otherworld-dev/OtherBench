@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import type { TodoItem, TodoStatus } from '@grunt/core/types/thread.js';
+import type { TodoItem, TodoStatus } from '@otherbench/core/types/thread.js';
 
 /** Steps shown before the rest are summed up (a Claude Code list can be longer than update_todos allows). */
 export const TODO_SHOWN_MAX = 50;

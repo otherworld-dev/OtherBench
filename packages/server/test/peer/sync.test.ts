@@ -3,12 +3,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FakeSecretStore } from '@grunt/core/testing/fakes.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { createBlobStore, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
-import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
-import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { createBlobStore, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { openDatabase } from '@otherbench/store-sqlite/db.js';
+import { runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
+import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { createPeerApp } from '../../src/peer/app.js';
 import { IdentityStore } from '../../src/peer/identity.js';
 import { PeerService } from '../../src/peer/service.js';
@@ -38,7 +38,7 @@ function syncNode(name: string, options: { schemaVersion?: number; fallbackMs?: 
   db.prepare('UPDATE node_self SET id = ?, name = ?').run(`node-${name}`, name);
   const store = new SqliteStore(db);
   const secrets = new FakeSecretStore();
-  const dir = mkdtempSync(join(tmpdir(), `grunt-sync-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `otherbench-sync-${name}-`));
   const blobs = createBlobStore(join(dir, 'blobs'));
   const bus = new AppEventBus();
   const events: AppEvent[] = [];
@@ -279,7 +279,7 @@ describe('syncing two machines over the peer listener', () => {
     seed(pc);
     await pairNodes(pc, laptop);
 
-    await expect(laptop.syncer.pullFrom('node-PC')).rejects.toThrow(/different version of Grunt.*Update Laptop/);
+    await expect(laptop.syncer.pullFrom('node-PC')).rejects.toThrow(/different version of OtherBench.*Update Laptop/);
     expect(laptop.store.chats.get('chat')).toBeNull();
     expect(laptop.syncer.status('node-PC').error).toMatch(/different version/);
   });

@@ -7,7 +7,7 @@ import { defaultCoworkRoot, findCoworkFolders, readCoworkSessions } from '../../
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'grunt-cowork-reader-'));
+  root = await mkdtemp(join(tmpdir(), 'otherbench-cowork-reader-'));
 });
 
 afterEach(async () => {

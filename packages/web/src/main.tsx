@@ -1,9 +1,11 @@
+// First: moves Grunt's saved preferences to their new keys before anything reads one.
+import './lib/legacyStorage.js';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Root } from './Root.js';
 import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
-import { keepGruntTitle } from './lib/gruntTitle.js';
+import { keepOtherBenchTitle } from './lib/otherBenchTitle.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
 import { initTextSize } from './state/textSize.js';
 import './index.css';
@@ -11,9 +13,9 @@ import './index.css';
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root element missing from index.html');
 
-// Computer use refuses any window whose title carries Grunt's marker, so a
-// browser showing this page can't be used to answer Grunt's own cards.
-keepGruntTitle();
+// Computer use refuses any window whose title carries OtherBench's marker, so a
+// browser showing this page can't be used to answer OtherBench's own cards.
+keepOtherBenchTitle();
 
 // Apply the saved text size and sidebar width before first paint.
 initTextSize();
@@ -44,7 +46,7 @@ try {
 function StartupError({ message }: { message: string }) {
   return (
     <div className="p-6 font-sans text-sm">
-      <h1 className="mb-2 text-base font-semibold">Grunt couldn't start its server</h1>
+      <h1 className="mb-2 text-base font-semibold">OtherBench couldn't start its server</h1>
       <pre className="whitespace-pre-wrap rounded border border-[var(--border)] bg-[var(--bg-sunken)] p-3">{message}</pre>
     </div>
   );

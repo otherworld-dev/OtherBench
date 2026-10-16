@@ -1,7 +1,7 @@
-// Entry point of Grunt's sandbox agent (spec 2026-10-12-sandbox-design §2):
+// Entry point of OtherBench's sandbox agent (spec 2026-10-12-sandbox-design §2):
 // wires agent-core.mjs to the real sandbox runtime and to this process's
-// stdin/stdout. Grunt starts it in the distro as the grunt user:
-//   wsl.exe -d grunt-sandbox -u grunt --exec /opt/grunt-sandbox/node/bin/node /opt/grunt-sandbox/agent.mjs
+// stdin/stdout. OtherBench starts it in the distro as the otherbench user:
+//   wsl.exe -d otherbench-sandbox -u otherbench --exec /opt/otherbench-sandbox/node/bin/node /opt/otherbench-sandbox/agent.mjs
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
@@ -43,7 +43,7 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on('line', (line) => {
   void agent.receive(line);
 });
-// Grunt went away or closed us: stop every command and the runtime's proxies.
+// OtherBench went away or closed us: stop every command and the runtime's proxies.
 lines.on('close', () => {
   void agent.receive(JSON.stringify({ type: 'close' }));
 });

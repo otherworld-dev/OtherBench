@@ -8,7 +8,7 @@ import type {
   ComputerStopReason,
   ComputerTarget,
 } from '../ports/computer.js';
-import { COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, expectationOf, isDevToolsTitle, isReadAction, KEY_MODIFIERS, parseAction, showsGruntUi } from '../domain/computer-apps.js';
+import { COMPUTER_DEVTOOLS_REASON, COMPUTER_OTHERBENCH_UI_REASON, expectationOf, isDevToolsTitle, isReadAction, KEY_MODIFIERS, parseAction, showsOtherBenchUi } from '../domain/computer-apps.js';
 
 /** A 1×1 PNG: every screenshot the fake driver takes. */
 export const FAKE_PNG = Buffer.from(
@@ -29,7 +29,7 @@ export const FAKE_COMPUTER_APP: ComputerTarget = Object.freeze({
   location: 'fixed',
   elevated: false,
   uiAccess: false,
-  grunt: false,
+  otherbench: false,
   shellView: false,
   title: 'Fake App',
   windowId: 'hwnd-1',
@@ -43,16 +43,16 @@ export function fakeComputerTarget(over: Partial<ComputerTarget> = {}): Computer
 }
 
 /** What `act` answers when the window is no longer the one the action was approved for. */
-export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after Grunt asked, so nothing was done.';
+export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after OtherBench asked, so nothing was done.';
 
 /** What `act` answers while any modifier key is down. */
 export const FAKE_MODIFIER_HELD_REASON = 'A modifier key is held; nothing was done.';
 
 /** What `act` answers while the state of the keyboard cannot be read. */
-export const FAKE_KEYBOARD_UNKNOWN_REASON = "Grunt couldn't read the keyboard's state; nothing was done.";
+export const FAKE_KEYBOARD_UNKNOWN_REASON = "OtherBench couldn't read the keyboard's state; nothing was done.";
 
 /** What every call but `ensureSession` answers (or rejects with) for a chat that has no control session. */
-export const FAKE_NO_SESSION_REASON = 'Grunt is not controlling this computer for that chat.';
+export const FAKE_NO_SESSION_REASON = 'OtherBench is not controlling this computer for that chat.';
 
 type Acted = { chatId: string; action: ComputerAction; expect: ComputerExpectation };
 
@@ -65,7 +65,7 @@ function sameAction(a: object, b: object): boolean {
 /**
  * A `ComputerDriver` that touches nothing: it records what it was asked and
  * answers with whatever the test set. Also what the server wires for e2e
- * when `GRUNT_COMPUTER_FAKE_DRIVER=1` (container.ts).
+ * when `OTHERBENCH_COMPUTER_FAKE_DRIVER=1` (container.ts).
  *
  * Like the real shell, `act` looks at the target again and does nothing
  * unless it is still the app, window and run the expectation names: under
@@ -193,10 +193,10 @@ export class FakeComputerDriver implements ComputerDriver {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: now.refuse };
     }
-    // A window showing Grunt's own UI is never acted in, whatever was approved (the shell does the same before every step).
-    if (showsGruntUi(now.title)) {
+    // A window showing OtherBench's own UI is never acted in, whatever was approved (the shell does the same before every step).
+    if (showsOtherBenchUi(now.title)) {
       this.refused.push({ chatId, action, expect });
-      return { ok: false, reason: COMPUTER_GRUNT_UI_REASON };
+      return { ok: false, reason: COMPUTER_OTHERBENCH_UI_REASON };
     }
     if (isDevToolsTitle(now.title)) {
       this.refused.push({ chatId, action, expect });

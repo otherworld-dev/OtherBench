@@ -36,11 +36,11 @@ describe('textSize module', () => {
 
   it('loads 100 when nothing, garbage or an off-step value is stored', () => {
     expect(loadTextSize()).toBe(100);
-    window.localStorage.setItem('grunt.textSize', 'banana');
+    window.localStorage.setItem('otherbench.textSize', 'banana');
     expect(loadTextSize()).toBe(100);
-    window.localStorage.setItem('grunt.textSize', '111');
+    window.localStorage.setItem('otherbench.textSize', '111');
     expect(loadTextSize()).toBe(100);
-    window.localStorage.setItem('grunt.textSize', '130');
+    window.localStorage.setItem('otherbench.textSize', '130');
     expect(loadTextSize()).toBe(130);
   });
 
@@ -58,7 +58,7 @@ describe('textSize module', () => {
 
   it('persists on set, and survives a storage write failure', () => {
     setTextSize(130);
-    expect(window.localStorage.getItem('grunt.textSize')).toBe('130');
+    expect(window.localStorage.getItem('otherbench.textSize')).toBe('130');
     expect(document.documentElement.style.fontSize).toBe('130%');
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('full');

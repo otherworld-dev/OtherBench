@@ -10,7 +10,7 @@ import { FAST, granted } from './helpers.js';
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'grunt-password-cmd-'));
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-password-cmd-'));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -23,7 +23,7 @@ function piped(text: string) {
   return { io: { stdin, stdout: { write: (s: string) => out.push(s) }, isTTY: false }, out };
 }
 
-describe('grunt password', () => {
+describe('otherbench password', () => {
   it('reads the first line of piped stdin, keeping spaces but not a Windows line ending, and says devices are signed out', async () => {
     const path = join(dir, 'login.json');
     const { io, out } = piped(' pässwörd with spaces \r\nsecond line\n');
@@ -160,7 +160,7 @@ describe('grunt password', () => {
   });
 
   it('is wired into main() beside the database, and a live PasswordFile sees the change', async () => {
-    const db = join(dir, 'grunt.db');
+    const db = join(dir, 'otherbench.db');
     let now = 1_000_000;
     const live = new PasswordFile(join(dir, 'login.json'), () => now, FAST);
     expect(live.epoch()).toBeNull();
@@ -180,7 +180,7 @@ describe('grunt password', () => {
     const exit = vi.fn();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await main(['password', '--db', join(dir, 'grunt.db')], { stdin: io.stdin, stdout: io.stdout, isTTY: false, exit });
+    await main(['password', '--db', join(dir, 'otherbench.db')], { stdin: io.stdin, stdout: io.stdout, isTTY: false, exit });
 
     expect(exit).toHaveBeenCalledWith(1);
     expect(errorSpy).toHaveBeenCalledWith('Error: The password must be at least 12 characters.');

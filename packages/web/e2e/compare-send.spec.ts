@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { BASE_URL } from '../playwright.config.js';
 
 /**

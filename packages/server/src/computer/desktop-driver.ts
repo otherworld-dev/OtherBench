@@ -1,6 +1,6 @@
-import { cardLine } from '@grunt/core/domain/card-text.js';
-import { COMPUTER_LIMITS, expectationOf } from '@grunt/core/domain/computer-apps.js';
-import { validateToolImage } from '@grunt/core/domain/tool-images.js';
+import { cardLine } from '@otherbench/core/domain/card-text.js';
+import { COMPUTER_LIMITS, expectationOf } from '@otherbench/core/domain/computer-apps.js';
+import { validateToolImage } from '@otherbench/core/domain/tool-images.js';
 import type {
   ComputerAction,
   ComputerAnswer,
@@ -10,7 +10,7 @@ import type {
   ComputerScreenshot,
   ComputerStopReason,
   ComputerTarget,
-} from '@grunt/core/ports/computer.js';
+} from '@otherbench/core/ports/computer.js';
 import { DEFAULT_CALL_TIMEOUT_MS, DesktopChannelError, type ShellChannel } from './desktop-channel.js';
 import { COMPUTER_NO_SESSION_REASON } from './sessions.js';
 
@@ -57,30 +57,30 @@ export const DESKTOP_OUTSIDE_REASON = 'That point is not inside the last screens
 export const DESKTOP_BUSY_REASON = "The desktop app is still busy with this chat's earlier requests; nothing was sent.";
 /** What a start throws while the shell has not confirmed an end this side asked for. */
 export const DESKTOP_END_PENDING_REASON = "The desktop app hasn't confirmed that the last control session ended, so nothing was started.";
-/** What a mouse action without a point is refused with. Core's `parseAction` can't build one, so it is a mistake in Grunt itself. */
-export const DESKTOP_NO_POINT_REASON = 'Grunt tried to send a mouse action without a point. That is a mistake in Grunt, not in the request; nothing was done.';
-/** What an action without the whole approved expectation is refused with. The tool always hands one, so it is a mistake in Grunt itself. */
-export const DESKTOP_NO_EXPECTATION_REASON = 'Grunt tried to send an action without the app the person approved. That is a mistake in Grunt, not in the request; nothing was done.';
+/** What a mouse action without a point is refused with. Core's `parseAction` can't build one, so it is a mistake in OtherBench itself. */
+export const DESKTOP_NO_POINT_REASON = 'OtherBench tried to send a mouse action without a point. That is a mistake in OtherBench, not in the request; nothing was done.';
+/** What an action without the whole approved expectation is refused with. The tool always hands one, so it is a mistake in OtherBench itself. */
+export const DESKTOP_NO_EXPECTATION_REASON = 'OtherBench tried to send an action without the app the person approved. That is a mistake in OtherBench, not in the request; nothing was done.';
 /** What a call is told when the shell says the chat's session is not its live one. */
 export const DESKTOP_SESSION_GONE_REASON = "The desktop app no longer has this chat's control session, so nothing was done.";
 /** Said after a call when this side has ended the chat's session because it could no longer be trusted, and the shell confirmed. */
-export const DESKTOP_ENDED_AFTER = 'Grunt has ended the control session, so nothing more is done.';
+export const DESKTOP_ENDED_AFTER = 'OtherBench has ended the control session, so nothing more is done.';
 /** The same, when the shell did not confirm that end. */
-export const DESKTOP_END_UNCONFIRMED_AFTER = "Grunt asked the desktop app to end the control session and couldn't confirm that it did.";
+export const DESKTOP_END_UNCONFIRMED_AFTER = "OtherBench asked the desktop app to end the control session and couldn't confirm that it did.";
 
 /** What a start is refused with for a chat id that is not one clean line of 1 to 128 characters. Nothing is sent for it. */
 export const DESKTOP_BAD_CHAT_REASON = "That chat can't control this computer: its id can't be sent to the desktop app.";
 const START_STOPPED_REASON = 'Control was stopped before it started, so nothing was started.';
-const TOO_MANY_REASON ='Grunt is keeping track of too many control sessions; stop one first.';
+const TOO_MANY_REASON ='OtherBench is keeping track of too many control sessions; stop one first.';
 const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
 const START_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so nothing was started.";
 const START_REFUSED_REASON = 'The desktop app refused to start controlling this computer.';
-const START_UNCONFIRMED = "Grunt couldn't confirm that the desktop app cancelled it.";
+const START_UNCONFIRMED = "OtherBench couldn't confirm that the desktop app cancelled it.";
 const END_GONE_REASON = 'The desktop app went away before it confirmed that the control session ended.';
 const END_REFUSED_REASON = "The desktop app couldn't end the control session.";
-const END_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended.";
+const END_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so OtherBench can't tell whether the control session ended.";
 const ACT_REFUSED_REASON = 'The desktop app refused the action.';
-const ACT_NOT_AN_ACTION_REASON = 'That is not an action Grunt can send.';
+const ACT_NOT_AN_ACTION_REASON = 'That is not an action OtherBench can send.';
 const ACT_UNREADABLE_REASON = "The desktop app's answer couldn't be read.";
 const ACT_UNKNOWN = 'Whether the action was carried out is not known.';
 const ACT_SESSION_ENDED = 'The control session ended while the desktop app was working.';
@@ -552,7 +552,7 @@ export class DesktopComputerDriver implements ComputerDriver {
       try {
         cb();
       } catch (err) {
-        console.error('[grunt-server] a computer-use reset listener failed:', err);
+        console.error('[otherbench-server] a computer-use reset listener failed:', err);
       }
     }
   }
@@ -704,7 +704,7 @@ export class DesktopComputerDriver implements ComputerDriver {
       try {
         cb(chatId);
       } catch (err) {
-        console.error('[grunt-server] a computer-use lost-session listener failed:', err);
+        console.error('[otherbench-server] a computer-use lost-session listener failed:', err);
       }
     }
   }
@@ -795,7 +795,7 @@ export class DesktopComputerDriver implements ComputerDriver {
     if (this.sessions.has(chatId)) return;
     this.doubtful.add(chatId);
     this.end(chatId).catch((err: unknown) => {
-      console.error(`[grunt-server] the desktop app answered a control request Grunt had given up on (chat ${chatId}), and didn't confirm ending it: ${failureText(err)}`);
+      console.error(`[otherbench-server] the desktop app answered a control request OtherBench had given up on (chat ${chatId}), and didn't confirm ending it: ${failureText(err)}`);
     });
   }
 
@@ -859,7 +859,7 @@ export class DesktopComputerDriver implements ComputerDriver {
       try {
         cb(chatId, why);
       } catch (err) {
-        console.error('[grunt-server] a computer-use stopped listener failed:', err);
+        console.error('[otherbench-server] a computer-use stopped listener failed:', err);
       }
     }
   }

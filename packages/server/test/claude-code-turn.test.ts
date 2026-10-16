@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeChatEngine, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { FakeChatEngine, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import { RoutingChatEngine } from '../src/engine-router.js';
 
 const ws = '/ws';

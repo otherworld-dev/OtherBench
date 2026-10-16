@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import type { SandboxRunResult } from '@grunt/core/ports/sandbox.js';
+import type { SandboxRunResult } from '@otherbench/core/ports/sandbox.js';
 import { otherSpelling, PROTECTED_PROBES, runSelfTest, selfTestCases, shellQuote, type SelfTestCase } from '../src/selftest.js';
 
-const places = { rwLinux: "/mnt/c/Users/O'Brien/rw", roLinux: '/mnt/c/st/ro', gateway: '172.20.48.1', gruntPort: 4747 };
+const places = { rwLinux: "/mnt/c/Users/O'Brien/rw", roLinux: '/mnt/c/st/ro', gateway: '172.20.48.1', otherBenchPort: 4747 };
 const result = (exitCode: number | null, output = ''): SandboxRunResult => ({ command: '', exitCode, signal: null, timedOut: false, truncated: false, timeoutMsUsed: 60_000, output, sandbox: true, cwd: '/' });
 
 describe('selfTestCases', () => {
-  it("covers the spec's list: unmounted paths, read-only folders, Windows programs, /etc/shadow, an unlisted host, Grunt's own port, and an allowlisted host", () => {
+  it("covers the spec's list: unmounted paths, read-only folders, Windows programs, /etc/shadow, an unlisted host, OtherBench's own port, and an allowlisted host", () => {
     const cases = selfTestCases(places);
     const blocked = cases.filter((c) => c.expect === 'blocked').map((c) => c.command);
     expect(blocked).toEqual(
       expect.arrayContaining([
         'ls /mnt/c/Windows',
-        'cat /home/grunt/.bashrc',
+        'cat /home/otherbench/.bashrc',
         `echo no > ${shellQuote('/mnt/c/st/ro/nope.txt')}`,
         `echo no > ${shellQuote('/mnt/c/st/RO/nope.txt')}`,
         `echo no > ${shellQuote("/mnt/c/Users/O'Brien/rw/.git/hooks/x")}`,
@@ -32,7 +32,7 @@ describe('selfTestCases', () => {
   });
 
   it('tries to start a Windows program inside the runtime, and only a clear "interop-off" passes', async () => {
-    const check = selfTestCases(places).find((c) => c.command === '/bin/sh /opt/grunt-sandbox/interop-check.sh');
+    const check = selfTestCases(places).find((c) => c.command === '/bin/sh /opt/otherbench-sandbox/interop-check.sh');
     expect(check).toMatchObject({ expect: 'ok', allowedHosts: [] });
     const pass = (r: SandboxRunResult) => runSelfTest([check!], async () => r, () => {});
     await expect(pass(result(0, 'note: a WSLInterop registration is visible\ninterop-off\n'))).resolves.toBeUndefined();
@@ -91,24 +91,24 @@ describe('selfTestCases', () => {
     expect(otherSpelling('.Git')).toBe('.gIT');
   });
 
-  it("decides the Grunt-port check on the connection failing with no HTTP status, not on what Grunt answers", () => {
+  it("decides the OtherBench-port check on the connection failing with no HTTP status, not on what OtherBench answers", () => {
     const probes = selfTestCases(places).filter((c) => c.command.includes('/api/health'));
     expect(probes).toHaveLength(2);
-    for (const grunt of probes) {
-      expect(grunt.expectOutput?.test('curl: (7) Failed to connect\nhttp_code=000')).toBe(true);
-      expect(grunt.expectOutput?.test('http_code=403')).toBe(false);
+    for (const otherbench of probes) {
+      expect(otherbench.expectOutput?.test('curl: (7) Failed to connect\nhttp_code=000')).toBe(true);
+      expect(otherbench.expectOutput?.test('http_code=403')).toBe(false);
     }
   });
 
-  it('fails the self-test when Grunt answers over HTTPS only (sign-in mode), though the plain-HTTP probe got no status', async () => {
+  it('fails the self-test when OtherBench answers over HTTPS only (sign-in mode), though the plain-HTTP probe got no status', async () => {
     const probes = selfTestCases(places).filter((c) => c.command.includes('/api/health'));
-    // What a reachable HTTPS-only Grunt gives: the HTTP probe's TLS handshake fails, the HTTPS probe gets a status.
+    // What a reachable HTTPS-only OtherBench gives: the HTTP probe's TLS handshake fails, the HTTPS probe gets a status.
     const run = async (c: SelfTestCase) => (c.command.includes('https://') ? result(0, 'http_code=200') : result(52, 'curl: (52) Empty reply from server\nhttp_code=000'));
     await expect(runSelfTest(probes, run, () => {})).rejects.toThrow(/over HTTPS too" was not blocked/);
   });
 
-  it("leaves out the Grunt-port check when the gateway or the port isn't known", () => {
-    expect(selfTestCases({ ...places, gruntPort: null }).some((c) => c.command.includes('/api/health'))).toBe(false);
+  it("leaves out the OtherBench-port check when the gateway or the port isn't known", () => {
+    expect(selfTestCases({ ...places, otherBenchPort: null }).some((c) => c.command.includes('/api/health'))).toBe(false);
     expect(selfTestCases({ ...places, gateway: null }).some((c) => c.command.includes('/api/health'))).toBe(false);
   });
 

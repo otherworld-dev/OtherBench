@@ -1,4 +1,4 @@
-import type { Chat, ProjectMemory } from '@grunt/core/ports/store.js';
+import type { Chat, ProjectMemory } from '@otherbench/core/ports/store.js';
 import { formatRelativeTime } from './relativeTime.js';
 
 /** Who last changed a project's memory and when, as the Inspector and the project page say it. */

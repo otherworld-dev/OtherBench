@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { COMPUTER_DESKTOP_ONLY_REASON } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON } from '@otherbench/core/domain/computer-apps.js';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
  * Computer use end to end (spec 2026-10-12-computer-use-design section 9),
- * against the fake driver this server runs with (GRUNT_COMPUTER_FAKE_DRIVER=1,
+ * against the fake driver this server runs with (OTHERBENCH_COMPUTER_FAKE_DRIVER=1,
  * playwright.config.ts): core's FakeComputerDriver, which touches no real
  * mouse, keyboard or screen. The Mock model's `#computer` takes a screenshot,
  * clicks at (10, 20) and types "hello from the mock" through the real tool,
@@ -110,11 +110,11 @@ test('computer use turned on for a profile: looks with no card, asks per action 
   await expect(card.getByTestId('computer-high-risk')).toHaveCount(0);
   await expect(card.getByRole('button', { name: 'Allow for this chat' })).toBeVisible();
   await expect(card.getByRole('button', { name: 'Always allow FakeApp.exe' })).toBeVisible();
-  await expect(banner).toContainText('Grunt is controlling this computer.');
+  await expect(banner).toContainText('OtherBench is controlling this computer.');
   await expect(banner.getByTestId('computer-banner-last')).toHaveCount(0);
 
   // While the computer is in control, an answer from anywhere but the desktop app's window (this browser stands in
-  // for it: playwright.config.ts) is refused, so a model using a browser can't answer Grunt's cards in it.
+  // for it: playwright.config.ts) is refused, so a model using a browser can't answer OtherBench's cards in it.
   const requestId = ((await card.getAttribute('data-testid')) ?? '').replace('approval-prompt-', '');
   const elsewhere = await request.post(`${BASE_URL}/api/approvals/${requestId}/resolve`, { data: { choice: 'once' } });
   expect(elsewhere.status()).toBe(403);
@@ -183,7 +183,7 @@ test('a denied click is not carried out, and the reply says so', async ({ page, 
   await expect(page.locator('article[data-role="assistant"] .markdown-body')).toContainText("The computer didn't work:");
   await expect(page.getByLabel('streaming')).toHaveCount(0);
   // Control started with the screenshot, and nothing was carried out: the banner has no last action.
-  await expect(banner).toContainText('Grunt is controlling this computer.');
+  await expect(banner).toContainText('OtherBench is controlling this computer.');
   await expect(banner.getByTestId('computer-banner-last')).toHaveCount(0);
   const reply = await assistantReply(request, chatId);
   expect(reply?.status).toBe('complete');

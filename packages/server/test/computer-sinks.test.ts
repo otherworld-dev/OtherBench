@@ -1,22 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { hasHiddenCharacter } from '@grunt/core/domain/card-text.js';
-import { COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@grunt/core/domain/computer-apps.js';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent } from '@grunt/core/ports/chat-engine.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { FAKE_COMPUTER_APP, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { hasHiddenCharacter } from '@otherbench/core/domain/card-text.js';
+import { COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { TurnRunner, type TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine, EngineEvent } from '@otherbench/core/ports/chat-engine.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { ComputerSessions } from '../src/computer/sessions.js';
 import { AppEventBus } from '../src/stream/events.js';
 
 /**
  * Where text from the screen can come out of a reply that uses the computer,
  * with everything real but the machine and the model: the real `TurnRunner`,
- * `GruntToolProvider`, `PermissionBroker`, `computer` tool, `ComputerSessions`
+ * `OtherBenchToolProvider`, `PermissionBroker`, `computer` tool, `ComputerSessions`
  * and `AppEventBus`, over `FakeComputerDriver` (never a real mouse, keyboard
  * or screen), and an engine that makes the model's calls the way an engine
  * does. One reply, with something hostile in every place the machine can put
@@ -95,7 +95,7 @@ describe('screen-derived text at every place a computer reply puts it', () => {
     const bus = new AppEventBus();
     const driver = new FakeComputerDriver();
     const sessions = new ComputerSessions(driver, { emit: (e) => bus.emit(e), cancelChat: () => {} });
-    const provider = new GruntToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
     const engine = callingEngine([
       { args: { action: 'screenshot' } },
       // A window whose title is the attack, and a program built under a name that is one.
@@ -246,7 +246,7 @@ describe('screen-derived text at every place a computer reply puts it', () => {
       await sessions.stop('chat-1');
       const lines = error.mock.calls.map((call) => call.map(String).join(' '));
       expect(lines.length).toBeGreaterThan(0);
-      expect(lines[0]).toBe(`[grunt-server] the desktop app couldn't say whether computer use is available: ${CLEAN}`);
+      expect(lines[0]).toBe(`[otherbench-server] the desktop app couldn't say whether computer use is available: ${CLEAN}`);
       for (const line of lines) expect(hasHiddenCharacter(line), JSON.stringify(line)).toBe(false);
       // One argument each: the text, never the error object.
       for (const call of error.mock.calls) expect(call.every((part) => typeof part === 'string')).toBe(true);

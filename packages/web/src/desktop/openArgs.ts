@@ -7,7 +7,7 @@ export interface OpenArgs {
 }
 
 /**
- * Reads Grunt's launch arguments. `argv[0]` (the executable) and flags it
+ * Reads OtherBench's launch arguments. `argv[0]` (the executable) and flags it
  * doesn't know (`--minimized`) are skipped. `--open-folder` takes the next
  * argument; `--send` takes every argument after it up to the next flag.
  */

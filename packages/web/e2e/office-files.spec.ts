@@ -14,7 +14,7 @@ import { BASE_URL } from '../playwright.config.js';
  */
 let ws: string;
 test.beforeEach(() => {
-  ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-office-'));
+  ws = mkdtempSync(join(tmpdir(), 'otherbench-e2e-office-'));
 });
 test.afterEach(() => {
   try {
@@ -45,7 +45,7 @@ async function send(page: Page, text: string): Promise<void> {
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 }
 
-/** A .docx with a heading and a paragraph: only the part Grunt reads, stored uncompressed. */
+/** A .docx with a heading and a paragraph: only the part OtherBench reads, stored uncompressed. */
 function minimalDocx(heading: string, text: string): Buffer {
   const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
   const files: [string, string][] = [
@@ -98,11 +98,11 @@ test("an attached Word file's text reaches the model", async ({ page, request })
   await page.getByTestId('composer-file-input').setInputFiles({
     name: 'memo.docx',
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    buffer: minimalDocx('Quarterly memo', 'Grunt reads this memo end to end'),
+    buffer: minimalDocx('Quarterly memo', 'OtherBench reads this memo end to end'),
   });
   await expect(page.getByTestId('composer-dropzone').getByTestId('attachment-chip')).toContainText('memo.docx');
   await send(page, '#echo-user');
-  await expect(page.locator('article[data-role="assistant"]').last()).toContainText('Grunt reads this memo end to end');
+  await expect(page.locator('article[data-role="assistant"]').last()).toContainText('OtherBench reads this memo end to end');
 });
 
 test('the model makes a spreadsheet: previewed with its formula, downloaded and saved as a real .xlsx', async ({ page, request }) => {

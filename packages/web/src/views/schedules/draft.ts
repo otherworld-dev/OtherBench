@@ -1,6 +1,6 @@
-import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, parseRule, type ScheduleRule, type ScheduleTarget } from '@grunt/core/domain/schedule.js';
-import type { Chat, Project, Schedule } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, parseRule, type ScheduleRule, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 import type { CreateScheduleBody, PatchScheduleBody } from '../../state/api.js';
 
 /**

@@ -23,7 +23,7 @@
   {
     "type": "system",
     "subtype": "init",
-    "cwd": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws",
+    "cwd": "C:\\Users\\Adam\\AppData\\Local\\Temp\\otherbench-probe-ws",
     "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
     "tools": [
       "Task",
@@ -740,9 +740,9 @@
     "product_feedback_disabled": false,
     "uuid": "b3e980fd-4489-4a9f-8cbf-544382ceb96a",
     "memory_paths": {
-      "auto": "C:\\Users\\Adam\\.claude\\projects\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\memory\\"
+      "auto": "C:\\Users\\Adam\\.claude\\projects\\C--Users-Adam-AppData-Local-Temp-otherbench-probe-ws\\memory\\"
     },
-    "scratchpad_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\claude\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\63d2e580-b7ca-4b7b-98a9-ee544e4534e9\\scratchpad",
+    "scratchpad_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\claude\\C--Users-Adam-AppData-Local-Temp-otherbench-probe-ws\\63d2e580-b7ca-4b7b-98a9-ee544e4534e9\\scratchpad",
     "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-9fe99a13381692f0a92a574a8c890c9f",
     "fast_mode_state": "off",
     "per_turn_effort_active": true,

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { PeerRepo } from '@grunt/core/ports/store.js';
-import type { Peer } from '@grunt/core/types/peer.js';
+import type { PeerRepo } from '@otherbench/core/ports/store.js';
+import type { Peer } from '@otherbench/core/types/peer.js';
 import type { SqlBindValue } from './crud.js';
 import { fromJson, toJson } from './util.js';
 

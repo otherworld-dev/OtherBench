@@ -6,7 +6,7 @@
 // metadata, then RFC 8414 / OpenID authorization-server metadata -- through
 // the MCP SDK's own discovery code. It registers no client, starts no
 // sign-in and sends no POST: `getOnly` below refuses any other method.
-// Whether a provider accepts Grunt's loopback redirect
+// Whether a provider accepts OtherBench's loopback redirect
 // (http://127.0.0.1:<port>/oauth/callback) can only be learned by
 // registering, which is Adam's live check (docs/HANDOVER.md, "Sign-in for
 // HTTP MCP servers").

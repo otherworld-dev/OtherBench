@@ -1,4 +1,4 @@
-import type { SandboxVersions } from '@grunt/core/ports/sandbox.js';
+import type { SandboxVersions } from '@otherbench/core/ports/sandbox.js';
 import { DISTRO, type WslResult, type WslRunner, type WslUser } from './wsl.js';
 
 /** `wsl --install <distro> --name` arrived in WSL 2.4 (spec 2026-10-12-sandbox-design). */
@@ -7,9 +7,9 @@ export const NODE_VERSION = 'v24.21.0';
 export const NODE_TARBALL = `node-${NODE_VERSION}-linux-x64.tar.xz`;
 export const NODE_URL = `https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}`;
 export const NODE_SHA256 = 'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6';
-export const INSTALL_DIR = '/opt/grunt-sandbox';
-/** Where Grunt's sandbox/ resource folder is mounted, read-only, while setup copies files in. */
-export const SETUP_MOUNT = '/mnt/grunt-setup';
+export const INSTALL_DIR = '/opt/otherbench-sandbox';
+/** Where OtherBench's sandbox/ resource folder is mounted, read-only, while setup copies files in. */
+export const SETUP_MOUNT = '/mnt/otherbench-setup';
 export const BASE_PACKAGES = [
   'bubblewrap',
   'socat',
@@ -52,7 +52,7 @@ export class SetupError extends Error {
 
 export interface SetupContext {
   runner: WslRunner;
-  /** Grunt's sandbox resource folder, as a Windows drive-letter path. */
+  /** OtherBench's sandbox resource folder, as a Windows drive-letter path. */
   resourcesDir: string;
   /** Extra apt packages from Settings. */
   packages: string[];
@@ -83,7 +83,7 @@ async function must(ctx: SetupContext, step: string, label: string, argv: string
 async function withResources(ctx: SetupContext, step: string, fn: () => Promise<void>): Promise<void> {
   await must(ctx, step, 'Making the setup mount point', ['/bin/mkdir', '-p', SETUP_MOUNT]);
   await ctx.runner.exec('root', ['/bin/umount', SETUP_MOUNT]); // a leftover from an interrupted setup; failing is normal
-  await must(ctx, step, `Mounting Grunt's sandbox files (${ctx.resourcesDir})`, ['/bin/mount', '-t', 'drvfs', ctx.resourcesDir, SETUP_MOUNT, '-o', 'ro']);
+  await must(ctx, step, `Mounting OtherBench's sandbox files (${ctx.resourcesDir})`, ['/bin/mount', '-t', 'drvfs', ctx.resourcesDir, SETUP_MOUNT, '-o', 'ro']);
   try {
     await fn();
   } finally {
@@ -94,16 +94,16 @@ async function withResources(ctx: SetupContext, step: string, fn: () => Promise<
 /**
  * The fresh, root-only folder this setup builds the new INSTALL_DIR in, by context. It is under /opt (the
  * same file system as INSTALL_DIR, so the finished tree is moved into place with one rename) and
- * mode 0700, so the grunt user can neither see nor change what root downloads, unpacks and installs there.
+ * mode 0700, so the otherbench user can neither see nor change what root downloads, unpacks and installs there.
  * runSetup() removes it however setup ends.
  */
 const stagings = new WeakMap<SetupContext, string>();
-const STAGING_PATTERN = /^\/opt\/\.grunt-sandbox\.[A-Za-z0-9]{6,}$/;
+const STAGING_PATTERN = /^\/opt\/\.otherbench-sandbox\.[A-Za-z0-9]{6,}$/;
 
 async function makeStaging(ctx: SetupContext, step: string): Promise<string> {
   // Leftovers of a setup that was interrupted.
-  await ctx.runner.exec('root', ['/usr/bin/find', '/opt', '-mindepth', '1', '-maxdepth', '1', '-name', '.grunt-sandbox.*', '-exec', '/bin/rm', '-rf', '{}', '+']);
-  const made = await must(ctx, step, 'Making a private build folder', ['/usr/bin/mktemp', '-d', '/opt/.grunt-sandbox.XXXXXX']);
+  await ctx.runner.exec('root', ['/usr/bin/find', '/opt', '-mindepth', '1', '-maxdepth', '1', '-name', '.otherbench-sandbox.*', '-exec', '/bin/rm', '-rf', '{}', '+']);
+  const made = await must(ctx, step, 'Making a private build folder', ['/usr/bin/mktemp', '-d', '/opt/.otherbench-sandbox.XXXXXX']);
   const path = made.stdout.trim();
   // Registered before it is checked: a path that doesn't look right is still removed by runSetup.
   stagings.set(ctx, path);
@@ -215,21 +215,21 @@ const configureDistro: SetupStep = {
       const lines = interop.stdout.replace(/\0/g, '').split(/\r?\n/).map((l) => l.trim());
       if (interop.code === 0 && !interop.timedOut && lines.includes(INTEROP_OFF)) {
         if (lines.some((l) => l.startsWith('note: no-registration'))) {
-          ctx.log('Windows interop is off in grunt-sandbox (wsl.conf). No interop handler was active, so the check could only see the kernel refuse a Windows program.');
+          ctx.log('Windows interop is off in otherbench-sandbox (wsl.conf). No interop handler was active, so the check could only see the kernel refuse a Windows program.');
         } else if (lines.some((l) => l.startsWith('note: '))) {
-          ctx.log('Windows interop is off in grunt-sandbox (a WSLInterop registration from another distro is visible; it is not usable here).');
+          ctx.log('Windows interop is off in otherbench-sandbox (a WSLInterop registration from another distro is visible; it is not usable here).');
         }
         return;
       }
       if (interop.code === 3) {
-        throw new SetupError(this.name, `Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the grunt-sandbox distro, then press Repair. ${textOf(interop)}`);
+        throw new SetupError(this.name, `Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the otherbench-sandbox distro, then press Repair. ${textOf(interop)}`);
       }
       throw new SetupError(this.name, `Couldn't confirm that Windows interop is off in the distro (${interop.timedOut ? 'timed out' : `exit ${String(interop.code)}`}): ${textOf(interop)}`);
     });
     // The distro's first start (before wsl.conf turned automount off) left a folder per drive, /mnt/c and so on,
-    // root's but writable by everyone (0777, found live). mount.sh refuses to mount below a folder the grunt user
+    // root's but writable by everyone (0777, found live). mount.sh refuses to mount below a folder the otherbench user
     // could change, so they are closed here. Only real folders directly under /mnt (root's own 0755 folder, so
-    // grunt can't swap one for a link meanwhile), only root's, and only the write bits for group and others.
+    // otherbench can't swap one for a link meanwhile), only root's, and only the write bits for group and others.
     const drives = await must(ctx, this.name, "Closing WSL's drive folders under /mnt", [
       '/usr/bin/find',
       '/mnt',
@@ -267,17 +267,17 @@ const installPackages: SetupStep = {
     }
     await must(ctx, this.name, 'apt-get update', apt(['update', '-q']), 15 * MINUTE);
     await must(ctx, this.name, 'apt-get install', apt(['install', '-y', '-q', ...BASE_PACKAGES, ...ctx.packages]), 45 * MINUTE);
-    const id = await ctx.runner.exec('root', ['/usr/bin/id', '-u', 'grunt']);
-    if (id.code !== 0) await must(ctx, this.name, 'Adding the grunt user', ['/usr/sbin/useradd', '-m', '-s', '/bin/bash', 'grunt']);
-    // As grunt, never root: grunt owns /home/grunt and could plant a link at `chats`, which a root `install -d` would follow and chown.
-    await must(ctx, this.name, "Making the chats' home folder", ['/bin/mkdir', '-p', '-m', '0700', '/home/grunt/chats'], 2 * MINUTE, 'grunt');
+    const id = await ctx.runner.exec('root', ['/usr/bin/id', '-u', 'otherbench']);
+    if (id.code !== 0) await must(ctx, this.name, 'Adding the otherbench user', ['/usr/sbin/useradd', '-m', '-s', '/bin/bash', 'otherbench']);
+    // As otherbench, never root: otherbench owns /home/otherbench and could plant a link at `chats`, which a root `install -d` would follow and chown.
+    await must(ctx, this.name, "Making the chats' home folder", ['/bin/mkdir', '-p', '-m', '0700', '/home/otherbench/chats'], 2 * MINUTE, 'otherbench');
   },
 };
 
 const installNode: SetupStep = {
   name: 'Install Node',
   async run(ctx) {
-    // Always rebuilt: nothing under an existing INSTALL_DIR is trusted, since the grunt user may have written there.
+    // Always rebuilt: nothing under an existing INSTALL_DIR is trusted, since the otherbench user may have written there.
     const staging = await makeStaging(ctx, this.name);
     const tree = `${staging}/tree`;
     const tarball = `${staging}/node.tar.xz`;
@@ -311,9 +311,9 @@ const installRuntime: SetupStep = {
       }
     });
     // What the 2026-10-12 probe left behind.
-    await ctx.runner.exec('root', ['/bin/rm', '-rf', '/opt/grunt-probe']);
+    await ctx.runner.exec('root', ['/bin/rm', '-rf', '/opt/otherbench-probe']);
     // The runtime's version is pinned in resources/package.json (and its lock). When it is bumped, re-run the live address case
-    // (GRUNT_SANDBOX_LIVE=1, test/live.test.ts: "resolved-address guard"), which holds Grunt's ranges to what that runtime really dials.
+    // (OTHERBENCH_SANDBOX_LIVE=1, test/live.test.ts: "resolved-address guard"), which holds OtherBench's ranges to what that runtime really dials.
     // The runtime is plain JavaScript: install scripts (which would run as root) have no business here.
     await must(
       ctx,

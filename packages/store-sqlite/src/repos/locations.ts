@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { LocationRepo } from '@grunt/core/ports/store.js';
-import type { Location, LocationPath } from '@grunt/core/types/workspace.js';
+import type { LocationRepo } from '@otherbench/core/ports/store.js';
+import type { Location, LocationPath } from '@otherbench/core/types/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
 

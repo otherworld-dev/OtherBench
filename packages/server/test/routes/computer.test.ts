@@ -2,15 +2,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
-import type { ComputerAction } from '@grunt/core/ports/computer.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import type { AppEvent } from '@grunt/core/types/events.js';
-import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
-import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON, expectationOf, parseAction } from '@otherbench/core/domain/computer-apps.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { ComputerAction } from '@otherbench/core/ports/computer.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import { cancelChatReplies, COMPUTER_START_STOPPED_REASON, ComputerSessions } from '../../src/computer/sessions.js';
 import type { Container } from '../../src/container.js';
@@ -45,7 +45,7 @@ let events: AppEventBus;
 let sessions: ComputerSessions;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'grunt-computer-route-'));
+  dir = await mkdtemp(join(tmpdir(), 'otherbench-computer-route-'));
   const store = new InMemoryStore();
   for (const id of ['chat-1', 'chat-2']) {
     store.chats.create({ id, title: id === 'chat-1' ? 'Budget' : 'Other', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
@@ -81,8 +81,8 @@ afterEach(async () => {
 
 /** The desktop app's own window: the one origin that may change anything while the computer is in control. */
 const DESKTOP = 'http://tauri.localhost';
-/** A browser tab of Grunt, as these tests reach the server. */
-const GRUNT_TAB = 'http://localhost';
+/** A browser tab of OtherBench, as these tests reach the server. */
+const OTHERBENCH_TAB = 'http://localhost';
 
 const post = (path: string, c: Container = container) => createApp(c).request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 
@@ -182,8 +182,8 @@ describe('while the computer may be in control, changes come only from the deskt
       headers: {
         'Content-Type': 'application/json',
         ...(init.origin === undefined ? {} : { Origin: init.origin }),
-        // What a browser tab of Grunt sends with its fetches: it passes the cross-site check.
-        ...(init.origin === GRUNT_TAB ? { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } : {}),
+        // What a browser tab of OtherBench sends with its fetches: it passes the cross-site check.
+        ...(init.origin === OTHERBENCH_TAB ? { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } : {}),
       },
       body: init.method === 'GET' ? undefined : JSON.stringify(init.body ?? {}),
     });
@@ -198,8 +198,8 @@ describe('while the computer may be in control, changes come only from the deskt
       ['POST', '/api/mcp-servers'],
       ['DELETE', '/api/chats/chat-2'],
     ];
-    // A browser tab of Grunt, another site's origin, a request with no Origin at all.
-    for (const origin of [GRUNT_TAB, 'http://evil.example', undefined]) {
+    // A browser tab of OtherBench, another site's origin, a request with no Origin at all.
+    for (const origin of [OTHERBENCH_TAB, 'http://evil.example', undefined]) {
       for (const [method, path] of writes) {
         const res = await send(path, { method, origin });
         expect(res.status, `${method} ${path} from ${String(origin)}`).toBe(403);
@@ -217,9 +217,9 @@ describe('while the computer may be in control, changes come only from the deskt
     // From the desktop app the request reaches its route (here: an unknown chat is a 404, not a 403).
     expect((await send('/api/chats/nope', { method: 'DELETE', origin: DESKTOP })).status).toBe(404);
     expect((await send('/api/computer/status', { method: 'GET' })).status).toBe(200);
-    expect((await send('/api/chats/chat-2', { method: 'GET', origin: GRUNT_TAB })).status).toBe(200);
+    expect((await send('/api/chats/chat-2', { method: 'GET', origin: OTHERBENCH_TAB })).status).toBe(200);
     const replyId = await startReply('chat-2');
-    expect((await send(`/api/messages/${replyId}/cancel`, { origin: GRUNT_TAB })).status).toBe(204);
+    expect((await send(`/api/messages/${replyId}/cancel`, { origin: OTHERBENCH_TAB })).status).toBe(204);
     expect((await send('/api/chats/chat-1/computer/stop')).status).toBe(204);
     expect(sessions.holder()).toBeNull();
     expect(sessions.mayBeInControl()).toBe(false);
@@ -237,7 +237,7 @@ describe('while the computer may be in control, changes come only from the deskt
     const res = await send('/api/chats/chat-2', { method: 'DELETE' });
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON, kind: 'desktop_only' });
-    // The desktop app starting over (as after a restart of Grunt) clears it.
+    // The desktop app starting over (as after a restart of OtherBench) clears it.
     sessions.shellReset();
     expect(sessions.mayBeInControl()).toBe(false);
     expect((await send('/api/chats/chat-2', { method: 'DELETE' })).status).toBe(204);

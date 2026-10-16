@@ -1,8 +1,8 @@
-import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
-import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
+import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { computerTool } from '../src/computer-tool.js';
 
 /**

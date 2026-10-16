@@ -1,4 +1,4 @@
-import { columnName } from '@grunt/core/domain/office-spec.js';
+import { columnName } from '@otherbench/core/domain/office-spec.js';
 import { attr, prefixedAttr, scanXml } from './xml.js';
 import type { OfficeParts, TextOut } from './parts.js';
 
@@ -320,7 +320,7 @@ function readSheet(xml: string, name: string, hidden: boolean, book: Book, out: 
   }
   const lastColumn = columnName(MAX_COLUMNS - 1);
   if (st.maxCol < 0) {
-    const empty = st.wide ? `has cells only past column ${lastColumn}, which Grunt leaves out.` : 'is empty.';
+    const empty = st.wide ? `has cells only past column ${lastColumn}, which OtherBench leaves out.` : 'is empty.';
     if (!out.line(`Sheet "${name}"${hidden ? ' (hidden)' : ''} ${empty}`)) return false;
   } else {
     if (!out.line(`Sheet "${name}" (A1:${columnName(st.maxCol)}${st.maxRow})${hidden ? ', hidden' : ''} as CSV:`)) return false;

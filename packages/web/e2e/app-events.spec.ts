@@ -47,5 +47,5 @@ test('a reply sent from another window shows up in a chat already open here', as
   await request.post(`${BASE_URL}/api/chats/${chat.id}/head`, { data: { messageId: userMessageId } });
 
   await expect(thread.getByText('sent from somewhere else')).toBeVisible();
-  await expect(thread.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(thread.getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
 });

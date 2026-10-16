@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool, liveToolRisks } from './artifact-tool.js';
-import { canonicalJson } from '@grunt/core/domain/live-artifacts.js';
+import { canonicalJson } from '@otherbench/core/domain/live-artifacts.js';
 import { recallTool } from './recall-tool.js';
-import { cardLine, revealAllHidden } from '@grunt/core/domain/card-text.js';
+import { cardLine, revealAllHidden } from '@otherbench/core/domain/card-text.js';
 import {
   COMPUTER_LIMITS,
   COMPUTER_OFF_REASON,
@@ -12,11 +12,11 @@ import {
   isSensitiveKeyText,
   isUnattendedRun,
   screenContentError,
-} from '@grunt/core/domain/computer-apps.js';
-import { allowedWhilePlanning, isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@grunt/core/domain/permissions.js';
-import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { UserAsks } from '@grunt/core/domain/user-asks.js';
-import type { ComputerDriver } from '@grunt/core/ports/computer.js';
+} from '@otherbench/core/domain/computer-apps.js';
+import { allowedWhilePlanning, isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@otherbench/core/domain/permissions.js';
+import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
+import { UserAsks } from '@otherbench/core/domain/user-asks.js';
+import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
 import {
   NO_APPROVAL_REASON,
   type ApprovalChoice,
@@ -36,11 +36,11 @@ import {
   type ToolContext,
   type ToolProvider,
   type ToolSpec,
-} from '@grunt/core/ports/tool-provider.js';
-import type { Sandbox } from '@grunt/core/ports/sandbox.js';
-import type { Store } from '@grunt/core/ports/store.js';
-import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
-import { runsShellInSandbox, type ToolPolicy, type ToolSource } from '@grunt/core/types/config.js';
+} from '@otherbench/core/ports/tool-provider.js';
+import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
+import type { Store } from '@otherbench/core/ports/store.js';
+import { canonicalHost } from '@otherbench/core/domain/network-hosts.js';
+import { runsShellInSandbox, type ToolPolicy, type ToolSource } from '@otherbench/core/types/config.js';
 import type { BrowserManager } from './browser/manager.js';
 import { browserTool, isSensitiveBrowserKey, pageFailure } from './browser/tool.js';
 import { computerTool } from './computer-tool.js';
@@ -53,7 +53,7 @@ import { runCommandTool } from './shell-tool.js';
 import { subagentTool } from './subagent-tool.js';
 import { threadTools } from './thread-tools.js';
 
-export interface GruntToolProviderOptions {
+export interface OtherBenchToolProviderOptions {
   /** Overridable id generator for audit row ids; defaults to `randomUUID`. */
   generateId?: () => string;
   /** Overridable clock, for deterministic duration assertions in tests. */
@@ -105,7 +105,7 @@ type Authorization = (
       grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan' | 'deny:unattended';
       /**
        * The line that says whose words `reason` may hold, when they may not
-       * be Grunt's own (`quoting`). The model reads it first, on every path.
+       * be OtherBench's own (`quoting`). The model reads it first, on every path.
        */
       about?: string;
     }
@@ -127,7 +127,7 @@ type SettleCause = 'user' | 'turn-ended' | 'dropped' | 'answer-refused';
  * A call that was refused before the broker decided. `unattended`: because
  * nobody is there to watch it. `plan`: because its reply's plan isn't
  * approved yet (Plan mode). `quoted`: the tool itself refused it while
- * describing it (or threw), so the reason may hold words that are not Grunt's
+ * describing it (or threw), so the reason may hold words that are not OtherBench's
  * (the computer tool passes on what the desktop app said, the browser quotes
  * the address it was sent).
  */
@@ -165,8 +165,8 @@ interface Approval {
 const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
 const STOPPED_BEFORE_RUN_REASON = 'The turn was stopped before this tool call ran, so it did not run. Nobody denied it.';
 const DROPPED_REASON = 'This approval request was dropped by the server (too many were pending), so the tool call did not run. Nobody denied it.';
-const ANSWER_REFUSED_REASON = "Grunt couldn't accept that answer to the approval, so the tool call did not run and nothing was stored.";
-const UNCHECKED_REASON = "Grunt couldn't check this call:";
+const ANSWER_REFUSED_REASON = "OtherBench couldn't accept that answer to the approval, so the tool call did not run and nothing was stored.";
+const UNCHECKED_REASON = "OtherBench couldn't check this call:";
 
 function cancelledAuth(reason: string = CANCELLED_REASON): Denied {
   return { ok: false, code: 'cancelled', reason, grantedBy: 'deny:cancelled' };
@@ -194,13 +194,13 @@ function isScreenTool(source: ToolSource): source is 'browser' | 'computer' {
   return source === 'browser' || source === 'computer';
 }
 
-/** A message that isn't Grunt's own (an error's, a tool's), as one clean bounded line. */
+/** A message that isn't OtherBench's own (an error's, a tool's), as one clean bounded line. */
 function messageOf(err: unknown): string {
   return desktopTextForResult(err instanceof Error ? err.message : String(err)) || 'no reason was given';
 }
 
 /**
- * A refusal whose reason may hold words that are not Grunt's own: what a tool
+ * A refusal whose reason may hold words that are not OtherBench's own: what a tool
  * said while describing a call, what an error said, the broker naming a
  * program. For computer use it is rebuilt by core's one builder
  * (`screenContentError`): the reason as one clean line, and the line that
@@ -208,7 +208,7 @@ function messageOf(err: unknown): string {
  * API model's error result, Claude Code's denial). The provider's own fixed
  * sentences (computer use is off, nobody is there, the turn was stopped, the
  * request was dropped, the user denied it) never come through here: nothing
- * in them was written by anyone but Grunt.
+ * in them was written by anyone but OtherBench.
  */
 function quoting(tool: ToolSpec, denied: Denied): Denied {
   if (tool.source !== 'computer') return denied;
@@ -318,11 +318,11 @@ function withoutTypedText(args: unknown, source: 'browser' | 'computer'): unknow
 }
 
 /**
- * Claude Code's name for a Grunt tool that types, relayed on its per-process
- * Grunt server (`mcp__grunt_<hex>__browser`, `mcp__grunt_<hex>__computer`),
+ * Claude Code's name for an OtherBench tool that types, relayed on its per-process
+ * OtherBench server (`mcp__otherbench_<hex>__browser`, `mcp__otherbench_<hex>__computer`),
  * or the tool's own name. The group is which of the two it is.
  */
-const RELAYED_TYPING_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?(browser|computer)$/;
+const RELAYED_TYPING_TOOL_NAME = /^(?:mcp__otherbench_[0-9a-f]+__)?(browser|computer)$/;
 
 function summarizeResult(result: unknown): string {
   if (result && typeof result === 'object' && (result as { error?: unknown }).error === true) {
@@ -401,7 +401,7 @@ function summarizeMcpContent(content: unknown): string {
  *
  * An API model's path is `gate()`: decide, then run, in one closure. Claude
  * Code's path is `requestApproval()` (decide, when its PreToolUse hook asks)
- * and, later, the `execute` of the spec `relayGruntTools` gave it, which is
+ * and, later, the `execute` of the spec `relayOtherBenchTools` gave it, which is
  * `runRelayedCall`: it runs only an argument object `requestApproval` itself
  * approved, for the same chat, reply and profile, once. There is no bare
  * `execute` of the browser or the computer tool outside this class.
@@ -419,7 +419,7 @@ function summarizeMcpContent(content: unknown): string {
  * takes its live branch), audits every decision, and only then calls the
  * server, through the cache and the per-artifact limits.
  */
-export class GruntToolProvider implements ToolProvider {
+export class OtherBenchToolProvider implements ToolProvider {
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
   /** requestId -> settle(choice, alreadyDroppedByBroker). One entry per card awaiting an answer; removed when it settles. */
   private readonly waiters = new Map<string, (choice: ApprovalChoice, cause: SettleCause, decidedOnNode?: string) => void>();
@@ -446,7 +446,7 @@ export class GruntToolProvider implements ToolProvider {
     private readonly broker: PermissionBroker,
     /** Only `listFor`/`refresh`/`shutdown` are used -- narrowed to these so a test can supply a minimal fake instead of a real `McpServerManager` with live connections. */
     private readonly mcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'>,
-    options: GruntToolProviderOptions = {}
+    options: OtherBenchToolProviderOptions = {}
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
@@ -504,18 +504,18 @@ export class GruntToolProvider implements ToolProvider {
   }
 
   /**
-   * Everything the Claude Code engine relays through its per-process Grunt
+   * Everything the Claude Code engine relays through its per-process OtherBench
    * server for this policy (the engine's gate approves each call with the
    * very same spec first): the allowlisted MCP servers' tools, the sandboxed
-   * run_command when the shell runs in the sandbox and this Grunt has one
-   * (spec 2026-10-12-sandbox-design, "Claude Code"), and Grunt's own relayed
-   * tools (`relayGruntTools`: the browser and computer use, each of which runs
+   * run_command when the shell runs in the sandbox and this OtherBench has one
+   * (spec 2026-10-12-sandbox-design, "Claude Code"), and OtherBench's own relayed
+   * tools (`relayOtherBenchTools`: the browser and computer use, each of which runs
    * only arguments `requestApproval` approved). Never the host run_command: a
    * profile that wants the sandbox gets it or nothing.
    */
   relayTools(policy: ToolPolicy): ToolSpec[] {
     const shell = runsShellInSandbox(policy) && this.sandbox !== null ? [this.sandboxTool(policy)] : [];
-    return this.deduplicateNames([...shell, ...this.relayGruntTools(policy), ...this.relayMcpTools(policy.mcpServerIds)]);
+    return this.deduplicateNames([...shell, ...this.relayOtherBenchTools(policy), ...this.relayMcpTools(policy.mcpServerIds)]);
   }
 
   /**
@@ -529,7 +529,7 @@ export class GruntToolProvider implements ToolProvider {
   }
 
   /**
-   * Grunt's own tools for the Claude Code relay: the browser and the computer
+   * OtherBench's own tools for the Claude Code relay: the browser and the computer
    * tool, each when the profile turns it on (and, for computer use, the
    * desktop shell can carry it out). The Claude Code gate approves each call
    * through `requestApproval`, which hands back the described arguments, and
@@ -541,7 +541,7 @@ export class GruntToolProvider implements ToolProvider {
    * writes the audit row for what came of it. So whatever calls it, and with
    * whatever, nothing runs that no approval stands behind.
    */
-  relayGruntTools(policy: ToolPolicy): ToolSpec[] {
+  relayOtherBenchTools(policy: ToolPolicy): ToolSpec[] {
     const specs: ToolSpec[] = [];
     if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy)));
     if (policy.computer === true && this.computer?.available()) specs.push(this.relayed(computerTool(this.computer, this.store)));
@@ -714,7 +714,7 @@ export class GruntToolProvider implements ToolProvider {
       seen.set(spec.name, priorCount + 1);
       if (priorCount === 0) return spec;
       const suffixed = `${spec.name}_${priorCount + 1}`;
-      if (log) console.warn(`[GruntToolProvider] tool name collision on "${spec.name}"; suffixed to "${suffixed}".`);
+      if (log) console.warn(`[OtherBenchToolProvider] tool name collision on "${spec.name}"; suffixed to "${suffixed}".`);
       return { ...spec, name: suffixed };
     });
   }
@@ -926,7 +926,7 @@ export class GruntToolProvider implements ToolProvider {
    *   1. The reply is not stopped.
    *   2. The call is described (`described`): for computer use the profile's
    *      switch and "is anyone there" first, then the tool's `describeCall`,
-   *      which throws away whatever the model put in the fields Grunt fills
+   *      which throws away whatever the model put in the fields OtherBench fills
    *      in. A refusal, or a throw, ends the call with no card.
    *   3. The reply is still not stopped. Checked before a refusal is read: a
    *      `describeCall` that stopped because the reply did (the start dialog
@@ -957,7 +957,7 @@ export class GruntToolProvider implements ToolProvider {
       // As before for every other source: the failure is the caller's to see.
       if (!isScreenTool(tool.source)) throw err;
       // The browser and computer use fail closed, on the record: the call is refused and audited.
-      console.error(`[GruntToolProvider] the broker could not decide a "${tool.name}" call: ${messageOf(err)}`);
+      console.error(`[OtherBenchToolProvider] the broker could not decide a "${tool.name}" call: ${messageOf(err)}`);
       return { kind: 'refused', args: call.args, denied: quoting(tool, deniedAuth(`${UNCHECKED_REASON} ${messageOf(err)}`, false)) };
     }
     // Never in a scheduled run: nobody is there, so the call is refused below rather than handed on.
@@ -1013,7 +1013,7 @@ export class GruntToolProvider implements ToolProvider {
 
   /**
    * The `execute` of a spec handed to the Claude Code relay
-   * (`relayGruntTools`). It runs `args` only when they are the very argument
+   * (`relayOtherBenchTools`). It runs `args` only when they are the very argument
    * object `requestApproval` approved for this tool, and the call is for the
    * chat, the reply and the profile it approved them for; each approval runs
    * once. Anything else (the model's own arguments, arguments made to look
@@ -1043,11 +1043,11 @@ export class GruntToolProvider implements ToolProvider {
   /**
    * Turns a broker decision into an authorisation, raising (and waiting on) an approval card for 'ask'.
    * `tool` is the spec the call came in on: a denial of a computer call that may name something on the
-   * machine is cleaned and labelled (`quoting`); one made because nobody is there is Grunt's own sentence.
+   * machine is cleaned and labelled (`quoting`); one made because nobody is there is OtherBench's own sentence.
    */
   private async settle(decision: Decision, ctx: ToolContext, tool: ToolSpec): Promise<Authorization> {
     if (decision.kind === 'deny') {
-      // Plan mode's and a scheduled run's refusals are Grunt's own sentences.
+      // Plan mode's and a scheduled run's refusals are OtherBench's own sentences.
       if (decision.plan === true) return deniedAuth(decision.reason, false, true);
       const denied = deniedAuth(decision.reason, decision.unattended === true);
       return decision.unattended === true ? denied : quoting(tool, denied);
@@ -1086,7 +1086,7 @@ export class GruntToolProvider implements ToolProvider {
     this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
     const on = decidedOnNode ? { decidedOnNode } : {};
     if (cause === 'turn-ended') return cancelledAuth();
-    // The broker's reason names the program the card was about: not Grunt's own words alone.
+    // The broker's reason names the program the card was about: not OtherBench's own words alone.
     if (cause === 'answer-refused') return { ...quoting(tool, deniedAuth(refusal ?? ANSWER_REFUSED_REASON, false)), ...on };
     if (cause === 'dropped') return { ok: false, code: 'approval_dropped', reason: DROPPED_REASON, grantedBy: 'deny:cancelled', ...on };
     if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.', grantedBy: 'deny:user', ...on };
@@ -1120,7 +1120,7 @@ export class GruntToolProvider implements ToolProvider {
       try {
         cb(event);
       } catch (err) {
-        console.error('[GruntToolProvider] an approval listener threw:', err);
+        console.error('[OtherBenchToolProvider] an approval listener threw:', err);
       }
     }
   }
@@ -1170,11 +1170,11 @@ export class GruntToolProvider implements ToolProvider {
           } catch (err) {
             if (request.source === 'computer') {
               // The broker's message names the program: one clean line of it, in the log as in the refusal.
-              console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed: ${messageOf(err)}`);
+              console.error(`[OtherBenchToolProvider] broker.resolve("${requestId}") failed: ${messageOf(err)}`);
               final = { choice: 'deny' };
               refusal = `${ANSWER_REFUSED_REASON} ${messageOf(err)}`;
             } else {
-              console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+              console.error(`[OtherBenchToolProvider] broker.resolve("${requestId}") failed:`, err);
               // The broker stored no grant (an "always" naming another host, a
               // shell answer with no command to pin, ...). The person did say
               // yes to this call, so it runs, but as what it now is: once.
@@ -1238,7 +1238,7 @@ export class GruntToolProvider implements ToolProvider {
         ...(decidedOnNode ? { decidedOnNode } : {}),
       });
     } catch (err) {
-      console.error(`[GruntToolProvider] failed to write an audit row for "${toolName}":`, err);
+      console.error(`[OtherBenchToolProvider] failed to write an audit row for "${toolName}":`, err);
     }
   }
 }

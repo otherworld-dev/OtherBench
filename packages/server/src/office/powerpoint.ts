@@ -17,7 +17,7 @@ import { markdownTable, type OfficeParts, type TextOut } from './parts.js';
 const MAX_LEVEL = 8;
 /** Output characters per table cell at the least, empty or not: " | " (so the check on a table's padded size never cuts one that would fit). */
 const CELL_CHARS = 3;
-const TABLE_CUT = '[Grunt left out the rest of this table: it is over the text limit.]';
+const TABLE_CUT = '[OtherBench left out the rest of this table: it is over the text limit.]';
 
 /** An indent level from an attribute: a hostile one (negative, huge, not a number) is clamped, never passed to repeat(). */
 const levelOf = (value: string | undefined): number => Math.min(MAX_LEVEL, Math.max(0, Math.trunc(Number(value ?? 0)) || 0));

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { isOfficeKind } from '@grunt/core/domain/office-spec.js';
-import type { ArtifactVersion } from '@grunt/core/ports/store.js';
+import { isOfficeKind } from '@otherbench/core/domain/office-spec.js';
+import type { ArtifactVersion } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ArtifactDetail, type LiveOutcome, type LiveStatus, type ViewOpened } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { serverUrl } from '../state/transport.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
@@ -46,7 +46,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const [reload, setReload] = useState(0);
   /** An Office download is being made by the server: Download waits, so repeat clicks don't queue more renders. */
   const [downloading, setDownloading] = useState(false);
-  const workspaceHere = useGruntStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
+  const workspaceHere = useOtherBenchStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
   const stamp = useArtifactsStamp(chatId);
 
   // Each load starts clean, so a failure (a version not synced yet, say) clears on the next change.
@@ -292,7 +292,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   } else if (live && left) {
     body = (
       <div className="flex flex-col items-start gap-2 p-3 text-sm">
-        <p>This page went to another address, so Grunt closed it.</p>
+        <p>This page went to another address, so OtherBench closed it.</p>
         <button type="button" onClick={() => void reloadFrame(false)} className={BUTTON}>Reopen</button>
       </div>
     );

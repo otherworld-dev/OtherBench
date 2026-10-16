@@ -1,8 +1,8 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', () => ({
   api: {
@@ -21,7 +21,7 @@ vi.mock('../desktop/bridge.js', () => ({
 
 import { hideQuick, openChatInMain } from '../desktop/bridge.js';
 import { api } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { QuickChat } from './QuickChat.js';
 
 const profile = (id: string, over: Partial<Profile> = {}): Profile => ({
@@ -34,7 +34,7 @@ const chat = (id: string): Chat => ({
 });
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   vi.mocked(api.profiles.list).mockResolvedValue([profile('p-other'), profile('p-default', { isDefault: true })]);
   vi.mocked(api.chats.create).mockResolvedValue(chat('q1'));
   vi.mocked(api.chats.patch).mockResolvedValue(chat('q1'));
@@ -61,7 +61,7 @@ describe('QuickChat', () => {
     expect(await screen.findByText('what is 2+2')).toBeInTheDocument();
 
     // The reply finishes (as the stream would report), then a follow-up.
-    useGruntStore.setState((s) => ({ messages: { ...s.messages, a1: { ...s.messages['a1']!, status: 'complete', createdAt: s.messages['u1']!.createdAt + 1 } } }));
+    useOtherBenchStore.setState((s) => ({ messages: { ...s.messages, a1: { ...s.messages['a1']!, status: 'complete', createdAt: s.messages['u1']!.createdAt + 1 } } }));
     await user.type(box, 'and 3+3{Enter}');
     await waitFor(() => expect(api.turns.create).toHaveBeenLastCalledWith('q1', expect.objectContaining({ parentId: 'a1' })));
     expect(api.chats.create).toHaveBeenCalledTimes(1);
@@ -78,7 +78,7 @@ describe('QuickChat', () => {
     await waitFor(() => expect(api.turns.create).toHaveBeenCalled());
     expect(api.chats.patch).not.toHaveBeenCalled();
 
-    act(() => useGruntStore.setState((s) => ({ messages: { ...s.messages, a1: { ...s.messages['a1']!, status: 'complete' } } })));
+    act(() => useOtherBenchStore.setState((s) => ({ messages: { ...s.messages, a1: { ...s.messages['a1']!, status: 'complete' } } })));
     expect(api.chats.patch).toHaveBeenCalledWith('q1', { unread: false });
 
     // A second reply finishes while the window is behind another: read when it comes back.
@@ -88,7 +88,7 @@ describe('QuickChat', () => {
       focused = false;
       window.dispatchEvent(new FocusEvent('blur'));
     });
-    act(() => useGruntStore.setState((s) => ({ messages: { ...s.messages, a2: { ...s.messages['a2']!, status: 'complete' } } })));
+    act(() => useOtherBenchStore.setState((s) => ({ messages: { ...s.messages, a2: { ...s.messages['a2']!, status: 'complete' } } })));
     expect(api.chats.patch).toHaveBeenCalledTimes(1);
     act(() => {
       focused = true;

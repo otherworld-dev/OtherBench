@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { McpServer } from '@grunt/core/ports/store.js';
-import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import type { McpServer } from '@otherbench/core/ports/store.js';
+import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { openInBrowser } from '../../desktop/bridge.js';
 import { ApiError, api } from '../../state/api.js';
 
-const SIGN_OUT_CONFIRM = 'Grunt will forget this sign-in. The provider still lists Grunt as allowed until you remove it there.';
+const SIGN_OUT_CONFIRM = 'OtherBench will forget this sign-in. The provider still lists OtherBench as allowed until you remove it there.';
 
 /** "12 Oct 2026". */
 export function formatSignInDate(ms: number): string {
@@ -57,7 +57,7 @@ export function McpSignIn({ server, health, onChanged }: { server: McpServer; he
     try {
       await action();
     } catch (err) {
-      console.error(`[grunt-web] MCP sign-in action failed for ${server.id}:`, err);
+      console.error(`[otherbench-web] MCP sign-in action failed for ${server.id}:`, err);
       setActionError(errorText(err, fallback));
     } finally {
       setBusy(false);

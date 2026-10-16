@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyGlobalMemoryBody } from '@grunt/core/domain/global-memory.js';
-import { MEMORY_QUIET_MS } from '@grunt/core/domain/memory.js';
-import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
+import { emptyGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
+import { MEMORY_QUIET_MS } from '@otherbench/core/domain/memory.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { Profile, ResolvedProfile } from '@otherbench/core/types/config.js';
 import { GlobalMemoryService, NO_GLOBAL_MEMORY_MODEL_MESSAGE, type GlobalMemoryServiceDeps } from '../../src/memory/global.js';
 import { MemoryServices } from '../../src/memory/index.js';
 import { ProjectMemoryService } from '../../src/memory/service.js';

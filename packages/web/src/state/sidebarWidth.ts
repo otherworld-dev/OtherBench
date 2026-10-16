@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 /** localStorage key: the sidebar's width in rem, so it follows the text size. Per device. */
-export const SIDEBAR_WIDTH_STORAGE_KEY = 'grunt.sidebarWidth';
+export const SIDEBAR_WIDTH_STORAGE_KEY = 'otherbench.sidebarWidth';
 export const SIDEBAR_WIDTH_DEFAULT = 16.25;
 export const SIDEBAR_WIDTH_MIN = 12.5;
 export const SIDEBAR_WIDTH_MAX = 30;

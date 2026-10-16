@@ -1,9 +1,9 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MemoryUpdateOutcome, ProjectMemoryView } from '@grunt/core/domain/memory.js';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { MemoryUpdateOutcome, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -23,7 +23,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 
 import { api } from '../state/api.js';
 import { setSectionOpen } from '../state/inspectorSections.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { Inspector } from './Inspector.js';
 
 const m = vi.mocked(api.memory);
@@ -69,8 +69,8 @@ const viewFor = (projectId: string, name: string): ProjectMemoryView => ({
 });
 
 beforeEach(() => {
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ projects: [project('A', 'Alpha'), project('B', 'Beta')] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ projects: [project('A', 'Alpha'), project('B', 'Beta')] });
   setSectionOpen('Project memory', true);
   vi.mocked(api.usage.get).mockReset().mockResolvedValue({ profiles: [], chats: [], buckets: [], totalMeasuredCost: 0, totalCancelledCount: 0, totalUnmeasuredErrorCount: 0 });
   vi.mocked(api.mcpServers.list).mockReset().mockResolvedValue([]);

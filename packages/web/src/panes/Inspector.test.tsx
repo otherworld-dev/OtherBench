@@ -1,13 +1,13 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@grunt/core/ports/store.js';
-import type { FolderView } from '@grunt/core/types/workspace.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { FolderView } from '@otherbench/core/types/workspace.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 import { Inspector } from './Inspector.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, groupDomId, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
 import { INSPECTOR_SECTIONS_STORAGE_KEY, resetInspectorSectionsForTests } from '../state/inspectorSections.js';
 
@@ -184,7 +184,7 @@ describe('Inspector collapsed strip', () => {
 
 describe('Inspector session spend', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     mockedUsageGet.mockReset();
   });
   afterEach(cleanup);
@@ -245,7 +245,7 @@ describe('Inspector session spend', () => {
 
   it('re-fetches when an assistant message in this chat reaches a terminal status (a new usage row may now exist)', async () => {
     mockedUsageGet.mockResolvedValue(makeRollup());
-    useGruntStore.getState().registerMessage(makeMessage('m1', { status: 'streaming' }));
+    useOtherBenchStore.getState().registerMessage(makeMessage('m1', { status: 'streaming' }));
 
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     await waitFor(() => expect(mockedUsageGet).toHaveBeenCalledTimes(1));
@@ -257,7 +257,7 @@ describe('Inspector session spend', () => {
         profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 3, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
       })
     );
-    useGruntStore.getState().applyTurnEvent({ messageId: 'm1', type: 'status', status: 'complete' });
+    useOtherBenchStore.getState().applyTurnEvent({ messageId: 'm1', type: 'status', status: 'complete' });
 
     await waitFor(() => expect(mockedUsageGet).toHaveBeenCalledTimes(2));
     expect(await screen.findByTestId('session-spend')).toHaveTextContent('$3.00');
@@ -283,12 +283,12 @@ describe('Inspector runs on', () => {
   afterEach(cleanup);
 
   it('is hidden until a machine is paired, then lists this machine and each paired one, and moves the chat', async () => {
-    useGruntStore.setState({ machines: null });
+    useOtherBenchStore.setState({ machines: null });
     const { unmount } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(screen.queryByRole('combobox', { name: 'Runs on' })).toBeNull();
     unmount();
 
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       machines: {
         self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
         listening: { running: true, addresses: [] },
@@ -302,20 +302,20 @@ describe('Inspector runs on', () => {
     expect(Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(['Laptop (this machine)', 'PC (connected)']);
     await userEvent.selectOptions(select, 'node-pc');
     await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { runsOn: 'node-pc' }));
-    useGruntStore.setState({ machines: null });
+    useOtherBenchStore.setState({ machines: null });
   });
 });
 
 describe('Inspector also active elsewhere', () => {
   afterEach(() => {
     cleanup();
-    useGruntStore.setState({ machines: null, chats: [] });
+    useOtherBenchStore.setState({ machines: null, chats: [] });
   });
 
   it("says when the other machine has a reply running in another chat in this chat's folder", () => {
     const workspace = { kind: 'location' as const, locationId: 'nc', subpath: 'Testing' };
     const chat = makeChat({ workspace, workspaceRoot: 'C:\\Users\\Adam\\Nextcloud\\Testing' });
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       chats: [chat, makeChat({ id: 'chat-pc', title: 'Refactor', workspace })],
       machines: {
         self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
@@ -339,30 +339,30 @@ describe('Inspector workspace root', () => {
   });
 
   it('says a Claude Code chat with no folder is a plain chat with web and MCP tools only', async () => {
-    useGruntStore.setState({ connections: [{ id: 'c1', name: 'Claude Code', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null }] });
+    useOtherBenchStore.setState({ connections: [{ id: 'c1', name: 'Claude Code', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null }] });
     render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(workspaceSection()).findByText('No folder: a plain chat. Web and MCP tools only; set a folder to let Claude Code use your files.')).toBeInTheDocument();
     expect(within(workspaceSection()).queryByText(/filesystem and shell tools are unavailable/i)).not.toBeInTheDocument();
-    useGruntStore.setState({ connections: [] });
+    useOtherBenchStore.setState({ connections: [] });
   });
 
   it('shows the current workspace path and the concrete consequence for this profile when one is set', async () => {
     render(
       <Inspector
-        chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })}
+        chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })}
         profile={makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'always_ask' } })}
         collapsed={false}
         onToggleCollapsed={vi.fn()}
       />
     );
-    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\Grunt');
+    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\OtherBench');
     expect(within(workspaceSection()).getByText(/can read and write files.*run shell commands/i)).toBeInTheDocument();
   });
 
   it('flags when the profile has fs/shell turned off by policy even though a workspace is configured', async () => {
     render(
       <Inspector
-        chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })}
+        chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })}
         profile={makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' } })}
         collapsed={false}
         onToggleCollapsed={vi.fn()}
@@ -393,7 +393,7 @@ describe('Inspector workspace root', () => {
     render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
-    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), '/e/Git/Grunt');
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), '/e/Git/OtherBench');
     await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
 
     expect(await within(workspaceSection()).findByTestId('workspace-root-error')).toHaveTextContent(/git-bash/i);
@@ -403,22 +403,22 @@ describe('Inspector workspace root', () => {
 
   it('accepts a native Windows absolute path and saves it', async () => {
     mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
-    mockedChatsPatch.mockResolvedValue(makeChat({ workspaceRoot: 'E:\\Git\\Grunt' }));
+    mockedChatsPatch.mockResolvedValue(makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' }));
     const user = userEvent.setup();
     render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
-    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\Grunt');
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\OtherBench');
     await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { workspaceRoot: 'E:\\Git\\Grunt' }));
-    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\Grunt');
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { workspaceRoot: 'E:\\Git\\OtherBench' }));
+    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\OtherBench');
   });
 
   it('Clear removes the workspace root without requiring the edit form', async () => {
     mockedChatsPatch.mockResolvedValue(makeChat({ workspaceRoot: null }));
     const user = userEvent.setup();
-    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     await user.click(await within(workspaceSection()).findByRole('button', { name: /^clear$/i }));
 
@@ -432,7 +432,7 @@ describe('Inspector workspace root', () => {
     render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
-    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\Grunt');
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\OtherBench');
     await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
 
     expect(await within(workspaceSection()).findByTestId('workspace-root-error')).toHaveTextContent('workspaceRoot must be an absolute path');
@@ -504,7 +504,7 @@ describe("Inspector MCP servers on the chat's profile", () => {
 
   it('turning a server on or off saves the change to the profile and the store', async () => {
     const profile = opus(['srv-1']);
-    useGruntStore.setState({ profiles: [profile] });
+    useOtherBenchStore.setState({ profiles: [profile] });
     mockedMcpList.mockResolvedValue(servers);
     mockedProfilesPatch.mockImplementation(async (_id, body) => ({ ...profile, toolPolicy: { ...profile.toolPolicy, mcpServerIds: body.toolPolicy!.mcpServerIds! } }));
     const user = userEvent.setup();
@@ -513,12 +513,12 @@ describe("Inspector MCP servers on the chat's profile", () => {
     const blender = await within(mcpHealthSection()).findByRole('checkbox', { name: 'Use blender in Claude Opus 5.5' });
     await user.click(blender);
     expect(mockedProfilesPatch).toHaveBeenCalledWith('p1', { toolPolicy: { mcpServerIds: ['srv-1', 'srv-2'] } });
-    await waitFor(() => expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-1', 'srv-2']));
+    await waitFor(() => expect(useOtherBenchStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-1', 'srv-2']));
     expect(blender).toBeChecked();
 
     await user.click(within(mcpHealthSection()).getByRole('checkbox', { name: 'Use nextcloud in Claude Opus 5.5' }));
     expect(mockedProfilesPatch).toHaveBeenLastCalledWith('p1', { toolPolicy: { mcpServerIds: ['srv-2'] } });
-    await waitFor(() => expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-2']));
+    await waitFor(() => expect(useOtherBenchStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-2']));
   });
 
   it('flips the box back and says why when the save fails', async () => {
@@ -705,7 +705,7 @@ describe('Inspector audit trail', () => {
 
 describe('Inspector project', () => {
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
     window.localStorage.clear();
     resetSidebarGroupsForTests();
@@ -722,7 +722,7 @@ describe('Inspector project', () => {
   });
 
   it("links to the chat's project: clicking expands its sidebar group and scrolls to it", async () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useOtherBenchStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-w']));
     const target = document.createElement('div');
     target.id = groupDomId('p-w');
@@ -746,18 +746,18 @@ describe('Inspector project', () => {
   });
 
   it("shows the project's description and opens its settings", async () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       projects: [{ id: 'p-w', name: 'Website', description: 'The marketing site', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
     });
     render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     expect(screen.getByTestId('inspector-project-description')).toHaveTextContent('The marketing site');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Project settings…' }));
-    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p-w' });
+    expect(useOtherBenchStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p-w' });
   });
 
   it("moves focus to the project's group heading button after revealing it", async () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useOtherBenchStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     const target = document.createElement('div');
     target.id = groupDomId('p-w');
     target.scrollIntoView = vi.fn();
@@ -774,7 +774,7 @@ describe('Inspector project', () => {
   });
 
   it('shows a Project memory section only for a chat in a loaded project', () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useOtherBenchStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(sectionNamed('Project memory')).toBeInTheDocument();
     expect(screen.getByTestId('inspector-memory')).toHaveTextContent('memory for p-w');
@@ -792,12 +792,12 @@ describe('Inspector project', () => {
 describe('Inspector other folders', () => {
   const refs = { kind: 'machine' as const, nodeId: 'node-self', root: 'E:\\Refs' };
   const refsView: FolderView = { workspace: refs, access: 'read', root: 'E:\\Refs', status: { status: 'ok', root: 'E:\\Refs' } };
-  const workspace = { kind: 'machine' as const, nodeId: 'node-self', root: 'E:\\Git\\Grunt' };
+  const workspace = { kind: 'machine' as const, nodeId: 'node-self', root: 'E:\\Git\\OtherBench' };
   const withFolders = (views: FolderView[]): Chat =>
-    makeChat({ workspace, workspaceRoot: 'E:\\Git\\Grunt', folders: views.map((v) => ({ workspace: v.workspace, access: v.access })), folderViews: views });
+    makeChat({ workspace, workspaceRoot: 'E:\\Git\\OtherBench', folders: views.map((v) => ({ workspace: v.workspace, access: v.access })), folderViews: views });
 
   beforeEach(() => {
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
   });
   afterEach(cleanup);
@@ -843,10 +843,10 @@ describe('Inspector other folders', () => {
 
     mockedChatsPatch.mockRejectedValue(new ApiError(400, '"folders[0]" is the workspace folder itself; it\'s already available.'));
     await user.clear(input);
-    await user.type(input, 'E:\\Git\\Grunt{Enter}');
+    await user.type(input, 'E:\\Git\\OtherBench{Enter}');
     await waitFor(() => expect(within(section).getByRole('alert')).toHaveTextContent('is the workspace folder itself'));
     // A refused folder stays in the field, to fix and try again.
-    expect(input).toHaveValue('E:\\Git\\Grunt');
+    expect(input).toHaveValue('E:\\Git\\OtherBench');
   });
 
   it("marks a folder that isn't on the machine running the chat, by where it's known to be", () => {
@@ -877,7 +877,7 @@ describe('Inspector other folders', () => {
       folders: [{ workspace: refs, access: 'read' }],
       folderViews: [refsView],
     };
-    useGruntStore.setState({ projects: [project] });
+    useOtherBenchStore.setState({ projects: [project] });
     mockedProjectsPatch.mockResolvedValue(project);
     const user = userEvent.setup();
     render(<Inspector chat={{ ...withFolders([]), projectId: 'p-w' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
@@ -907,7 +907,7 @@ describe('Inspector other folders', () => {
     await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { folders: [{ path: 'E:\\Picked', access: 'read' }] }));
     unmount();
 
-    useGruntStore.setState({ machines: { self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' }, listening: { running: true, addresses: [] }, peers: [] } });
+    useOtherBenchStore.setState({ machines: { self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' }, listening: { running: true, addresses: [] }, peers: [] } });
     render(<Inspector chat={{ ...withFolders([]), runsOn: 'node-pc' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(foldersSection()).queryByRole('button', { name: 'Choose…' })).toBeNull();
     mockedIsDesktop.mockReturnValue(false);
@@ -922,7 +922,7 @@ describe('Inspector Progress', () => {
   const todoCall = { type: 'tool-call' as const, id: 't1', name: 'update_todos', args: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] } };
 
   it("lists each running reply's checklist, named by profile in a compare, and hides once none is running", () => {
-    useGruntStore.setState({ messages: {
+    useOtherBenchStore.setState({ messages: {
       a: makeMessage('a', { parts: [todoCall] }),
       b: makeMessage('b', { parts: [todoCall], producedBy: { profileId: 'p2', profileName: 'Beta', connectionId: 'c1', modelId: 'm' } }),
     } });
@@ -931,7 +931,7 @@ describe('Inspector Progress', () => {
     expect(screen.getByText('Alpha')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getAllByTestId('todo-checklist')).toHaveLength(2);
-    useGruntStore.setState({ messages: { a: makeMessage('a', { parts: [todoCall], status: 'complete' }) } });
+    useOtherBenchStore.setState({ messages: { a: makeMessage('a', { parts: [todoCall], status: 'complete' }) } });
     rerender(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
     expect(screen.queryByRole('heading', { name: 'Progress' })).toBeNull();
   });
@@ -947,7 +947,7 @@ describe('Inspector condensed sections', () => {
   beforeEach(() => {
     window.localStorage.clear();
     resetInspectorSectionsForTests();
-    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
   });
   afterEach(cleanup);
@@ -963,10 +963,10 @@ describe('Inspector condensed sections', () => {
         profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
       })
     );
-    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })} profile={makeProfile({ name: 'Sonnet' })} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })} profile={makeProfile({ name: 'Sonnet' })} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
     expect(toggle('Workspace')).toHaveAttribute('aria-expanded', 'true');
-    expect(toggle('Workspace')).toHaveAccessibleName('Workspace Grunt');
+    expect(toggle('Workspace')).toHaveAccessibleName('Workspace OtherBench');
     await waitFor(() => expect(toggle('Tool grants')).toHaveAccessibleName('Tool grants 1 active'));
     await waitFor(() => expect(toggle('Audit trail')).toHaveAccessibleName('Audit trail 1 call'));
     await waitFor(() => expect(toggle('Spend')).toHaveAccessibleName('Spend $4.50'));
@@ -1007,7 +1007,7 @@ describe('Inspector condensed sections', () => {
   });
 
   it('puts Runs on inside the Workspace section once a machine is paired', () => {
-    useGruntStore.setState({
+    useOtherBenchStore.setState({
       machines: {
         self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
         listening: { running: true, addresses: [] },

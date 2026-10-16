@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ArtifactVersion } from '@grunt/core/ports/store.js';
+import type { ArtifactVersion } from '@otherbench/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
@@ -11,15 +11,15 @@ vi.mock('../state/api.js', async (importOriginal) => ({
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 
 // The sheet preview names a column header per column on every render, so counting these counts redraws of the table.
-vi.mock('@grunt/core/domain/office-spec.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@grunt/core/domain/office-spec.js')>();
+vi.mock('@otherbench/core/domain/office-spec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@otherbench/core/domain/office-spec.js')>();
   return { ...actual, columnName: vi.fn(actual.columnName) };
 });
 
-import { columnName } from '@grunt/core/domain/office-spec.js';
+import { columnName } from '@otherbench/core/domain/office-spec.js';
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ArtifactDetail, type LiveStatus } from '../state/api.js';
-import { useGruntStore } from '../state/store.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ArtifactView } from './ArtifactView.js';
 
 const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model', kind: ArtifactVersion['kind'] = 'html'): ArtifactVersion => ({
@@ -45,8 +45,8 @@ beforeEach(() => {
   vi.mocked(api.artifacts.get).mockReset().mockResolvedValue(detail());
   vi.mocked(api.artifacts.version).mockReset().mockImplementation(async (_c, _a, id) => version(id, id === 'v1' ? 1 : 2, `<p>${id}</p>`));
   vi.mocked(api.view.openArtifact).mockReset().mockImplementation(async (_c, id) => ({ path: '', name: 'calc.html', kind: 'html', url: `/view/x-${id}/calc.html`, size: 1 }));
-  useGruntStore.setState(useGruntStore.getInitialState(), true);
-  useGruntStore.setState({ chats: [{ id: 'c1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never] });
+  useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  useOtherBenchStore.setState({ chats: [{ id: 'c1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never] });
 });
 afterEach(cleanup);
 
@@ -54,21 +54,21 @@ describe('ArtifactView', () => {
   it('picks up a change the reply makes as it streams, with the head on your message as an ordinary send leaves it', async () => {
     const reply = (parts: unknown[], status = 'streaming') => ({ id: 'r1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts, status, error: null, producedBy: null, createdAt: 2 });
     const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'make it blue' }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
-    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine, r1: reply([]) } as never });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine, r1: reply([]) } as never });
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v1' });
-    act(() => useGruntStore.setState({ messages: { u1: mine, r1: reply([{ type: 'tool-result', id: 'a', name: 'artifact', result: '{}', isError: false }]) } as never }));
+    act(() => useOtherBenchStore.setState({ messages: { u1: mine, r1: reply([{ type: 'tool-result', id: 'a', name: 'artifact', result: '{}', isError: false }]) } as never }));
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
   });
 
   it("recovers from a failed load on the next change, e.g. a version that hadn't synced yet", async () => {
     const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 1 };
-    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine } as never });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine } as never });
     vi.mocked(api.artifacts.get).mockRejectedValueOnce(new ApiError(404, 'Artifact not found in this chat.'));
     render(<ArtifactView chatId="c1" item={item} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Artifact not found in this chat.');
-    act(() => useGruntStore.setState({ messages: { u1: mine, r1: { ...mine, id: 'r1', parentId: 'u1', role: 'assistant', createdAt: 2 } } as never }));
+    act(() => useOtherBenchStore.setState({ messages: { u1: mine, r1: { ...mine, id: 'r1', parentId: 'u1', role: 'assistant', createdAt: 2 } } as never }));
     expect(await screen.findByTitle('calc.html')).toHaveAttribute('src', '/view/x-v2/calc.html');
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -88,7 +88,7 @@ describe('ArtifactView', () => {
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v1' });
-    act(() => useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'other-branch', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never] }));
+    act(() => useOtherBenchStore.setState({ chats: [{ id: 'c1', headMessageId: 'other-branch', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never] }));
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
   });
 
@@ -157,7 +157,7 @@ describe('ArtifactView', () => {
   });
 
   it("offers no Save to workspace when the chat's folder isn't on this machine", async () => {
-    useGruntStore.setState({ chats: [{ id: 'c1', workspaceStatus: { status: 'unresolved', reason: 'other-machine' } } as never] });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', workspaceStatus: { status: 'unresolved', reason: 'other-machine' } } as never] });
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     expect(screen.queryByRole('button', { name: 'Save to workspace' })).toBeNull();
@@ -419,7 +419,7 @@ describe('ArtifactView live pages (spec 2026-10-12-live-artifacts)', () => {
     fireEvent.load(frame);
     expect(screen.queryByText(/went to another address/)).toBeNull();
     fireEvent.load(frame);
-    expect(await screen.findByText('This page went to another address, so Grunt closed it.')).toBeInTheDocument();
+    expect(await screen.findByText('This page went to another address, so OtherBench closed it.')).toBeInTheDocument();
     expect(screen.queryByTitle('calc.html')).toBeNull();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Reopen' }));
     const again = await screen.findByTitle('calc.html');
