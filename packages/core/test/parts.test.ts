@@ -115,6 +115,19 @@ describe('subagentPartEvents', () => {
     expect(fold(subagentPartEvents(stored))).toEqual([stored]);
   });
 
+  it('keeps when it started and finished, and gives them back when rebuilt', () => {
+    const stored = fold([start, { type: 'running', at: 1000 }, { type: 'running', at: 2000 }, { type: 'end', status: 'complete', at: 5000 }])[0] as SubagentPart;
+    // The first start counts; a repeated running doesn't move it.
+    expect(stored).toMatchObject({ startedAt: 1000, finishedAt: 5000 });
+    expect(fold(subagentPartEvents(stored))).toEqual([stored]);
+  });
+
+  it('refuses a time that is not a sensible number from a peer', () => {
+    expect(isSubagentEvent({ type: 'running', at: 1000 })).toBe(true);
+    expect(isSubagentEvent({ type: 'running', at: 'soon' })).toBe(false);
+    expect(isSubagentEvent({ type: 'end', status: 'complete', at: -1 })).toBe(false);
+  });
+
   it('leaves out running for a queued part and end for an unfinished one', () => {
     const queued = fold([start])[0] as SubagentPart;
     expect(subagentPartEvents(queued).map((e) => e.type)).toEqual(['start']);

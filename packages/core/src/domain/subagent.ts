@@ -657,7 +657,7 @@ export class SubagentRunner implements SubagentHost {
       this.send(callId, { type: 'start', label, prompt, profileId: chosen.id, profileName: chosen.name, modelId: chosen.modelId }, true);
       slot = await this.acquire(this.deps.signal);
       if (slot) {
-        this.send(callId, { type: 'running' }, true);
+        this.send(callId, { type: 'running', at: this.deps.now() }, true);
         const tools = await this.toolsFor(chosen, narrowed.policy);
         const request = this.requestFor(chosen, narrowed.policy, shellWithheld, label, prompt, callId, tools, child.signal, ctx);
         for await (const raw of this.deps.engine.stream(request)) {
@@ -702,7 +702,7 @@ export class SubagentRunner implements SubagentHost {
     }
     const endStatus: SubagentEndStatus = status === 'complete' && typeof result !== 'string' ? 'error' : status;
     const endError = endStatus === 'error' ? (failure?.message ?? (typeof result === 'string' ? undefined : result.message)) : undefined;
-    this.sendEnd(callId, { type: 'end', status: endStatus, ...(endError !== undefined ? { error: endError } : {}), ...(usage ? { usage } : {}) });
+    this.sendEnd(callId, { type: 'end', status: endStatus, ...(endError !== undefined ? { error: endError } : {}), ...(usage ? { usage } : {}), at: this.deps.now() });
     return result;
   }
 

@@ -2,7 +2,6 @@ import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
-import { SUBAGENT_TOOL_NAME } from '@otherbench/core/domain/parts.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
@@ -430,12 +429,13 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   // calls show as their record once answered; while waiting, only the card shows.
   const results = new Map(parts.flatMap((p) => (p.type === 'tool-result' ? [[p.id, p] as const] : [])));
   const recorded = new Set(parts.flatMap((p) => (p.type === 'tool-call' && (isAskTool(p.name) || isPlanTool(p.name)) ? [p.id] : [])));
-  // A sub-agent shows as its card; the parent's own subagent call and result
-  // for it are hidden. A subagent call with no card (refused before it
-  // started) stays in the tool group, so its error shows.
+  // A sub-agent shows as its card; the parent's own call and result that
+  // started it (the API `subagent` tool, or Claude Code's Task or Agent) are
+  // hidden. A subagent call with no card (refused before it started) stays in
+  // the tool group, so its error shows.
   const subagentCards = new Set(parts.flatMap((p) => (p.type === 'subagent' ? [p.callId] : [])));
   parts.forEach((p, i) => {
-    if ((p.type === 'tool-call' || p.type === 'tool-result') && p.name === SUBAGENT_TOOL_NAME && subagentCards.has(p.id)) return;
+    if ((p.type === 'tool-call' || p.type === 'tool-result') && subagentCards.has(p.id)) return;
     if (p.type === 'subagent') {
       flush();
       out.push(

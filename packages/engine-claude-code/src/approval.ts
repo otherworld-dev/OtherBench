@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from 'node:path';
+import type { HelperRegistry } from './helpers.js';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
@@ -157,6 +158,8 @@ export function createGate(deps: {
   autoMode?: boolean;
   /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
   onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
+  /** The reply's helpers: a call one of them made says so on its approval card. */
+  helpers?: HelperRegistry;
 }): Gate {
   /** AskUserQuestion: the question card, answered through `updatedInput` (spec 2026-10-12-thread-cards-design section 6). */
   const askQuestion = async (input: Record<string, unknown>, signal: AbortSignal): Promise<GateDecision> => {
@@ -217,7 +220,10 @@ export function createGate(deps: {
       // Claude Code's classifier. canUseTool (reached when the classifier
       // can't decide) always gets a card.
       const deferAsk = deps.autoMode === true && opts?.mayDefer === true;
-      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal }, { deferAsk });
+      // A helper's call is named on its card (best effort: known once its message has been read); the decision is the reply's own.
+      const helper = deps.helpers?.ownerOf(opts?.toolUseId);
+      const shown = helper ? { shownSubagent: { callId: helper.callId, label: helper.label, parentProfileId: deps.ctx.profileId } } : {};
+      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal, ...shown }, { deferAsk });
       if ('deferred' in outcome && outcome.deferred === true) {
         return deferAsk ? { defer: true } : { allow: false, reason: 'OtherBench could not check this tool call: unexpected deferral.' };
       }

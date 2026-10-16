@@ -16,13 +16,13 @@ export type SubagentEndStatus = Exclude<SubagentStatus, 'queued' | 'running'>;
 /** One step in a sub-agent's life, carried on a `subagent` TurnEvent with its call id. */
 export type SubagentEvent =
   | { type: 'start'; label: string; prompt: string; profileId: string; profileName: string; modelId: string }
-  | { type: 'running' }
+  | { type: 'running'; at?: number }
   | { type: 'text-delta'; text: string }
   | { type: 'reasoning-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
   | { type: 'notice'; text: string }
-  | { type: 'end'; status: SubagentEndStatus; error?: string; usage?: Usage };
+  | { type: 'end'; status: SubagentEndStatus; error?: string; usage?: Usage; at?: number };
 
 /**
  * Appends streamed text (or reasoning) onto `parts`, merging into the
@@ -78,7 +78,7 @@ export function applySubagentEvent(parts: Part[], callId: string, event: Subagen
   if (part.status === 'complete' || part.status === 'error' || part.status === 'cancelled') return parts;
   let next: SubagentPart;
   if (event.type === 'running') {
-    next = { ...part, status: 'running' };
+    next = { ...part, status: 'running', ...(event.at !== undefined && part.startedAt === undefined ? { startedAt: event.at } : {}) };
   } else if (event.type === 'end') {
     const { usage } = event;
     next = {
@@ -86,6 +86,7 @@ export function applySubagentEvent(parts: Part[], callId: string, event: Subagen
       status: event.status,
       ...(event.error !== undefined ? { error: event.error } : {}),
       ...(usage ? { usage: { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, tokensCached: usage.tokensCached, tokensReasoning: usage.tokensReasoning } } : {}),
+      ...(event.at !== undefined ? { finishedAt: event.at } : {}),
     };
   } else {
     next = { ...part, parts: foldSubagentContent(part.parts, event) };
@@ -98,7 +99,7 @@ export function subagentPartEvents(part: SubagentPart): SubagentEvent[] {
   const events: SubagentEvent[] = [
     { type: 'start', label: part.label, prompt: part.prompt, profileId: part.profileId, profileName: part.profileName, modelId: part.modelId },
   ];
-  if (part.status !== 'queued') events.push({ type: 'running' });
+  if (part.status !== 'queued') events.push({ type: 'running', ...(part.startedAt !== undefined ? { at: part.startedAt } : {}) });
   for (const p of part.parts) {
     switch (p.type) {
       case 'text':
@@ -121,7 +122,7 @@ export function subagentPartEvents(part: SubagentPart): SubagentEvent[] {
     }
   }
   if (part.status === 'complete' || part.status === 'error' || part.status === 'cancelled') {
-    events.push({ type: 'end', status: part.status, ...(part.error !== undefined ? { error: part.error } : {}), ...(part.usage ? { usage: part.usage } : {}) });
+    events.push({ type: 'end', status: part.status, ...(part.error !== undefined ? { error: part.error } : {}), ...(part.usage ? { usage: part.usage } : {}), ...(part.finishedAt !== undefined ? { at: part.finishedAt } : {}) });
   }
   return events;
 }
@@ -135,6 +136,10 @@ function isUsage(value: unknown): boolean {
 }
 
 /** Whether `value` is a well-formed `SubagentEvent`: for events that come from outside this process (a paired machine's relay). */
+function isTime(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 export function isSubagentEvent(value: unknown): value is SubagentEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const e = value as Record<string, unknown>;
@@ -143,7 +148,7 @@ export function isSubagentEvent(value: unknown): value is SubagentEvent {
     case 'start':
       return str('label') && str('prompt') && str('profileId') && str('profileName') && str('modelId');
     case 'running':
-      return true;
+      return e['at'] === undefined || isTime(e['at']);
     case 'text-delta':
     case 'reasoning-delta':
     case 'notice':
@@ -156,7 +161,8 @@ export function isSubagentEvent(value: unknown): value is SubagentEvent {
       return (
         typeof e['status'] === 'string' && END_STATUSES.has(e['status']) &&
         (e['error'] === undefined || str('error')) &&
-        (e['usage'] === undefined || isUsage(e['usage']))
+        (e['usage'] === undefined || isUsage(e['usage'])) &&
+        (e['at'] === undefined || isTime(e['at']))
       );
     default:
       return false;

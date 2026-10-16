@@ -1,4 +1,5 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
+import type { SubagentEvent } from '../domain/parts.js';
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
@@ -111,7 +112,13 @@ export type EngineEvent =
   | { type: 'finish'; usage: Usage; finishReason: string }
   | { type: 'error'; error: SerializedError }
   | { type: 'engine-meta'; meta: EngineMeta }
-  | { type: 'notice'; text: string };
+  | { type: 'notice'; text: string }
+  /**
+   * A helper the engine's own agent started (Claude Code's Task or Agent
+   * tool), told the way an API sub-agent is: `callId` is the tool call that
+   * started it. Folded into the reply's parts as a `subagent` part.
+   */
+  | { type: 'subagent'; callId: string; event: SubagentEvent };
 
 export interface DiscoveredModel {
   modelId: string;

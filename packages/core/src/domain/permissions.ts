@@ -425,7 +425,7 @@ export class PermissionBroker {
               : tool.source === 'computer'
                 ? computerSummary(args)
                 : summarize(tool, args),
-      ...(ctx.subagent ? { subagent: ctx.subagent } : {}),
+      ...(ctx.subagent ? { subagent: ctx.subagent } : ctx.shownSubagent ? { subagent: ctx.shownSubagent } : {}),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
