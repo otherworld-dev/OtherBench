@@ -32,8 +32,13 @@ export async function startTurn(container: TurnStartDeps, input: TurnInput): Pro
   // The head goes to the new user message (what every client does next
   // anyway) in the same update that marks the chat active, so the
   // chat-updated event this sends never carries a stale head that would
-  // undo a client's own move (Task 34).
-  container.store.chats.update(input.chatId, { headMessageId: result.userMessageId, updatedAt: Date.now() });
+  // undo a client's own move (Task 34). The chat also takes the profile the
+  // message was sent with (a compare turn's first), so it opens on that
+  // model next time, here and on every paired machine. A scheduled run keeps
+  // the chat's own: it runs as the schedule's profile, not one the user chose.
+  const primary = input.unattended ? undefined : input.profiles[0]?.id;
+  const changesProfile = primary !== undefined && container.store.chats.get(input.chatId)?.profileId !== primary;
+  container.store.chats.update(input.chatId, { headMessageId: result.userMessageId, updatedAt: Date.now(), ...(changesProfile ? { profileId: primary } : {}) });
   container.events?.emit({ type: 'turn-started', chatId: input.chatId, messageIds: result.assistantMessageIds });
   return result;
 }

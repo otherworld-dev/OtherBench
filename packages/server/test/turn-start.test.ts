@@ -7,9 +7,9 @@ import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { startTurn } from '../src/turn-start.js';
 
-function profile(): ResolvedProfile {
+function profile(id = 'p1'): ResolvedProfile {
   return {
-    id: 'p1', name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
+    id, name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
     toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
     connection: { id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null },
     apiKey: null, model: null,
@@ -38,6 +38,22 @@ describe('startTurn', () => {
     expect(store.chats.get('chat-1')!.headMessageId).toBe(result.userMessageId);
     expect(streamRegistry.snapshot('chat-1').map((b) => b.messageId)).toEqual(result.assistantMessageIds);
     expect(seen).toContainEqual({ type: 'turn-started', chatId: 'chat-1', messageIds: result.assistantMessageIds });
+  });
+
+  it("takes the profile the message was sent with, so the chat opens on it next time, here and on paired machines", async () => {
+    const { store, deps } = setup();
+
+    await startTurn(deps, { chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile('p2'), profile('p3')] });
+
+    expect(store.chats.get('chat-1')!.profileId).toBe('p2');
+  });
+
+  it("leaves the chat's profile alone for a scheduled run", async () => {
+    const { store, deps } = setup();
+
+    await startTurn(deps, { chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile('p2')], unattended: true });
+
+    expect(store.chats.get('chat-1')!.profileId).toBe('p1');
   });
 
   it('re-arms project memory and rethrows when the turn cannot start', async () => {
