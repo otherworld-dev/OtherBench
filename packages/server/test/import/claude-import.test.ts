@@ -138,7 +138,7 @@ describe('ClaudeImportService: chats', () => {
   it('imports every conversation with its messages, branches, times and memory cursors', async () => {
     const status = await runImport(makeService());
     expect(status).toMatchObject({ state: 'done', done: 2, total: 2, error: null });
-    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, newer: 0, filed: 0, messages: 5, failed: [] });
+    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, updated: 0, newer: 0, filed: 0, messages: 5, failed: [] });
     expect(status.report!.emptyChats).toBe(1);
 
     const chat = store.chats.get('c1')!;
@@ -154,17 +154,36 @@ describe('ClaudeImportService: chats', () => {
   it('skips chats already imported on a second run', async () => {
     await runImport(makeService());
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 0, filed: 0, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 0, filed: 0, messages: 0, failed: [] });
     expect(store.chats.list()).toHaveLength(2);
   });
 
-  it('counts, without adding, messages a chat gained on claude.ai since it was imported', async () => {
+  it('adds the messages a chat gained on claude.ai since it was imported, when it was not carried on here', async () => {
     await runImport(makeService());
-    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
-    expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, newer: 1 });
+    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [
+      message('u2', 'human', CLAUDE_ROOT_PARENT, 4),
+      message('a3', 'assistant', 'u2', 5),
+      message('u4', 'human', 'a3', 6),
+      message('a4', 'assistant', 'u4', 7),
+    ];
+    expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, updates: 1, newer: 0 });
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 1, filed: 0, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, filed: 0, messages: 2, failed: [] });
+    expect(store.messages.get('a4')).toMatchObject({ parentId: 'u4', role: 'assistant' });
+    // The memory sweeps start after the imported messages, as they do for a chat imported new.
+    expect(store.chats.get('c2')).toMatchObject({ headMessageId: 'a4', memoryCursor: 'a4', globalMemoryCursor: 'a4' });
+  });
+
+  it('leaves a chat carried on here as it is, counting the newer messages it was not given', async () => {
+    await runImport(makeService());
+    store.messages.create({ id: 'mine', chatId: 'c2', parentId: 'a3', role: 'user', parts: [{ type: 'text', text: 'carried on here' }], status: 'complete', error: null, producedBy: null });
+    store.chats.update('c2', { headMessageId: 'mine' });
+    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
+    expect((await makeService().preview(root)).chats).toMatchObject({ existing: 2, updates: 0, newer: 1 });
+    const again = await runImport(makeService());
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 1, filed: 0, messages: 0, failed: [] });
     expect(store.messages.get('u4')).toBeNull();
+    expect(store.chats.get('c2')!.headMessageId).toBe('mine');
   });
 
   it('rolls back a chat that fails part-way, says so, and carries on with the rest', async () => {
@@ -495,6 +514,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
       sources: [{ path: ROOT, sessions: 2 }],
       sessions: 2,
       existing: 0,
+      updates: 0,
       messages: 4,
       images: 1,
       spaces: [{ id: 'space-1', sessions: 1, titles: ['Finance Dept'] }],
@@ -504,7 +524,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
 
   it("imports them when asked, filing each space's sessions where the user chose and storing pasted images as attachments", async () => {
     const status = await runCowork(coworkService());
-    expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, filed: 1, messages: 4, images: 1, failed: [] });
+    expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, updated: 0, filed: 1, messages: 4, images: 1, failed: [] });
     expect(store.chats.get('local_s1')).toMatchObject({ title: 'Finance Dept', projectId: 'otherbench-phd', headMessageId: 'local_s1-a' });
     expect(store.chats.get('local_s2')!.projectId).toBeNull();
     const [attachment] = store.attachments.list('local_s1');
@@ -532,6 +552,60 @@ describe('ClaudeImportService: Cowork sessions', () => {
     await runCowork(coworkService({ blobStore: undefined }));
     expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'text', text: '[An image, not imported]' });
     expect(store.attachments.list('local_s1')).toEqual([]);
+  });
+
+  it('fills in, on a second run, the images an earlier import left as notes', async () => {
+    await runCowork(coworkService({ blobStore: undefined }));
+    expect((await coworkService().preview(root)).cowork).toMatchObject({ existing: 2, updates: 1 });
+
+    const again = await runCowork(coworkService());
+
+    expect(again.report!.cowork).toEqual({ imported: 0, existing: 2, updated: 1, filed: 0, messages: 0, images: 1, failed: [] });
+    expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'image', attachmentId: 'local_s1-u:image:1', mime: 'image/png' });
+    const [attachment] = store.attachments.list('local_s1');
+    expect(attachment).toMatchObject({ id: 'local_s1-u:image:1', messageId: 'local_s1-u', size: png.length });
+    expect(await readFile(attachment!.storagePath)).toEqual(png);
+    // A third run finds nothing left to do.
+    expect((await runCowork(coworkService())).report!.cowork).toMatchObject({ existing: 2, updated: 0, images: 0 });
+  });
+
+  it("stores the images a tool returned on the reply, where the chat's tool images are looked up", async () => {
+    const shot = Buffer.from('a screenshot, near enough');
+    sessions = [
+      {
+        meta: { sessionId: 'local_s3', title: 'Page check', createdAt: Date.parse(at(0)), lastActivityAt: Date.parse(at(9)), model: 'claude-opus-4-7' },
+        transcript: [
+          line({ type: 'user', uuid: 's3-u', parentUuid: null, message: { role: 'user', content: 'Check the page' } }),
+          line({ type: 'assistant', uuid: 's3-a', parentUuid: 's3-u', message: { role: 'assistant', model: 'claude-opus-4-7', content: [{ type: 'tool_use', id: 't1', name: 'screenshot', input: {} }] } }),
+          line({ type: 'user', uuid: 's3-r', parentUuid: 's3-a', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: shot.toString('base64') } }] }] } }),
+        ].join('\n'),
+        spaceId: null,
+      },
+    ];
+
+    const status = await runCowork(coworkService(), {});
+
+    expect(status.report!.cowork).toMatchObject({ imported: 1, images: 1 });
+    expect(store.messages.get('s3-a')!.parts[1]).toMatchObject({ type: 'tool-result', result: [{ type: 'image', attachmentId: 's3-r:image:1', mimeType: 'image/png' }] });
+    expect(store.attachments.get('s3-r:image:1')).toMatchObject({ chatId: 'local_s3', messageId: 's3-a', mime: 'image/png', size: shot.length });
+  });
+
+  it('adds messages a Cowork session gained since it was imported', async () => {
+    await runCowork(coworkService());
+    const s2 = sessions[1]!;
+    sessions[1] = {
+      ...s2,
+      transcript: [
+        s2.transcript,
+        line({ type: 'user', uuid: 'local_s2-u2', parentUuid: 'local_s2-a', message: { role: 'user', content: 'And the gate?' } }),
+        line({ type: 'assistant', uuid: 'local_s2-a2', parentUuid: 'local_s2-u2', message: { role: 'assistant', model: 'claude-opus-4-7', content: [{ type: 'text', text: 'Gate reply' }] } }),
+      ].join('\n'),
+    };
+
+    const again = await runCowork(coworkService());
+
+    expect(again.report!.cowork).toMatchObject({ imported: 0, existing: 2, updated: 1, messages: 2 });
+    expect(store.chats.get('local_s2')!.headMessageId).toBe('local_s2-a2');
   });
 
   const NO_EXPORT = { files: { conversations: [], projects: [], memories: [], artifacts: [] }, sources: [], organizationId: null, hasExport: false };

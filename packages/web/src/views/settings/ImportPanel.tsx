@@ -245,6 +245,8 @@ interface PreviewProps {
 function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory, cowork, onCowork, projects, spaces, onSpace, starting, onImport }: PreviewProps): JSX.Element {
   const { chats, memory: notes } = preview;
   const fresh = chats.total - chats.existing + (cowork && preview.cowork ? preview.cowork.sessions - preview.cowork.existing : 0);
+  // Chats already here that get new messages or images count as work for the button too.
+  const updates = chats.updates + (cowork && preview.cowork ? preview.cowork.updates : 0);
   // Without an export (a folder of Cowork sessions, or none) there's only Cowork to import.
   const nothing = !preview.export && !cowork;
   return (
@@ -254,11 +256,12 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
           <li>
             {count(chats.total, 'chat')} ({count(chats.messages, 'message')}
             {chats.branched > 0 ? `, ${chats.branched.toLocaleString('en-US')} with more than one branch` : ''})
-            {chats.existing > 0 ? `; ${chats.existing.toLocaleString('en-US')} already imported, which will be skipped` : ''}
+            {chats.existing > 0 ? `; ${chats.existing.toLocaleString('en-US')} already imported` : ''}
           </li>
+          {chats.updates > 0 && <li>{count(chats.updates, 'imported chat gets', 'imported chats get')} the messages added on claude.ai since</li>}
           {chats.newer > 0 && (
             <li>
-              {count(chats.newer, 'imported chat has', 'imported chats have')} newer messages on claude.ai, which a second import doesn&rsquo;t add
+              {count(chats.newer, 'imported chat was', 'imported chats were')} carried on here, so {chats.newer === 1 ? 'its' : 'their'} newer messages on claude.ai aren&rsquo;t added
             </li>
           )}
           {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
@@ -303,7 +306,9 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
           <label className="flex items-center gap-2">
             <input type="checkbox" aria-label="Import Cowork sessions" checked={cowork} onChange={(e) => onCowork(e.target.checked)} />
             {preview.export ? 'Also import' : 'Import'} the {count(preview.cowork.sessions, 'Cowork session')}
-            {preview.cowork.existing > 0 ? ` (${preview.cowork.existing.toLocaleString('en-US')} already imported)` : ''}
+            {preview.cowork.existing > 0
+              ? ` (${preview.cowork.existing.toLocaleString('en-US')} already imported${preview.cowork.updates > 0 ? `, ${preview.cowork.updates.toLocaleString('en-US')} of them with new messages or images` : ''})`
+              : ''}
           </label>
           <p className={HINT}>
             {count(preview.cowork.messages, 'message')} and {count(preview.cowork.images, 'image')}, from{' '}
@@ -373,7 +378,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
       )}
 
       <button type="button" onClick={onImport} disabled={!profileId || starting || nothing} className="btn btn-primary px-2.5 py-1">
-        {starting ? 'Starting…' : fresh > 0 ? `Import ${count(fresh, 'chat')}` : 'Import'}
+        {starting ? 'Starting…' : fresh > 0 ? `Import ${count(fresh, 'chat')}${updates > 0 ? ` and update ${updates.toLocaleString('en-US')}` : ''}` : updates > 0 ? `Update ${count(updates, 'chat')}` : 'Import'}
       </button>
     </div>
   );
@@ -467,7 +472,8 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
         <li>
           Imported {count(report.chats.imported, 'chat')} ({count(report.chats.messages, 'message')})
           {report.chats.existing > 0 ? `; ${report.chats.existing.toLocaleString('en-US')} were already here` : ''}
-          {report.chats.newer > 0 ? `, ${report.chats.newer.toLocaleString('en-US')} of them with newer messages on claude.ai that weren't added` : ''}
+          {report.chats.updated > 0 ? `, ${report.chats.updated.toLocaleString('en-US')} of them given the messages added on claude.ai since` : ''}
+          {report.chats.newer > 0 ? `; ${report.chats.newer.toLocaleString('en-US')} carried on here, whose newer messages on claude.ai weren't added` : ''}
         </li>
         {report.chats.filed > 0 && <li>Filed {count(report.chats.filed, 'chat')} into {report.chats.filed === 1 ? 'its project' : 'their projects'}</li>}
         {report.artifacts.imported + report.artifacts.existing > 0 && <li>Imported {count(report.artifacts.imported, 'published artifact')}</li>}
@@ -475,6 +481,7 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
           <li>
             Imported {count(report.cowork.imported, 'Cowork session')} ({count(report.cowork.messages, 'message')}, {count(report.cowork.images, 'image')})
             {report.cowork.existing > 0 ? `; ${report.cowork.existing.toLocaleString('en-US')} were already here` : ''}
+            {report.cowork.updated > 0 ? `, ${report.cowork.updated.toLocaleString('en-US')} of them given new messages or images` : ''}
             {report.cowork.filed > 0 ? `; ${report.cowork.filed.toLocaleString('en-US')} filed into projects` : ''}
           </li>
         )}

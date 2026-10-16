@@ -23,10 +23,11 @@ export interface ImportPreview {
   /** The files the conversations and memory were read from. */
   sources: string[];
   /**
-   * `newer`: already imported, with messages since that the import won't add.
+   * `updates`: already imported, and given the messages they gained since (or images the last import left as notes).
+   * `newer`: already imported and carried on here, with messages since that the import won't add.
    * `filed`: chats claude.ai's chat list puts in a project (when the list is in the folder).
    */
-  chats: { total: number; existing: number; newer: number; filed: number; messages: number; branched: number };
+  chats: { total: number; existing: number; updates: number; newer: number; filed: number; messages: number; branched: number };
   /** Whether claude.ai's chat list is in the folder, and where to get it (null when the export doesn't say whose it is). */
   chatList: { found: boolean; url: string | null };
   /** The Cowork sessions on this machine, or null when there are none. */
@@ -52,6 +53,8 @@ export interface CoworkPreview {
   sources: { path: string; sessions: number }[];
   sessions: number;
   existing: number;
+  /** Already imported, and given the messages they gained since or the images the last import left as notes. */
+  updates: number;
   messages: number;
   images: number;
   /** Cowork's spaces, whose names only claude.ai knows: each with a few of its sessions' titles, so the user can tell which is which. */
@@ -59,10 +62,14 @@ export interface CoworkPreview {
 }
 
 export interface ImportReport {
-  /** `newer`: already imported, with messages since that weren't added. `filed`: chats put in a project, new or already here. */
-  chats: { imported: number; existing: number; newer: number; filed: number; messages: number; failed: ImportFailure[] };
+  /**
+   * `updated`: already here, and given the messages they gained since or the images the last import left as notes.
+   * `newer`: already here and carried on in OtherBench, with messages since that weren't added.
+   * `filed`: chats put in a project, new or already here. `messages` and `images` count what was added.
+   */
+  chats: { imported: number; existing: number; updated: number; newer: number; filed: number; messages: number; failed: ImportFailure[] };
   /** Null when Cowork wasn't imported. */
-  cowork: { imported: number; existing: number; filed: number; messages: number; images: number; failed: ImportFailure[] } | null;
+  cowork: { imported: number; existing: number; updated: number; filed: number; messages: number; images: number; failed: ImportFailure[] } | null;
   emptyChats: number;
   artifacts: { imported: number; existing: number; failed: ImportFailure[] };
   projects: { created: string[]; merged: string[]; existing: string[]; failed: ImportFailure[]; skipped: number };

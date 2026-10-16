@@ -106,6 +106,62 @@ describe('planCoworkSession', () => {
     expect((reply!.parts[1] as Extract<Part, { type: 'tool-result' }>).result).toBe('[An image, not imported]\ncaptured');
   });
 
+  it('keeps the images a tool returned as tool images on the reply, as OtherBench stores its own screenshots', () => {
+    const png = Buffer.from('fake png').toString('base64');
+    const jpeg = Buffer.from('fake jpeg').toString('base64');
+    const { chat, stats } = plan(
+      session([
+        { uuid: 'u1', parent: null, type: 'user', content: 'Look at the page' },
+        { uuid: 'a1', parent: 'u1', type: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }, { type: 'tool_use', id: 't2', name: 'screenshot', input: {} }], model: 'claude-opus-4-7' },
+        {
+          uuid: 'r1',
+          parent: 'a1',
+          type: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }] },
+            {
+              type: 'tool_result',
+              tool_use_id: 't2',
+              content: [
+                { type: 'text', text: 'captured' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg } },
+                { type: 'image', source: { type: 'base64', media_type: 'image/svg+xml', data: 'PHN2Zz4=' } },
+              ],
+            },
+          ],
+        },
+      ])
+    );
+    const reply = chat!.messages[1]!;
+    const results = reply.parts.filter((p): p is Extract<Part, { type: 'tool-result' }> => p.type === 'tool-result');
+    expect(results.map((r) => r.result)).toEqual([
+      [{ type: 'image', attachmentId: 'r1:image:1', mimeType: 'image/png' }],
+      [
+        { type: 'text', text: 'captured' },
+        { type: 'image', attachmentId: 'r1:image:2', mimeType: 'image/jpeg' },
+        { type: 'text', text: '[An image, not imported]' },
+      ],
+    ]);
+    expect(chat!.images).toEqual([
+      { attachmentId: 'r1:image:1', messageId: 'a1', mime: 'image/png', data: png, filename: 'tool-image.png' },
+      { attachmentId: 'r1:image:2', messageId: 'a1', mime: 'image/jpeg', data: jpeg, filename: 'tool-image.jpg' },
+    ]);
+    expect(stats.images).toBe(2);
+  });
+
+  it('leaves a tool image over the size limit as a note', () => {
+    const big = 'A'.repeat(Math.ceil((5 * 1024 * 1024) / 3) * 4 + 4);
+    const { chat } = plan(
+      session([
+        { uuid: 'u1', parent: null, type: 'user', content: 'Look' },
+        { uuid: 'a1', parent: 'u1', type: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }], model: 'claude-opus-4-7' },
+        { uuid: 'r1', parent: 'a1', type: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: big } }] }] },
+      ])
+    );
+    expect((chat!.messages[1]!.parts[1] as Extract<Part, { type: 'tool-result' }>).result).toBe('[An image, not imported]');
+    expect(chat!.images).toEqual([]);
+  });
+
   it('mints only attachment ids the binding rule accepts, so an imported image is replayed and synced like any other', () => {
     const png = Buffer.from('fake png').toString('base64');
     const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } };

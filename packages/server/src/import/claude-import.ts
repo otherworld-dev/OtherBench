@@ -7,11 +7,13 @@ import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, impor
 import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@otherbench/core/domain/global-memory.js';
 import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@otherbench/core/domain/memory.js';
 import { containPath } from '@otherbench/core/domain/paths.js';
+import { isToolImageRef } from '@otherbench/core/domain/tool-images.js';
 import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@otherbench/core/domain/workspace.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
 import type { Project, Store } from '@otherbench/core/ports/store.js';
 import type { AboutOutcome, CoworkPreview, ImportPhase, ImportPreview, ImportReport, ImportStart, ImportStatus, MemoryOutcome } from '@otherbench/core/types/claude-import.js';
 import type { Profile, ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
 import { sha256Of, type BlobStore, type StoredBlob } from '@otherbench/store-sqlite/blob-store.js';
 import { askMemoryModel, errorMessage, MEMORY_UPDATE_TIMEOUT_MS, pickMemoryProfile, type MemoryQueue } from '../memory/shared.js';
@@ -90,11 +92,19 @@ function failed(reason: string): MemoryOutcome & AboutOutcome {
   return { status: 'failed', reason };
 }
 
-/** What happened to one chat: new, or already here (with messages it lacks or not), and whether it was put in a project. */
+/**
+ * What happened to one chat: new, or already here, and whether it was put in
+ * a project. One already here may have been given messages (`added`) or the
+ * images the last import left as notes (`filled`), or, carried on here, have
+ * messages it wasn't given (`newer`). `images` counts the images stored.
+ */
 interface ChatOutcome {
   imported: boolean;
   newer: boolean;
   filed: boolean;
+  added: number;
+  filled: number;
+  images: number;
 }
 
 /** What an empty folder holds: no export. */
@@ -112,9 +122,50 @@ function withPinnedShas<T>(shas: string[], fn: () => Promise<T>): Promise<T> {
   return first === undefined ? fn() : withPinnedSha(first, () => withPinnedShas(rest, fn));
 }
 
-/** Whether an imported chat has messages in the export that it doesn't have here: added on claude.ai since the first import. */
-function hasNewer(store: Store, chat: ImportedChat): boolean {
-  return chat.messages.some((m) => store.messages.get(m.id) === null);
+/** The note an import leaves where it couldn't keep an image. */
+const IMAGE_NOTE = '[An image, not imported]';
+
+/** An image in a message: one pasted in, or a reference in a tool's result. */
+function holdsImage(parts: Part[]): boolean {
+  return parts.some((p) => p.type === 'image' || (p.type === 'tool-result' && Array.isArray(p.result) && p.result.some((i) => isToolImageRef(i))));
+}
+
+function noteCount(parts: Part[]): number {
+  return JSON.stringify(parts).split(IMAGE_NOTE).length - 1;
+}
+
+/**
+ * What a re-import does to a chat already here. `fill`: messages here that
+ * still hold image notes, which the source now has the images for. `add`:
+ * the source's messages this chat lacks (parents first), only when the chat
+ * still ends where the import left it, so its own continuation is never
+ * mixed with the source's; when it doesn't, `continued` says there were some.
+ */
+function planRefresh(store: Store, chat: ImportedChat, head: string | null): { fill: CanonMessage[]; add: CanonMessage[]; continued: boolean } {
+  const fill: CanonMessage[] = [];
+  const missing: CanonMessage[] = [];
+  for (const m of chat.messages) {
+    const here = store.messages.get(m.id);
+    if (!here) missing.push(m);
+    else if (holdsImage(m.parts) && noteCount(here.parts) > noteCount(m.parts)) fill.push(m);
+  }
+  if (missing.length === 0) return { fill, add: [], continued: false };
+  const imported = new Set(chat.messages.map((m) => m.id));
+  if (head === null || !imported.has(head)) return { fill, add: [], continued: true };
+  // Parents before children, whatever order the source listed them in.
+  const add: CanonMessage[] = [];
+  const placed = new Set<string>();
+  let rest = missing;
+  while (rest.length > 0) {
+    const ready = rest.filter((m) => m.parentId === null || placed.has(m.parentId) || store.messages.get(m.parentId) !== null);
+    if (ready.length === 0) break;
+    for (const m of ready) {
+      add.push(m);
+      placed.add(m.id);
+    }
+    rest = rest.filter((m) => !placed.has(m.id));
+  }
+  return { fill, add, continued: false };
 }
 
 export class ClaudeImportService {
@@ -169,7 +220,8 @@ export class ClaudeImportService {
       chats: {
         total: plan.chats.length,
         existing: existing.length,
-        newer: existing.filter((c) => hasNewer(store, c)).length,
+        updates: existing.filter((c) => this.refreshes(c)).length,
+        newer: existing.filter((c) => planRefresh(store, c, store.chats.get(c.id)!.headMessageId).continued).length,
         filed: plan.chats.filter((c) => c.projectId && (planned.has(c.projectId) || store.projects.get(c.projectId) !== null)).length,
         messages: plan.stats.messages,
         branched: plan.stats.branchedChats,
@@ -257,6 +309,14 @@ export class ClaudeImportService {
     return { chats, sources: counts };
   }
 
+  /** Whether a re-import would give this chat, already here, messages or images. */
+  private refreshes(chat: ImportedChat): boolean {
+    const here = this.deps.store.chats.get(chat.id);
+    if (!here) return false;
+    const refresh = planRefresh(this.deps.store, chat, here.headMessageId);
+    return refresh.add.length + refresh.fill.length > 0;
+  }
+
   private coworkPreview(planned: { chats: CoworkChat[]; sources: { path: string; sessions: number }[] }): CoworkPreview | null {
     const { chats } = planned;
     if (chats.length === 0) return null;
@@ -266,6 +326,7 @@ export class ClaudeImportService {
       sources: planned.sources,
       sessions: chats.length,
       existing: chats.filter((c) => this.deps.store.chats.get(c.id) !== null).length,
+      updates: chats.filter((c) => this.deps.store.chats.get(c.id) !== null && this.refreshes(c)).length,
       messages: chats.reduce((n, c) => n + c.messages.length, 0),
       images: chats.reduce((n, c) => n + c.images.length, 0),
       spaces: [...spaces].map(([id, inSpace]) => ({ id, sessions: inSpace.length, titles: inSpace.slice(0, 5).map((c) => c.title) })),
@@ -355,8 +416,8 @@ export class ClaudeImportService {
 
   private async run(plan: ImportPlan, profileId: string, memory: boolean, cowork: CoworkChat[] | null, spaces: Record<string, string | null>): Promise<void> {
     const report: ImportReport = {
-      chats: { imported: 0, existing: 0, newer: 0, filed: 0, messages: 0, failed: [] },
-      cowork: cowork ? { imported: 0, existing: 0, filed: 0, messages: 0, images: 0, failed: [] } : null,
+      chats: { imported: 0, existing: 0, updated: 0, newer: 0, filed: 0, messages: 0, failed: [] },
+      cowork: cowork ? { imported: 0, existing: 0, updated: 0, filed: 0, messages: 0, images: 0, failed: [] } : null,
       emptyChats: plan.stats.emptyConversations + plan.stats.malformedConversations,
       artifacts: { imported: 0, existing: 0, failed: [] },
       projects: { created: [], merged: [], existing: [], failed: [], skipped: plan.stats.projectsSkipped },
@@ -404,7 +465,11 @@ export class ClaudeImportService {
               if (into === report.chats) report.chats.messages += chat.messages.length;
             } else {
               into.existing++;
-              if (outcome.newer && into === report.chats) report.chats.newer++;
+              if (into === report.chats) {
+                if (outcome.newer) report.chats.newer++;
+                if (outcome.added + outcome.filled > 0) report.chats.updated++;
+                report.chats.messages += outcome.added;
+              }
             }
             if (outcome.filed && into === report.chats) report.chats.filed++;
           } catch (err) {
@@ -437,10 +502,12 @@ export class ClaudeImportService {
           if (outcome.imported) {
             into.imported++;
             into.messages += chat.messages.length;
-            into.images += chat.images.length;
           } else {
             into.existing++;
+            if (outcome.added + outcome.filled > 0) into.updated++;
+            into.messages += outcome.added;
           }
+          into.images += outcome.images;
           if (outcome.filed) into.filed++;
         } catch (err) {
           into.failed.push({ title: chat.title, error: errorMessage(err) });
@@ -464,21 +531,37 @@ export class ClaudeImportService {
   /**
    * Writes one chat (and its artifact, and the attachment rows for images
    * already in the blob store) in one transaction, filed under `projectId`.
-   * A chat already here is left as it is, except that one still in No
-   * project is filed (the user's own filing is never undone); `newer` says
-   * the export has messages it lacks, which a re-run doesn't add, so a chat
-   * carried on in OtherBench keeps its own branch.
+   * A chat already here keeps what it has: it is given the messages it
+   * gained since and the images the last import left as notes (`planRefresh`),
+   * and one still in No project is filed (the user's own filing is never
+   * undone). One carried on in OtherBench keeps its own branch; `newer` says
+   * the source has messages it wasn't given.
    */
   private writeChat(chat: ImportedChat, profileId: string, projectId: string | null, images: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = []): ChatOutcome {
     const { store } = this.deps;
     const existing = store.chats.get(chat.id);
     if (existing) {
-      const newer = hasNewer(store, chat);
-      if (existing.projectId !== null || projectId === null) return { imported: false, newer, filed: false };
-      // Moving a chat into a project restarts its project memory; it starts after the imported messages, as a new import does.
-      store.chats.update(chat.id, { projectId });
-      store.chats.update(chat.id, { memoryCursor: store.messages.latestId(chat.id) });
-      return { imported: false, newer, filed: true };
+      const refresh = planRefresh(store, chat, existing.headMessageId);
+      const touched = new Set([...refresh.fill, ...refresh.add].map((m) => m.id));
+      const filing = existing.projectId === null && projectId !== null;
+      let stored = 0;
+      store.transaction(() => {
+        for (const m of refresh.fill) store.messages.updateParts(m.id, m.parts);
+        for (const m of refresh.add) store.messages.create(m);
+        for (const { image, blob } of images) {
+          if (!touched.has(image.messageId) || store.attachments.get(image.attachmentId)) continue;
+          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+          stored++;
+        }
+        if (refresh.add.length > 0) store.chats.update(chat.id, { headMessageId: chat.headMessageId, updatedAt: Math.max(existing.updatedAt, chat.updatedAt) });
+        // Moving a chat into a project restarts its project memory; it starts after the imported messages, as a new import does.
+        if (filing) store.chats.update(chat.id, { projectId });
+        if (filing || refresh.add.length > 0) {
+          const latest = store.messages.latestId(chat.id);
+          store.chats.update(chat.id, refresh.add.length > 0 ? { memoryCursor: latest, globalMemoryCursor: latest } : { memoryCursor: latest });
+        }
+      });
+      return { imported: false, newer: refresh.continued, filed: filing, added: refresh.add.length, filled: refresh.fill.length, images: stored };
     }
     let announced = false;
     try {
@@ -518,7 +601,7 @@ export class ClaudeImportService {
       if (announced) this.deps.events?.emit({ type: 'chat-deleted', chatId: chat.id });
       throw err;
     }
-    return { imported: true, newer: false, filed: projectId !== null };
+    return { imported: true, newer: false, filed: projectId !== null, added: 0, filled: 0, images: images.length };
   }
 
   /**
@@ -528,13 +611,15 @@ export class ClaudeImportService {
    */
   private async writeCoworkChat(chat: CoworkChat, profileId: string, projectId: string | null): Promise<ChatOutcome> {
     const blobs = this.deps.blobStore;
-    if (this.deps.store.chats.get(chat.id) || chat.images.length === 0) return this.writeChat(chat, profileId, projectId);
+    // Only images not stored yet: a chat already here has the rest.
+    const wanted = chat.images.filter((i) => this.deps.store.attachments.get(i.attachmentId) === null);
+    if (wanted.length === 0) return this.writeChat(chat, profileId, projectId);
     if (!blobs) {
       const ids = new Set(chat.images.map((i) => i.attachmentId));
       const messages = chat.messages.map((m) => ({ ...m, parts: m.parts.map((p) => (p.type === 'image' && ids.has(p.attachmentId) ? { type: 'text' as const, text: '[An image, not imported]' } : p)) }));
       return this.writeChat({ ...chat, messages }, profileId, projectId);
     }
-    const data = chat.images.map((image) => ({ image, bytes: Buffer.from(image.data, 'base64') }));
+    const data = wanted.map((image) => ({ image, bytes: Buffer.from(image.data, 'base64') }));
     return withPinnedShas([...new Set(data.map((d) => sha256Of(d.bytes)))], async () => {
       const stored: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = [];
       for (const d of data) stored.push({ image: d.image, blob: await blobs.put(d.bytes) });
