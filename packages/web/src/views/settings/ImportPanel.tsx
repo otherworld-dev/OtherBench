@@ -281,6 +281,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
               {p.hasMemory ? ', memory' : ''}
             </li>
           ))}
+          {preview.filesIncluded > 0 && <li>{count(preview.filesIncluded, 'image or file', 'images and files')} come back from the files saved from claude.ai</li>}
           {preview.filesNotIncluded > 0 && (
             <li>{count(preview.filesNotIncluded, 'image or file', 'images and files')} aren&rsquo;t in the export; each shows as a note in its chat</li>
           )}
@@ -514,6 +515,7 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
             claude.ai&rsquo;s memory files are in <span className="font-mono">{report.memoryFiles}</span>
           </li>
         )}
+        {report.chats.files > 0 && <li>Stored {count(report.chats.files, 'image or file', 'images and files')} saved from claude.ai</li>}
         {report.filesNotIncluded > 0 && <li>{count(report.filesNotIncluded, 'image or file', 'images and files')} weren&rsquo;t in the export</li>}
       </ul>
       {memory?.about.status === 'drafted' && <AboutDraft text={memory.about.text} />}

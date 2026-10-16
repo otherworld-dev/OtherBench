@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -138,7 +138,7 @@ describe('ClaudeImportService: chats', () => {
   it('imports every conversation with its messages, branches, times and memory cursors', async () => {
     const status = await runImport(makeService());
     expect(status).toMatchObject({ state: 'done', done: 2, total: 2, error: null });
-    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, updated: 0, newer: 0, filed: 0, messages: 5, failed: [] });
+    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, updated: 0, newer: 0, filed: 0, messages: 5, files: 0, failed: [] });
     expect(status.report!.emptyChats).toBe(1);
 
     const chat = store.chats.get('c1')!;
@@ -154,7 +154,7 @@ describe('ClaudeImportService: chats', () => {
   it('skips chats already imported on a second run', async () => {
     await runImport(makeService());
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 0, filed: 0, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 0, filed: 0, messages: 0, files: 0, failed: [] });
     expect(store.chats.list()).toHaveLength(2);
   });
 
@@ -168,7 +168,7 @@ describe('ClaudeImportService: chats', () => {
     ];
     expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, updates: 1, newer: 0 });
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, filed: 0, messages: 2, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, filed: 0, messages: 2, files: 0, failed: [] });
     expect(store.messages.get('a4')).toMatchObject({ parentId: 'u4', role: 'assistant' });
     // The memory sweeps start after the imported messages, as they do for a chat imported new.
     expect(store.chats.get('c2')).toMatchObject({ headMessageId: 'a4', memoryCursor: 'a4', globalMemoryCursor: 'a4' });
@@ -181,7 +181,7 @@ describe('ClaudeImportService: chats', () => {
     (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
     expect((await makeService().preview(root)).chats).toMatchObject({ existing: 2, updates: 0, newer: 1 });
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 1, filed: 0, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 1, filed: 0, messages: 0, files: 0, failed: [] });
     expect(store.messages.get('u4')).toBeNull();
     expect(store.chats.get('c2')!.headMessageId).toBe('mine');
   });
@@ -225,6 +225,85 @@ describe('ClaudeImportService: chats', () => {
     release();
     await service.idle();
     expect(service.status().state).toBe('done');
+  });
+});
+
+describe('ClaudeImportService: files saved from claude.ai', () => {
+  const SHOT = '4acc75d1-3be4-43cc-97df-2403031ae2c8';
+  const NOTES = 'bc2bf0f2-7906-4f06-9a72-a82a7da01427';
+  const GONE = '9c6b9ee7-1862-4f40-bf04-b402ce518229';
+  const FAKE = 'd6673f82-c0c2-417a-981d-362647cb6936';
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x20, 0, 0, 0]), Buffer.from('WEBPVP8 a picture, near enough')]);
+
+  let downloaded: Record<string, { name: string; mime: string }>;
+  const filesService = (over: Partial<ConstructorParameters<typeof ClaudeImportService>[0]> = {}) =>
+    makeService({
+      blobStore: createBlobStore(join(root, 'blobs')),
+      read: async () => ({ files: { ...exportFiles, downloaded }, sources: ['conversations.json', 'files/index.json'], organizationId: 'org-1', hasExport: true, filesDir: join(root, 'files') }),
+      ...over,
+    });
+
+  beforeEach(async () => {
+    await mkdir(join(root, 'files'), { recursive: true });
+    await writeFile(join(root, 'files', SHOT), webp);
+    await writeFile(join(root, 'files', NOTES), 'notes for the shed');
+    await writeFile(join(root, 'files', FAKE), 'not a webp at all');
+    downloaded = {
+      [SHOT]: { name: 'shot.png', mime: 'image/webp' },
+      [NOTES]: { name: 'notes.txt', mime: 'text/plain' },
+      [GONE]: { name: 'gone.png', mime: 'image/webp' },
+      [FAKE]: { name: 'fake.png', mime: 'image/webp' },
+    };
+    exportFiles.conversations = [
+      conversation('c1', 'Garden plans', [
+        {
+          ...message('u1', 'human', CLAUDE_ROOT_PARENT, 1, 'see these'),
+          files: [
+            { file_uuid: SHOT, file_name: 'shot.png' },
+            { file_uuid: NOTES, file_name: 'notes.txt' },
+            { file_uuid: GONE, file_name: 'gone.png' },
+            { file_uuid: FAKE, file_name: 'fake.png' },
+          ],
+        },
+        message('a1', 'assistant', 'u1', 2),
+      ]),
+    ];
+  });
+
+  it('stores them as attachments on their messages, with the text of a document, and keeps a note for one it cannot use', async () => {
+    const status = await runImport(filesService());
+
+    expect(status.report!.chats).toMatchObject({ imported: 1, files: 2 });
+    expect(store.messages.get('u1')!.parts).toEqual([
+      { type: 'text', text: 'see these' },
+      { type: 'image', attachmentId: `u1:file:${SHOT}`, mime: 'image/webp' },
+      { type: 'file', attachmentId: `u1:file:${NOTES}`, mime: 'text/plain', filename: 'notes.txt' },
+      // Not in the folder, and not the image it says it is.
+      { type: 'text', text: '[Not included in the claude.ai export: gone.png]' },
+      { type: 'text', text: '[Not included in the claude.ai export: fake.png]' },
+    ]);
+    const image = store.attachments.get(`u1:file:${SHOT}`)!;
+    expect(image).toMatchObject({ chatId: 'c1', messageId: 'u1', mime: 'image/webp', size: webp.length, extractedText: null });
+    expect(await readFile(image.storagePath)).toEqual(webp);
+    expect(store.attachments.get(`u1:file:${NOTES}`)).toMatchObject({ filename: 'notes.txt', extractedText: 'notes for the shed' });
+  });
+
+  it('fills them into a chat an earlier import left with notes, and does nothing more on a third run', async () => {
+    await runImport(makeService());
+    expect(store.messages.get('u1')!.parts.filter((p) => p.type === 'text')).toHaveLength(5);
+
+    const again = await runImport(filesService());
+
+    expect(again.report!.chats).toMatchObject({ imported: 0, existing: 1, updated: 1, files: 2 });
+    expect(store.messages.get('u1')!.parts.map((p) => p.type)).toEqual(['text', 'image', 'file', 'text', 'text']);
+    expect((await runImport(filesService())).report!.chats).toMatchObject({ existing: 1, updated: 0, files: 0 });
+  });
+
+  it('keeps the notes when there is nowhere to store files', async () => {
+    const status = await runImport(filesService({ blobStore: undefined }));
+    expect(status.report!.chats).toMatchObject({ imported: 1, files: 0 });
+    expect(store.messages.get('u1')!.parts.every((p) => p.type === 'text')).toBe(true);
+    expect(store.attachments.list('c1')).toEqual([]);
   });
 });
 

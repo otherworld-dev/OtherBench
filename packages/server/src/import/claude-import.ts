@@ -1,13 +1,13 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setImmediate as breathe } from 'node:timers/promises';
-import { chatListUrl, ClaudeExportError, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@otherbench/core/domain/claude-import.js';
+import { chatListUrl, ClaudeExportError, fileNote, planClaudeImport, safeFileName, type ImportedChat, type ImportedFile, type ImportedProject, type ImportPlan } from '@otherbench/core/domain/claude-import.js';
 import { emptyCoworkStats, planCoworkSession, type CoworkChat, type CoworkSessionFiles } from '@otherbench/core/domain/cowork-import.js';
 import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@otherbench/core/domain/claude-import-memory.js';
 import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@otherbench/core/domain/global-memory.js';
 import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@otherbench/core/domain/memory.js';
 import { containPath } from '@otherbench/core/domain/paths.js';
-import { isToolImageRef } from '@otherbench/core/domain/tool-images.js';
+import { hasToolImageSignature, isToolImageRef } from '@otherbench/core/domain/tool-images.js';
 import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@otherbench/core/domain/workspace.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
 import type { Project, Store } from '@otherbench/core/ports/store.js';
@@ -19,6 +19,8 @@ import { sha256Of, type BlobStore, type StoredBlob } from '@otherbench/store-sql
 import { askMemoryModel, errorMessage, MEMORY_UPDATE_TIMEOUT_MS, pickMemoryProfile, type MemoryQueue } from '../memory/shared.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
+import { extractAttachmentText } from '../attachment-text.js';
+import { MAX_ATTACHMENT_BYTES } from '../routes/attachments.js';
 import type { AppEventBus } from '../stream/events.js';
 import { readClaudeExport, type ClaudeExportRead } from './claude-reader.js';
 import { readCoworkSessions } from './cowork-reader.js';
@@ -122,16 +124,24 @@ function withPinnedShas<T>(shas: string[], fn: () => Promise<T>): Promise<T> {
   return first === undefined ? fn() : withPinnedSha(first, () => withPinnedShas(rest, fn));
 }
 
-/** The note an import leaves where it couldn't keep an image. */
-const IMAGE_NOTE = '[An image, not imported]';
+/** The notes an import leaves where it couldn't keep an image or a file: Cowork's, and claude.ai's export's. */
+const IMAGE_NOTES = ['[An image, not imported]', 'Not included in the claude.ai export'];
 
-/** An image in a message: one pasted in, or a reference in a tool's result. */
+/** An image or a file in a message: one pasted in or saved from claude.ai, or a reference in a tool's result. */
 function holdsImage(parts: Part[]): boolean {
-  return parts.some((p) => p.type === 'image' || (p.type === 'tool-result' && Array.isArray(p.result) && p.result.some((i) => isToolImageRef(i))));
+  return parts.some((p) => p.type === 'image' || p.type === 'file' || (p.type === 'tool-result' && Array.isArray(p.result) && p.result.some((i) => isToolImageRef(i))));
 }
 
 function noteCount(parts: Part[]): number {
-  return JSON.stringify(parts).split(IMAGE_NOTE).length - 1;
+  const text = JSON.stringify(parts);
+  return IMAGE_NOTES.reduce((n, note) => n + text.split(note).length - 1, 0);
+}
+
+/** An image or a file a chat's parts name, stored: its bytes in the blob store, and for a file the text a model reads. */
+interface StoredFile {
+  image: { attachmentId: string; messageId: string; mime: string; filename: string };
+  blob: StoredBlob;
+  extractedText?: string | null;
 }
 
 /**
@@ -254,6 +264,7 @@ export class ClaudeImportService {
       memoryChat: plan.memoryChat ? { title: plan.memoryChat.title, notes: plan.memoryChat.messages.length, existing: store.chats.get(plan.memoryChat.id) !== null } : null,
       memoryModel: model?.name ?? null,
       filesNotIncluded: plan.stats.filesNotIncluded,
+      filesIncluded: plan.stats.filesIncluded,
       dropped: plan.stats.dropped,
       importFolder: this.deps.importRoot,
     };
@@ -345,6 +356,7 @@ export class ClaudeImportService {
     let plan: ImportPlan;
     let profile: Profile;
     let cowork: CoworkChat[] | null = null;
+    let filesDir: string | null = null;
     const spaces = input.spaces ?? {};
     try {
       profile = this.checkProfile(input.profileId);
@@ -353,6 +365,7 @@ export class ClaudeImportService {
       }
       const gathered = await this.gather(input.folder, input.cowork === true);
       plan = planClaudeImport(gathered.read.files, { id: profile.id, connectionId: profile.connectionId });
+      filesDir = gathered.read.filesDir ?? null;
       if (input.cowork) cowork = this.planCowork(gathered.cowork, profile).chats;
     } catch (err) {
       this.busy = false;
@@ -369,7 +382,7 @@ export class ClaudeImportService {
       report: null,
       error: null,
     };
-    this.job = this.run(plan, profile.id, input.memory, cowork, spaces).finally(() => {
+    this.job = this.run(plan, profile.id, input.memory, cowork, spaces, filesDir).finally(() => {
       this.busy = false;
     });
     return this.status();
@@ -414,9 +427,9 @@ export class ClaudeImportService {
     this.current.done = Math.min(this.current.total, this.current.done + 1);
   }
 
-  private async run(plan: ImportPlan, profileId: string, memory: boolean, cowork: CoworkChat[] | null, spaces: Record<string, string | null>): Promise<void> {
+  private async run(plan: ImportPlan, profileId: string, memory: boolean, cowork: CoworkChat[] | null, spaces: Record<string, string | null>, filesDir: string | null): Promise<void> {
     const report: ImportReport = {
-      chats: { imported: 0, existing: 0, updated: 0, newer: 0, filed: 0, messages: 0, failed: [] },
+      chats: { imported: 0, existing: 0, updated: 0, newer: 0, filed: 0, messages: 0, files: 0, failed: [] },
       cowork: cowork ? { imported: 0, existing: 0, updated: 0, filed: 0, messages: 0, images: 0, failed: [] } : null,
       emptyChats: plan.stats.emptyConversations + plan.stats.malformedConversations,
       artifacts: { imported: 0, existing: 0, failed: [] },
@@ -459,7 +472,8 @@ export class ClaudeImportService {
         for (const chat of chats) {
           this.step(phase);
           try {
-            const outcome = this.writeChat(chat, profileId, groundedProject(chat.projectId));
+            const outcome = chat.files?.length ? await this.writeClaudeChat(chat, profileId, groundedProject(chat.projectId), filesDir) : this.writeChat(chat, profileId, groundedProject(chat.projectId));
+            if (into === report.chats) report.chats.files += outcome.images;
             if (outcome.imported) {
               into.imported++;
               if (into === report.chats) report.chats.messages += chat.messages.length;
@@ -537,7 +551,7 @@ export class ClaudeImportService {
    * undone). One carried on in OtherBench keeps its own branch; `newer` says
    * the source has messages it wasn't given.
    */
-  private writeChat(chat: ImportedChat, profileId: string, projectId: string | null, images: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = []): ChatOutcome {
+  private writeChat(chat: ImportedChat, profileId: string, projectId: string | null, images: StoredFile[] = []): ChatOutcome {
     const { store } = this.deps;
     const existing = store.chats.get(chat.id);
     if (existing) {
@@ -548,9 +562,9 @@ export class ClaudeImportService {
       store.transaction(() => {
         for (const m of refresh.fill) store.messages.updateParts(m.id, m.parts);
         for (const m of refresh.add) store.messages.create(m);
-        for (const { image, blob } of images) {
+        for (const { image, blob, extractedText: extracted } of images) {
           if (!touched.has(image.messageId) || store.attachments.get(image.attachmentId)) continue;
-          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: extracted ?? null });
           stored++;
         }
         if (refresh.add.length > 0) store.chats.update(chat.id, { headMessageId: chat.headMessageId, updatedAt: Math.max(existing.updatedAt, chat.updatedAt) });
@@ -582,8 +596,8 @@ export class ClaudeImportService {
         });
         announced = true;
         for (const m of chat.messages) store.messages.create(m);
-        for (const { image, blob } of images) {
-          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+        for (const { image, blob, extractedText } of images) {
+          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: extractedText ?? null });
         }
         const artifact = chat.artifact;
         if (artifact) {
@@ -605,6 +619,55 @@ export class ClaudeImportService {
   }
 
   /**
+   * A claude.ai chat naming files saved from claude.ai: each one not stored
+   * yet is read from `filesDir` (by its claude.ai id, through `containPath`)
+   * and stored as an upload is, pinned against blob GC until the rows naming
+   * it are written, with the text a model reads when it's a document. One
+   * that can't be read, is too big, or is an image whose bytes aren't the type
+   * it says goes back to the note the export gives it.
+   */
+  private async writeClaudeChat(chat: ImportedChat, profileId: string, projectId: string | null, filesDir: string | null): Promise<ChatOutcome> {
+    const blobs = this.deps.blobStore;
+    const unread = new Map<string, ImportedFile>();
+    const found: { file: ImportedFile; data: Buffer }[] = [];
+    for (const file of chat.files ?? []) {
+      if (this.deps.store.attachments.get(file.attachmentId)) continue;
+      let data: Buffer | null = null;
+      if (blobs && filesDir) {
+        try {
+          data = await readFile(containPath(filesDir, file.uuid));
+        } catch {
+          data = null;
+        }
+      }
+      const fits = data !== null && data.length > 0 && data.length <= MAX_ATTACHMENT_BYTES;
+      const image = file.mime.startsWith('image/');
+      if (!fits || (image && !hasToolImageSignature(data!, file.mime))) unread.set(file.attachmentId, file);
+      else found.push({ file, data: data! });
+    }
+    const planned: ImportedChat =
+      unread.size === 0
+        ? chat
+        : {
+            ...chat,
+            messages: chat.messages.map((m) => ({
+              ...m,
+              parts: m.parts.map((part) => ((part.type === 'image' || part.type === 'file') && unread.has(part.attachmentId) ? fileNote(unread.get(part.attachmentId)!.filename) : part)),
+            })),
+          };
+    if (found.length === 0 || !blobs) return this.writeChat(planned, profileId, projectId);
+    return withPinnedShas([...new Set(found.map((f) => sha256Of(f.data)))], async () => {
+      const stored: StoredFile[] = [];
+      for (const { file, data } of found) {
+        const blob = await blobs.put(data);
+        const extractedText = file.mime.startsWith('image/') ? null : await extractAttachmentText(data, file.mime, file.filename);
+        stored.push({ image: file, blob, extractedText });
+      }
+      return this.writeChat(planned, profileId, projectId, stored);
+    });
+  }
+
+  /**
    * A Cowork session's chat: its pasted images go into the blob store first,
    * pinned against blob GC until the rows naming them are written, as an
    * upload's are. Without a blob store they become notes.
@@ -621,7 +684,7 @@ export class ClaudeImportService {
     }
     const data = wanted.map((image) => ({ image, bytes: Buffer.from(image.data, 'base64') }));
     return withPinnedShas([...new Set(data.map((d) => sha256Of(d.bytes)))], async () => {
-      const stored: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = [];
+      const stored: StoredFile[] = [];
       for (const d of data) stored.push({ image: d.image, blob: await blobs.put(d.bytes) });
       return this.writeChat(chat, profileId, projectId, stored);
     });
