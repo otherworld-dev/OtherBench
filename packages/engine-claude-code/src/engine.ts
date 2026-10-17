@@ -247,6 +247,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return;
     }
     const finished = live.background?.lastFinished ?? null;
+    // Named once: a later turn it starts with no helper finished since is not this helper's.
+    if (live.background) live.background.lastFinished = null;
     const notice = finished === null
       ? 'Carried on after a background task finished.'
       : finished.kind === 'local_agent'

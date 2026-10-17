@@ -2114,6 +2114,24 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  it("a later turn Claude Code starts by itself, with no helper finished since, doesn't name the earlier helper", async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewed.');
+      yield selfResult();
+      yield delta('Something else.');
+      yield selfResult();
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(2));
+    expect(selfStarts(seen).map((s) => s.notice)).toEqual(['Carried on after the helper "implementer" reported back.', 'Carried on after a background task finished.']);
+    for (const start of selfStarts(seen)) start.decline();
+    e.dispose();
+  });
+
   it('declined self-start is drained, and the next reply is unaffected', async () => {
     const { query, starts } = scripted(async function* ({ nextPrompt }) {
       yield* firstReply(nextPrompt);
