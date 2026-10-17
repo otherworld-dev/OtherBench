@@ -122,6 +122,20 @@ describe('subagentPartEvents', () => {
     expect(fold(subagentPartEvents(stored))).toEqual([stored]);
   });
 
+  it('moves a working or finished card to background, and back to done when it ends', () => {
+    let parts = fold([start, { type: 'running', at: 1000 }, { type: 'background' }]);
+    expect(parts[0]).toMatchObject({ status: 'background', startedAt: 1000 });
+    expect(parts[0]).not.toHaveProperty('finishedAt');
+    expect(fold(subagentPartEvents(parts[0] as SubagentPart))).toEqual(parts);
+    parts = applySubagentEvent(parts, 'call-1', { type: 'end', status: 'complete', at: 9000 });
+    expect(parts[0]).toMatchObject({ status: 'complete', finishedAt: 9000 });
+    // A resumed helper: back in the background, no longer finished.
+    parts = applySubagentEvent(parts, 'call-1', { type: 'background', at: 9500 });
+    expect(parts[0]).toMatchObject({ status: 'background' });
+    expect(parts[0]).not.toHaveProperty('finishedAt');
+    expect(isSubagentEvent({ type: 'background' })).toBe(true);
+  });
+
   it('refuses a time that is not a sensible number from a peer', () => {
     expect(isSubagentEvent({ type: 'running', at: 1000 })).toBe(true);
     expect(isSubagentEvent({ type: 'running', at: 'soon' })).toBe(false);

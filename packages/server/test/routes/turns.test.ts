@@ -830,3 +830,16 @@ describe('project memory re-arm when a turn fails to start', () => {
     expect(memory.noteTurnCompleted).toHaveBeenCalledWith(chatId);
   });
 });
+
+describe('POST /api/chats/:id/helpers/:taskId/stop', () => {
+  it('stops a helper, and 404s an unknown one', async () => {
+    container.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const stopHelper = vi.fn(async (_chat: string, taskId: string) => taskId === 'k1');
+    container.engine = { ...container.engine, stopHelper } as typeof container.engine;
+    const ok = await app().request('/api/chats/chat-1/helpers/k1/stop', { method: 'POST' });
+    expect(ok.status).toBe(200);
+    expect(stopHelper).toHaveBeenCalledWith('chat-1', 'k1');
+    const missing = await app().request('/api/chats/chat-1/helpers/k2/stop', { method: 'POST' });
+    expect(missing.status).toBe(404);
+  });
+});

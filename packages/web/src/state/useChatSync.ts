@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
+import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import { api } from './api.js';
 import { SseClient } from './sse.js';
-import { useOtherBenchStore, type StreamConnectionStatus } from './store.js';
+import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } from './store.js';
 
 /**
  * Keeps one chat's message tree and SSE stream in sync with the store:
@@ -10,6 +13,13 @@ import { useOtherBenchStore, type StreamConnectionStatus } from './store.js';
  * chat's connection down and opens a fresh one whenever `chatId` changes,
  * and on unmount. A `null` id (nothing selected) does nothing.
  */
+/** The chat stream's hello: its replies in flight, and its background tasks with their open approval cards. */
+interface ChatHello {
+  inFlight?: HelloBuffer[];
+  helpers?: BackgroundHelper[];
+  backgroundApprovals?: ApprovalRequest[];
+}
+
 export function useChatSync(chatId: string | null, reportStatus = true): void {
   // Another machine's changes may have added to this chat, or a turn this
   // window didn't start ran in it: reload its messages (the stream stays as it is).
@@ -67,10 +77,15 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
       });
 
-    const client = new SseClient({
+    const { applyChatEvent, setChatBackground } = useOtherBenchStore.getState();
+    const client = new SseClient<ChatHello, TurnEvent | ChatLevelEvent>({
       url: api.streamUrl(chatId),
-      onHello: applyHello,
-      onEvent: applyTurnEvent,
+      readHello: (payload) => payload as ChatHello,
+      onHello: (hello) => {
+        applyHello(hello.inFlight ?? []);
+        setChatBackground(chatId, hello.helpers ?? [], hello.backgroundApprovals ?? []);
+      },
+      onEvent: (event) => applyChatEvent(chatId, event),
       onStatusChange: report,
     });
     client.connect();

@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
@@ -199,6 +201,20 @@ export interface OtherBenchState {
    */
   applyHello(buffers: HelloBuffer[]): void;
 
+  // --- background work (spec 2026-10-17-claude-background-helpers-design) ---
+  /** Each chat's background tasks (Claude Code helpers, background commands), as its stream last said. */
+  chatHelpers: Record<string, BackgroundHelper[]>;
+  /** Approval cards a chat's background helpers asked for while no reply was streaming. */
+  backgroundApprovals: Record<string, ApprovalRequest[]>;
+  /** The chat stream's hello: what's background for the chat, besides its replies in flight. */
+  setChatBackground(chatId: string, helpers: BackgroundHelper[], approvals: ApprovalRequest[]): void;
+  /**
+   * One event from a chat's stream: its background tasks, a reload when its
+   * stored messages changed, an approval card for a reply that isn't streaming
+   * (a background helper's, kept for the strip), or a reply's own event.
+   */
+  applyChatEvent(chatId: string, event: TurnEvent | ChatLevelEvent): void;
+
   /**
    * Optimistically resets a message right before a retry request goes out
    * (task 27: per-tab Retry on a failed compare variant) -- clears its
@@ -288,7 +304,7 @@ function computerSessionOf(lastAction: unknown): { lastAction?: string } {
   return typeof lastAction === 'string' ? { lastAction } : {};
 }
 
-export const useOtherBenchStore = create<OtherBenchState>()((set) => ({
+export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   connections: [],
   models: [],
   profiles: [],
@@ -582,17 +598,49 @@ export const useOtherBenchStore = create<OtherBenchState>()((set) => ({
       return changed ? { extras } : {};
     }),
 
+  chatHelpers: {},
+  backgroundApprovals: {},
+  setChatBackground: (chatId, helpers, approvals) =>
+    set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: helpers }, backgroundApprovals: { ...state.backgroundApprovals, [chatId]: approvals } })),
+  applyChatEvent: (chatId, event) => {
+    if (event.type === 'helpers') {
+      set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: event.helpers } }));
+      return;
+    }
+    if (event.type === 'messages-changed') {
+      set((state) => ({ chatReloads: bump(state.chatReloads, chatId) }));
+      return;
+    }
+    const state = get();
+    const background = state.backgroundApprovals[chatId] ?? [];
+    if (event.type === 'approval-request' && state.messages[event.messageId]?.status !== 'streaming' && !state.pendingEvents[event.messageId]) {
+      set({ backgroundApprovals: { ...state.backgroundApprovals, [chatId]: [...background.filter((r) => r.id !== event.request.id), event.request] } });
+      return;
+    }
+    if (event.type === 'approval-resolved' && background.some((r) => r.id === event.requestId)) {
+      set({ backgroundApprovals: { ...state.backgroundApprovals, [chatId]: background.filter((r) => r.id !== event.requestId) } });
+      return;
+    }
+    state.applyTurnEvent(event);
+  },
+
   dropApproval: (requestId) =>
     set((state) => {
       let changed = false;
       const extras = { ...state.extras };
+      const backgroundApprovals = { ...state.backgroundApprovals };
+      for (const [chatId, list] of Object.entries(state.backgroundApprovals)) {
+        if (!list.some((r) => r.id === requestId)) continue;
+        backgroundApprovals[chatId] = list.filter((r) => r.id !== requestId);
+        changed = true;
+      }
       for (const [messageId, e] of Object.entries(state.extras)) {
         if (e.pendingApprovals.some((r) => r.id === requestId)) {
           extras[messageId] = { ...e, pendingApprovals: e.pendingApprovals.filter((r) => r.id !== requestId) };
           changed = true;
         }
       }
-      return changed ? { extras } : {};
+      return changed ? { extras, backgroundApprovals } : {};
     }),
 
   applyTurnEvent: (event) =>

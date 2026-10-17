@@ -6,6 +6,7 @@ type SubagentPart = Extract<Part, { type: 'subagent' }>;
 const STATUS_TEXT: Record<SubagentStatus, string> = {
   queued: 'waiting to start',
   running: 'working…',
+  background: 'working in the background',
   complete: 'done',
   error: 'failed',
   cancelled: 'stopped',
@@ -71,7 +72,7 @@ export interface SubagentCardProps {
 export function SubagentCard({ part, replyStreaming, awaitingApproval, children }: SubagentCardProps): JSX.Element {
   const status = subagentDisplayStatus(part.status, replyStreaming);
   const waiting = awaitingApproval && status === 'running';
-  const working = status === 'running' || status === 'queued';
+  const working = status === 'running' || status === 'queued' || status === 'background';
   const now = useNow(working && typeof part.startedAt === 'number');
   const calls = (part.parts ?? []).filter((p): p is Extract<Part, { type: 'tool-call' }> => p.type === 'tool-call');
   const lastCall = calls.at(-1);

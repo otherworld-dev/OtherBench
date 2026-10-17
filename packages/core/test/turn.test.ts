@@ -2483,6 +2483,24 @@ describe("TurnRunner and an engine's own helpers (Claude Code's Task tool)", () 
     expect(sent).toEqual(['start', 'running', 'tool-call', 'tool-result', 'text-delta', 'end']);
   });
 
+  it('leaves a card the engine moved to the background open when the reply ends', async () => {
+    const store = new InMemoryStore();
+    chat(store);
+    const engine = new FakeChatEngine([
+      { type: 'subagent', callId: 'task-1', event: start },
+      { type: 'subagent', callId: 'task-1', event: { type: 'running', at: 1000 } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'background' } },
+      { type: 'finish', usage: ZERO, finishReason: 'stop' },
+    ]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+
+    expect(store.messages.get(id)!.parts.find((p) => p.type === 'subagent')).toMatchObject({ status: 'background' });
+  });
+
   it('ends a helper the engine never finished as stopped', async () => {
     const store = new InMemoryStore();
     chat(store);
@@ -2498,5 +2516,68 @@ describe("TurnRunner and an engine's own helpers (Claude Code's Task tool)", () 
     await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
 
     expect(store.messages.get(id)!.parts.find((p) => p.type === 'subagent')).toMatchObject({ status: 'cancelled', finishedAt: 9000 });
+  });
+});
+
+describe('TurnRunner.runSelfStarted (a reply Claude Code started by itself)', () => {
+  const ZERO = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
+
+  it('runs a self-started reply after the reply it continues, with its notice, streaming events and recorded usage', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.messages.create({ id: 'q1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'review it' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'q1', role: 'assistant', parts: [{ type: 'text', text: 'Waiting on the helper.' }], status: 'complete', error: null, producedBy: null });
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+    const sent: string[] = [];
+    runner.on((e) => sent.push(e.type));
+    const requests: EngineRequest[] = [];
+
+    const { assistantMessageId } = await runner.runSelfStarted({
+      chatId: 'chat-1',
+      parentId: 'a1',
+      profile: makeResolvedProfile(),
+      notice: 'Carried on after the helper "implementer" reported back.',
+      unattended: false,
+      stream: async function* (req) {
+        requests.push(req);
+        yield { type: 'text-delta', text: 'Reviewed.' };
+        yield { type: 'finish', usage: { ...ZERO, tokensIn: 5, tokensOut: 2 }, finishReason: 'stop' };
+      },
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(store.messages.get(assistantMessageId)).toMatchObject({
+      parentId: 'a1',
+      role: 'assistant',
+      parts: [{ type: 'notice', text: 'Carried on after the helper "implementer" reported back.' }, { type: 'text', text: 'Reviewed.' }],
+    });
+    expect(engine.requests).toEqual([]);
+    expect(requests[0]).toMatchObject({ chatId: 'chat-1', messageId: assistantMessageId });
+    expect(sent).toEqual(expect.arrayContaining(['notice', 'text-delta', 'status']));
+    expect(store.usage.list('chat-1').some((u) => u.messageId === assistantMessageId && u.tokensIn === 5)).toBe(true);
+  });
+});
+
+describe('TurnRunner.runSelfStarted and plan mode', () => {
+  it("keeps the chat's plan gate: a self-started reply in a planning chat can't change anything before a plan is approved", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode: true });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const proposePlan = { name: 'propose_plan', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null };
+    const runner = new TurnRunner(store, new FakeChatEngine([]), { toolProvider: new FakeToolProvider({ tools: [proposePlan] }) });
+    const requests: EngineRequest[] = [];
+
+    const { assistantMessageId } = await runner.runSelfStarted({
+      chatId: 'chat-1', parentId: 'a1', profile: makeResolvedProfile(), notice: 'Carried on.', unattended: false,
+      stream: async function* (req) {
+        requests.push(req);
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(requests[0]!.plan).toBeDefined();
+    expect(requests[0]!.plan!.approved).toBe(false);
   });
 });

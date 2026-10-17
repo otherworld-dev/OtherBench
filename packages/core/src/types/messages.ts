@@ -1,7 +1,12 @@
 import type { Usage } from './usage.js';
 
-/** Where a sub-agent is (spec 2026-10-12-api-subagents-design): waiting for a slot, working, or finished one way or another. */
-export type SubagentStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+/**
+ * Where a sub-agent is (spec 2026-10-12-api-subagents-design): waiting for a
+ * slot, working, working in the background after its reply ended (a Claude
+ * Code helper, spec 2026-10-17-claude-background-helpers-design), or finished
+ * one way or another.
+ */
+export type SubagentStatus = 'queued' | 'running' | 'background' | 'complete' | 'error' | 'cancelled';
 
 /**
  * The mark on a reference to a file that has not been checked yet. Sync can

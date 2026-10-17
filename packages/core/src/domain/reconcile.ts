@@ -1,5 +1,6 @@
 import type { Store } from '../ports/store.js';
 import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
+import { applySubagentEvent } from './parts.js';
 
 /** Written on a sub-agent card that was still queued or running when OtherBench's process died. */
 export const SUBAGENT_INTERRUPTED_MESSAGE = 'OtherBench restarted while this sub-agent was working.';
@@ -17,6 +18,20 @@ export function interruptSubagents(parts: Part[], message: string = SUBAGENT_INT
     return { ...p, status: 'error', error: message };
   });
   return changed ? next : null;
+}
+
+/**
+ * The parts with every helper card still working in the background (a Claude
+ * Code helper, spec 2026-10-17-claude-background-helpers-design) ended as
+ * stopped, or null when there is none. Stopped, not failed: it is what the
+ * engine shows when it closes a process with helpers still running.
+ */
+export function stopBackgroundSubagents(parts: Part[]): Part[] | null {
+  let next = parts;
+  for (const p of parts) {
+    if (p.type === 'subagent' && p.status === 'background') next = applySubagentEvent(next, p.callId, { type: 'end', status: 'cancelled' });
+  }
+  return next === parts ? null : next;
 }
 
 /**
@@ -93,10 +108,28 @@ export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
  * only `status` and `error` change. A `subagent` card still queued or running
  * in such a message becomes an error too (spec 2026-10-12-api-subagents-design).
  *
- * @returns Every message that was reconciled, in their new (post-update)
- *   state -- for startup logging; callers that don't care can ignore it.
+ * A helper card still working in the background, in any reply this machine
+ * wrote (finished ones included), ends as stopped: its helper lived in a
+ * Claude Code process that died with this one, so nothing will ever bring the
+ * card up to date (spec 2026-10-17-claude-background-helpers-design). A reply
+ * a paired machine wrote is left alone: its helpers ran there. The change is
+ * stamped for sync (`reviseParts`), so paired machines stop showing the
+ * helper working too, as the status change of an interrupted reply already is.
+ *
+ * @returns Every message that was reconciled out of `streaming`, in their
+ *   new (post-update) state -- for startup logging; callers that don't care
+ *   can ignore it. A finished reply that only had a helper card stopped is
+ *   not among them.
  */
 export function reconcileInterruptedTurns(store: Store): CanonMessage[] {
+  const self = store.nodes.self().id;
+  for (const message of store.messages.listWithSubagentStatus('background')) {
+    if ((message.originNode ?? self) !== self) continue;
+    const parts = stopBackgroundSubagents(message.parts);
+    if (parts) store.messages.reviseParts(message.id, parts);
+  }
+
+  // Read after the sweep above, so a streaming reply's parts include its stopped helper cards.
   const orphaned = store.messages.listByStatus('streaming');
   const reconciled: CanonMessage[] = [];
   for (const message of orphaned) {

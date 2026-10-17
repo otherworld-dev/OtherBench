@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
@@ -648,7 +649,7 @@ describe('ClaudeCodeChatEngine live processes', () => {
     e.dispose();
   });
 
-  it('stopping a reply stops its process, and the next message resumes the session in a new one', async () => {
+  it("stopping a reply whose turn won't end closes its process after the grace, and the next message resumes the session in a new one", async () => {
     const { query, starts } = liveQuery(async function* ({ n, options }) {
       yield init('sess-1');
       if (n === 2) await new Promise<void>((resolve) => options.abortController!.signal.addEventListener('abort', () => resolve()));
@@ -656,11 +657,16 @@ describe('ClaudeCodeChatEngine live processes', () => {
     });
     const e = live(query);
     await collect(e.stream(req()));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const stop = new AbortController();
     const running = collect(e.stream(followUp({ signal: stop.signal })));
-    await new Promise((r) => setTimeout(r, 10));
+    await vi.advanceTimersByTimeAsync(10);
     stop.abort();
+    // The reply stops at once; its process gets a little while to end the turn.
     await running;
+    expect(starts[0]!.stopped()).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
     expect(starts[0]!.stopped()).toBe(true);
 
     await collect(e.stream(followUp({ messageId: 'm3' })));
@@ -1715,5 +1721,431 @@ describe('ClaudeCodeChatEngine images in the new message', () => {
       const content = (call.prompt.message as unknown as { content: { type: string; text?: string }[] }).content;
       expect(content.slice(1).map((c) => (c.type === 'text' ? c.text : c.type))).toEqual([NOT_IMAGE, 'image']);
     }
+  });
+});
+
+describe('ClaudeCodeChatEngine between replies (spec 2026-10-17-claude-background-helpers-design)', () => {
+  /** A fake long-lived Claude Code whose turns may keep talking after their result, and which answers interrupt() as the turn running says. */
+  function chattyLive(turn: (ctx: { prompt: SDKUserMessage; n: number; interrupted: Promise<void> }) => AsyncGenerator<SDKMessage>, opts: { honourInterrupt?: boolean } = {}) {
+    const starts: { interrupts: number; stopped: () => boolean }[] = [];
+    const query: QueryFn = ({ prompt, options }) => {
+      let interrupt: () => void = () => {};
+      const start = { interrupts: 0, stopped: () => options.abortController?.signal.aborted ?? false };
+      starts.push(start);
+      let n = 0;
+      const gen = (async function* () {
+        for await (const msg of prompt) {
+          if (start.stopped()) return;
+          n += 1;
+          const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+          yield* turn({ prompt: msg, n, interrupted });
+        }
+      })();
+      return Object.assign(gen, {
+        interrupt: async () => {
+          start.interrupts += 1;
+          if (opts.honourInterrupt !== false) interrupt();
+        },
+        stopTask: async () => undefined,
+        supportedModels: async () => [],
+        accountInfo: async () => ({}),
+      });
+    };
+    return { query, starts };
+  }
+  const resultFor = (prompt: SDKUserMessage, subtype = 'success'): SDKMessage =>
+    ({ type: 'result', subtype, is_error: subtype !== 'success', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [(prompt as { uuid?: string }).uuid] }) as unknown as SDKMessage;
+  const textOfEvents = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+  it('a turn Claude Code starts after the reply ends never reaches the next reply', async () => {
+    const { query, starts } = chattyLive(async function* ({ prompt, n }) {
+      if (n === 1) {
+        yield init();
+        yield delta('one');
+        yield resultFor(prompt);
+        // Claude Code carrying on by itself after the reply ended.
+        yield delta('stray');
+        yield ({ type: 'result', subtype: 'success', is_error: false, usage: {}, user_message_uuids: [], origin: { kind: 'task-notification' } } as unknown as SDKMessage);
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    expect(textOfEvents(await collect(e.stream(req())))).toBe('one');
+    expect(textOfEvents(await collect(e.stream(followUp())))).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
+  it('a message sent right after Stop waits for the stopped turn to end in the same process, rather than starting a second one on the session', async () => {
+    let endStopped!: () => void;
+    const slowEnd = new Promise<void>((resolve) => (endStopped = resolve));
+    let first = true;
+    const { query, starts } = chattyLive(async function* ({ prompt, interrupted }) {
+      if (first) {
+        first = false;
+        yield init();
+        yield delta('working');
+        await interrupted;
+        await slowEnd;
+        yield resultFor(prompt, 'error_during_execution');
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    const controller = new AbortController();
+    for await (const ev of e.stream(req({ signal: controller.signal }))) {
+      if (ev.type === 'text-delta') controller.abort();
+    }
+    const next = collect(e.stream(followUp()));
+    await new Promise((r) => setTimeout(r, 0));
+    endStopped();
+    expect(textOfEvents(await next)).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
+  it('Stop interrupts the turn and keeps the process for the next message', async () => {
+    const { query, starts } = chattyLive(async function* ({ prompt, n, interrupted }) {
+      if (n === 1) {
+        yield init();
+        yield delta('working');
+        await interrupted;
+        yield resultFor(prompt, 'error_during_execution');
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    const controller = new AbortController();
+    const events: EngineEvent[] = [];
+    for await (const ev of e.stream(req({ signal: controller.signal }))) {
+      events.push(ev);
+      if (ev.type === 'text-delta') controller.abort();
+    }
+    expect(starts[0]!.interrupts).toBe(1);
+    expect(starts[0]!.stopped()).toBe(false);
+    expect(events.some((ev) => ev.type === 'error')).toBe(false);
+    expect(textOfEvents(await collect(e.stream(followUp())))).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
+  it('a turn that does not end after interrupt closes its process', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { query, starts } = chattyLive(async function* () {
+        yield init();
+        yield delta('stuck');
+        await new Promise(() => {});
+      }, { honourInterrupt: false });
+      const controller = new AbortController();
+      const run = collect(engine(query).stream(req({ signal: controller.signal })));
+      await vi.waitFor(() => expect(starts).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      // The reply stops at once; the process is closed when the turn hasn't ended in time.
+      await run;
+      expect(starts[0]!.stopped()).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(starts[0]!.stopped()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('ClaudeCodeChatEngine and background helpers', () => {
+  /** A live Claude Code whose first turn starts helper k1 in the background; later turns just answer. */
+  function withHelper(stopTask = vi.fn(async () => undefined)) {
+    const query: QueryFn = ({ prompt, options }) => {
+      const gen = (async function* () {
+        let n = 0;
+        for await (const msg of prompt) {
+          if (options.abortController?.signal.aborted) return;
+          n += 1;
+          const uuid = (msg as { uuid?: string }).uuid;
+          if (n === 1) {
+            yield init();
+            yield ({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it', subagent_type: 'general-purpose' } }] }, parent_tool_use_id: null } as unknown as SDKMessage);
+            yield ({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: true } as unknown as SDKMessage);
+            yield ({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'k1', task_type: 'local_agent', description: 'implementer' }] } as unknown as SDKMessage);
+            yield ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] }, parent_tool_use_id: null } as unknown as SDKMessage);
+          }
+          yield ({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [uuid] } as unknown as SDKMessage);
+        }
+      })();
+      return Object.assign(gen, { interrupt: async () => undefined, stopTask, supportedModels: async () => [], accountInfo: async () => ({}) });
+    };
+    return { query, stopTask };
+  }
+
+  it("closeChats closes a gone chat's processes, ending its helpers, and leaves other chats' alone", async () => {
+    const { query } = withHelper();
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    await collect(e.stream(req()));
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [{ taskId: 'k1' }] }));
+    e.closeChats((chatId) => chatId === 'other');
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+    e.closeChats((chatId) => chatId === req().chatId);
+    expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [] });
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(false);
+    e.dispose();
+  });
+
+  it('reports the chat\'s helpers, and stopHelper stops the task in the process holding it', async () => {
+    const { query, stopTask } = withHelper();
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const events = await collect(e.stream(req()));
+    expect(events.find((ev) => ev.type === 'subagent' && ev.event.type === 'background')).toBeDefined();
+    expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ chatId: req().chatId, helpers: [{ taskId: 'k1', callId: 'task-1', label: 'implementer' }] });
+    expect(await e.stopHelper('nope', 'k1')).toBe(false);
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+    expect(stopTask).toHaveBeenCalledWith('k1');
+    e.dispose();
+  });
+
+  it('keeps a process with a helper running past its idle time, and closes it once the helper is done', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { query } = withHelper();
+      const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, liveIdleMs: 1_000 });
+      const seen: EngineBackgroundEvent[] = [];
+      e.onBackground((ev) => seen.push(ev));
+      await collect(e.stream(req()));
+      await vi.advanceTimersByTimeAsync(5_000);
+      // Still kept: its helper is running.
+      expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [{ taskId: 'k1' }] });
+      expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+      e.dispose();
+      expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-background-helpers-design)', () => {
+  type Script = (ctx: { options: Options; nextPrompt: () => Promise<SDKUserMessage> }) => AsyncGenerator<SDKMessage>;
+  /** A fake Claude Code driven by one script for its whole life, so it can act between replies. */
+  function scripted(script: Script) {
+    const starts: Options[] = [];
+    const query: QueryFn = ({ prompt, options }) => {
+      starts.push(options);
+      const it = prompt[Symbol.asyncIterator]();
+      const gen = script({ options, nextPrompt: async () => (await it.next()).value as SDKUserMessage });
+      return Object.assign(gen, { interrupt: async () => undefined, stopTask: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}) });
+    };
+    return { query, starts };
+  }
+  const msg = (o: object) => o as unknown as SDKMessage;
+  const resultOf = (prompt: SDKUserMessage) => msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [(prompt as { uuid?: string }).uuid] });
+  const selfResult = () => msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 2, output_tokens: 3 }, user_message_uuids: [], origin: { kind: 'task-notification' } });
+  /** The first reply: starts helper task-1 ("implementer") in the background. */
+  async function* firstReply(nextPrompt: () => Promise<SDKUserMessage>, permissionMode = 'default'): AsyncGenerator<SDKMessage> {
+    const p1 = await nextPrompt();
+    yield init('sess-1', permissionMode);
+    yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it' } }] }, parent_tool_use_id: null });
+    yield msg({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: true });
+    yield msg({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] }, parent_tool_use_id: null });
+    yield resultOf(p1);
+  }
+  const make = (query: QueryFn, requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }))) => {
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval, recordAgentDenial: vi.fn() }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    return { e, seen, requestApproval };
+  };
+  const selfStarts = (seen: EngineBackgroundEvent[]) => seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []));
+
+  it('a helper asking for a tool between replies gets a card against its helper, in auto mode through the classifier', async () => {
+    let hookAnswer: unknown;
+    const { query } = scripted(async function* ({ options, nextPrompt }) {
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
+      yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'npm test' } }] }, parent_tool_use_id: 'task-1' });
+      await new Promise((r) => setTimeout(r, 0));
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      hookAnswer = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1' } as never, 'c1', { signal: new AbortController().signal });
+      await new Promise(() => {});
+    });
+    const { e, requestApproval } = make(query);
+    await collect(e.stream(req({ autoMode: true, messageId: 'm1' })));
+    await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+    const [, , , ctx, opts] = requestApproval.mock.calls[0]! as unknown as [unknown, unknown, unknown, ToolContext, { deferAsk?: boolean }];
+    expect(ctx).toMatchObject({ messageId: 'm1', shownSubagent: { callId: 'task-1', label: 'implementer' } });
+    expect(opts).toEqual({ deferAsk: true });
+    await vi.waitFor(() => expect(hookAnswer).toBeDefined());
+    e.dispose();
+  });
+
+  /** A first reply whose helper asks for `npm test` once `go` resolves; `hookAnswer` gets the hook's answer. */
+  function helperAsksLater(go: Promise<void>, out: { hookAnswer?: unknown; options?: Options }) {
+    return scripted(async function* ({ options, nextPrompt }) {
+      out.options = options;
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
+      yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'npm test' } }] }, parent_tool_use_id: 'task-1' });
+      await go;
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      out.hookAnswer = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1' } as never, 'c1', { signal: new AbortController().signal });
+      await new Promise(() => {});
+    });
+  }
+
+  it("a helper's call between replies still gets a card once its reply's signal is aborted, as TurnRunner aborts it when a reply ends", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const { e, requestApproval } = make(query);
+    const controller = new AbortController();
+    await collect(e.stream(req({ messageId: 'm1', signal: controller.signal })));
+    controller.abort();
+    go();
+    await vi.waitFor(() => expect(out.hookAnswer).toBeDefined());
+    expect(requestApproval).toHaveBeenCalled();
+    expect(out.hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    e.dispose();
+  });
+
+  it("gates a helper's call between replies with the chat's current Auto, plan mode and policy", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const current = { fs: 'read' as const, shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const };
+    const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    const e = new ClaudeCodeChatEngine({
+      query,
+      approvals: { requestApproval, recordAgentDenial: vi.fn() },
+      listEndpointModels: async () => [],
+      baseEnv: { PATH: '/bin' },
+      chatSettings: () => ({ autoMode: false, planMode: true, policy: current }),
+    });
+    await collect(e.stream(req({ autoMode: true, messageId: 'm1' })));
+    go();
+    await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+    const [, , policy, ctx, opts] = requestApproval.mock.calls[0]! as unknown as [unknown, unknown, unknown, ToolContext, { deferAsk?: boolean } | undefined];
+    expect(policy).toEqual(current);
+    expect(opts?.deferAsk).not.toBe(true);
+    expect(ctx.plan).toBeDefined();
+    expect(ctx.plan!.approved).toBe(false);
+    e.dispose();
+  });
+
+  it("refuses a helper's call between replies once its chat is gone", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval, recordAgentDenial: vi.fn() }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, chatSettings: () => null });
+    await collect(e.stream(req({ messageId: 'm1' })));
+    go();
+    await vi.waitFor(() => expect(out.hookAnswer).toBeDefined());
+    expect(out.hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    expect(requestApproval).not.toHaveBeenCalled();
+    e.dispose();
+  });
+
+  it('audits a classifier denial of a helper call between replies against its helper', async () => {
+    const out: { options?: Options } = {};
+    const { query } = helperAsksLater(new Promise<void>(() => {}), out);
+    const recordAgentDenial = vi.fn();
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval: vi.fn(), recordAgentDenial }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    await collect(e.stream(req({ autoMode: true, messageId: 'm1' })));
+    await new Promise((r) => setTimeout(r, 0));
+    const denied = out.options!.hooks!.PermissionDenied![0]!.hooks[0]!;
+    await denied({ hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1', reason: 'risky' } as never, 'c1', { signal: new AbortController().signal });
+    expect(recordAgentDenial).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'm1', chatId: 'chat' }), 'Bash', expect.anything(), 'risky');
+    e.dispose();
+  });
+
+  it('a call between replies with no known helper is refused', async () => {
+    let hookAnswer: unknown;
+    const { query } = scripted(async function* ({ options, nextPrompt }) {
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
+      await new Promise((r) => setTimeout(r, 0));
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      hookAnswer = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'stranger' } as never, 'stranger', { signal: new AbortController().signal });
+      await new Promise(() => {});
+    });
+    const { e, requestApproval } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(hookAnswer).toBeDefined());
+    expect(hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    expect(requestApproval).not.toHaveBeenCalled();
+    e.dispose();
+  });
+
+  it('a turn Claude Code starts by itself becomes a self-start the handler runs', async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewed.');
+      yield selfResult();
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    const start = selfStarts(seen)[0]!;
+    expect(start).toMatchObject({ chatId: req().chatId, afterMessageId: 'm1', notice: 'Carried on after the helper "implementer" reported back.', unattended: false });
+    const events = await collect(start.run(req({ messageId: 'm-self' })));
+    expect(events[0]).toMatchObject({ type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 'sess-1' } });
+    expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'Reviewed.' }]);
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    e.dispose();
+  });
+
+  it("a self-started reply whose process ends before the turn's result ends in an error, not as complete", async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewing');
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    const events = await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self' })));
+    expect(events.some((ev) => ev.type === 'error')).toBe(true);
+    expect(events.some((ev) => ev.type === 'finish')).toBe(false);
+    e.dispose();
+  });
+
+  it('declined self-start is drained, and the next reply is unaffected', async () => {
+    const { query, starts } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield delta('stray');
+      yield selfResult();
+      const p2 = await nextPrompt();
+      yield delta('two');
+      yield resultOf(p2);
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    selfStarts(seen)[0]!.decline();
+    const events = await collect(e.stream(followUp()));
+    expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'two' }]);
+    expect(starts).toHaveLength(1);
+    e.dispose();
+  });
+
+  it('self-start waits for the attached reply: a helper finishing mid-reply starts nothing until the reply ends', async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      const p1 = await nextPrompt();
+      yield init();
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k9', status: 'completed', summary: 'x', output_file: '' });
+      yield delta('still mine');
+      yield resultOf(p1);
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    const events = await collect(e.stream(req({ messageId: 'm1' })));
+    expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'still mine' }]);
+    expect(selfStarts(seen)).toHaveLength(0);
+    e.dispose();
   });
 });

@@ -1,0 +1,39 @@
+import { applySubagentEvent } from '@otherbench/core/domain/parts.js';
+import type { EngineBackgroundEvent } from '@otherbench/core/ports/chat-engine.js';
+import type { Container } from './container.js';
+import { resolveProfile } from './profile-resolution.js';
+import { startSelfStartedTurn } from './turn-start.js';
+
+/**
+ * What the engine reports its agent doing between replies (spec
+ * 2026-10-17-claude-background-helpers-design): a chat's background tasks go
+ * on that chat's stream, a helper's card in an earlier reply is brought up to
+ * date (stored, and subscribers told to reload), and a turn the agent started
+ * by itself is run as a reply.
+ */
+export function handleBackground(container: Container, event: EngineBackgroundEvent): void {
+  switch (event.type) {
+    case 'helpers':
+      container.streamRegistry.setHelpers(event.chatId, event.helpers);
+      return;
+    case 'helper-event': {
+      const message = container.store.messages.get(event.messageId);
+      if (!message || message.chatId !== event.chatId) return;
+      const parts = applySubagentEvent(message.parts, event.callId, event.event);
+      if (parts === message.parts) return;
+      // Stamped for sync, so a paired machine's copy of the card updates too.
+      container.store.messages.reviseParts(message.id, parts);
+      container.streamRegistry.messagesChanged(event.chatId);
+      return;
+    }
+    case 'self-start': {
+      const { start } = event;
+      const deps = { ...container, resolveProfile: (id: string) => resolveProfile({ store: container.store, secrets: container.secrets }, id) };
+      void startSelfStartedTurn(deps, start).catch((err: unknown) => {
+        console.error(`[otherbench-server] could not run a reply Claude Code started by itself in chat ${start.chatId}:`, err);
+        start.decline();
+      });
+      return;
+    }
+  }
+}

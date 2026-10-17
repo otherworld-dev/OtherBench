@@ -296,13 +296,17 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
     void eachRecord(response, async (_raw, event, data) => {
       if (!open) return;
       if (event === 'hello') {
-        const hello = data as { inFlight?: { messageId: string; status: string; events?: Record<string, unknown>[] }[] };
+        const hello = data as { inFlight?: { messageId: string; status: string; events?: Record<string, unknown>[] }[]; backgroundApprovals?: { id?: unknown }[] };
         for (const b of hello.inFlight ?? []) {
           if (TERMINAL.has(b.status)) continue;
           inFlight.add(b.messageId);
           seen.set(b.messageId, (Array.isArray(b.events) ? b.events : []).reduce(withEvent, []));
         }
         runs.noteMessages(nodeId, [...inFlight]);
+        // Cards a background helper raised there before this machine was watching: answered there too.
+        for (const request of Array.isArray(hello.backgroundApprovals) ? hello.backgroundApprovals : []) {
+          if (isString(request?.id)) runs.noteApproval(request.id, nodeId);
+        }
         sink.send('hello', data);
         return;
       }
@@ -311,7 +315,15 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
       if (e.type === 'approval-resolved' && e.requestId) runs.resolved(e.requestId);
       if (e.type === 'ask-request' && e.ask) runs.noteApproval(e.ask.id, nodeId);
       if (e.type === 'ask-resolved' && e.askId) runs.resolved(e.askId);
-      if (e.messageId && e.type !== 'status') {
+      // A card can belong to a reply that already finished (a background helper's), so it says
+      // nothing about a reply running: it neither marks one running there nor ends one here.
+      const card = e.type === 'approval-request' || e.type === 'approval-resolved' || e.type === 'ask-request' || e.type === 'ask-resolved';
+      if (e.messageId && !card && !(e.type === 'status' && e.status && TERMINAL.has(e.status))) {
+        // Any reply heard running there, including one this machine never started (one Claude Code
+        // started by itself): its Stop goes there.
+        runs.noteMessages(nodeId, [e.messageId]);
+      }
+      if (e.messageId && e.type !== 'status' && !card) {
         inFlight.add(e.messageId);
         seen.set(e.messageId, withEvent(seen.get(e.messageId) ?? [], data as Record<string, unknown>));
       }
@@ -416,6 +428,12 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
+  app.post('/chats/:id/helpers/:taskId/stop', async (c, next) => {
+    const chatId = c.req.param('id');
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return next();
+    return forward(container, c, nodeId, `/chats/${chatId}/helpers/${encodeURIComponent(c.req.param('taskId'))}/stop`);
+  });
   app.get('/chats/:id/stream', async (c, next) => {
     const chatId = c.req.param('id');
     const nodeId = remoteNode(chatId);

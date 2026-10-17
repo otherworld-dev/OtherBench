@@ -49,6 +49,8 @@ export interface SdkEventMapperOptions {
   profileId?: string;
   modelId?: string;
   now?: () => number;
+  /** Told each helper card it starts (by the Task call's id), so the engine knows which reply holds it. */
+  onCard?: (callId: string) => void;
 }
 
 /**
@@ -91,6 +93,7 @@ export class SdkEventMapper {
     const label = text(args['description']) ?? kind ?? 'Helper';
     this.openHelpers.add(id);
     this.options.helpers?.start(id, label);
+    this.options.onCard?.(id);
     return [
       this.helperEvent(id, {
         type: 'start',
@@ -114,10 +117,40 @@ export class SdkEventMapper {
     ];
   }
 
+  /** The helpers still open that Claude Code moved to the background. */
+  openBackgroundHelpers(): string[] {
+    return [...this.openHelpers].filter((id) => this.backgrounded.has(id));
+  }
+
+  /**
+   * The reply is ending (its result, or a stop) with these helpers still
+   * working in the background: their cards say so rather than stopped, and an
+   * earlier reply's card is updated from the engine's background tasks later.
+   */
+  backgroundOpen(): MappedEvent[] {
+    const out: MappedEvent[] = [];
+    for (const id of this.openBackgroundHelpers()) {
+      this.openHelpers.delete(id);
+      this.backgrounded.delete(id);
+      out.push(this.helperEvent(id, { type: 'background', at: this.now() }));
+    }
+    return out;
+  }
+
   /** The helper whose own call this message is, or null for the reply's own agent (or a helper it doesn't know). */
   private helperOf(m: Record<string, unknown>): string | null {
     const parent = m['parent_tool_use_id'];
     return typeof parent === 'string' && this.openHelpers.has(parent) ? parent : null;
+  }
+
+  /**
+   * A helper's message this reply didn't start the helper of: an earlier
+   * reply's helper still working in the background (or a helper's own
+   * helper). It isn't this reply's, so it's left out; the engine's background
+   * tasks show what it does.
+   */
+  private isStrangers(m: Record<string, unknown>): boolean {
+    return typeof m['parent_tool_use_id'] === 'string' && this.helperOf(m) === null;
   }
 
   map(msg: SDKMessage): MappedEvent[] {
@@ -138,6 +171,7 @@ export class SdkEventMapper {
         return [];
       }
       case 'assistant': {
+        if (this.isStrangers(m)) return [];
         const out: MappedEvent[] = [];
         const isMain = m['parent_tool_use_id'] === null;
         const helper = this.helperOf(m);
@@ -162,6 +196,7 @@ export class SdkEventMapper {
         return out;
       }
       case 'user': {
+        if (this.isStrangers(m)) return [];
         const out: MappedEvent[] = [];
         const helper = this.helperOf(m);
         for (const block of blocksOf(m['message'])) {
@@ -188,22 +223,28 @@ export class SdkEventMapper {
         return info?.status === 'rejected' ? [{ type: 'rate-limited', resetsAt: info.resetsAt ?? null }] : [];
       }
       case 'result': {
-        if (m['subtype'] !== 'success' || m['is_error'] === true) {
-          const errors = (m['errors'] as string[] | undefined) ?? [];
-          const text = errors.join('\n') || String(m['result'] ?? m['subtype'] ?? 'Claude Code reported an error.');
-          return [{ type: 'result-error', text }];
-        }
-        const u = (m['usage'] ?? {}) as Record<string, unknown>;
-        const cached = num(u['cache_read_input_tokens']);
-        return [{
-          type: 'finish',
-          finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason'] as string) : 'stop',
-          usage: { tokensIn: num(u['input_tokens']) + cached + num(u['cache_creation_input_tokens']), tokensOut: num(u['output_tokens']), tokensCached: cached, tokensReasoning: 0 },
-        }];
+        const background = this.backgroundOpen();
+        return [...background, ...this.result(m)];
       }
       default:
         return [];
     }
+  }
+
+  /** A turn's result: its usage when it succeeded, else its error. */
+  private result(m: Record<string, unknown>): MappedEvent[] {
+    if (m['subtype'] !== 'success' || m['is_error'] === true) {
+      const errors = (m['errors'] as string[] | undefined) ?? [];
+      const text = errors.join('\n') || String(m['result'] ?? m['subtype'] ?? 'Claude Code reported an error.');
+      return [{ type: 'result-error', text }];
+    }
+    const u = (m['usage'] ?? {}) as Record<string, unknown>;
+    const cached = num(u['cache_read_input_tokens']);
+    return [{
+      type: 'finish',
+      finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason'] as string) : 'stop',
+      usage: { tokensIn: num(u['input_tokens']) + cached + num(u['cache_creation_input_tokens']), tokensOut: num(u['output_tokens']), tokensCached: cached, tokensReasoning: 0 },
+    }];
   }
 
   /** Claude Code's task messages: a helper moving to the background, and a background helper finishing. */

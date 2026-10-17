@@ -105,6 +105,12 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     return { helpers, mapper, tick: (ms: number) => (clock += ms) };
   };
 
+  it("leaves out the calls and results of a helper it didn't start (an earlier reply's, still working in the background)", () => {
+    const { mapper } = make();
+    expect(mapper.map(assistant([{ type: 'tool_use', id: 'grep-1', name: 'Grep', input: { pattern: 'x' } }], 'old-task'))).toEqual([]);
+    expect(mapper.map(user([{ type: 'tool_result', tool_use_id: 'grep-1', content: 'found' }], 'old-task'))).toEqual([]);
+  });
+
   it('gives a Task call a card: its own calls and results go on it, and the Task result is its report', () => {
     const { helpers, mapper, tick } = make();
     expect(mapper.map(task('task-1'))).toEqual([
@@ -163,8 +169,21 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     ]);
   });
 
-  it("leaves a subagent's calls with the reply when it never saw the Task call that started it", () => {
+  it('moves a backgrounded helper to the background as the reply finishes', () => {
     const { mapper } = make();
-    expect(mapper.map(assistant([{ type: 'tool_use', id: 'g1', name: 'Grep', input: {} }], 'unknown-task'))).toEqual([{ type: 'tool-call', id: 'g1', name: 'Grep', args: {} }]);
+    mapper.map(task('task-1'));
+    mapper.map(system({ subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'Find the bug', is_backgrounded: true }));
+    mapper.map(user([{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }]));
+    const out = mapper.map({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } } as unknown as SDKMessage);
+    expect(out[0]).toEqual({ type: 'subagent', callId: 'task-1', event: { type: 'background', at: 1000 } });
+    expect(out.at(-1)).toMatchObject({ type: 'finish' });
+    expect(mapper.openBackgroundHelpers()).toEqual([]);
+  });
+
+  it('tells the reply each helper card it starts', () => {
+    const cards: string[] = [];
+    const mapper = new SdkEventMapper({ onCard: (id) => cards.push(id) });
+    mapper.map(task('task-1'));
+    expect(cards).toEqual(['task-1']);
   });
 });

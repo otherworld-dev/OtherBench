@@ -9,6 +9,7 @@ import type { ChangeRow } from '@otherbench/core/domain/sync.js';
 import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
 import { bindToolImageParts } from '@otherbench/core/domain/tool-images.js';
 import { BOUND_ATTACHMENT_SQL } from '../src/repos/sync.js';
+import { reconcileInterruptedTurns } from '@otherbench/core/domain/reconcile.js';
 
 interface Node {
   id: string;
@@ -157,6 +158,41 @@ describe('change log (Task 49)', () => {
     const health = latest(a);
     a.store.connections.update('c1', { status: 'ok', statusMessage: 'fine', checkedAt: 5 });
     expect(since(a, health)).toEqual([]);
+  });
+
+  it("a finished reply's revised parts log, so a paired machine gets the helper card brought up to date", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'r', 'c', null, { role: 'assistant' });
+    s.aToB();
+    const before = latest(a);
+
+    a.store.messages.reviseParts('r', [{ type: 'text', text: 'brought up to date' }]);
+
+    expect(since(a, before)).toEqual(['message:upsert']);
+    s.aToB();
+    expect(b.store.messages.get('r')!.parts).toEqual([{ type: 'text', text: 'brought up to date' }]);
+  });
+
+  it("a helper card closed at startup logs, so a paired machine stops showing it working in the background", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    const card = { type: 'subagent' as const, callId: 't1', label: 'implementer', prompt: 'p', profileId: 'p1', profileName: 'P', modelId: 'm', status: 'background' as const, parts: [] };
+    message(a, 'r', 'c', null, { role: 'assistant', parts: [card] });
+    s.aToB();
+    const before = latest(a);
+
+    reconcileInterruptedTurns(a.store);
+
+    expect(since(a, before)).toEqual(['message:upsert']);
+    s.aToB();
+    expect(b.store.messages.get('r')!.parts).toEqual([{ ...card, status: 'cancelled' }]);
   });
 
   it('the migration stamps and logs every existing row, so a first sync sends everything', () => {

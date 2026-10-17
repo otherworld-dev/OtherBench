@@ -682,6 +682,14 @@ describe('Message sub-agent cards', () => {
     }
   });
 
+  it('shows a helper still working in the background on a finished reply, not stopped', () => {
+    render(<Message message={base({ parts: [card({ status: 'background', usage: undefined, startedAt: 1_000 })] })} />);
+    const el = screen.getByTestId('subagent-card');
+    expect(el).toHaveAttribute('data-status', 'background');
+    expect(el).toHaveTextContent('working in the background');
+    expect(el).not.toHaveTextContent('stopped');
+  });
+
   it('shows how long a finished helper took, and no last tool', () => {
     render(<Message message={base({ parts: [card({ startedAt: 1_000, finishedAt: 93_000 })] })} />);
     expect(screen.getByTestId('subagent-elapsed')).toHaveTextContent('1m 32s');

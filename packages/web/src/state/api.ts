@@ -457,6 +457,8 @@ export const api = {
     create: (body: CreateChatBody) => post<Chat>('/chats', body),
     get: (id: string) => request<Chat>(`/chats/${id}`),
     patch: (id: string, body: ChatPatchBody) => patch<Chat>(`/chats/${id}`, body),
+    /** Stops one of the chat's background tasks (spec 2026-10-17-claude-background-helpers-design). */
+    stopHelper: (chatId: string, taskId: string) => post<{ stopped: boolean }>(`/chats/${chatId}/helpers/${encodeURIComponent(taskId)}/stop`, {}),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),
     /** The chat as a file (#820): the shown conversation as Markdown, or the whole tree as JSON. */

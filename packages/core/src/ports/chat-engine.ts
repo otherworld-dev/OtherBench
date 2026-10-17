@@ -1,5 +1,7 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
 import type { SubagentEvent } from '../domain/parts.js';
+import type { BackgroundHelper } from '../types/background.js';
+export type { BackgroundHelper } from '../types/background.js';
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
@@ -134,8 +136,43 @@ export interface ConnectionTestResult {
   latencyMs: number;
 }
 
+/**
+ * A turn the engine's agent started by itself while no reply was running
+ * (Claude Code carrying on after a background helper reported back, spec
+ * 2026-10-17-claude-background-helpers-design). Whoever runs it makes the
+ * reply and calls `run` once; nobody running it calls `decline`.
+ */
+export interface SelfStart {
+  chatId: string;
+  /** The newest reply of the session that started it: the new reply's parent. */
+  afterMessageId: string;
+  profileId: string;
+  /** The notice at the top of the reply, e.g. 'Carried on after the helper "implementer" reported back.' */
+  notice: string;
+  /** Carried over from the reply before it: a scheduled run's helpers carry on unattended. */
+  unattended: boolean;
+  /** Runs the turn for the reply `req` describes, gated like a reply the user asked for. Iterate once. */
+  run(req: EngineRequest): AsyncIterable<EngineEvent>;
+  /** Nobody will run it: the engine reads the turn to its end and discards it. */
+  decline(): void;
+}
+
+/** Work an engine's agent does between replies, reported to whoever runs replies. */
+export type EngineBackgroundEvent =
+  | { type: 'self-start'; start: SelfStart }
+  /** The chat's background tasks now (the whole set, replacing the last). */
+  | { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] }
+  /** A change to a helper's card in an earlier reply `messageId`: it finished, or went back to work. */
+  | { type: 'helper-event'; chatId: string; messageId: string; callId: string; event: SubagentEvent };
+
 export interface ChatEngine {
   stream(req: EngineRequest): AsyncIterable<EngineEvent>;
+  /** Where the engine reports work its agent does between replies (one handler; a later call replaces it). */
+  onBackground?(handler: (event: EngineBackgroundEvent) => void): void;
+  /** Stops one of a chat's background tasks; false when no such task is running. */
+  stopHelper?(chatId: string, taskId: string): Promise<boolean>;
+  /** Ends what the engine keeps running for the chats `gone` picks (they were deleted): their processes and background tasks. */
+  closeChats?(gone: (chatId: string) => boolean): void;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
   /**

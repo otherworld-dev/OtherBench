@@ -44,6 +44,8 @@ import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
 import { forwardedApi, RemoteRuns } from './peer/forward.js';
+import { handleBackground } from './background.js';
+import { closeEngineChatsThatAreGone } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
@@ -423,6 +425,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through OtherBench's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (policy) => toolProvider.relayTools(policy),
+      // A background helper's call between replies is gated with the chat's settings as they are now.
+      chatSettings: (chatId, profileId) => {
+        const chat = store.chats.get(chatId);
+        const profile = store.profiles.get(profileId);
+        return chat && profile ? { autoMode: chat.autoMode, planMode: chat.planMode === true, policy: profile.toolPolicy } : null;
+      },
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
@@ -620,6 +628,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   forwarded = forwardedApi(container);
   peers.startMonitoring();
   syncer.start();
+  // Work Claude Code does between replies: its helpers, their cards, and turns it starts by itself.
+  engine.onBackground?.((event) => handleBackground(container, event));
+  // A chat that goes takes its Claude Code processes and background helpers with it.
+  closeEngineChatsThatAreGone(events, engine, (chatId) => store.chats.get(chatId) !== null);
 
   return container;
 }

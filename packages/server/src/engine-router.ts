@@ -22,6 +22,21 @@ export class RoutingChatEngine implements ChatEngine {
     return this.pick(conn.kind).testConnection(conn, apiKey);
   }
 
+  onBackground(handler: Parameters<NonNullable<ChatEngine['onBackground']>>[0]): void {
+    this.aisdk.onBackground?.(handler);
+    this.claudeCode.onBackground?.(handler);
+  }
+
+  async stopHelper(chatId: string, taskId: string): Promise<boolean> {
+    if (this.claudeCode.stopHelper && (await this.claudeCode.stopHelper(chatId, taskId))) return true;
+    return this.aisdk.stopHelper ? this.aisdk.stopHelper(chatId, taskId) : false;
+  }
+
+  closeChats(gone: (chatId: string) => boolean): void {
+    this.aisdk.closeChats?.(gone);
+    this.claudeCode.closeChats?.(gone);
+  }
+
   async planUsage(conn: Connection): Promise<PlanUsage | null> {
     const engine = this.pick(conn.kind);
     return engine.planUsage ? engine.planUsage(conn) : null;

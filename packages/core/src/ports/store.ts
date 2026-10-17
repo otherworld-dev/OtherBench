@@ -1,4 +1,4 @@
-import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError, SubagentStatus } from '../types/messages.js';
 import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
@@ -349,7 +349,14 @@ export interface MessageRepo {
   children(parentId: string): CanonMessage[];
   roots(chatId: string): CanonMessage[];
   pathToRoot(messageId: string): CanonMessage[];   // ordered root -> leaf
+  /** A streaming reply's checkpoint: not a change paired machines are sent (the reply is sent once it finishes). */
   updateParts(id: string, parts: Part[]): void;
+  /**
+   * Changes a finished message's parts as a change paired machines are sent,
+   * unlike `updateParts`: a background helper's card in an earlier reply
+   * brought up to date, or closed at startup. Throws when the id does not exist.
+   */
+  reviseParts(id: string, parts: Part[]): void;
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void;
   /** Messages with every word of `query` in their text, best match first; `offset` skips that many, to page through. */
   searchText(query: string, limit: number, offset?: number): { messageId: string; chatId: string; snippet: string }[];
@@ -367,6 +374,13 @@ export interface MessageRepo {
    * tree one at a time via `roots`/`children`.
    */
   listByStatus(status: MessageStatus): CanonMessage[];
+  /**
+   * Every message across every chat, at any status, with a top-level
+   * `subagent` card at `status`, in no particular order. For startup
+   * reconciliation too: a helper card left 'background' by a process that
+   * died, found without reading every finished message.
+   */
+  listWithSubagentStatus(status: SubagentStatus): CanonMessage[];
   /** Stores engine-owned state on a message. Throws when the id does not exist. */
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */

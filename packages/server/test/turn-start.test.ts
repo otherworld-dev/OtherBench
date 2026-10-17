@@ -5,7 +5,8 @@ import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
-import { startTurn } from '../src/turn-start.js';
+import { startSelfStartedTurn, startTurn } from '../src/turn-start.js';
+import type { EngineEvent, SelfStart } from '@otherbench/core/ports/chat-engine.js';
 
 function profile(id = 'p1'): ResolvedProfile {
   return {
@@ -65,5 +66,47 @@ describe('startTurn', () => {
 
     expect(memory.noteTurnCompleted).toHaveBeenCalledWith('chat-1');
     expect(store.chats.get('chat-1')!.headMessageId).toBeNull();
+  });
+});
+
+describe('startSelfStartedTurn', () => {
+  function selfStart(over: Partial<SelfStart> = {}): SelfStart & { declined: () => boolean } {
+    let declined = false;
+    return {
+      chatId: 'chat-1', afterMessageId: 'a1', profileId: 'p1', notice: 'Carried on after the helper "implementer" reported back.', unattended: false,
+      run: async function* (): AsyncGenerator<EngineEvent> {
+        yield { type: 'text-delta', text: 'Reviewed.' };
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+      decline: () => { declined = true; },
+      declined: () => declined,
+      ...over,
+    };
+  }
+
+  it('runs a self-start as a reply after the one it continues and announces it', async () => {
+    const { store, seen, streamRegistry, deps } = setup();
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const start = selfStart();
+
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
+
+    const started = seen.find((e) => e.type === 'turn-started') as Extract<typeof seen[number], { type: 'turn-started' }>;
+    expect(started).toMatchObject({ chatId: 'chat-1' });
+    const id = started.messageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    expect(store.messages.get(id)).toMatchObject({ parentId: 'a1', parts: [{ type: 'notice' }, { type: 'text', text: 'Reviewed.' }] });
+    expect(streamRegistry.snapshot('chat-1').some((b) => b.messageId === id)).toBe(true);
+    expect(start.declined()).toBe(false);
+  });
+
+  it('declines a self-start for a deleted chat, or a reply that is gone', async () => {
+    const { deps } = setup();
+    const gone = selfStart({ chatId: 'nope' });
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, gone);
+    expect(gone.declined()).toBe(true);
+    const noReply = selfStart({ afterMessageId: 'missing' });
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, noReply);
+    expect(noReply.declined()).toBe(true);
   });
 });

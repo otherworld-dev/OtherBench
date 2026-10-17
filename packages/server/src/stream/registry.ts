@@ -1,4 +1,6 @@
 import { subagentPartEvents } from '@otherbench/core/domain/parts.js';
+import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
+import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import type { TurnEvent, TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
@@ -116,9 +118,16 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
  * stops streaming). `snapshot()` covers both by falling back to the `Store`
  * for any message id it has no live buffer for -- see `snapshotFromStore`.
  */
+/** What a chat's stream subscriber hears: its replies' events, and chat-level ones (background tasks, stored messages changed). */
+export type ChatStreamEvent = TurnEvent | ChatLevelEvent;
+
 export class StreamRegistry {
   private readonly buffers = new Map<string, StreamBuffer>();
-  private readonly chatSubscribers = new Map<string, Set<(e: TurnEvent) => void>>();
+  private readonly chatSubscribers = new Map<string, Set<(e: ChatStreamEvent) => void>>();
+  /** Each chat's background tasks, as the engine last reported them. */
+  private readonly helpers = new Map<string, BackgroundHelper[]>();
+  /** Approval cards asked for by a background helper with no reply live (spec 2026-10-17-claude-background-helpers-design), by chat and request id. */
+  private readonly backgroundApprovals = new Map<string, Map<string, ApprovalRequest>>();
   private readonly evictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly retentionMs: number;
 
@@ -169,6 +178,30 @@ export class StreamRegistry {
 
   private handleEvent(event: TurnEvent): void {
     const buffer = this.buffers.get(event.messageId);
+    // A card for a reply that isn't live: a background helper's, kept for the chat until it's answered.
+    // A finished reply keeps its buffer for the retention window, so a helper asking soon after its
+    // reply ended still counts: in that buffer the card would be missing from a reconnect's hello.
+    const live = buffer !== undefined && buffer.status === 'streaming';
+    if (!live && event.type === 'approval-request') {
+      const chatId = event.request.chatId;
+      const pending = this.backgroundApprovals.get(chatId) ?? new Map<string, ApprovalRequest>();
+      pending.set(event.request.id, event.request);
+      this.backgroundApprovals.set(chatId, pending);
+      this.broadcast(chatId, event);
+      return;
+    }
+    if (!live && event.type === 'approval-resolved') {
+      let background = false;
+      for (const [chatId, pending] of this.backgroundApprovals) {
+        if (!pending.delete(event.requestId)) continue;
+        background = true;
+        if (pending.size === 0) this.backgroundApprovals.delete(chatId);
+        this.broadcast(chatId, event);
+      }
+      // Not a background card: one the reply itself asked for, settled just after it ended
+      // (a Stop), so it goes on with that reply's events below.
+      if (background || !buffer) return;
+    }
     if (!buffer) return; // Unknown to us -- registerTurn() was never called for it; nothing to attach this to.
 
     buffer.events.push(event);
@@ -259,7 +292,34 @@ export class StreamRegistry {
   }
 
   /** Subscribes to live events for every message in `chatId`. Returns an unsubscribe function. */
-  subscribe(chatId: string, cb: (e: TurnEvent) => void): () => void {
+  /** The chat's background tasks now; subscribers hear them. */
+  setHelpers(chatId: string, helpers: BackgroundHelper[]): void {
+    if (helpers.length === 0) this.helpers.delete(chatId);
+    else this.helpers.set(chatId, helpers);
+    this.broadcast(chatId, { type: 'helpers', chatId, helpers });
+  }
+
+  /** Tells the chat's subscribers its stored messages changed (a helper's card in an earlier reply), so they reload them. */
+  messagesChanged(chatId: string): void {
+    this.broadcast(chatId, { type: 'messages-changed', chatId });
+  }
+
+  /** What a new subscriber needs besides the replies in flight: the chat's background tasks and their open approval cards. */
+  chatState(chatId: string): { helpers: BackgroundHelper[]; backgroundApprovals: ApprovalRequest[] } {
+    return { helpers: this.helpers.get(chatId) ?? [], backgroundApprovals: [...(this.backgroundApprovals.get(chatId)?.values() ?? [])] };
+  }
+
+  private broadcast(chatId: string, event: ChatStreamEvent): void {
+    for (const cb of this.chatSubscribers.get(chatId) ?? []) {
+      try {
+        cb(event);
+      } catch (err) {
+        console.error(`[StreamRegistry] subscriber threw while handling '${event.type}' for chat ${chatId}:`, err);
+      }
+    }
+  }
+
+  subscribe(chatId: string, cb: (e: ChatStreamEvent) => void): () => void {
     let subscribers = this.chatSubscribers.get(chatId);
     if (!subscribers) {
       subscribers = new Set();

@@ -1054,6 +1054,16 @@ export function runStoreContract(
         expect(store.messages.get('msg-a')?.parts).toEqual(newParts);
       });
 
+      it("reviseParts persists a finished message's new parts, leaving its status alone", () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id, status: 'complete' }));
+        const newParts: Part[] = [{ type: 'text', text: 'revised content' }];
+
+        store.messages.reviseParts('msg-a', newParts);
+
+        expect(store.messages.get('msg-a')).toMatchObject({ parts: newParts, status: 'complete' });
+      });
+
       it('updateStatus persists the status and error', () => {
         const { chat } = seedChat(store, 'chat-a');
         store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id, status: 'streaming' }));
@@ -1222,6 +1232,10 @@ export function runStoreContract(
         expect(() => store.messages.updateParts('does-not-exist', [{ type: 'text', text: 'x' }])).toThrow(Error);
       });
 
+      it('reviseParts throws when the id does not exist', () => {
+        expect(() => store.messages.reviseParts('does-not-exist', [{ type: 'text', text: 'x' }])).toThrow(Error);
+      });
+
       it('updateStatus throws when the id does not exist', () => {
         expect(() => store.messages.updateStatus('does-not-exist', 'complete')).toThrow(Error);
       });
@@ -1239,6 +1253,22 @@ export function runStoreContract(
 
       it('listByStatus returns [] when nothing is at that status', () => {
         expect(store.messages.listByStatus('streaming')).toEqual([]);
+      });
+
+      it('listWithSubagentStatus returns every message, in any chat and at any status, with a sub-agent card at that status', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        const card = (callId: string, status: 'background' | 'running' | 'complete'): Part => ({
+          type: 'subagent', callId, label: callId, prompt: 'p', profileId: 'p', profileName: 'P', modelId: 'm', status, parts: [{ type: 'text', text: 'background' }],
+        });
+        store.messages.create(makeMessageInput({ id: 'done-a', chatId: chatA.id, role: 'assistant', status: 'complete', parts: [{ type: 'text', text: 'hi' }, card('t1', 'complete'), card('t2', 'background')] }));
+        store.messages.create(makeMessageInput({ id: 'failed-b', chatId: chatB.id, role: 'assistant', status: 'error', parts: [card('t3', 'background')] }));
+        store.messages.create(makeMessageInput({ id: 'running-a', chatId: chatA.id, role: 'assistant', status: 'complete', parts: [card('t4', 'running')] }));
+        store.messages.create(makeMessageInput({ id: 'text-a', chatId: chatA.id, status: 'complete', parts: [{ type: 'text', text: '"status":"background"' }] }));
+
+        expect(store.messages.listWithSubagentStatus('background').map((m) => m.id).sort()).toEqual(['done-a', 'failed-b']);
+        expect(store.messages.listWithSubagentStatus('running').map((m) => m.id)).toEqual(['running-a']);
+        expect(store.messages.listWithSubagentStatus('queued')).toEqual([]);
       });
     });
 
