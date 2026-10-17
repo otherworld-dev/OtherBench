@@ -32,6 +32,11 @@ export class RoutingChatEngine implements ChatEngine {
     return this.aisdk.stopHelper ? this.aisdk.stopHelper(chatId, taskId) : false;
   }
 
+  closeChats(gone: (chatId: string) => boolean): void {
+    this.aisdk.closeChats?.(gone);
+    this.claudeCode.closeChats?.(gone);
+  }
+
   async planUsage(conn: Connection): Promise<PlanUsage | null> {
     const engine = this.pick(conn.kind);
     return engine.planUsage ? engine.planUsage(conn) : null;

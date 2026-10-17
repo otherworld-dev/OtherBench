@@ -207,6 +207,16 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return false;
   }
 
+  /** Closes the processes of the chats `gone` picks, ending their background tasks (a chat that was deleted keeps nothing running). */
+  closeChats(gone: (chatId: string) => boolean): void {
+    for (const live of [...this.processes]) {
+      const chatId = live.background?.chatId ?? live.last?.chatId;
+      if (chatId === undefined || !gone(chatId)) continue;
+      live.close();
+      this.processes.delete(live);
+    }
+  }
+
   /** What Claude Code does while no reply is attached to the process. */
   private handleIdle(live: LiveProcess, message: SDKMessage): void {
     if (startsOwnTurn(message)) this.selfStart(live, message);

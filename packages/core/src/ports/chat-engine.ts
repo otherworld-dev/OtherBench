@@ -171,6 +171,8 @@ export interface ChatEngine {
   onBackground?(handler: (event: EngineBackgroundEvent) => void): void;
   /** Stops one of a chat's background tasks; false when no such task is running. */
   stopHelper?(chatId: string, taskId: string): Promise<boolean>;
+  /** Ends what the engine keeps running for the chats `gone` picks (they were deleted): their processes and background tasks. */
+  closeChats?(gone: (chatId: string) => boolean): void;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
   /**

@@ -45,6 +45,7 @@ import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
 import { forwardedApi, RemoteRuns } from './peer/forward.js';
 import { handleBackground } from './background.js';
+import { closeEngineChatsThatAreGone } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
@@ -629,6 +630,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   syncer.start();
   // Work Claude Code does between replies: its helpers, their cards, and turns it starts by itself.
   engine.onBackground?.((event) => handleBackground(container, event));
+  // A chat that goes takes its Claude Code processes and background helpers with it.
+  closeEngineChatsThatAreGone(events, engine, (chatId) => store.chats.get(chatId) !== null);
 
   return container;
 }

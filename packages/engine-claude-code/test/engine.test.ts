@@ -1881,6 +1881,21 @@ describe('ClaudeCodeChatEngine and background helpers', () => {
     return { query, stopTask };
   }
 
+  it("closeChats closes a gone chat's processes, ending its helpers, and leaves other chats' alone", async () => {
+    const { query } = withHelper();
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    await collect(e.stream(req()));
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [{ taskId: 'k1' }] }));
+    e.closeChats((chatId) => chatId === 'other');
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+    e.closeChats((chatId) => chatId === req().chatId);
+    expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [] });
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(false);
+    e.dispose();
+  });
+
   it('reports the chat\'s helpers, and stopHelper stops the task in the process holding it', async () => {
     const { query, stopTask } = withHelper();
     const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
