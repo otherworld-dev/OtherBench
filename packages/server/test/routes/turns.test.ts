@@ -7,7 +7,7 @@ import { NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
-import { CLEAR_MID_REPLY, CLEAR_ON_ITS_OWN } from '../../src/routes/turns.js';
+import { CLEAR_MID_REPLY, CLEAR_ON_ITS_OWN, COMPACT_NO_REGENERATE } from '../../src/routes/turns.js';
 import type { Container } from '../../src/container.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -596,6 +596,22 @@ describe('POST /api/chats/:id/regenerate', () => {
     const out = await regenerate(chatId, { messageId: assistantMessageIds[0] });
     expect(out.status).toBe(409);
     expect(container.store.messages.children(userMessageId)).toHaveLength(1);
+  });
+
+  it("409s for a compact's reply, creating nothing", async () => {
+    const { chatId } = seedChat();
+    container.store.messages.create({ id: 'k', chatId, parentId: null, role: 'user', parts: [{ type: 'context', kind: 'compact' }], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({
+      id: 'kr', chatId, parentId: 'k', role: 'assistant', parts: [{ type: 'context-summary', text: 'S' }], status: 'complete', error: null,
+      producedBy: { profileId: 'profile-0', profileName: 'Profile 0', connectionId: 'conn-0', modelId: 'model-x' },
+    });
+
+    const out = await regenerate(chatId, { messageId: 'kr' });
+
+    expect(out.status).toBe(409);
+    expect(await out.json()).toEqual({ error: COMPACT_NO_REGENERATE });
+    expect(COMPACT_NO_REGENERATE).toBe("A compact can't be retried in place. Send /compact again.");
+    expect(container.store.messages.children('k').map((m) => m.id)).toEqual(['kr']);
   });
 });
 

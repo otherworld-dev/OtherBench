@@ -426,7 +426,9 @@ of work landed after that plan closed out:
   with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
   selected profile is a Claude Code profile is written by the server as a line
   of its own: no reply, no Claude Code process. Names match in any case; a
-  clear name with text after it is refused (400), never sent on. `TurnRunner.buildRequestMessages`
+  clear name with text after it is refused (400), never sent on. A compact's
+  reply can't be regenerated (409, "Send /compact again"), and the thread
+  offers no Regenerate on it. `TurnRunner.buildRequestMessages`
   cuts every engine's history at the latest line, so a reply after it (Claude
   Code or an API profile) sees only what follows. `/compact` runs as a Claude
   Code turn and its summary shows in the thread. The thread draws a line as a

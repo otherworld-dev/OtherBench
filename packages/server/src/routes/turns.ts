@@ -3,7 +3,7 @@ import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
-import { CLEAR_ON_ITS_OWN, contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ParsedCommand } from '@otherbench/core/domain/context-lines.js';
+import { CLEAR_ON_ITS_OWN, contextLineOf, contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ParsedCommand } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
@@ -40,6 +40,9 @@ export const CLEAR_MID_REPLY = 'Wait for the reply to finish, or stop it, before
 
 /** Refused when /clear (or /reset, /new) comes with more text after it in a Claude Code chat. */
 export { CLEAR_ON_ITS_OWN };
+
+/** Refused when a compact's reply is regenerated: it compacted a session that has moved on since. */
+export const COMPACT_NO_REGENERATE = "A compact can't be retried in place. Send /compact again.";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -311,6 +314,8 @@ export function turnsRoutes(container: Container): Hono {
     if (message.role !== 'assistant') {
       throw new HTTPException(400, { message: `Message "${messageId}" is not an assistant reply; only a reply can be regenerated.` });
     }
+    const parent = message.parentId ? container.store.messages.get(message.parentId) : null;
+    if (parent && contextLineOf(parent)?.kind === 'compact') return c.json({ error: COMPACT_NO_REGENERATE }, 409);
     // With no profileId given, the reply's own profile, skipping one that has
     // since been archived: then the chat's profile, then the app default.
     const live = (id: string | null | undefined): string | null =>
