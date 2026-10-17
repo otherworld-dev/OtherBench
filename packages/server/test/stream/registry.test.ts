@@ -373,6 +373,20 @@ describe('StreamRegistry', () => {
     expect(notice?.text).toContain('does not support image input');
   });
 
+  it('rebuilds a stored context-summary part into a context-summary event', () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.messages.create({
+      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null,
+      parts: [{ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 }],
+    });
+    const { engine } = manualEngine();
+    const registry = new StreamRegistry(new TurnRunner(store, engine), store);
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === 'assistant-1')!;
+    expect(buffer.events).toContainEqual({ messageId: 'assistant-1', type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
+  });
+
   it('rebuilds a stored subagent part into subagent events that fold back to the same part', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
