@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fetchInFlight } from '../peer/forward.js';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -285,9 +286,20 @@ export function chatsRoutes(container: Container): Hono {
     });
   });
 
-  app.get('/:id/messages', (c) => {
+  app.get('/:id/messages', async (c) => {
     const chat = getChatOrThrow(container, c.req.param('id'));
     const messages = collectMessageTree(container.store, chat.id);
+    // A reply the machine this chat runs on is still writing isn't synced yet: it
+    // comes from that machine, to show live, and is never stored here.
+    let headMessageId = chat.headMessageId;
+    const peers = container.peers;
+    if (peers && chat.runsOn !== container.store.nodes.self().id && peers.activeChats(chat.runsOn).includes(chat.id)) {
+      const live = await fetchInFlight(container, chat.runsOn, chat.id);
+      const known = new Set(messages.map((m) => m.id));
+      const added = live.messages.filter((m) => !known.has(m.id));
+      messages.push(...added);
+      if (added.length > 0 && live.headMessageId && messages.some((m) => m.id === live.headMessageId)) headMessageId = live.headMessageId;
+    }
     // Each finished reply's recorded usage, keyed by message id, so the
     // compare tabs show what a reply cost at the price it ran at, after a
     // reload too (#819). One row per message; a later one would win.
@@ -304,7 +316,7 @@ export function chatsRoutes(container: Container): Hono {
         latencyMs: u.latencyMs,
       };
     }
-    return c.json({ messages, headMessageId: chat.headMessageId, usage });
+    return c.json({ messages, headMessageId, usage });
   });
 
   return app;

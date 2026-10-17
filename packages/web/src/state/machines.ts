@@ -1,6 +1,7 @@
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { api, type PeersOverview } from './api.js';
 import { useOtherBenchStore, type StreamConnectionStatus } from './store.js';
+export { chatsWorkingElsewhere, workingElsewhere } from './peerActivity.js';
 
 /**
  * This machine and its paired machines, as the UI needs them to show where

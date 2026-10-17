@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
@@ -397,7 +398,16 @@ export const useOtherBenchStore = create<OtherBenchState>()((set) => ({
   syncRevision: 0,
   chatReloads: {},
   machines: null,
-  setMachines: (machines) => set({ machines }),
+  setMachines: (machines) =>
+    set((state) => {
+      // A chat a paired machine has just started a reply in reloads, so the reply (fetched from that machine) shows live.
+      const before = chatsWorkingElsewhere(state.machines);
+      const started = [...chatsWorkingElsewhere(machines)].filter((id) => !before.has(id));
+      if (started.length === 0) return { machines };
+      const chatReloads = { ...state.chatReloads };
+      for (const id of started) chatReloads[id] = (chatReloads[id] ?? 0) + 1;
+      return { machines, chatReloads };
+    }),
   applyAppHello: (hello) =>
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
