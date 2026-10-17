@@ -292,10 +292,16 @@ describe('chats CRUD', () => {
     expect((await json(unarchiveRes))['archivedAt']).toBeNull();
   });
 
+  it('starts a new chat with Auto on, unless the request says otherwise', async () => {
+    expect((await createChat())['autoMode']).toBe(true);
+    const off = await json(await app().request('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profileId: 'profile-1', autoMode: false }) }));
+    expect(off['autoMode']).toBe(false);
+  });
+
   it('turns auto mode on and off via PATCH autoMode, without moving the chat in the list', async () => {
     const created = await createChat();
     const id = created['id'] as string;
-    expect(created['autoMode']).toBe(false);
+    await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoMode: false }) });
     const before = container.store.chats.get(id)!.updatedAt;
 
     const on = await app().request(`/api/chats/${id}`, {
@@ -345,7 +351,7 @@ describe('chats CRUD', () => {
       expect(res.status).toBe(400);
       expect((await json(res))['error']).toBe('"autoMode" must be a boolean.');
     }
-    expect(container.store.chats.get(id)!.autoMode).toBe(false);
+    expect(container.store.chats.get(id)!.autoMode).toBe(true);
   });
 
   it('sets extra folders by path (stored against a location when inside one), keeps ones it has, and refuses the rest', async () => {
