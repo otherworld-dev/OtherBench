@@ -675,6 +675,30 @@ describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in V
     e.dispose();
   });
 
+  it("switching Auto off stops handing calls to the classifier at once, even when Claude Code can't be switched", async () => {
+    let go!: () => void;
+    const ready = new Promise<void>((resolve) => (go = resolve));
+    let hookOut: unknown;
+    const { query } = switchable(async function* ({ options, prompt, mode }) {
+      yield init('sess-1', mode());
+      await ready;
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never, 't1', sig());
+      yield resultOf(prompt);
+    });
+    const stuck: QueryFn = (args) => Object.assign(query(args), { setPermissionMode: async () => { throw new Error('control request failed'); } });
+    const settings = { autoMode: true };
+    const { e, a } = make(stuck, settings);
+    const run = collect(e.stream(req({ autoMode: true })));
+    await new Promise((r) => setTimeout(r, 0));
+    settings.autoMode = false;
+    e.refreshChatSettings(req().chatId);
+    go();
+    await run;
+    expect(hookOut).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(a.requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: false });
+    e.dispose();
+  });
+
   it('the next message after Auto is switched goes to the same Claude Code, switched, so its helpers carry on', async () => {
     const { query, starts, switched } = switchable(async function* ({ prompt, mode }) {
       yield init('sess-1', mode());

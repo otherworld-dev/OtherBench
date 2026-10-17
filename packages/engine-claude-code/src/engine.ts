@@ -225,6 +225,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const current = this.deps.chatSettings?.(last.chatId, last.profileId);
       if (!current) continue;
       const want = current.autoMode ? 'auto' : 'default';
+      // Recorded first: Auto switched off holds at once, whatever becomes of the switch.
+      live.wantsAuto = current.autoMode;
       if (live.permissionMode !== want) void live.switchMode(want);
     }
   }
@@ -443,6 +445,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
     const reused = taken !== null;
     const live = taken ?? this.startProcess(options, key, plan, own, relay, backend === CLAUDE_BACKEND);
+    live.wantsAuto = mode === 'auto';
     proc.live = live;
     // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
     if (req.signal.aborted) {
@@ -504,7 +507,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
-        autoMode: () => classifier && proc.live?.permissionMode === 'auto',
+        autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
         onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
       }),
