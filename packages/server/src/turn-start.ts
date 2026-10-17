@@ -69,6 +69,12 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
     start.decline();
     return;
   }
+  // Checked again: a /clear, or the chat deleted, while the profile resolved (a secret read) puts it aside too.
+  const now = container.store.chats.get(chat.id);
+  if (!now || lineAfter(container, now.headMessageId, after.id)) {
+    start.decline();
+    return;
+  }
   container.memory?.noteTurnStarted(chat.id);
   // A reply that ended without running Claude Code's turn (its folder isn't on this machine, say) declines it, so the turn is read and dropped.
   let ran = false;

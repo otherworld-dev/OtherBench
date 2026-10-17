@@ -33,7 +33,10 @@ interface HeadBody {
 const KNOWN_PART_TYPES = new Set(['text', 'reasoning', 'image', 'file', 'tool-call', 'tool-result', 'notice', 'context']);
 
 /** Refused when a /clear or /compact comes with an image or file. */
-const COMMAND_WITH_ATTACHMENTS = "A command can't carry attachments. Send /clear or /compact on its own.";
+export const COMMAND_WITH_ATTACHMENTS = "A command can't carry attachments. Send /clear or /compact on its own.";
+
+/** Refused when a /clear comes while a reply in the chat is still being written: closing its process would cut it off. */
+export const CLEAR_MID_REPLY = 'Wait for the reply to finish, or stop it, before clearing.';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -192,6 +195,7 @@ export function turnsRoutes(container: Container): Hono {
       if (parts.some((p) => p.type === 'image' || p.type === 'file')) throw new HTTPException(400, { message: COMMAND_WITH_ATTACHMENTS });
       userParts = [contextPart(command)];
       if (command.kind === 'clear') {
+        if (container.store.messages.listByStatus('streaming').some((m) => m.chatId === chatId)) return c.json({ error: CLEAR_MID_REPLY }, 409);
         const { userMessageId } = writeClearLine(container, { chatId, parentId });
         return c.json({ userMessageId, assistantMessageIds: [], profileIds: [], userParts }, 202);
       }

@@ -7,6 +7,7 @@ import { NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
+import { CLEAR_MID_REPLY } from '../../src/routes/turns.js';
 import type { Container } from '../../src/container.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -922,6 +923,25 @@ describe('context commands in POST /api/chats/:id/turns', () => {
     expect(gone('chat-other')).toBe(false);
     expect(seen).toContainEqual({ type: 'turn-started', chatId, messageIds: [] });
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('/clear while a reply in the chat is streaming is refused, writing nothing', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+    const first = await post(chatId, { parts: [{ type: 'text', text: 'Hi' }], profileIds });
+    const { userMessageId: asked, assistantMessageIds } = (await first.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    expect(container.store.messages.get(assistantMessageIds[0]!)!.status).toBe('streaming');
+    const closeChats = vi.fn();
+    container.engine = { ...container.engine, closeChats };
+
+    const res = await post(chatId, { parentId: asked, parts: [{ type: 'text', text: '/clear' }], profileIds });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: CLEAR_MID_REPLY });
+    expect(CLEAR_MID_REPLY).toBe('Wait for the reply to finish, or stop it, before clearing.');
+    expect(container.store.messages.children(asked).map((m) => m.id)).toEqual(assistantMessageIds);
+    expect(container.store.chats.get(chatId)!.headMessageId).toBe(asked);
+    expect(closeChats).not.toHaveBeenCalled();
   });
 
   it('/clear text with only API profiles is an ordinary message', async () => {
