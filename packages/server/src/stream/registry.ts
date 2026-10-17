@@ -1,6 +1,6 @@
 import { subagentPartEvents } from '@otherbench/core/domain/parts.js';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
-import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
+import type { BackgroundHelper, ChatLevelEvent, BackgroundMark } from '@otherbench/core/types/background.js';
 import type { TurnEvent, TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
@@ -119,7 +119,7 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
  * for any message id it has no live buffer for -- see `snapshotFromStore`.
  */
 /** What a chat's stream subscriber hears: its replies' events, and chat-level ones (background tasks, stored messages changed). */
-export type ChatStreamEvent = TurnEvent | ChatLevelEvent;
+export type ChatStreamEvent = TurnEvent | ChatLevelEvent | (TurnEvent & BackgroundMark);
 
 export class StreamRegistry {
   private readonly buffers = new Map<string, StreamBuffer>();
@@ -187,7 +187,7 @@ export class StreamRegistry {
       const pending = this.backgroundApprovals.get(chatId) ?? new Map<string, ApprovalRequest>();
       pending.set(event.request.id, event.request);
       this.backgroundApprovals.set(chatId, pending);
-      this.broadcast(chatId, event);
+      this.broadcast(chatId, { ...event, background: true });
       return;
     }
     if (!live && event.type === 'approval-resolved') {
@@ -196,7 +196,7 @@ export class StreamRegistry {
         if (!pending.delete(event.requestId)) continue;
         background = true;
         if (pending.size === 0) this.backgroundApprovals.delete(chatId);
-        this.broadcast(chatId, event);
+        this.broadcast(chatId, { ...event, background: true });
       }
       // Not a background card: one the reply itself asked for, settled just after it ended
       // (a Stop), so it goes on with that reply's events below.

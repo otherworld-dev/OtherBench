@@ -69,7 +69,7 @@ describe('BackgroundHelpers', () => {
     s.loadMessages('c1', [{ id: 'm-old', chatId: 'c1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 1 }], null);
     act(() => {
       s.applyChatEvent('c1', { type: 'helpers', chatId: 'c1', helpers: [implementer] });
-      s.applyChatEvent('c1', { messageId: 'm-old', type: 'approval-request', request });
+      s.applyChatEvent('c1', { messageId: 'm-old', type: 'approval-request', request, background: true });
       s.applyChatEvent('c1', { type: 'messages-changed', chatId: 'c1' });
     });
     const state = useOtherBenchStore.getState();
@@ -77,7 +77,13 @@ describe('BackgroundHelpers', () => {
     expect(state.backgroundApprovals['c1']).toEqual([request]);
     expect(state.extras['m-old']?.pendingApprovals ?? []).toEqual([]);
     expect(state.chatReloads['c1']).toBe(1);
-    act(() => s.applyChatEvent('c1', { messageId: 'm-old', type: 'approval-resolved', requestId: 'r1', choice: 'once' }));
+    act(() => s.applyChatEvent('c1', { messageId: 'm-old', type: 'approval-resolved', requestId: 'r1', choice: 'once', background: true }));
     expect(useOtherBenchStore.getState().backgroundApprovals['c1']).toEqual([]);
+  });
+
+  it("gives a reply's own approval card to the reply, even one this window hasn't loaded yet", () => {
+    const s = useOtherBenchStore.getState();
+    act(() => s.applyChatEvent('c1', { messageId: 'm-unseen', type: 'approval-request', request: { ...request, messageId: 'm-unseen' } }));
+    expect(useOtherBenchStore.getState().backgroundApprovals['c1'] ?? []).toEqual([]);
   });
 });

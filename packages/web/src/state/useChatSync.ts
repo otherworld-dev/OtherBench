@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
-import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
+import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import { api } from './api.js';
 import { SseClient } from './sse.js';
 import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } from './store.js';
@@ -78,7 +78,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
       });
 
     const { applyChatEvent, setChatBackground } = useOtherBenchStore.getState();
-    const client = new SseClient<ChatHello, TurnEvent | ChatLevelEvent>({
+    const client = new SseClient<ChatHello, (TurnEvent & Partial<BackgroundMark>) | ChatLevelEvent>({
       url: api.streamUrl(chatId),
       readHello: (payload) => payload as ChatHello,
       onHello: (hello) => {
