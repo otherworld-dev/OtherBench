@@ -156,7 +156,7 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
 const COMMAND = /^\/[A-Za-z0-9][\w:.-]*(\s|$)/;
 
 /** What a reply that sent /compact has seen of it: the PostCompact hook's summary and the boundary's token counts. */
-type Compaction = { summary: string | null; preTokens?: number; postTokens?: number | null };
+type Compaction = { summary: string | null; preTokens?: number; postTokens?: number | null; failure?: string };
 
 const AUTO_COMPACTED = 'Claude Code compacted the context automatically.';
 
@@ -356,6 +356,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init' || event.type === 'rate-limited') continue;
+          if (event.type === 'command-error') continue;
           if (event.type === 'compacted') {
             if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
             continue;
@@ -658,6 +659,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           } else if (event.type === 'compacted') {
             if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
             else if (compaction) Object.assign(compaction, { preTokens: event.preTokens, postTokens: event.postTokens });
+          } else if (event.type === 'command-error') {
+            // Why a /compact failed, in Claude Code's words; another command's is left out, as before.
+            if (compaction) compaction.failure = event.text;
           } else if (event.type === 'result-error') {
             // A stopped reply's interrupted turn: its process carries on for the next message.
             if (req.signal.aborted) return 'done';
@@ -670,9 +674,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             if (event.type === 'finish') {
               finished = true;
               if (compaction) {
-                // The turn ended without the hook's summary: there is nothing to cut the chat at, so the reply fails.
+                // The turn ended without the hook's summary: there is nothing to cut the chat at, so the
+                // reply fails, with Claude Code's own reason when it gave one.
                 if (compaction.summary === null) {
-                  yield { type: 'error', error: { kind: 'unknown', retryable: false, message: 'Claude Code finished without compacting.' } };
+                  yield { type: 'error', error: { kind: 'unknown', retryable: false, message: compaction.failure ?? 'Claude Code finished without compacting.' } };
                   continue;
                 }
                 yield {

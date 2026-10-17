@@ -9,7 +9,9 @@ export type MappedEvent =
   | { type: 'result-error'; text: string }
   | { type: 'rate-limited'; resetsAt: number | null }
   /** Claude Code swapped the conversation for a summary: on /compact (manual) or by itself near the context limit (auto). */
-  | { type: 'compacted'; trigger: 'manual' | 'auto'; preTokens: number; postTokens: number | null };
+  | { type: 'compacted'; trigger: 'manual' | 'auto'; preTokens: number; postTokens: number | null }
+  /** A slash command's own failure, from its `<local-command-stderr>` (tags stripped, trimmed). */
+  | { type: 'command-error'; text: string };
 
 type Block = { type: string; [k: string]: unknown };
 
@@ -32,6 +34,15 @@ function resultText(content: unknown): unknown {
       .join('\n');
   }
   return content;
+}
+
+/** The text of a user message whose string content is wrapped in `<local-command-stderr>`, or null. */
+function commandStderr(message: unknown): string | null {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  if (typeof content !== 'string') return null;
+  const match = /^\s*<local-command-stderr>([\s\S]*)<\/local-command-stderr>\s*$/.exec(content);
+  const inner = match?.[1]?.trim();
+  return inner ? inner : null;
 }
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
@@ -205,6 +216,9 @@ export class SdkEventMapper {
       }
       case 'user': {
         if (this.isStrangers(m)) return [];
+        // A built-in command that failed says why in a user message of its own (live probe, /security-review).
+        const stderr = m['parent_tool_use_id'] == null ? commandStderr(m['message']) : null;
+        if (stderr !== null) return [{ type: 'command-error', text: stderr }];
         const out: MappedEvent[] = [];
         const helper = this.helperOf(m);
         for (const block of blocksOf(m['message'])) {

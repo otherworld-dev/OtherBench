@@ -2445,6 +2445,18 @@ describe('ClaudeCodeChatEngine slash commands', () => {
     expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'unknown', retryable: false, message: 'Claude Code finished without compacting.' } });
   });
 
+  it("a failed compact shows Claude Code's own reason", async () => {
+    // Built-ins fail with a stderr user message and a success result (fixtures README, Q3 /security-review).
+    const { query } = fakeQuery(async function* () {
+      yield init('sess-1');
+      yield { type: 'user', message: { role: 'user', content: '<local-command-stderr>Error: Not enough messages to compact.\n</local-command-stderr>' }, parent_tool_use_id: null } as unknown as SDKMessage;
+      yield commandResult();
+    });
+    const events = await collect(engine(query).stream(compactReq(compactMessage())));
+    expect(events.map((e) => e.type)).not.toContain('finish');
+    expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'unknown', retryable: false, message: 'Error: Not enough messages to compact.' } });
+  });
+
   it('a second init mid-turn does not re-run the auto-mode check', async () => {
     // Auto switched off mid-reply: the init after compaction says default, which must not read as auto being unavailable.
     let inits = 0;
