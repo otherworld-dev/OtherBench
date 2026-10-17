@@ -2483,6 +2483,24 @@ describe("TurnRunner and an engine's own helpers (Claude Code's Task tool)", () 
     expect(sent).toEqual(['start', 'running', 'tool-call', 'tool-result', 'text-delta', 'end']);
   });
 
+  it('leaves a card the engine moved to the background open when the reply ends', async () => {
+    const store = new InMemoryStore();
+    chat(store);
+    const engine = new FakeChatEngine([
+      { type: 'subagent', callId: 'task-1', event: start },
+      { type: 'subagent', callId: 'task-1', event: { type: 'running', at: 1000 } },
+      { type: 'subagent', callId: 'task-1', event: { type: 'background' } },
+      { type: 'finish', usage: ZERO, finishReason: 'stop' },
+    ]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+
+    expect(store.messages.get(id)!.parts.find((p) => p.type === 'subagent')).toMatchObject({ status: 'background' });
+  });
+
   it('ends a helper the engine never finished as stopped', async () => {
     const store = new InMemoryStore();
     chat(store);

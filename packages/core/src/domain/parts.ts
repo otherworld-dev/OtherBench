@@ -11,12 +11,14 @@ import type { Usage } from '../types/usage.js';
 export const SUBAGENT_TOOL_NAME = 'subagent';
 
 export type SubagentPart = Extract<Part, { type: 'subagent' }>;
-export type SubagentEndStatus = Exclude<SubagentStatus, 'queued' | 'running'>;
+export type SubagentEndStatus = Exclude<SubagentStatus, 'queued' | 'running' | 'background'>;
 
 /** One step in a sub-agent's life, carried on a `subagent` TurnEvent with its call id. */
 export type SubagentEvent =
   | { type: 'start'; label: string; prompt: string; profileId: string; profileName: string; modelId: string }
   | { type: 'running'; at?: number }
+  /** Still working after its reply ended (a Claude Code helper in the background), or working again after it had finished (resumed). */
+  | { type: 'background'; at?: number }
   | { type: 'text-delta'; text: string }
   | { type: 'reasoning-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; args: unknown }
@@ -74,8 +76,15 @@ export function applySubagentEvent(parts: Part[], callId: string, event: Subagen
   }
   if (index === -1) return parts;
   const part = parts[index] as SubagentPart;
+  const finished = part.status === 'complete' || part.status === 'error' || part.status === 'cancelled';
   // A finished sub-agent stays finished: a late event (a relay replaying out of order) changes nothing.
-  if (part.status === 'complete' || part.status === 'error' || part.status === 'cancelled') return parts;
+  // Only `background` reopens one, for a Claude Code helper sent more work after it reported back.
+  if (event.type === 'background') {
+    if (part.status === 'queued') return parts;
+    const { finishedAt: _done, ...rest } = part;
+    return parts.with(index, { ...rest, status: 'background', ...(event.at !== undefined && part.startedAt === undefined ? { startedAt: event.at } : {}) });
+  }
+  if (finished) return parts;
   let next: SubagentPart;
   if (event.type === 'running') {
     next = { ...part, status: 'running', ...(event.at !== undefined && part.startedAt === undefined ? { startedAt: event.at } : {}) };
@@ -100,6 +109,7 @@ export function subagentPartEvents(part: SubagentPart): SubagentEvent[] {
     { type: 'start', label: part.label, prompt: part.prompt, profileId: part.profileId, profileName: part.profileName, modelId: part.modelId },
   ];
   if (part.status !== 'queued') events.push({ type: 'running', ...(part.startedAt !== undefined ? { at: part.startedAt } : {}) });
+  if (part.status === 'background') events.push({ type: 'background' });
   for (const p of part.parts) {
     switch (p.type) {
       case 'text':
@@ -148,6 +158,7 @@ export function isSubagentEvent(value: unknown): value is SubagentEvent {
     case 'start':
       return str('label') && str('prompt') && str('profileId') && str('profileName') && str('modelId');
     case 'running':
+    case 'background':
       return e['at'] === undefined || isTime(e['at']);
     case 'text-delta':
     case 'reasoning-delta':
