@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { canonicalHost } from '@otherbench/core/domain/network-hosts.js';
 import { DEFAULT_SANDBOX_HOSTS } from '@otherbench/core/types/config.js';
@@ -355,6 +355,19 @@ describe('DELETE /api/profiles/:id', () => {
     const res = await app().request(`/api/profiles/${(created as { id: string }).id}`, { method: 'DELETE' });
     expect(res.status).toBe(204);
     expect(container.store.profiles.get((created as { id: string }).id)).toBeNull();
+  });
+
+  it("closes the engine's processes for the chats that went with it", async () => {
+    const created = (await (await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(basicProfileBody) })).json()) as { id: string };
+    container.store.chats.create({ id: 'chat-gone', title: 'T', profileId: created.id, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const closeChats = vi.fn();
+    container.engine.closeChats = closeChats;
+
+    expect((await app().request(`/api/profiles/${created.id}`, { method: 'DELETE' })).status).toBe(204);
+
+    expect(closeChats).toHaveBeenCalledTimes(1);
+    const gone = closeChats.mock.calls[0]![0] as (chatId: string) => boolean;
+    expect(gone('chat-gone')).toBe(true);
   });
 });
 

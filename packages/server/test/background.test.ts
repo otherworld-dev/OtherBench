@@ -8,6 +8,7 @@ import { runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
 import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { handleBackground } from '../src/background.js';
 import type { Container } from '../src/container.js';
+import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 
 function container(store: Store = new InMemoryStore()): Container {
@@ -18,6 +19,22 @@ function container(store: Store = new InMemoryStore()): Container {
 const card: Part = { type: 'subagent', callId: 't1', label: 'implementer', prompt: 'fix it', profileId: 'p', profileName: 'general-purpose', modelId: 'opus', status: 'background', parts: [], startedAt: 1 };
 
 describe('handleBackground', () => {
+  it("holds a card update for a reply still being written until it ends, so the reply's last write doesn't undo it", () => {
+    const c = container();
+    const events = new AppEventBus();
+    (c as { events?: AppEventBus }).events = events;
+    c.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    c.store.messages.create({ id: 'm1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [card], status: 'streaming', error: null, producedBy: null });
+
+    handleBackground(c, { type: 'helper-event', chatId: 'chat-1', messageId: 'm1', callId: 't1', event: { type: 'end', status: 'complete', at: 9 } });
+    // TurnRunner's last write, from what it had: the card still working in the background.
+    c.store.messages.updateParts('m1', [card]);
+    c.store.messages.updateStatus('m1', 'complete', null);
+    events.emit({ type: 'turn-finished', chatId: 'chat-1', messageId: 'm1', status: 'complete' });
+
+    expect(c.store.messages.get('m1')!.parts[0]).toMatchObject({ status: 'complete', finishedAt: 9 });
+  });
+
   it("folds a finished helper into its card in an earlier reply, and tells the chat's subscribers", () => {
     const c = container();
     c.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });

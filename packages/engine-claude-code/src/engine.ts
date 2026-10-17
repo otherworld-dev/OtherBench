@@ -247,6 +247,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return;
     }
     const finished = live.background?.lastFinished ?? null;
+    // Named once: a later turn it starts with no helper finished since is not this helper's.
+    if (live.background) live.background.lastFinished = null;
     const notice = finished === null
       ? 'Carried on after a background task finished.'
       : finished.kind === 'local_agent'
@@ -406,7 +408,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const { gateCtx, autoMode, own, relay, tickets, helpers, binding } = this.prepareReply(req, backend, clean);
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
-    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key) : null;
+    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
+    // Stopped while waiting for the session's busy process (or before it began): no process is started.
+    if (taken === null && req.signal.aborted) return 'done';
     const reused = taken !== null;
     const live = taken ?? this.startProcess(options, key, plan, own, relay);
     // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.

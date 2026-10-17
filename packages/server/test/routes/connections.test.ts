@@ -267,6 +267,7 @@ describe('PATCH /api/connections/:id', () => {
     expect(await secrets.get(ref)).toBeNull();
   });
 
+
   it('updates non-secret fields like name and baseUrl', async () => {
     const created = await json(
       await app().request('/api/connections', {
@@ -369,6 +370,20 @@ describe('DELETE /api/connections/:id', () => {
 
     expect(container.store.connections.get(id)).toBeNull();
     expect(await secrets.get(ref)).toBeNull();
+  });
+  it("closes the engine's processes for the chats that went with it", async () => {
+    const created = await json(await app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Gone', kind: 'openai', apiKey: 'sk-gone' }) }));
+    const id = created['id'] as string;
+    container.store.profiles.create({ id: 'p-gone', name: 'P', description: null, colour: null, connectionId: id, modelId: 'gpt-4o', systemPrompt: null, params: {}, toolPolicy: { fs: 'none', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' }, isDefault: false, archivedAt: null });
+    container.store.chats.create({ id: 'chat-gone', title: 'T', profileId: 'p-gone', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const closeChats = vi.fn();
+    container.engine.closeChats = closeChats;
+
+    expect((await app().request(`/api/connections/${id}`, { method: 'DELETE' })).status).toBe(204);
+
+    expect(closeChats).toHaveBeenCalledTimes(1);
+    const gone = closeChats.mock.calls[0]![0] as (chatId: string) => boolean;
+    expect(gone('chat-gone')).toBe(true);
   });
 });
 

@@ -560,7 +560,8 @@ export class ClaudeImportService {
       const filing = existing.projectId === null && projectId !== null;
       let stored = 0;
       store.transaction(() => {
-        for (const m of refresh.fill) store.messages.updateParts(m.id, m.parts);
+        // Stamped for sync, so a paired machine gets the files filled in too.
+        for (const m of refresh.fill) store.messages.reviseParts(m.id, m.parts);
         for (const m of refresh.add) store.messages.create(m);
         for (const { image, blob, extractedText: extracted } of images) {
           if (!touched.has(image.messageId) || store.attachments.get(image.attachmentId)) continue;

@@ -4,6 +4,37 @@ import type { Container } from './container.js';
 import { resolveProfile } from './profile-resolution.js';
 import { startSelfStartedTurn } from './turn-start.js';
 
+type HelperEvent = Extract<EngineBackgroundEvent, { type: 'helper-event' }>;
+
+/** Card updates for replies still being written, per container, by reply: applied once each reply ends. */
+const held = new WeakMap<Container, Map<string, HelperEvent[]>>();
+
+/**
+ * Keeps a card update for reply `event.messageId`, still being written, until
+ * TurnRunner announces its end (after its last write), so that write, made
+ * from what the reply knew, doesn't undo the update. Without an event bus to
+ * hear the end on, it isn't held. Returns whether it was held.
+ */
+function holdUntilWritten(container: Container, event: HelperEvent): boolean {
+  const events = container.events;
+  if (!events) return false;
+  let byMessage = held.get(container);
+  if (!byMessage) {
+    const waiting = new Map<string, HelperEvent[]>();
+    byMessage = waiting;
+    held.set(container, waiting);
+    events.subscribe((e) => {
+      if (e.type !== 'turn-finished') return;
+      const due = waiting.get(e.messageId);
+      if (!due) return;
+      waiting.delete(e.messageId);
+      for (const update of due) handleBackground(container, update);
+    });
+  }
+  byMessage.set(event.messageId, [...(byMessage.get(event.messageId) ?? []), event]);
+  return true;
+}
+
 /**
  * What the engine reports its agent doing between replies (spec
  * 2026-10-17-claude-background-helpers-design): a chat's background tasks go
@@ -19,6 +50,7 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
     case 'helper-event': {
       const message = container.store.messages.get(event.messageId);
       if (!message || message.chatId !== event.chatId) return;
+      if (message.status === 'streaming' && holdUntilWritten(container, event)) return;
       const parts = applySubagentEvent(message.parts, event.callId, event.event);
       if (parts === message.parts) return;
       // Stamped for sync, so a paired machine's copy of the card updates too.
