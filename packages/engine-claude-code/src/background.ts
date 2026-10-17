@@ -35,6 +35,8 @@ export class BackgroundTasks {
   private readonly cards = new Map<string, string>();
   /** Which helper made each tool call. */
   private readonly owners = new Map<string, string>();
+  /** Who is waiting to learn which helper made a call (whenOwned). */
+  private readonly ownerWaiters = new Map<string, (() => void)[]>();
   private lastSent = '';
   /** The task that finished most recently: what a turn Claude Code starts by itself is carrying on after. */
   lastFinished: BackgroundHelper | null = null;
@@ -81,6 +83,31 @@ export class BackgroundTasks {
     return messageId !== undefined && task ? { callId, label: task.helper.label, messageId } : null;
   }
 
+  /**
+   * The helper that made tool call `toolUseId`, waiting up to `ms` for the
+   * message that says so: Claude Code can ask about a call (its PreToolUse
+   * hook) a moment before this process's reader has read the helper's message
+   * naming it. Null when no helper is running, or none claims it in time.
+   */
+  async whenOwned(toolUseId: string, ms: number): Promise<{ callId: string; label: string; messageId: string } | null> {
+    const known = this.ownerOf(toolUseId);
+    if (known || !this.running) return known;
+    await new Promise<void>((resolve) => {
+      const waiters = this.ownerWaiters.get(toolUseId) ?? [];
+      const done = (): void => {
+        clearTimeout(timer);
+        const left = (this.ownerWaiters.get(toolUseId) ?? []).filter((w) => w !== done);
+        if (left.length > 0) this.ownerWaiters.set(toolUseId, left);
+        else this.ownerWaiters.delete(toolUseId);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      timer.unref?.();
+      this.ownerWaiters.set(toolUseId, [...waiters, done]);
+    });
+    return this.ownerOf(toolUseId);
+  }
+
   handle(raw: unknown): void {
     if (typeof raw !== 'object' || raw === null) return;
     const m = raw as Obj;
@@ -102,6 +129,7 @@ export class BackgroundTasks {
 
   /** The process is gone: every task ends as stopped. */
   closeAll(): void {
+    for (const waiters of [...this.ownerWaiters.values()]) for (const wake of waiters) wake();
     for (const task of this.tasks.values()) {
       if (task.ended) continue;
       task.ended = true;
@@ -118,7 +146,10 @@ export class BackgroundTasks {
     for (const block of Array.isArray(content) ? content : []) {
       if (typeof block !== 'object' || block === null || (block as Obj)['type'] !== 'tool_use') continue;
       const id = str((block as Obj)['id']);
-      if (id) this.owners.set(id, parent);
+      if (id) {
+        this.owners.set(id, parent);
+        for (const wake of this.ownerWaiters.get(id) ?? []) wake();
+      }
       const name = str((block as Obj)['name']);
       if (task && name) task.helper = { ...task.helper, lastActivity: name };
     }
