@@ -148,6 +148,8 @@ export function chatsRoutes(container: Container): Hono {
       pinned: false,
       archivedAt: null,
       projectId: project?.id ?? null,
+      // A new chat starts with Auto on (Claude Code decides routine tool calls), unless the request says otherwise.
+      autoMode: body.autoMode === undefined ? true : optionalBoolean(body.autoMode, 'autoMode', true),
     });
     return c.json(chatView(container, created), 201);
   });
