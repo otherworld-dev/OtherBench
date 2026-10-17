@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { HookCallback, Options, SDKMessage, SDKUserMessage, PermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, Options, SDKMessage, SDKUserMessage, PermissionMode, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { Gate } from './approval.js';
@@ -45,6 +45,8 @@ export type LiveQuery = AsyncIterable<SDKMessage> & {
   stopTask?(taskId: string): Promise<unknown>;
   /** Switches the running Claude Code's permission mode (what VS Code does when its mode changes). */
   setPermissionMode?(mode: PermissionMode): Promise<unknown>;
+  /** The slash commands this Claude Code offers. */
+  supportedCommands?(): Promise<SlashCommand[]>;
 };
 
 /**

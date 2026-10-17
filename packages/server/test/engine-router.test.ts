@@ -15,6 +15,17 @@ describe('RoutingChatEngine', () => {
     expect((await router.listModels(conn('claude_code'), null))[0]!.modelId).toBe('sonnet');
     expect((await router.listModels(conn('ollama'), null))[0]!.modelId).toBe('a');
   });
+  it('lists commands from the Claude Code engine only, and none for other connections', async () => {
+    const row = { name: 'deploy', description: 'd', argumentHint: '', aliases: [] };
+    const asked: string[] = [];
+    const cc = new FakeChatEngine([]);
+    cc.listCommands = async (i) => { asked.push(i.chatId); return [row]; };
+    const router = new RoutingChatEngine(new FakeChatEngine([]), cc);
+    const profile = (kind: Connection['kind']) => ({ connection: conn(kind) }) as never;
+    expect(await router.listCommands({ chatId: 'c1', profile: profile('claude_code'), workspaceRoot: null })).toEqual([row]);
+    expect(await router.listCommands({ chatId: 'c2', profile: profile('ollama'), workspaceRoot: null })).toEqual([]);
+    expect(asked).toEqual(['c1']);
+  });
   it('lists endpoint models through the Ollama path with /v1 appended', async () => {
     const aisdk = new FakeChatEngine([]);
     const seen: Connection[] = [];

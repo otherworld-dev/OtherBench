@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKMessage, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
-import { contextLineOf, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
+import { contextLineOf, NOTHING_TO_COMPACT, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
@@ -14,7 +14,7 @@ import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMIS
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
 import { HelperStopError, type ChatEngine, type ConnectionTestResult, type DiscoveredModel, type EngineBackgroundEvent, type EngineEvent, type EngineRequest, type SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
-import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
+import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
@@ -26,6 +26,7 @@ import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
+import { chatCommands } from './commands.js';
 import { toPlanUsage } from './plan-usage.js';
 import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
@@ -39,6 +40,8 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
   setPermissionMode?(mode: 'default' | 'auto'): Promise<unknown>;
   supportedModels(): Promise<{ value: string; displayName: string }[]>;
   accountInfo(): Promise<{ email?: string; subscriptionType?: string }>;
+  /** The slash commands Claude Code offers in this session. Optional: an older Claude Code may not have it. */
+  supportedCommands?(): Promise<SlashCommand[]>;
   /** The data behind /usage. Experimental in the SDK and may go away, hence optional; its answer is checked, not trusted (plan-usage.ts). */
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: { skipBehaviors?: boolean }): Promise<unknown>;
 };
@@ -202,6 +205,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private readonly processes = new Set<LiveProcess>();
   /** Where work Claude Code does between replies is reported (spec 2026-10-17-claude-background-helpers-design). */
   private backgroundHandler: ((event: EngineBackgroundEvent) => void) | null = null;
+  /** Each chat's last command list from a live process, so the menu has one while no process is running. */
+  private readonly commandLists = new Map<string, CommandRow[]>();
 
   constructor(private readonly deps: ClaudeCodeEngineDeps) {
     this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
@@ -212,6 +217,32 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     this.pool.closeAll();
     for (const live of this.processes) live.close();
     this.processes.clear();
+    this.commandLists.clear();
+  }
+
+  /**
+   * The Claude Code commands a chat's slash menu offers. Only a live process is
+   * asked: starting one just to list would run the folder's SessionStart hook.
+   * With none, the chat's last list is returned (empty before its first reply).
+   */
+  async listCommands(input: { chatId: string; profile: ResolvedProfile; workspaceRoot: string | null }): Promise<CommandRow[]> {
+    const live = [...this.processes].find((p) => !p.isClosed && p.last?.chatId === input.chatId && p.query.supportedCommands);
+    if (live) {
+      const rows = await this.rememberCommands(input.chatId, live);
+      if (rows) return rows;
+    }
+    return this.commandLists.get(input.chatId) ?? [];
+  }
+
+  /** Asks a live process for its commands and remembers them; null when it can't answer. */
+  private async rememberCommands(chatId: string, live: LiveProcess): Promise<CommandRow[] | null> {
+    try {
+      const rows = chatCommands((await live.query.supportedCommands?.()) ?? []);
+      this.commandLists.set(chatId, rows);
+      return rows;
+    } catch {
+      return null;
+    }
   }
 
   onBackground(handler: (event: EngineBackgroundEvent) => void): void {
@@ -713,6 +744,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       } else if (ended && !live.isClosed && (finished || req.signal.aborted)) {
         // A turn that reached its own result leaves its process waiting for the next message.
         this.pool.release(live);
+        void this.rememberCommands(req.chatId, live);
       } else {
         live.close();
       }

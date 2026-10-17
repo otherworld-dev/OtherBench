@@ -715,6 +715,58 @@ describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in V
   });
 });
 
+describe('ClaudeCodeChatEngine.listCommands', () => {
+  const cmds = [{ name: 'deploy', description: 'Deploy', argumentHint: '' }, { name: 'config', description: 'c', argumentHint: '', builtin: true }, { name: 'init', description: 'i', argumentHint: '', builtin: true, aliases: [] }];
+  const withCommands = (list = cmds) => {
+    const starts: Options[] = [];
+    const asked = { n: 0 };
+    const query: QueryFn = ({ prompt, options }) => {
+      starts.push(options);
+      const gen = (async function* () { for await (const _ of prompt) { yield init('sess-1'); yield success(); } })();
+      return Object.assign(gen, { interrupt: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}), supportedCommands: async () => { asked.n += 1; return list; } });
+    };
+    return { query, starts, asked };
+  };
+  const input = { chatId: 'chat', profile: profile(), workspaceRoot: ws };
+
+  it("uses the chat's live process and starts no new query", async () => {
+    const { query, starts, asked } = withCommands();
+    const e = engine(query);
+    await collect(e.stream(req()));
+    const before = asked.n;
+    const rows = await e.listCommands(input);
+    expect(asked.n).toBe(before + 1);
+    expect(starts).toHaveLength(1);
+    expect(rows.map((r) => r.name)).toEqual(['deploy', 'init']);
+    e.dispose();
+  });
+
+  it('listCommands with no live process returns the remembered list and starts no query', async () => {
+    const { query, starts } = withCommands();
+    const e = engine(query);
+    expect(await e.listCommands(input)).toEqual([]);
+    expect(starts).toHaveLength(0);
+    await collect(e.stream(req()));
+    await e.listCommands(input);
+    e.closeChats(() => true);
+    const n = starts.length;
+    expect((await e.listCommands(input)).map((r) => r.name)).toEqual(['deploy', 'init']);
+    expect(await e.listCommands({ ...input, chatId: 'other' })).toEqual([]);
+    expect(starts).toHaveLength(n);
+    e.dispose();
+  });
+
+  it('a finished reply refreshes the remembered list', async () => {
+    const { query } = withCommands();
+    const e = engine(query);
+    await collect(e.stream(req()));
+    await new Promise((r) => setTimeout(r, 20));
+    e.closeChats(() => true);
+    expect((await e.listCommands(input)).map((r) => r.name)).toEqual(['deploy', 'init']);
+    e.dispose();
+  });
+});
+
 describe('ClaudeCodeChatEngine live processes', () => {
   const textOfPrompt = (p: SDKUserMessage): string => ((p.message as { content: { text?: string }[] }).content[0]!.text ?? '');
   const live = (query: QueryFn, extra: { liveIdleMs?: number; maxLive?: number } = {}) =>

@@ -1,4 +1,5 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
+import type { CommandRow } from '../domain/context-lines.js';
 import type { SubagentEvent } from '../domain/parts.js';
 import type { BackgroundHelper } from '../types/background.js';
 export type { BackgroundHelper } from '../types/background.js';
@@ -181,6 +182,8 @@ export interface ChatEngine {
   refreshChatSettings?(chatId?: string): void;
   /** Ends what the engine keeps running for the chats `gone` picks (they were deleted): their processes and background tasks. */
   closeChats?(gone: (chatId: string) => boolean): void;
+  /** The slash commands the engine's agent offers in a chat, for the chat's slash menu. Only the Claude Code engine has any. */
+  listCommands?(input: { chatId: string; profile: ResolvedProfile; workspaceRoot: string | null }): Promise<CommandRow[]>;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
   /**
