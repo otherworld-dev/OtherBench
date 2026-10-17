@@ -585,6 +585,8 @@ export class TurnRunner {
     notice: string;
     unattended: boolean;
     stream: (req: EngineRequest) => AsyncIterable<EngineEvent>;
+    /** Called once the reply has ended, however it ended (also when it ended before `stream` was called). */
+    onEnd?: () => void;
   }): Promise<{ assistantMessageId: string }> {
     const { profile } = input;
     const message = this.store.messages.create({
@@ -597,9 +599,11 @@ export class TurnRunner {
       error: null,
       producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
     });
-    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice }).catch((err: unknown) => {
-      console.error(`[TurnRunner] self-started reply ${message.id} failed outside its own error handling:`, err);
-    });
+    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice })
+      .catch((err: unknown) => {
+        console.error(`[TurnRunner] self-started reply ${message.id} failed outside its own error handling:`, err);
+      })
+      .finally(() => input.onEnd?.());
     return { assistantMessageId: message.id };
   }
 
