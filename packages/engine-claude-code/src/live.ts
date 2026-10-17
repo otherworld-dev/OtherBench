@@ -37,6 +37,49 @@ export class PromptQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** What a live process reads from: Claude Code's output, and the controls of the query that produces it. */
+export type LiveQuery = AsyncIterable<SDKMessage> & {
+  interrupt(): Promise<unknown>;
+  stopTask?(taskId: string): Promise<unknown>;
+};
+
+/**
+ * One turn's share of a process's output: the messages from when a reply
+ * attaches to its own result. Read once.
+ */
+export class TurnFeed implements AsyncIterable<SDKMessage> {
+  private readonly queued: SDKMessage[] = [];
+  private wake: (() => void) | null = null;
+  private ended = false;
+
+  push(message: SDKMessage): void {
+    this.queued.push(message);
+    this.wake?.();
+  }
+
+  end(): void {
+    this.ended = true;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<SDKMessage> {
+    for (;;) {
+      while (this.queued.length > 0) yield this.queued.shift()!;
+      if (this.ended) return;
+      await new Promise<void>((resolve) => (this.wake = resolve));
+      this.wake = null;
+    }
+  }
+}
+
+/** Whether `msg` is the result of the turn that answered the message `uuid`. A result naming no message (an older Claude Code) counts. */
+function resultFor(msg: SDKMessage, uuid: string): boolean {
+  const m = msg as unknown as { type?: unknown; user_message_uuid?: unknown; user_message_uuids?: unknown };
+  if (m.type !== 'result') return false;
+  const named = [...(typeof m.user_message_uuid === 'string' ? [m.user_message_uuid] : []), ...(Array.isArray(m.user_message_uuids) ? m.user_message_uuids : [])];
+  return named.length === 0 || named.includes(uuid);
+}
+
 /** What one reply binds a live process's hooks to while it runs. */
 export interface TurnBinding {
   gate: Gate;
@@ -69,6 +112,12 @@ export interface OtherBenchServerSwitches {
  * live sessions). Its options -- and so its hooks -- are fixed when it
  * starts, so the hooks call through `binding`, which each reply sets for its
  * own approvals context and clears when it ends.
+ *
+ * Its output is read for its whole life, by one reader (spec
+ * 2026-10-17-claude-background-helpers-design): a reply that `attach`es gets
+ * its turn up to its own result, and anything else -- what Claude Code does
+ * between replies -- goes to `onIdle`. So output from a turn a reply didn't
+ * start never reaches it.
  */
 export class LiveProcess {
   sessionId: string | null = null;
@@ -84,17 +133,79 @@ export class LiveProcess {
   /** Claude Code's name for each relayed MCP tool on this process's OtherBench server -> the API model's name for it. */
   relayNames = new Map<string, string>();
   readonly stderr: string[] = [];
-  readonly iterator: AsyncIterator<SDKMessage>;
   private closed = false;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Where output goes while no reply is attached (the engine's background handling). */
+  onIdle: (message: SDKMessage) => void = () => {};
+  /** Why the output ended, when it ended with an error. */
+  failure: unknown = null;
+  private attached: { uuid: string; feed: TurnFeed } | null = null;
+  private freeWaiters: (() => void)[] = [];
+  private outputEnded = false;
 
   constructor(
     readonly key: string,
     readonly input: PromptQueue,
     readonly abortController: AbortController,
-    stream: AsyncIterable<SDKMessage>
+    readonly query: LiveQuery
   ) {
-    this.iterator = stream[Symbol.asyncIterator]();
+    void this.pump(query[Symbol.asyncIterator]());
+  }
+
+  /** The one reader of this process's output. */
+  private async pump(iterator: AsyncIterator<SDKMessage>): Promise<void> {
+    try {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) break;
+        const turn = this.attached;
+        if (turn && (next.value as { type?: unknown }).type === 'result' && !resultFor(next.value, turn.uuid)) {
+          // Another turn's result (one Claude Code ran by itself) never ends this reply.
+          this.onIdle(next.value);
+        } else if (turn) {
+          turn.feed.push(next.value);
+          if (resultFor(next.value, turn.uuid)) this.detach();
+        } else {
+          this.onIdle(next.value);
+        }
+      }
+    } catch (err) {
+      this.failure = err;
+    } finally {
+      this.outputEnded = true;
+      this.detach();
+    }
+  }
+
+  /** The output of the turn answering the message `uuid`, up to its result. Attach before sending that message. */
+  attach(uuid: string): TurnFeed {
+    const feed = new TurnFeed();
+    if (this.outputEnded) {
+      feed.end();
+      return feed;
+    }
+    this.attached?.feed.end();
+    this.attached = { uuid, feed };
+    return feed;
+  }
+
+  get isAttached(): boolean {
+    return this.attached !== null;
+  }
+
+  /** Resolves once no reply is attached. */
+  whenFree(): Promise<void> {
+    if (!this.attached) return Promise.resolve();
+    return new Promise((resolve) => this.freeWaiters.push(resolve));
+  }
+
+  private detach(): void {
+    if (!this.attached) return;
+    this.attached.feed.end();
+    this.attached = null;
+    const waiters = this.freeWaiters;
+    this.freeWaiters = [];
+    for (const wake of waiters) wake();
   }
 
   get isClosed(): boolean {
@@ -107,6 +218,8 @@ export class LiveProcess {
     this.closed = true;
     clearTimeout(this.idleTimer);
     this.binding = null;
+    // Whatever was reading this process's turn learns it's over.
+    this.detach();
     this.input.end();
     this.abortController.abort();
   }
@@ -144,8 +257,14 @@ export class LivePool {
     private readonly max = MAX_LIVE
   ) {}
 
-  /** The idle process on `sessionId`, if its options match `key`; it's now busy. A mismatched one is closed. */
-  take(sessionId: string, key: string): LiveProcess | null {
+  /**
+   * The pooled process on `sessionId`, if its options match `key`; it's now
+   * busy. One running a turn Claude Code started by itself is waited for
+   * first. A mismatched one is closed.
+   */
+  async takeWhenFree(sessionId: string, key: string): Promise<LiveProcess | null> {
+    const waiting = this.idle.get(sessionId);
+    if (waiting?.isAttached) await waiting.whenFree();
     const live = this.idle.get(sessionId);
     if (!live) return null;
     this.idle.delete(sessionId);

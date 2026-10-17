@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +31,8 @@ import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
+  /** Stops one background task (a helper, a background command) by Claude Code's task id. */
+  stopTask?(taskId: string): Promise<unknown>;
   supportedModels(): Promise<{ value: string; displayName: string }[]>;
   accountInfo(): Promise<{ email?: string; subscriptionType?: string }>;
   /** The data behind /usage. Experimental in the SDK and may go away, hence optional; its answer is checked, not trusted (plan-usage.ts). */
@@ -84,6 +87,9 @@ export interface ClaudeCodeEngineDeps {
 
 const PROBE_TIMEOUT_MS = 20_000;
 
+/** How long a stopped reply's turn may take to end after Claude Code is interrupted before its process is closed. */
+export const INTERRUPT_GRACE_MS = 5_000;
+
 /** A clean chat's folder name under the scratch root: its id, made a plain name so it can't point outside (the server deletes it by the same rule). */
 export function scratchFolderName(chatId: string): string {
   return chatId.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -94,8 +100,9 @@ type PendingNotice = { text: string | null };
 
 type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
-const userMessage = (content: ContentBlock[]): SDKUserMessage =>
-  ({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, origin: { kind: 'human' } }) as unknown as SDKUserMessage;
+/** A message to Claude Code; `uuid` lets the reply find the result of its own turn. */
+const userMessage = (content: ContentBlock[], uuid?: string): SDKUserMessage =>
+  ({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, origin: { kind: 'human' }, ...(uuid ? { uuid } : {}) }) as unknown as SDKUserMessage;
 
 /** A one-message prompt stream that stays open until `close()` -- hooks and canUseTool travel over the same channel, so input must not end before the result. */
 function promptStream(content: ContentBlock[]): { stream: AsyncIterable<SDKUserMessage>; close: () => void } {
@@ -284,18 +291,33 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     };
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
-    const taken = plan.mode === 'continue' ? this.pool.take(plan.sessionId, key) : null;
+    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key) : null;
     const reused = taken !== null;
     const live = taken ?? this.startProcess(options, key, plan, own, relay);
+    // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
+    if (req.signal.aborted) {
+      if (reused) this.pool.release(live);
+      else live.close();
+      return 'done';
+    }
     live.binding = binding;
+    // This reply's turn, up to its own result: attached before the message
+    // goes, so nothing of it is missed and nothing else reaches it.
+    const uuid = randomUUID();
+    const feed = live.attach(uuid)[Symbol.asyncIterator]();
 
-    // Stopping a reply stops its process: the next message resumes the
-    // session in a new one, rather than trusting a half-finished turn.
-    const onAbort = (): void => live.close();
+    // Stopping a reply interrupts Claude Code's turn and keeps the process, so
+    // its background helpers carry on and the next message continues the
+    // session. The reply ends at once; the turn is read to its end in the
+    // background (finishStopped), and one that doesn't end in time closes the process.
+    let stopped!: () => void;
+    const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
+    const onAbort = (): void => {
+      void live.query.interrupt().catch(() => live.close());
+      stopped();
+    };
     req.signal.addEventListener('abort', onAbort, { once: true });
-    // An 'abort' that fired before the listener existed never reaches it.
-    if (req.signal.aborted) live.close();
-    live.input.push(userMessage(content));
+    live.input.push(userMessage(content, uuid));
 
     // This process's own tools are reported under the API engines' names.
     const renames = new Map<string, string>();
@@ -306,12 +328,22 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const mapper = new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: profile.id, modelId: profile.modelId });
     let sawInit = false;
     let finished = false;
+    // The turn's own result arrived (a success or not): the process is in a known state.
+    let ended = false;
     let rateLimitResetsAt: number | null = null;
+    let pending: Promise<IteratorResult<SDKMessage>> | null = null;
     try {
-      // Read by hand: a for-await `break` would end the process's output for good.
       while (!finished) {
-        const next = await live.iterator.next();
-        if (next.done) break; // the process ended
+        pending ??= feed.next();
+        const next = await Promise.race([pending, stoppedNow]);
+        if ('stopped' in next) break;
+        pending = null;
+        if (next.done) {
+          // The output ended (the process died) unless this turn's result was the last thing.
+          if (live.failure !== null && !ended) throw live.failure;
+          break;
+        }
+        if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init') {
             sawInit = true;
@@ -330,6 +362,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           } else if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
           } else if (event.type === 'result-error') {
+            // A stopped reply's interrupted turn: its process carries on for the next message.
+            if (req.signal.aborted) return 'done';
             live.close();
             if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
@@ -352,12 +386,41 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     } finally {
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
-      // Only a cleanly finished reply leaves its process waiting for the next message.
-      if (finished && !req.signal.aborted && !live.isClosed) this.pool.release(live);
-      else live.close();
+      if (req.signal.aborted && !ended && !live.isClosed) {
+        // Stopped mid-turn: the turn is read to its end in the background, then the process waits for the next message.
+        void this.finishStopped(live, feed, pending);
+      } else if (ended && !live.isClosed && (finished || req.signal.aborted)) {
+        // A turn that reached its own result leaves its process waiting for the next message.
+        this.pool.release(live);
+      } else {
+        live.close();
+      }
       if (live.isClosed) this.processes.delete(live);
     }
     return 'done';
+  }
+
+  /**
+   * After a stop: reads the interrupted turn to its result, then pools the
+   * process for the next message. One whose turn hasn't ended within
+   * INTERRUPT_GRACE_MS is closed.
+   */
+  private async finishStopped(live: LiveProcess, feed: AsyncIterator<SDKMessage>, pending: Promise<IteratorResult<SDKMessage>> | null): Promise<void> {
+    const timer = setTimeout(() => live.close(), INTERRUPT_GRACE_MS);
+    timer.unref?.();
+    let ended = false;
+    try {
+      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next()) {
+        if ((next.value as { type?: unknown }).type === 'result') ended = true;
+      }
+    } catch {
+      ended = false;
+    } finally {
+      clearTimeout(timer);
+      if (ended && !live.isClosed) this.pool.release(live);
+      else live.close();
+      if (live.isClosed) this.processes.delete(live);
+    }
   }
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */

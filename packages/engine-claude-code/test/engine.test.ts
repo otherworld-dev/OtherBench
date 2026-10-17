@@ -648,7 +648,7 @@ describe('ClaudeCodeChatEngine live processes', () => {
     e.dispose();
   });
 
-  it('stopping a reply stops its process, and the next message resumes the session in a new one', async () => {
+  it("stopping a reply whose turn won't end closes its process after the grace, and the next message resumes the session in a new one", async () => {
     const { query, starts } = liveQuery(async function* ({ n, options }) {
       yield init('sess-1');
       if (n === 2) await new Promise<void>((resolve) => options.abortController!.signal.addEventListener('abort', () => resolve()));
@@ -656,11 +656,16 @@ describe('ClaudeCodeChatEngine live processes', () => {
     });
     const e = live(query);
     await collect(e.stream(req()));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const stop = new AbortController();
     const running = collect(e.stream(followUp({ signal: stop.signal })));
-    await new Promise((r) => setTimeout(r, 10));
+    await vi.advanceTimersByTimeAsync(10);
     stop.abort();
+    // The reply stops at once; its process gets a little while to end the turn.
     await running;
+    expect(starts[0]!.stopped()).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    vi.useRealTimers();
     expect(starts[0]!.stopped()).toBe(true);
 
     await collect(e.stream(followUp({ messageId: 'm3' })));
@@ -1714,6 +1719,109 @@ describe('ClaudeCodeChatEngine images in the new message', () => {
     for (const call of calls) {
       const content = (call.prompt.message as unknown as { content: { type: string; text?: string }[] }).content;
       expect(content.slice(1).map((c) => (c.type === 'text' ? c.text : c.type))).toEqual([NOT_IMAGE, 'image']);
+    }
+  });
+});
+
+describe('ClaudeCodeChatEngine between replies (spec 2026-10-17-claude-background-helpers-design)', () => {
+  /** A fake long-lived Claude Code whose turns may keep talking after their result, and which answers interrupt() as the turn running says. */
+  function chattyLive(turn: (ctx: { prompt: SDKUserMessage; n: number; interrupted: Promise<void> }) => AsyncGenerator<SDKMessage>, opts: { honourInterrupt?: boolean } = {}) {
+    const starts: { interrupts: number; stopped: () => boolean }[] = [];
+    const query: QueryFn = ({ prompt, options }) => {
+      let interrupt: () => void = () => {};
+      const start = { interrupts: 0, stopped: () => options.abortController?.signal.aborted ?? false };
+      starts.push(start);
+      let n = 0;
+      const gen = (async function* () {
+        for await (const msg of prompt) {
+          if (start.stopped()) return;
+          n += 1;
+          const interrupted = new Promise<void>((resolve) => (interrupt = resolve));
+          yield* turn({ prompt: msg, n, interrupted });
+        }
+      })();
+      return Object.assign(gen, {
+        interrupt: async () => {
+          start.interrupts += 1;
+          if (opts.honourInterrupt !== false) interrupt();
+        },
+        stopTask: async () => undefined,
+        supportedModels: async () => [],
+        accountInfo: async () => ({}),
+      });
+    };
+    return { query, starts };
+  }
+  const resultFor = (prompt: SDKUserMessage, subtype = 'success'): SDKMessage =>
+    ({ type: 'result', subtype, is_error: subtype !== 'success', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [(prompt as { uuid?: string }).uuid] }) as unknown as SDKMessage;
+  const textOfEvents = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+  it('a turn Claude Code starts after the reply ends never reaches the next reply', async () => {
+    const { query, starts } = chattyLive(async function* ({ prompt, n }) {
+      if (n === 1) {
+        yield init();
+        yield delta('one');
+        yield resultFor(prompt);
+        // Claude Code carrying on by itself after the reply ended.
+        yield delta('stray');
+        yield ({ type: 'result', subtype: 'success', is_error: false, usage: {}, user_message_uuids: [], origin: { kind: 'task-notification' } } as unknown as SDKMessage);
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    expect(textOfEvents(await collect(e.stream(req())))).toBe('one');
+    expect(textOfEvents(await collect(e.stream(followUp())))).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
+  it('Stop interrupts the turn and keeps the process for the next message', async () => {
+    const { query, starts } = chattyLive(async function* ({ prompt, n, interrupted }) {
+      if (n === 1) {
+        yield init();
+        yield delta('working');
+        await interrupted;
+        yield resultFor(prompt, 'error_during_execution');
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    const controller = new AbortController();
+    const events: EngineEvent[] = [];
+    for await (const ev of e.stream(req({ signal: controller.signal }))) {
+      events.push(ev);
+      if (ev.type === 'text-delta') controller.abort();
+    }
+    expect(starts[0]!.interrupts).toBe(1);
+    expect(starts[0]!.stopped()).toBe(false);
+    expect(events.some((ev) => ev.type === 'error')).toBe(false);
+    expect(textOfEvents(await collect(e.stream(followUp())))).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
+  it('a turn that does not end after interrupt closes its process', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { query, starts } = chattyLive(async function* () {
+        yield init();
+        yield delta('stuck');
+        await new Promise(() => {});
+      }, { honourInterrupt: false });
+      const controller = new AbortController();
+      const run = collect(engine(query).stream(req({ signal: controller.signal })));
+      await vi.waitFor(() => expect(starts).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      // The reply stops at once; the process is closed when the turn hasn't ended in time.
+      await run;
+      expect(starts[0]!.stopped()).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(starts[0]!.stopped()).toBe(true);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
