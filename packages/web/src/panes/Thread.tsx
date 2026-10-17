@@ -247,7 +247,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     setSwitchError(null);
     try {
       const result = await api.turns.create(chat!.id, { parentId: original.parentId, parts, profileIds: [profile.id] });
-      registerMessage(buildUserStub(chat!, result.userMessageId, original.parentId, parts));
+      registerMessage(buildUserStub(chat!, result.userMessageId, original.parentId, result.userParts ?? parts));
       for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat!, id, result.userMessageId, profile));
       // Same head rule as Composer: head lands on the new USER message and the
       // thread walks into its lone reply.

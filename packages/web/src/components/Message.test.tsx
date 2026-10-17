@@ -26,6 +26,28 @@ function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
 describe('Message', () => {
   afterEach(cleanup);
 
+  it('renders a context line as a separator, not a user bubble', () => {
+    render(<Message message={base({ role: 'user', producedBy: null, parts: [{ type: 'context', kind: 'clear' }] })} />);
+    expect(screen.getByRole('separator')).toHaveTextContent('Context cleared');
+    expect(screen.queryByText('You')).toBeNull();
+  });
+
+  it('renders a compact summary closed, with the token counts, and the summary once opened', async () => {
+    const message = base({ parts: [{ type: 'context-summary', text: 'The **gist**', preTokens: 120000, postTokens: 8000 }] });
+    render(<Message message={message} />);
+    const summary = screen.getByText(`Context compacted · ${(120000).toLocaleString()} → ${(8000).toLocaleString()} tokens`);
+    const details = summary.closest('details')!;
+    expect(details.open).toBe(false);
+    await userEvent.setup().click(summary);
+    expect(details.open).toBe(true);
+    expect(screen.getByText('gist').tagName).toBe('STRONG');
+  });
+
+  it('leaves the counts off a compact summary that has none', () => {
+    render(<Message message={base({ parts: [{ type: 'context-summary', text: 's' }] })} />);
+    expect(screen.getByText('Context compacted')).toBeInTheDocument();
+  });
+
   it('renders text parts as markdown', () => {
     render(<Message message={base()} />);
     const strong = screen.getByText('world');

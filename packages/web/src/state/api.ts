@@ -349,6 +349,10 @@ export interface CreateTurnBody {
 export interface TurnResult {
   userMessageId: string;
   assistantMessageIds: string[];
+  /** The profiles actually run, in `assistantMessageIds` order (a /compact runs one, whatever was selected). */
+  profileIds?: string[];
+  /** The user message's parts as stored (a typed "/clear" becomes a context part). */
+  userParts?: Part[];
 }
 
 /** What `POST /chats/:id/regenerate` returns: the new reply, under the same user message. */

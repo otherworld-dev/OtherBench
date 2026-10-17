@@ -367,9 +367,11 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     try {
       const result = await api.turns.create(chat.id, { parentId: effectiveParentId, parts, profileIds: selectedProfileIds });
 
-      registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, parts));
+      // What the server stored and ran, not what was typed: a /clear is a context line, and a /compact runs one profile.
+      registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, result.userParts ?? parts));
+      const ranProfileIds = result.profileIds ?? selectedProfileIds;
       result.assistantMessageIds.forEach((id, i) => {
-        const profile = profiles.find((p) => p.id === selectedProfileIds[i]);
+        const profile = profiles.find((p) => p.id === ranProfileIds[i]);
         if (!profile) return;
         registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
       });

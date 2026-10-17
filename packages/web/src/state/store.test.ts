@@ -575,6 +575,12 @@ describe('running replies from app-wide events (#824)', () => {
     expect(s().chatReloads).toEqual({ c1: 2 });
   });
 
+  it('asks a chat to reload when a turn starts with no replies (a /clear), as its line may not have synced yet', () => {
+    const s = () => useOtherBenchStore.getState();
+    s().applyAppEvent({ type: 'turn-started', chatId: 'c1', messageIds: [] });
+    expect(s().chatReloads).toEqual({ c1: 1 });
+  });
+
   it('loading a finished message drops the events buffered for it before it was known', () => {
     const s = () => useOtherBenchStore.getState();
     s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: 'early' });

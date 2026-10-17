@@ -174,6 +174,43 @@ describe('Composer', () => {
     expect(textbox.style.height).toBe('120px');
   });
 
+  it('sends /compact to the one profile the server ran, with one reply stub', async () => {
+    const p2 = makeProfile({ id: 'p2', name: 'Other' });
+    useOtherBenchStore.getState().setProfiles([makeProfile(), p2]);
+    mockedCreate.mockResolvedValue({
+      userMessageId: 'u1',
+      assistantMessageIds: ['a1'],
+      profileIds: ['p2'],
+      userParts: [{ type: 'context', kind: 'compact' }],
+    });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Other' }));
+    await user.type(screen.getByRole('textbox', { name: /message/i }), '/compact');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    expect(mockedCreate.mock.calls[0]![1].profileIds).toEqual(['p1', 'p2']);
+    const { messages } = useOtherBenchStore.getState();
+    expect(messages['u1']!.parts).toEqual([{ type: 'context', kind: 'compact' }]);
+    expect(messages['a1']!.producedBy?.profileId).toBe('p2');
+    expect(Object.keys(messages).sort()).toEqual(['a1', 'u1']);
+  });
+
+  it('shows /clear as its line at once, with no reply stub', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [], profileIds: [], userParts: [{ type: 'context', kind: 'clear' }] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.type(screen.getByRole('textbox', { name: /message/i }), '/clear');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    await waitFor(() => expect(useOtherBenchStore.getState().messages['u1']).toBeDefined());
+    expect(useOtherBenchStore.getState().messages['u1']!.parts).toEqual([{ type: 'context', kind: 'clear' }]);
+    expect(Object.keys(useOtherBenchStore.getState().messages)).toEqual(['u1']);
+  });
+
   it('sending posts the right body to the turns API', async () => {
     mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
     mockedSetHead.mockResolvedValue(makeChat());

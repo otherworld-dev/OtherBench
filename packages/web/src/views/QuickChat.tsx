@@ -101,7 +101,7 @@ export function QuickChat(): JSX.Element {
       } else if (chat) {
         const parts: Part[] = [{ type: 'text', text: body }];
         const result = await api.turns.create(chat.id, { parentId, parts, profileIds: [profile.id] });
-        registerMessage(buildUserStub(chat, result.userMessageId, parentId, parts));
+        registerMessage(buildUserStub(chat, result.userMessageId, parentId, result.userParts ?? parts));
         for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
       }
       setText('');

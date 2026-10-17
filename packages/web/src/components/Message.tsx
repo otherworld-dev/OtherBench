@@ -2,12 +2,14 @@ import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
 import { isToolImageRef, type ToolImageRef } from '@otherbench/core/domain/tool-images.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
+import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
@@ -52,6 +54,22 @@ function AttachmentPartChip({ part }: { part: Extract<Part, { type: 'image' | 'f
   const filename = part.type === 'file' ? part.filename : imageDisplayName(part.attachmentId, part.mime);
   const previewUrl = api.attachments.previewable(part.mime) ? api.attachments.contentUrl(part.attachmentId) : undefined;
   return <AttachmentChip filename={filename} mime={part.mime} previewUrl={previewUrl} />;
+}
+
+/** A compact's summary: closed by default, the counts on its line when both are known. */
+function ContextSummaryBlock({ part }: { part: Extract<Part, { type: 'context-summary' }> }): JSX.Element {
+  const counts =
+    part.preTokens !== undefined && part.postTokens !== undefined
+      ? ` · ${part.preTokens.toLocaleString()} → ${part.postTokens.toLocaleString()} tokens`
+      : '';
+  return (
+    <details className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+      <summary className="cursor-pointer font-medium text-[var(--text-muted)] select-none">{`Context compacted${counts}`}</summary>
+      <div className="mt-1 text-sm">
+        <MarkdownBody text={part.text} />
+      </div>
+    </details>
+  );
 }
 
 function ReasoningBlock({ text }: { text: string }): JSX.Element {
@@ -305,6 +323,8 @@ function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element
       return <ToolResultBlock key={key} name={part.name} result={part.result} isError={part.isError} scope={scope} />;
     case 'notice':
       return <NoticeBlock key={key} text={part.text} />;
+    case 'context-summary':
+      return <ContextSummaryBlock key={key} part={part} />;
     case 'image':
     case 'file':
       return (
@@ -658,6 +678,8 @@ export function Message({
   editing,
   framed = false,
 }: MessageProps): JSX.Element {
+  const line = contextLineOf(message);
+  if (line) return <ContextLine kind={line.kind} {...(line.focus !== undefined ? { focus: line.focus } : {})} at={message.createdAt} />;
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
   // Assistant messages already render image/file parts inline, in order,
