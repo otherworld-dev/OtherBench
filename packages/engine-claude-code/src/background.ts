@@ -15,13 +15,15 @@ interface Task {
  * The background tasks one Claude Code process has running for its chat
  * (spec 2026-10-17-claude-background-helpers-design): helpers (Task/Agent in
  * the background) and background shells, monitors and the like. It reads
- * every message the process produces, in a reply or between replies, and
- * reports the chat's live set (`helpers`) and changes to a helper's card in
- * an earlier reply (`helper-event`: it finished, or went back to work). The
- * card of the reply that's running is left to that reply (its event mapper).
+ * every message the process produces, in order, as the process's reader
+ * gets it (in a reply or between replies), and reports the chat's live set
+ * (`helpers`) and changes to a helper's card in an earlier reply
+ * (`helper-event`: it finished, or went back to work). A helper card is noted
+ * from the main agent's Task/Agent call, as belonging to the reply running
+ * then (`current`); that reply's own cards are left to its event mapper.
  */
 export class BackgroundTasks {
-  /** The reply that's running, if any: its own cards aren't touched from here. */
+  /** The reply that's running, if any: new helper cards are its, and its own cards aren't touched from here. */
   current: string | null = null;
   private readonly tasks = new Map<string, Task>();
   /** Each helper card's reply, by the tool call that started it. */
@@ -29,6 +31,8 @@ export class BackgroundTasks {
   /** Which helper made each tool call. */
   private readonly owners = new Map<string, string>();
   private lastSent = '';
+  /** The task that finished most recently: what a turn Claude Code starts by itself is carrying on after. */
+  lastFinished: BackgroundHelper | null = null;
 
   constructor(
     readonly chatId: string,
@@ -39,6 +43,12 @@ export class BackgroundTasks {
   /** The helper started by the tool call `callId` has its card in the reply `messageId`. */
   noteCard(callId: string, messageId: string): void {
     this.cards.set(callId, messageId);
+  }
+
+  /** The running reply has its message id now (a self-started one gets it after its turn began): its cards move with it. */
+  renameCurrent(from: string, to: string): void {
+    for (const [callId, messageId] of this.cards) if (messageId === from) this.cards.set(callId, to);
+    if (this.current === from) this.current = to;
   }
 
   /** Whether any task is running. */
@@ -97,7 +107,7 @@ export class BackgroundTasks {
 
   private toolCalls(m: Obj): void {
     const parent = str(m['parent_tool_use_id']);
-    if (parent === null) return;
+    if (parent === null) return this.mainCalls(m);
     const task = [...this.tasks.values()].find((t) => t.helper.callId === parent && !t.ended);
     const content = (m['message'] as { content?: unknown } | undefined)?.content;
     for (const block of Array.isArray(content) ? content : []) {
@@ -108,6 +118,18 @@ export class BackgroundTasks {
       if (task && name) task.helper = { ...task.helper, lastActivity: name };
     }
     this.sendList();
+  }
+
+  /** The main agent's Task/Agent calls start helper cards in the running reply. */
+  private mainCalls(m: Obj): void {
+    if (this.current === null) return;
+    const content = (m['message'] as { content?: unknown } | undefined)?.content;
+    for (const block of Array.isArray(content) ? content : []) {
+      if (typeof block !== 'object' || block === null) continue;
+      const b = block as Obj;
+      const id = str(b['id']);
+      if (b['type'] === 'tool_use' && id && (b['name'] === 'Task' || b['name'] === 'Agent')) this.cards.set(id, this.current);
+    }
   }
 
   private liveSet(m: Obj): void {
@@ -161,6 +183,7 @@ export class BackgroundTasks {
     if (!task) return;
     const wasRunning = !task.ended;
     task.ended = true;
+    this.lastFinished = task.helper;
     const summary = str(m['summary']);
     const at = this.now();
     if (wasRunning || this.cards.has(task.helper.callId ?? '')) {

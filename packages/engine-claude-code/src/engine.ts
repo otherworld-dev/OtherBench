@@ -11,7 +11,7 @@ import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineBackgroundEvent, EngineEvent, EngineRequest, SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -100,6 +100,16 @@ export function scratchFolderName(chatId: string): string {
 type PendingNotice = { text: string | null };
 
 type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+/**
+ * Whether a message read while no reply is attached begins a turn of the
+ * main agent: Claude Code carrying on by itself. A helper's own messages
+ * (with a parent tool call) and system messages don't.
+ */
+function startsOwnTurn(message: SDKMessage): boolean {
+  const m = message as unknown as { type?: unknown; parent_tool_use_id?: unknown };
+  return (m.type === 'stream_event' || m.type === 'assistant') && m.parent_tool_use_id === null;
+}
 
 /** A message to Claude Code; `uuid` lets the reply find the result of its own turn. */
 const userMessage = (content: ContentBlock[], uuid?: string): SDKUserMessage =>
@@ -190,7 +200,121 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /** What Claude Code does while no reply is attached to the process. */
   private handleIdle(live: LiveProcess, message: SDKMessage): void {
-    live.background?.handle(message);
+    if (startsOwnTurn(message)) this.selfStart(live, message);
+  }
+
+  /**
+   * Claude Code began a turn by itself (a helper reported back): it's handed
+   * to whoever runs replies as a self-start, its output buffered until then.
+   * With nobody to run it, it's read to its end and dropped.
+   */
+  private selfStart(live: LiveProcess, first: SDKMessage): void {
+    const placeholder = `self-${randomUUID()}`;
+    const feed = live.attach(placeholder);
+    feed.push(first);
+    // Helper cards it starts belong to its reply, whose id comes when it runs.
+    if (live.background) {
+      live.background.current = placeholder;
+      live.background.handle(first);
+    }
+    const iterator = feed[Symbol.asyncIterator]();
+    let taken = false;
+    const drain = async (): Promise<void> => {
+      for (let next = await iterator.next(); !next.done; next = await iterator.next());
+    };
+    const last = live.last;
+    if (!last || !this.backgroundHandler) {
+      void drain();
+      return;
+    }
+    const finished = live.background?.lastFinished ?? null;
+    const notice = finished === null
+      ? 'Carried on after a background task finished.'
+      : finished.kind === 'local_agent'
+        ? `Carried on after the helper "${finished.label}" reported back.`
+        : `Carried on after the background task "${finished.label}" finished.`;
+    const start: SelfStart = {
+      chatId: last.chatId,
+      afterMessageId: last.messageId,
+      profileId: last.profileId,
+      notice,
+      unattended: last.unattended,
+      run: (req) => {
+        if (taken) throw new Error('A self-started turn runs once.');
+        taken = true;
+        live.background?.renameCurrent(placeholder, req.messageId);
+        return this.runSelfStarted(live, req, iterator);
+      },
+      decline: () => {
+        if (taken) return;
+        taken = true;
+        void drain();
+      },
+    };
+    this.backgroundHandler({ type: 'self-start', start });
+  }
+
+  /** A self-started turn, for the reply `req` describes: gated and mapped like a user's reply, from the output already buffered. */
+  private async *runSelfStarted(live: LiveProcess, req: EngineRequest, feed: AsyncIterator<SDKMessage>): AsyncGenerator<EngineEvent> {
+    const backend = backendOf(req.profile.connection);
+    const clean = !req.workspaceRoot;
+    const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
+    const prepared = this.prepareReply(req, backend, clean);
+    live.binding = prepared.binding;
+    live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
+    const mapper = this.replyMapper(live, req, prepared.helpers);
+    let stopped!: () => void;
+    const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
+    const onAbort = (): void => {
+      void live.query.interrupt().catch(() => live.close());
+      stopped();
+    };
+    req.signal.addEventListener('abort', onAbort, { once: true });
+    if (req.signal.aborted) onAbort();
+    let pending: Promise<IteratorResult<SDKMessage>> | null = null;
+    let ended = false;
+    try {
+      yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, cwd, tools: [], mcpServers: [] } };
+      for (;;) {
+        pending ??= feed.next();
+        const next = await Promise.race([pending, stoppedNow]);
+        if ('stopped' in next) {
+          yield* mapper.backgroundOpen() as EngineEvent[];
+          break;
+        }
+        pending = null;
+        if (next.done) break;
+        if ((next.value as { type?: unknown }).type === 'result') ended = true;
+        for (const event of mapper.map(next.value)) {
+          if (event.type === 'init' || event.type === 'rate-limited') continue;
+          if (event.type === 'result-error') {
+            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId }) };
+            continue;
+          }
+          yield event;
+        }
+        if (ended) break;
+      }
+    } finally {
+      prepared.tickets.clear();
+      req.signal.removeEventListener('abort', onAbort);
+      live.binding = null;
+      // Stopped mid-turn: read the rest in the background (the process stays pooled, as it already is).
+      if (req.signal.aborted && !ended && !live.isClosed) void this.finishSelfStopped(live, feed, pending);
+    }
+  }
+
+  /** After a self-started reply is stopped: reads its turn to the end; one that doesn't end in time closes the process. */
+  private async finishSelfStopped(live: LiveProcess, feed: AsyncIterator<SDKMessage>, pending: Promise<IteratorResult<SDKMessage>> | null): Promise<void> {
+    const timer = setTimeout(() => live.close(), INTERRUPT_GRACE_MS);
+    timer.unref?.();
+    try {
+      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next());
+    } catch {
+      live.close();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
@@ -251,15 +375,32 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     clean: boolean,
     images: ContentBlock[]
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
-    const flushNotice = function* (): Generator<EngineEvent> {
-      const text = notice.text;
-      if (text === null) return;
-      notice.text = null;
-      yield { type: 'notice', text };
-    };
     const profile = req.profile;
     const content = this.userContent(req, plan.mode === 'fresh', images);
+    const { gateCtx, autoMode, own, relay, tickets, helpers, binding } = this.prepareReply(req, backend, clean);
+    const options = this.processOptions(req, cwd, autoMode, clean);
+    const key = liveKey(options, { backend, token: profile.apiKey }, own);
+    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key) : null;
+    const reused = taken !== null;
+    const live = taken ?? this.startProcess(options, key, plan, own, relay);
+    // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
+    if (req.signal.aborted) {
+      if (reused) this.pool.release(live);
+      else live.close();
+      return 'done';
+    }
+    live.binding = binding;
+    live.last = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, policy: profile.toolPolicy, ctx: gateCtx, autoMode, unattended: req.unattended === true };
+    return yield* this.runReplyTurn(req, plan, backend, notice, cwd, live, reused, content, autoMode, helpers, tickets);
+  }
 
+  /**
+   * What a reply binds a process's hooks to: its gate (with its tool
+   * context, policy and auto mode), its own tools and relay, and the switches
+   * the process key needs. A user's reply and a self-started one build it the same way.
+   */
+  private prepareReply(req: EngineRequest, backend: string, clean: boolean): { gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding } {
+    const profile = req.profile;
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
     const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
@@ -310,18 +451,40 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(relay.tools.size > 0 ? { relay: async (approved: ToolSpec, args: unknown) => runRelayed(currentRelayed(relay, approved), args, gateCtx, tickets) } : {}),
       tickets,
     };
-    const options = this.processOptions(req, cwd, autoMode, clean);
-    const key = liveKey(options, { backend, token: profile.apiKey }, own);
-    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key) : null;
-    const reused = taken !== null;
-    const live = taken ?? this.startProcess(options, key, plan, own, relay);
-    // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
-    if (req.signal.aborted) {
-      if (reused) this.pool.release(live);
-      else live.close();
-      return 'done';
-    }
-    live.binding = binding;
+    return { gateCtx, autoMode, own, relay, tickets, helpers, binding };
+  }
+
+  /** The mapper for one reply on `live`: this process's own tools under the API engines' names, helper cards noted for its background tasks. */
+  private replyMapper(live: LiveProcess, req: EngineRequest, helpers: HelperRegistry): SdkEventMapper {
+    const renames = new Map<string, string>();
+    if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
+    if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
+    if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
+    for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
+    return new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: req.profile.id, modelId: req.profile.modelId });
+  }
+
+  /** A user's reply on `live`: sends its message and reads its turn (see runTurn). */
+  private async *runReplyTurn(
+    req: EngineRequest,
+    plan: SessionPlan,
+    backend: string,
+    notice: PendingNotice,
+    cwd: string,
+    live: LiveProcess,
+    reused: boolean,
+    content: ContentBlock[],
+    autoMode: boolean,
+    helpers: HelperRegistry,
+    tickets: ApprovalTickets
+  ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
+    const flushNotice = function* (): Generator<EngineEvent> {
+      const text = notice.text;
+      if (text === null) return;
+      notice.text = null;
+      yield { type: 'notice', text };
+    };
+    const profile = req.profile;
     // The process's background tasks, for this chat; this reply's own helper cards are left to its mapper.
     live.background ??= new BackgroundTasks(req.chatId, (event) => this.backgroundHandler?.(event));
     live.background.current = req.messageId;
@@ -344,13 +507,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     req.signal.addEventListener('abort', onAbort, { once: true });
     live.input.push(userMessage(content, uuid));
 
-    // This process's own tools are reported under the API engines' names.
-    const renames = new Map<string, string>();
-    if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
-    if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
-    if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
-    for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
-    const mapper = new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: profile.id, modelId: profile.modelId, onCard: (callId) => live.background?.noteCard(callId, req.messageId) });
+    const mapper = this.replyMapper(live, req, helpers);
     let sawInit = false;
     let finished = false;
     // The turn's own result arrived (a success or not): the process is in a known state.
@@ -373,7 +530,6 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           break;
         }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
-        live.background.handle(next.value);
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init') {
             sawInit = true;
@@ -414,7 +570,6 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
-      if (live.background.current === req.messageId) live.background.current = null;
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {
@@ -550,9 +705,18 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     ];
     const gate: Gate = (toolName, toolInput, signal, opts) => {
       const which = ownTool(toolName);
-      return live?.binding
-        ? live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) })
-        : Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
+      if (live?.binding) return live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) });
+      // Between replies only a background helper's own call can be approved, on its helper's card (the reply that started it).
+      const owner = live?.last && opts?.toolUseId && !which ? live.background?.ownerOf(opts.toolUseId) : null;
+      if (!live?.last || !owner) return Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
+      const last = live.last;
+      const helperGate = createGate({
+        approvals: this.deps.approvals,
+        policy: last.policy,
+        ctx: { ...last.ctx, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
+        autoMode: last.autoMode,
+      });
+      return helperGate(toolName, toolInput, signal, opts);
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) =>
       live?.binding?.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};

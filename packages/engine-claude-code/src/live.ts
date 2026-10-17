@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { Gate } from './approval.js';
 import type { BackgroundTasks } from './background.js';
 import type { ApprovalTickets } from './tickets.js';
@@ -142,6 +143,12 @@ export class LiveProcess {
   failure: unknown = null;
   /** The background tasks this process is running for its chat (set by its first reply). */
   background: BackgroundTasks | null = null;
+  /**
+   * The reply that ran last (a user's or a self-started one): what its
+   * helpers' calls between replies are gated with, and what a turn Claude
+   * Code starts by itself follows.
+   */
+  last: { chatId: string; messageId: string; profileId: string; policy: ToolPolicy; ctx: ToolContext; autoMode: boolean; unattended: boolean } | null = null;
   private attached: { uuid: string; feed: TurnFeed } | null = null;
   private freeWaiters: (() => void)[] = [];
   private outputEnded = false;
@@ -161,6 +168,8 @@ export class LiveProcess {
       for (;;) {
         const next = await iterator.next();
         if (next.done) break;
+        // The background tasks see everything, in the order it came.
+        this.background?.handle(next.value);
         const turn = this.attached;
         if (turn && (next.value as { type?: unknown }).type === 'result' && !resultFor(next.value, turn.uuid)) {
           // Another turn's result (one Claude Code ran by itself) never ends this reply.
@@ -206,6 +215,7 @@ export class LiveProcess {
     if (!this.attached) return;
     this.attached.feed.end();
     this.attached = null;
+    if (this.background) this.background.current = null;
     const waiters = this.freeWaiters;
     this.freeWaiters = [];
     for (const wake of waiters) wake();
