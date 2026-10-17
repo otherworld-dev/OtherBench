@@ -285,6 +285,8 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'tool-call':
       case 'tool-result':
       case 'notice':
+      case 'context':
+      case 'context-summary':
       case 'subagent':
         // Not valid content for a user turn; defensively dropped rather
         // than forwarded to the model. `notice` also never legitimately
@@ -316,6 +318,8 @@ async function assistantContentFromParts(
       case 'reasoning':
         // Dropped entirely -- not replayable across providers/models.
         break;
+      case 'context':
+      case 'context-summary':
       case 'notice':
         // Dropped entirely, same reasoning as `reasoning`: a capability-
         // fallback disclosure describes what OTHERBENCH did, not something the

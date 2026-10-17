@@ -2581,3 +2581,33 @@ describe('TurnRunner.runSelfStarted and plan mode', () => {
     expect(requests[0]!.plan!.approved).toBe(false);
   });
 });
+
+describe('TurnRunner and context lines', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  function chat(): InMemoryStore {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    return store;
+  }
+  const base = { chatId: 'chat-1', status: 'complete' as const, error: null, producedBy: null };
+
+  it('a reply after /clear gets only what follows it', async () => {
+    const store = chat();
+    store.messages.create({ ...base, id: 'u1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }] });
+    store.messages.create({ ...base, id: 'a1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'hello' }] });
+    store.messages.create({ ...base, id: 'c1', parentId: 'a1', role: 'user', parts: [{ type: 'context', kind: 'clear' }] });
+    const engine = new FakeChatEngine([finish]);
+    const result = await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: 'c1', userParts: [{ type: 'text', text: 'new' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    expect(engine.requests[0]!.messages.filter((m) => m.role !== 'system').map((m) => m.id)).toEqual([result.userMessageId]);
+  });
+
+  it('a context-summary event becomes a context-summary part', async () => {
+    const store = chat();
+    const engine = new FakeChatEngine([{ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 }, finish]);
+    const result = await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    expect(store.messages.get(id)!.parts).toContainEqual({ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
+  });
+});

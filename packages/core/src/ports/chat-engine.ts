@@ -115,6 +115,7 @@ export type EngineEvent =
   | { type: 'error'; error: SerializedError }
   | { type: 'engine-meta'; meta: EngineMeta }
   | { type: 'notice'; text: string }
+  | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
   /**
    * A helper the engine's own agent started (Claude Code's Task or Agent
    * tool), told the way an API sub-agent is: `callId` is the tool call that

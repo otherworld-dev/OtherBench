@@ -7,7 +7,7 @@ import { createHash, createHmac, randomBytes, randomInt, scrypt, timingSafeEqual
  */
 
 /** The peer protocol's version, compared in `GET /peer/info` before syncing. */
-export const PEER_PROTOCOL_VERSION = 1;
+export const PEER_PROTOCOL_VERSION = 2;
 
 /** 32 symbols with no lookalikes: no 0/O, 1/I. */
 export const PAIRING_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';

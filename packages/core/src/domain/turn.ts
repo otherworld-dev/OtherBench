@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { cutAtContextLine } from './context-lines.js';
 import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Project, Store } from '../ports/store.js';
@@ -869,6 +870,18 @@ export class TurnRunner {
             parts = [...parts, { type: 'notice', text: out.text }];
             checkpoint(true);
             break;
+          case 'context-summary':
+            parts = [
+              ...parts,
+              {
+                type: 'context-summary',
+                text: out.text,
+                ...(out.preTokens !== undefined ? { preTokens: out.preTokens } : {}),
+                ...(out.postTokens !== undefined ? { postTokens: out.postTokens } : {}),
+              },
+            ];
+            checkpoint(true);
+            break;
           case 'text-delta':
             parts = appendDelta(parts, 'text', out.text);
             checkpoint(false);
@@ -1007,7 +1020,7 @@ export class TurnRunner {
   }
 
   private buildRequestMessages(userMessageId: string, profile: ResolvedProfile): CanonMessage[] {
-    const history = this.store.messages.pathToRoot(userMessageId);
+    const history = cutAtContextLine(this.store.messages.pathToRoot(userMessageId));
     if (!profile.systemPrompt) return history;
 
     const systemMessage: CanonMessage = {

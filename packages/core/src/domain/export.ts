@@ -107,6 +107,12 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
       return `**${part.isError ? 'Tool error' : 'Tool result'}:** \`${part.name}\`\n\n${fenced(cut(asText(part.result)))}`;
     case 'notice':
       return `*${part.text}*`;
+    case 'context':
+      return part.kind === 'clear' ? '*/clear*' : `*/compact${part.focus ? ` ${part.focus}` : ''}*`;
+    case 'context-summary':
+      return `**Summary of the conversation so far:**
+
+${part.text}`;
     case 'subagent': {
       const text = part.parts
         .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')

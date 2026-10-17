@@ -44,6 +44,10 @@ export type Part =
    * would misattribute it as assistant output.
    */
   | { type: 'notice'; text: string }
+  /** A user message that is a context command (`/clear`, `/compact`), not text for a model. */
+  | { type: 'context'; kind: 'clear' | 'compact'; focus?: string }
+  /** The summary a compact reply carries; it stands in for everything above the compact line. */
+  | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
   /**
    * A sub-agent this reply started: one an API profile started with the
    * `subagent` tool, or a helper Claude Code started with its Task or Agent
