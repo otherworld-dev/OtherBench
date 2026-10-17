@@ -1101,6 +1101,31 @@ describe('Composer / command menu', () => {
     expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
   });
 
+  it('Enter on a typed /clear sends it at once; Tab still only fills', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/clear');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Tab}');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    await user.clear(box());
+    await user.type(box(), '/clear');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ parts: [{ type: 'text', text: '/clear' }] })));
+  });
+
+  it('Enter on a typed /compact still fills it for a focus, without sending', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/compact');
+    await user.keyboard('{Enter}');
+    expect(box()).toHaveValue('/compact ');
+    expect(mockedCreate).not.toHaveBeenCalled();
+  });
+
   it('lists the fetched commands and shows the warning as a last row that is not an option', async () => {
     vi.mocked(api.chats.commands).mockResolvedValue({ commands: [{ name: 'clear', description: '', argumentHint: '', aliases: [] }, { name: 'deploy', description: 'Ship it', argumentHint: '', aliases: [] }], warning: "Couldn't load this chat's own commands." });
     const user = userEvent.setup();

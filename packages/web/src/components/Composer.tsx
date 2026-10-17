@@ -412,9 +412,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     }
   }
 
+  /** What picking a row puts in the box: `/clear` whole, anything else ready for its arguments. */
+  const commandFill = (command: CommandRow): string => (command.name === 'clear' ? `/${command.name}` : `/${command.name} `);
+
   function pickCommand(command: CommandRow): void {
     caretTo.current = 'end';
-    setText(command.name === 'clear' ? `/${command.name}` : `/${command.name} `);
+    setText(commandFill(command));
     setBrowsing(null);
     setMenuDismissed(true);
     textareaRef.current?.focus();
@@ -429,7 +432,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         return;
       }
       if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-        if (activeRow) {
+        // Enter on a box that already holds the row's whole command (`/clear`) sends it rather than filling it again.
+        const complete = e.key === 'Enter' && activeRow !== undefined && text === commandFill(activeRow) && !text.endsWith(' ');
+        if (activeRow && !complete) {
           e.preventDefault();
           pickCommand(activeRow);
           return;
