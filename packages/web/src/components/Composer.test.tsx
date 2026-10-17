@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
-import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
+import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { Composer } from './Composer.js';
 
@@ -1109,6 +1109,43 @@ describe('Composer / command menu', () => {
     expect(await screen.findByRole('option', { name: /\/deploy/ })).toBeInTheDocument();
     expect(vi.mocked(api.chats.commands)).toHaveBeenCalledWith('chat-1', 'sonnet');
     expect(screen.getByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
+    expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
+  });
+
+  it('retries after a fetch was cut short by closing the menu before it answered', async () => {
+    let release!: (v: { commands: CommandRow[] }) => void;
+    vi.mocked(api.chats.commands).mockReturnValueOnce(new Promise((r) => (release = r)));
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    await user.keyboard('{Escape}');
+    release({ commands: [...OWN_COMMANDS, { name: 'deploy', description: '', argumentHint: '', aliases: [] }] });
+    await user.clear(box());
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/deploy/ })).toBeInTheDocument();
+  });
+
+  it('shows each chat its own list when switching A to B and back', async () => {
+    const cmd = (name: string): CommandRow => ({ name, description: '', argumentHint: '', aliases: [] });
+    vi.mocked(api.chats.commands).mockImplementation(async (chatId) => ({ commands: [cmd(chatId === 'chat-1' ? 'alpha' : 'beta')] }));
+    const user = userEvent.setup();
+    const view = render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/alpha/ })).toBeInTheDocument();
+    view.rerender(<Composer chat={makeChat({ id: 'chat-2', profileId: 'sonnet' })} />);
+    expect(await screen.findByRole('option', { name: /\/beta/ })).toBeInTheDocument();
+    view.rerender(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    expect(await screen.findByRole('option', { name: /\/alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /\/beta/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the built-ins and says so when the fetch fails', async () => {
+    vi.mocked(api.chats.commands).mockRejectedValue(new Error('network'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
     expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
   });
 });
