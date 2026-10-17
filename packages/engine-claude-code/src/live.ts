@@ -161,6 +161,13 @@ export class LiveProcess {
   permissionMode: string | null = null;
   /** Whether this process can run in auto mode at all (it runs on the Claude login). */
   canAuto = false;
+  /**
+   * The chat's Auto as last set for this process, recorded the moment it
+   * changes: calls go to the classifier only while this is on AND Claude Code
+   * is in auto mode, so switching Auto off holds even before (or if never)
+   * Claude Code confirms the switch.
+   */
+  wantsAuto = false;
   /** The background tasks this process is running for its chat (set by its first reply). */
   background: BackgroundTasks | null = null;
   /**
