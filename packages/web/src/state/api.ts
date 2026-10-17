@@ -1,4 +1,5 @@
 import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
@@ -461,6 +462,8 @@ export const api = {
     create: (body: CreateChatBody) => post<Chat>('/chats', body),
     get: (id: string) => request<Chat>(`/chats/${id}`),
     patch: (id: string, body: ChatPatchBody) => patch<Chat>(`/chats/${id}`, body),
+    /** The commands the `/` menu offers in this chat; `warning` when the chat's own couldn't be loaded. */
+    commands: (chatId: string, profileId: string) => request<{ commands: CommandRow[]; warning?: string }>(`/chats/${chatId}/commands?profileId=${encodeURIComponent(profileId)}`),
     /** Stops one of the chat's background tasks (spec 2026-10-17-claude-background-helpers-design). */
     stopHelper: (chatId: string, taskId: string) => post<{ stopped: boolean }>(`/chats/${chatId}/helpers/${encodeURIComponent(taskId)}/stop`, {}),
     delete: (id: string) => del(`/chats/${id}`),

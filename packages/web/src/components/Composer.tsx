@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
@@ -6,6 +6,9 @@ import { promptHistory } from '../lib/promptHistory.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
+import { useChatCommands } from '../state/useChatCommands.js';
+import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
@@ -123,6 +126,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [planSaving, setPlanSaving] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The `/` menu: open while the box holds just `/name` (no space yet) and a selected profile runs Claude Code.
+  const [menuDismissed, setMenuDismissed] = useState(false);
+  const [menuIndex, setMenuIndex] = useState(0);
+  const menuId = useId();
   // The message field starts one line high and grows with its text, up to its max height (then it scrolls).
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -165,6 +172,11 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   // login, so it's unavailable when every such profile uses an endpoint backend.
   const claudeCodeProfiles = selectedProfiles.filter((p) => isClaudeCodeProfile(p, connections));
   const showAutoToggle = claudeCodeProfiles.length > 0;
+  const slashTyped = /^\/\S*$/.test(text);
+  const chatCommands = useChatCommands(chat.id, claudeCodeProfiles[0]?.id ?? null, slashTyped && !menuDismissed);
+  const menuRows = slashTyped && claudeCodeProfiles.length > 0 ? filterCommands(chatCommands.commands, text.slice(1)) : [];
+  const menuOpen = menuRows.length > 0 && !menuDismissed;
+  const activeRow = menuRows[Math.min(menuIndex, menuRows.length - 1)];
   const autoUnavailable = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
   const autoMode = (storedChat ?? chat).autoMode;
   const autoActive = autoMode && !autoUnavailable;
@@ -400,7 +412,35 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     }
   }
 
+  function pickCommand(command: CommandRow): void {
+    caretTo.current = 'end';
+    setText(command.name === 'clear' ? `/${command.name}` : `/${command.name} `);
+    setBrowsing(null);
+    setMenuDismissed(true);
+    textareaRef.current?.focus();
+  }
+
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (menuOpen && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        setMenuIndex((i) => (Math.min(i, menuRows.length - 1) + step + menuRows.length) % menuRows.length);
+        return;
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        if (activeRow) {
+          e.preventDefault();
+          pickCommand(activeRow);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMenuDismissed(true);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -549,21 +589,28 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           </div>
         )}
 
+        <div className="relative">
+          {menuOpen && <CommandMenu id={menuId} commands={chatCommands.commands} query={text.slice(1)} activeIndex={Math.min(menuIndex, menuRows.length - 1)} onPick={pickCommand} warning={chatCommands.warning} />}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             setBrowsing(null); // typing in a recalled message makes it the draft
+            setMenuDismissed(false);
+            setMenuIndex(0);
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           aria-label="Message"
+          aria-controls={menuOpen ? menuId : undefined}
+          aria-activedescendant={menuOpen && activeRow ? commandOptionId(menuId, activeRow.name) : undefined}
           placeholder="Message…"
           title="Enter to send, Shift+Enter for a new line. Drag and drop or paste to attach a file."
           rows={1}
           className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
         />
+        </div>
 
         {/*
           One line while it fits: the profile name gives way first, then the plan meter (by the box's width).

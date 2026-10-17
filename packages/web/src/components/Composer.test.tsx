@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
+import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { Composer } from './Composer.js';
 
@@ -14,7 +15,7 @@ vi.mock('../state/api.js', () => ({
       cancel: vi.fn(),
       setHead: vi.fn(),
     },
-    chats: { patch: vi.fn() },
+    chats: { patch: vi.fn(), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
     claude: { planUsage: vi.fn(async () => ({ usage: null })) },
     attachments: {
       upload: vi.fn(),
@@ -1027,5 +1028,87 @@ describe('Composer message history (Up and Down)', () => {
     await user.click(box());
     await user.keyboard('{ArrowUp}');
     expect(box()).toHaveValue('');
+  });
+});
+
+describe('Composer / command menu', () => {
+  const conn = (id: string, kind: Connection['kind']): Connection => ({
+    id, name: id, kind, baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null,
+  });
+  beforeEach(() => {
+    reset();
+    vi.mocked(api.chats.commands).mockReset();
+    vi.mocked(api.chats.commands).mockResolvedValue({ commands: [...OWN_COMMANDS] });
+    useOtherBenchStore.getState().setConnections([conn('cc', 'claude_code'), conn('oll', 'ollama')]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
+      makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
+    ]);
+  });
+  afterEach(cleanup);
+  const box = () => screen.getByRole('textbox', { name: /message/i });
+
+  it('opens on / in a Claude Code chat; ArrowDown then Enter fills /compact and does not send, Enter again sends', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(screen.getByRole('option', { name: /\/clear/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /\/compact/ })).toBeInTheDocument();
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(box()).toHaveValue('/compact ');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+  });
+
+  it('opens no menu in an API-only chat', async () => {
+    await userEvent.setup().type((render(<Composer chat={makeChat({ profileId: 'qwen' })} />), box()), '/');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+  });
+
+  it('Esc closes the menu and keeps the text', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/co');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    expect(box()).toHaveValue('/co');
+  });
+
+  it('keeps focus in the box and points aria-activedescendant at the active option', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(box()).toHaveFocus();
+    const active = within(screen.getByRole('listbox', { name: 'Commands' })).getByRole('option', { selected: true });
+    expect(box()).toHaveAttribute('aria-activedescendant', active.id);
+    await user.keyboard('{ArrowDown}');
+    expect(box()).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name: /\/compact/ }).id);
+  });
+
+  it('picking /clear leaves no trailing space and closes the menu; a space closes it too', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/cl{Enter}');
+    expect(box()).toHaveValue('/clear');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    await user.clear(box());
+    await user.type(box(), '/compact ');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+  });
+
+  it('lists the fetched commands and shows the warning as a last row that is not an option', async () => {
+    vi.mocked(api.chats.commands).mockResolvedValue({ commands: [{ name: 'clear', description: '', argumentHint: '', aliases: [] }, { name: 'deploy', description: 'Ship it', argumentHint: '', aliases: [] }], warning: "Couldn't load this chat's own commands." });
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/deploy/ })).toBeInTheDocument();
+    expect(vi.mocked(api.chats.commands)).toHaveBeenCalledWith('chat-1', 'sonnet');
+    expect(screen.getByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
+    expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
   });
 });
