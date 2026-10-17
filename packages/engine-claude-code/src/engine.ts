@@ -11,7 +11,7 @@ import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/doma
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineBackgroundEvent, EngineEvent, EngineRequest, SelfStart } from '@otherbench/core/ports/chat-engine.js';
+import { HelperStopError, type ChatEngine, type ConnectionTestResult, type DiscoveredModel, type EngineBackgroundEvent, type EngineEvent, type EngineRequest, type SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -201,7 +201,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   async stopHelper(chatId: string, taskId: string): Promise<boolean> {
     for (const live of this.processes) {
       if (live.isClosed || live.background?.chatId !== chatId || !live.background.has(taskId)) continue;
-      await live.query.stopTask?.(taskId);
+      if (!live.query.stopTask) throw new HelperStopError("This version of Claude Code can't stop one background task. Update Claude Code to stop it from here.");
+      await live.query.stopTask(taskId);
       return true;
     }
     return false;
