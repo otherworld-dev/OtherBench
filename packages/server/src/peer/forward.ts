@@ -8,6 +8,7 @@ import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
 import type { Part, ProducedBy, SerializedError } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
+import { commandsRoutes } from '../routes/commands.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
@@ -362,6 +363,35 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
 }
 
 /**
+ * The replies a turn started on another machine is writing, with what was
+ * asked: `request` is what this machine sent, `answer` what came back. Each
+ * reply's profile and the stored question come from the answer when it says
+ * (a /compact runs on the profile of the reply above, not the one selected,
+ * and stores a context line, not the text typed), else from the request.
+ */
+export function turnReplies(chatId: string, request: Record<string, unknown>, answer: Record<string, unknown>): { id: string; reply: RemoteReply }[] {
+  const ids = Array.isArray(answer['assistantMessageIds']) ? answer['assistantMessageIds'].filter(isString) : [];
+  const userMessageId = isString(answer['userMessageId']) ? answer['userMessageId'] : null;
+  const profileIds: unknown[] = Array.isArray(answer['profileIds']) ? answer['profileIds'] : Array.isArray(request['profileIds']) ? request['profileIds'] : [];
+  const parts = Array.isArray(answer['userParts']) ? (answer['userParts'] as Part[]) : Array.isArray(request['parts']) ? (request['parts'] as Part[]) : [];
+  const parentId = isString(request['parentId']) ? request['parentId'] : null;
+  const at = Date.now();
+  return ids.map((id, i) => {
+    const profileId = profileIds[i];
+    return {
+      id,
+      reply: {
+        chatId,
+        parentId: userMessageId,
+        profileId: isString(profileId) ? profileId : null,
+        ...(userMessageId ? { question: { id: userMessageId, parentId, parts } } : {}),
+        at,
+      },
+    };
+  });
+}
+
+/**
  * Middleware for this machine's own API: chat-scoped calls for a chat that
  * runs on a paired machine go there instead of being handled here. Calls
  * that arrive over the peer listener never pass through this, so a call is
@@ -395,28 +425,6 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
       return res;
     };
 
-  const turnReplies: NoteReplies = (chatId, request, answer) => {
-    const ids = Array.isArray(answer['assistantMessageIds']) ? answer['assistantMessageIds'].filter(isString) : [];
-    const userMessageId = isString(answer['userMessageId']) ? answer['userMessageId'] : null;
-    const profileIds: unknown[] = Array.isArray(request['profileIds']) ? request['profileIds'] : [];
-    const parts = Array.isArray(request['parts']) ? (request['parts'] as Part[]) : [];
-    const parentId = isString(request['parentId']) ? request['parentId'] : null;
-    const at = Date.now();
-    return ids.map((id, i) => {
-      const profileId = profileIds[i];
-      return {
-        id,
-        reply: {
-          chatId,
-          parentId: userMessageId,
-          profileId: isString(profileId) ? profileId : null,
-          ...(userMessageId ? { question: { id: userMessageId, parentId, parts } } : {}),
-          at,
-        },
-      };
-    });
-  };
-
   const regenerateReplies: NoteReplies = (chatId, request, answer) => {
     const id = answer['assistantMessageId'];
     if (!isString(id)) return [];
@@ -433,6 +441,14 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     const nodeId = remoteNode(chatId);
     if (!nodeId) return next();
     return forward(container, c, nodeId, `/chats/${chatId}/helpers/${encodeURIComponent(c.req.param('taskId'))}/stop`);
+  });
+  // The slash menu: that machine has the chat's Claude Code processes and folder.
+  app.get('/chats/:id/commands', async (c, next) => {
+    const chatId = c.req.param('id');
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return next();
+    const profileId = c.req.query('profileId');
+    return forward(container, c, nodeId, `/chats/${chatId}/commands${profileId ? `?profileId=${encodeURIComponent(profileId)}` : ''}`);
   });
   app.get('/chats/:id/stream', async (c, next) => {
     const chatId = c.req.param('id');
@@ -532,6 +548,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));
+  app.route('/', commandsRoutes(container));
   app.onError((err, c) => {
     const status = (err as { status?: number }).status;
     if (typeof status === 'number' && status >= 400 && status < 600) return c.json({ error: err.message }, status as 400);

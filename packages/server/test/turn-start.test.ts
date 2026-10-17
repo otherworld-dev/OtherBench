@@ -113,6 +113,34 @@ describe('startSelfStartedTurn', () => {
     await vi.waitFor(() => expect(start.declined()).toBe(true));
   });
 
+  it('self-start after clear is declined', async () => {
+    const { store, seen, deps } = setup();
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'line', chatId: 'chat-1', parentId: 'a1', role: 'user', parts: [{ type: 'context', kind: 'clear' }], status: 'complete', error: null, producedBy: null });
+    store.chats.update('chat-1', { headMessageId: 'line' });
+    const start = selfStart();
+
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
+
+    expect(start.declined()).toBe(true);
+    expect(store.messages.children('a1').map((m) => m.id)).toEqual(['line']);
+    expect(seen.some((e) => e.type === 'turn-started')).toBe(false);
+  });
+
+  it('a context line before the reply it continues does not decline it', async () => {
+    const { store, seen, deps } = setup();
+    store.messages.create({ id: 'line', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'context', kind: 'clear' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'line', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    store.chats.update('chat-1', { headMessageId: 'a1' });
+    const start = selfStart();
+
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
+
+    expect(start.declined()).toBe(false);
+    expect(seen.some((e) => e.type === 'turn-started')).toBe(true);
+  });
+
   it('declines a self-start for a deleted chat, or a reply that is gone', async () => {
     const { deps } = setup();
     const gone = selfStart({ chatId: 'nope' });

@@ -9,6 +9,7 @@ import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
 import { computerRoutes } from './routes/computer.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
+import { commandsRoutes } from './routes/commands.js';
 import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
 import { connectionsRoutes } from './routes/connections.js';
@@ -136,6 +137,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // handlers forward its calls, and pass everything else on to the routes below.
   if (container.peers && container.remoteRuns) authed.route('/', forwardingRoutes(container, container.remoteRuns));
   authed.route('/', turnsRoutes(container));
+  // A chat's slash menu: after the forwarding handlers, so a chat on a paired machine is asked there.
+  authed.route('/', commandsRoutes(container));
   // memoryRoutes defines full paths under /projects/:id/memory and
   // /chats/:id/memory, so it also mounts at the authed root. No collisions:
   // projectsRoutes owns /projects and /projects/:id only.

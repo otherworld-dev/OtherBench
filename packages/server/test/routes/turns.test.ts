@@ -3,8 +3,12 @@ import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import { NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
+import type { Part } from '@otherbench/core/types/messages.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -853,5 +857,174 @@ describe('POST /api/chats/:id/helpers/:taskId/stop', () => {
     const res = await app().request('/api/chats/chat-1/helpers/k1/stop', { method: 'POST' });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "This version of Claude Code can't stop one background task." });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /clear and /compact (spec 2026-10-17-claude-slash-commands)
+// ---------------------------------------------------------------------------
+
+describe('context commands in POST /api/chats/:id/turns', () => {
+  const ATTACHMENTS = "A command can't carry attachments. Send /clear or /compact on its own.";
+
+  /** Makes `profile-<i>` a Claude Code profile. */
+  function claudeCode(i: number): void {
+    container.store.connections.update(`conn-${i}`, { kind: 'claude_code' });
+  }
+
+  function useEvents(): AppEvent[] {
+    const bus = new AppEventBus();
+    const seen: AppEvent[] = [];
+    bus.subscribe((e) => seen.push(e));
+    container.events = bus;
+    return seen;
+  }
+
+  /** A finished Claude Code reply by `profileId` under a user message, returning its id. */
+  function claudeReply(chatId: string, profileId: string, parts: Part[] = [{ type: 'text', text: 'Done.' }]): string {
+    container.store.messages.create({ id: 'u0', chatId, parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    const profile = container.store.profiles.get(profileId)!;
+    container.store.messages.create({
+      id: 'a0', chatId, parentId: 'u0', role: 'assistant', parts, status: 'complete', error: null,
+      producedBy: { profileId, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
+      engineMeta: { engine: 'claude_code', sessionId: 's1', backend: 'claude', cwd: 'E:\\x' },
+    });
+    return 'a0';
+  }
+
+  async function post(chatId: string, body: Record<string, unknown>) {
+    return app().request(`/api/chats/${chatId}/turns`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('typed /clear writes a line with no reply', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+    const parentId = claudeReply(chatId, profileIds[0]!);
+    const closeChats = vi.fn();
+    container.engine = { ...container.engine, closeChats };
+    const seen = useEvents();
+    const run = vi.spyOn(container.turnRunner, 'run');
+
+    const res = await post(chatId, { parentId, parts: [{ type: 'text', text: ' /clear ' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageIds: string[]; profileIds: string[]; userParts: Part[] };
+    expect(body).toMatchObject({ assistantMessageIds: [], profileIds: [], userParts: [{ type: 'context', kind: 'clear' }] });
+    expect(container.store.messages.get(body.userMessageId)).toMatchObject({ chatId, parentId, role: 'user', status: 'complete', parts: [{ type: 'context', kind: 'clear' }] });
+    expect(container.store.chats.get(chatId)!.headMessageId).toBe(body.userMessageId);
+    expect(closeChats).toHaveBeenCalledTimes(1);
+    const gone = closeChats.mock.calls[0]![0] as (id: string) => boolean;
+    expect(gone(chatId)).toBe(true);
+    expect(gone('chat-other')).toBe(false);
+    expect(seen).toContainEqual({ type: 'turn-started', chatId, messageIds: [] });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('/clear text with only API profiles is an ordinary message', async () => {
+    const { chatId, profileIds } = seedChat(1);
+
+    const res = await post(chatId, { parts: [{ type: 'text', text: '/clear' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageIds: string[]; profileIds: string[]; userParts: Part[] };
+    expect(body.assistantMessageIds).toHaveLength(1);
+    expect(body.profileIds).toEqual(profileIds);
+    expect(body.userParts).toEqual([{ type: 'text', text: '/clear' }]);
+    expect(container.store.messages.get(body.userMessageId)!.parts).toEqual([{ type: 'text', text: '/clear' }]);
+  });
+
+  it('/clear with an attachment is refused', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+
+    const res = await post(chatId, { parts: [{ type: 'text', text: '/clear' }, { type: 'image', attachmentId: 'att-1', mime: 'image/png' }], profileIds });
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENTS);
+    expect(container.store.messages.roots(chatId)).toEqual([]);
+  });
+
+  it('an explicit clear part is a line whatever the profiles', async () => {
+    const { chatId, profileIds } = seedChat(1);
+
+    const res = await post(chatId, { parts: [{ type: 'context', kind: 'clear' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    expect(body.assistantMessageIds).toEqual([]);
+    expect(container.store.messages.get(body.userMessageId)!.parts).toEqual([{ type: 'context', kind: 'clear' }]);
+  });
+
+  it("/compact runs on the reply above's profile", async () => {
+    const { chatId, profileIds } = seedChat(2);
+    claudeCode(0);
+    claudeCode(1);
+    const parentId = claudeReply(chatId, 'profile-1');
+
+    const res = await post(chatId, { parentId, parts: [{ type: 'text', text: '/compact  the API work ' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageIds: string[]; profileIds: string[]; userParts: Part[] };
+    expect(body.profileIds).toEqual(['profile-1']);
+    expect(body.assistantMessageIds).toHaveLength(1);
+    expect(body.userParts).toEqual([{ type: 'context', kind: 'compact', focus: 'the API work' }]);
+    expect(container.store.messages.get(body.userMessageId)!.parts).toEqual([{ type: 'context', kind: 'compact', focus: 'the API work' }]);
+    expect(container.store.messages.get(body.assistantMessageIds[0]!)!.producedBy!.profileId).toBe('profile-1');
+  });
+
+  it('/compact with nothing to compact', async () => {
+    const { chatId, profileIds } = seedChat(2);
+    claudeCode(0);
+    container.store.messages.create({ id: 'u1', chatId, parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({
+      id: 'api-reply', chatId, parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'Hello' }], status: 'complete', error: null,
+      producedBy: { profileId: 'profile-1', profileName: 'Profile 1', connectionId: 'conn-1', modelId: 'model-x' },
+    });
+
+    for (const parentId of [null, 'u1', 'api-reply']) {
+      const res = await post(chatId, { parentId, parts: [{ type: 'text', text: '/compact' }], profileIds });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: NOTHING_TO_COMPACT });
+    }
+    expect(container.store.messages.roots(chatId).map((m) => m.id)).toEqual(['u1']);
+    expect(container.store.messages.children('u1').map((m) => m.id)).toEqual(['api-reply']);
+    expect(container.store.messages.children('api-reply')).toEqual([]);
+  });
+
+  it("a client can't send a context-summary part", async () => {
+    const { chatId, profileIds } = seedChat(1);
+    const res = await post(chatId, { parts: [{ type: 'context-summary', text: 'All of it.' }], profileIds });
+    expect(res.status).toBe(400);
+  });
+
+  it('a context part must name clear or compact, with a string focus', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    for (const part of [{ type: 'context', kind: 'forget' }, { type: 'context' }, { type: 'context', kind: 'compact', focus: 7 }]) {
+      const res = await post(chatId, { parts: [part], profileIds });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('helper cards end as stopped after /clear', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+    const card: Part = {
+      type: 'subagent', callId: 'call-1', label: 'implementer', prompt: 'do it', profileId: 'profile-0', profileName: 'Profile 0', modelId: 'model-x',
+      status: 'background', parts: [],
+    };
+    const parentId = claudeReply(chatId, profileIds[0]!, [{ type: 'text', text: 'Started a helper.' }, card]);
+    const changed: string[] = [];
+    container.streamRegistry.subscribe(chatId, (e) => changed.push(e.type));
+
+    const res = await post(chatId, { parentId, parts: [{ type: 'text', text: '/clear' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const stored = container.store.messages.get(parentId)!.parts.find((p) => p.type === 'subagent');
+    expect(stored).toMatchObject({ type: 'subagent', status: 'cancelled' });
+    expect(changed).toContain('messages-changed');
   });
 });

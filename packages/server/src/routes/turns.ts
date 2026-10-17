@@ -3,8 +3,11 @@ import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
+import { contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ContextCommand } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
+import { writeClearLine } from '../context-commands.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { startTurn } from '../turn-start.js';
@@ -26,7 +29,11 @@ interface HeadBody {
   messageId?: unknown;
 }
 
-const KNOWN_PART_TYPES = new Set(['text', 'reasoning', 'image', 'file', 'tool-call', 'tool-result', 'notice']);
+// `context-summary` is never accepted from a client: only a compact reply writes one.
+const KNOWN_PART_TYPES = new Set(['text', 'reasoning', 'image', 'file', 'tool-call', 'tool-result', 'notice', 'context']);
+
+/** Refused when a /clear or /compact comes with an image or file. */
+const COMMAND_WITH_ATTACHMENTS = "A command can't carry attachments. Send /clear or /compact on its own.";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -85,6 +92,14 @@ function assertValidPart(part: unknown, index: number): void {
         throw new HTTPException(400, { message: `${where}.id, .name must be strings and .isError a boolean.` });
       }
       break;
+    case 'context':
+      if (part['kind'] !== 'clear' && part['kind'] !== 'compact') {
+        throw new HTTPException(400, { message: `${where}.kind must be "clear" or "compact".` });
+      }
+      if (part['focus'] !== undefined && typeof part['focus'] !== 'string') {
+        throw new HTTPException(400, { message: `${where}.focus must be a string.` });
+      }
+      break;
   }
 }
 
@@ -106,6 +121,36 @@ function parseProfileIds(value: unknown): string[] {
 function parseParentId(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   return requireNonEmptyString(value, 'parentId');
+}
+
+/**
+ * The context command a turn's parts make (spec 2026-10-17-claude-slash-commands),
+ * or null for an ordinary message. An explicit `context` part is one whatever
+ * the profiles; typed `/clear` or `/compact` text is one only when a Claude Code
+ * profile is answering, so an API chat can still say "/clear" to its model.
+ */
+function contextCommandOf(parts: Part[], profiles: ResolvedProfile[]): ContextCommand | null {
+  for (const p of parts) {
+    if (p.type === 'context') return p.kind === 'compact' ? { kind: 'compact', focus: p.focus?.trim() ?? '' } : { kind: 'clear' };
+  }
+  if (!profiles.some((p) => p.connection.kind === 'claude_code')) return null;
+  const text = parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
+  return parseContextCommand(text);
+}
+
+/**
+ * The profile a /compact runs on: the one that wrote the Claude Code reply it
+ * sits under, whatever was selected (its session is the one compacted). Null
+ * when the message above isn't such a reply, or its profile can't be resolved.
+ */
+async function compactProfile(container: Container, chatId: string, parentId: string | null): Promise<ResolvedProfile | null> {
+  const parent = parentId ? container.store.messages.get(parentId) : null;
+  if (!parent || parent.chatId !== chatId || parent.role !== 'assistant' || parent.engineMeta?.engine !== 'claude_code' || !parent.producedBy) return null;
+  try {
+    return await resolveProfile(container, parent.producedBy.profileId);
+  } catch {
+    return null;
+  }
 }
 
 function getChatOrThrow(container: Container, chatId: string) {
@@ -139,13 +184,27 @@ export function turnsRoutes(container: Container): Hono {
     const parts = parseParts(body.parts);
     const profileIds = parseProfileIds(body.profileIds);
 
-    const profiles = await Promise.all(profileIds.map((id) => resolveProfile(container, id)));
+    let profiles = await Promise.all(profileIds.map((id) => resolveProfile(container, id)));
+    let userParts = parts;
+
+    const command = contextCommandOf(parts, profiles);
+    if (command) {
+      if (parts.some((p) => p.type === 'image' || p.type === 'file')) throw new HTTPException(400, { message: COMMAND_WITH_ATTACHMENTS });
+      userParts = [contextPart(command)];
+      if (command.kind === 'clear') {
+        const { userMessageId } = writeClearLine(container, { chatId, parentId });
+        return c.json({ userMessageId, assistantMessageIds: [], profileIds: [], userParts }, 202);
+      }
+      const profile = await compactProfile(container, chatId, parentId);
+      if (!profile) return c.json({ error: NOTHING_TO_COMPACT }, 409);
+      profiles = [profile];
+    }
 
     // Only these four fields reach the runner: `unattended` is set by the
     // schedule service alone and is never read from a request body.
     let result;
     try {
-      result = await startTurn(container, { chatId, parentId, userParts: parts, profiles });
+      result = await startTurn(container, { chatId, parentId, userParts, profiles });
     } catch (err) {
       // A part naming an attachment that doesn't exist, or belongs to a
       // DIFFERENT chat, is a client-supplied bad reference -- 400, not the
@@ -157,7 +216,8 @@ export function turnsRoutes(container: Container): Hono {
       throw err;
     }
 
-    return c.json(result, 202);
+    // The profiles that answer, in reply order (a /compact's is not the one selected), and the message as stored.
+    return c.json({ ...result, profileIds: profiles.map((p) => p.id), userParts }, 202);
   });
 
   app.post('/messages/:id/cancel', (c) => {
