@@ -1903,9 +1903,9 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
   const resultOf = (prompt: SDKUserMessage) => msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [(prompt as { uuid?: string }).uuid] });
   const selfResult = () => msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 2, output_tokens: 3 }, user_message_uuids: [], origin: { kind: 'task-notification' } });
   /** The first reply: starts helper task-1 ("implementer") in the background. */
-  async function* firstReply(nextPrompt: () => Promise<SDKUserMessage>): AsyncGenerator<SDKMessage> {
+  async function* firstReply(nextPrompt: () => Promise<SDKUserMessage>, permissionMode = 'default'): AsyncGenerator<SDKMessage> {
     const p1 = await nextPrompt();
-    yield init();
+    yield init('sess-1', permissionMode);
     yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it' } }] }, parent_tool_use_id: null });
     yield msg({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: true });
     yield msg({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] }, parent_tool_use_id: null });
@@ -1922,7 +1922,7 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
   it('a helper asking for a tool between replies gets a card against its helper, in auto mode through the classifier', async () => {
     let hookAnswer: unknown;
     const { query } = scripted(async function* ({ options, nextPrompt }) {
-      yield* firstReply(nextPrompt);
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
       yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'npm test' } }] }, parent_tool_use_id: 'task-1' });
       await new Promise((r) => setTimeout(r, 0));
       const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
@@ -1939,10 +1939,89 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  /** A first reply whose helper asks for `npm test` once `go` resolves; `hookAnswer` gets the hook's answer. */
+  function helperAsksLater(go: Promise<void>, out: { hookAnswer?: unknown; options?: Options }) {
+    return scripted(async function* ({ options, nextPrompt }) {
+      out.options = options;
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
+      yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'npm test' } }] }, parent_tool_use_id: 'task-1' });
+      await go;
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      out.hookAnswer = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1' } as never, 'c1', { signal: new AbortController().signal });
+      await new Promise(() => {});
+    });
+  }
+
+  it("a helper's call between replies still gets a card once its reply's signal is aborted, as TurnRunner aborts it when a reply ends", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const { e, requestApproval } = make(query);
+    const controller = new AbortController();
+    await collect(e.stream(req({ messageId: 'm1', signal: controller.signal })));
+    controller.abort();
+    go();
+    await vi.waitFor(() => expect(out.hookAnswer).toBeDefined());
+    expect(requestApproval).toHaveBeenCalled();
+    expect(out.hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    e.dispose();
+  });
+
+  it("gates a helper's call between replies with the chat's current Auto, plan mode and policy", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const current = { fs: 'read' as const, shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const };
+    const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    const e = new ClaudeCodeChatEngine({
+      query,
+      approvals: { requestApproval, recordAgentDenial: vi.fn() },
+      listEndpointModels: async () => [],
+      baseEnv: { PATH: '/bin' },
+      chatSettings: () => ({ autoMode: false, planMode: true, policy: current }),
+    });
+    await collect(e.stream(req({ autoMode: true, messageId: 'm1' })));
+    go();
+    await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+    const [, , policy, ctx, opts] = requestApproval.mock.calls[0]! as unknown as [unknown, unknown, unknown, ToolContext, { deferAsk?: boolean } | undefined];
+    expect(policy).toEqual(current);
+    expect(opts?.deferAsk).not.toBe(true);
+    expect(ctx.plan).toBeDefined();
+    expect(ctx.plan!.approved).toBe(false);
+    e.dispose();
+  });
+
+  it("refuses a helper's call between replies once its chat is gone", async () => {
+    let go!: () => void;
+    const out: { hookAnswer?: unknown } = {};
+    const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+    const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval, recordAgentDenial: vi.fn() }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, chatSettings: () => null });
+    await collect(e.stream(req({ messageId: 'm1' })));
+    go();
+    await vi.waitFor(() => expect(out.hookAnswer).toBeDefined());
+    expect(out.hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    expect(requestApproval).not.toHaveBeenCalled();
+    e.dispose();
+  });
+
+  it('audits a classifier denial of a helper call between replies against its helper', async () => {
+    const out: { options?: Options } = {};
+    const { query } = helperAsksLater(new Promise<void>(() => {}), out);
+    const recordAgentDenial = vi.fn();
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval: vi.fn(), recordAgentDenial }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    await collect(e.stream(req({ autoMode: true, messageId: 'm1' })));
+    await new Promise((r) => setTimeout(r, 0));
+    const denied = out.options!.hooks!.PermissionDenied![0]!.hooks[0]!;
+    await denied({ hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1', reason: 'risky' } as never, 'c1', { signal: new AbortController().signal });
+    expect(recordAgentDenial).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'm1', chatId: 'chat' }), 'Bash', expect.anything(), 'risky');
+    e.dispose();
+  });
+
   it('a call between replies with no known helper is refused', async () => {
     let hookAnswer: unknown;
     const { query } = scripted(async function* ({ options, nextPrompt }) {
-      yield* firstReply(nextPrompt);
+      yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
       await new Promise((r) => setTimeout(r, 0));
       const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
       hookAnswer = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'stranger' } as never, 'stranger', { signal: new AbortController().signal });

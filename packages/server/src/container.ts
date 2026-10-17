@@ -424,6 +424,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through OtherBench's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (policy) => toolProvider.relayTools(policy),
+      // A background helper's call between replies is gated with the chat's settings as they are now.
+      chatSettings: (chatId, profileId) => {
+        const chat = store.chats.get(chatId);
+        const profile = store.profiles.get(profileId);
+        return chat && profile ? { autoMode: chat.autoMode, planMode: chat.planMode === true, policy: profile.toolPolicy } : null;
+      },
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections

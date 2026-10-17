@@ -7,7 +7,7 @@ import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/d
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
-import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
+import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
@@ -44,6 +44,15 @@ export interface ClaudeCodeEngineDeps {
   query: QueryFn;
   /** `askUser` answers Claude Code's AskUserQuestion and OtherBench's propose_plan through cards; without it both are refused. */
   approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'> & Partial<Pick<ToolProvider, 'askUser'>>;
+  /**
+   * A chat's settings as they are now (spec 2026-10-17-claude-background-helpers-design):
+   * a background helper's call between replies is gated with these, not the
+   * last reply's, so turning Auto off or plan mode on holds a running helper
+   * too, and with the current policy of the profile the helper runs under.
+   * Null when the chat or profile is gone, which refuses the call. Without it
+   * the last reply's settings are used.
+   */
+  chatSettings?: (chatId: string, profileId: string) => { autoMode: boolean; planMode: boolean; policy: ToolPolicy } | null;
   /** Model listing for an endpoint backend (e.g. Ollama), supplied by the server. */
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
   /** Defaults to `process.env`. */
@@ -703,23 +712,40 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(own.plan ? [otherBenchPlanTool(() => live?.binding?.plan)] : []),
       ...[...relay.tools].map(([name, spec]) => relayServerTool(name, spec, () => live?.binding?.relay)),
     ];
+    /**
+     * Between replies only a background helper's own call can be approved, on
+     * its helper's card (the reply that started it), with the chat's settings
+     * as they are now. The last reply's signal is dead by then (TurnRunner
+     * aborts it when a reply ends), so the call is tied to the process's own.
+     */
+    const helperContext = (toolUseId: string | undefined): { ctx: ToolContext; policy: ToolPolicy; autoMode: boolean } | null => {
+      const owner = live?.last && toolUseId ? live.background?.ownerOf(toolUseId) : null;
+      if (!live?.last || !owner) return null;
+      const last = live.last;
+      const current = this.deps.chatSettings ? this.deps.chatSettings(last.chatId, last.profileId) : { autoMode: last.autoMode, planMode: last.ctx.plan !== undefined, policy: last.policy };
+      if (!current) return null;
+      const { plan: lastPlan, ...rest } = last.ctx;
+      const plan = current.planMode ? (lastPlan ?? createPlanGate()) : undefined;
+      return {
+        ctx: { ...rest, ...(plan ? { plan } : {}), signal: abortController.signal, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
+        policy: current.policy,
+        // Claude Code's own mode can't change mid-process: Auto turned on since doesn't make it auto.
+        autoMode: last.autoMode && current.autoMode && !last.unattended,
+      };
+    };
     const gate: Gate = (toolName, toolInput, signal, opts) => {
       const which = ownTool(toolName);
       if (live?.binding) return live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) });
-      // Between replies only a background helper's own call can be approved, on its helper's card (the reply that started it).
-      const owner = live?.last && opts?.toolUseId && !which ? live.background?.ownerOf(opts.toolUseId) : null;
-      if (!live?.last || !owner) return Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
-      const last = live.last;
-      const helperGate = createGate({
-        approvals: this.deps.approvals,
-        policy: last.policy,
-        ctx: { ...last.ctx, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
-        autoMode: last.autoMode,
-      });
-      return helperGate(toolName, toolInput, signal, opts);
+      const helper = which ? null : helperContext(opts?.toolUseId);
+      if (!helper) return Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
+      return createGate({ approvals: this.deps.approvals, ...helper })(toolName, toolInput, signal, opts);
     };
-    const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) =>
-      live?.binding?.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
+    const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) => {
+      if (live?.binding) return live.binding.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
+      // A helper's call the classifier blocked between replies is audited against its helper's reply, like any other.
+      const helper = helperContext(toolUseId ?? undefined);
+      return helper ? permissionDeniedHook({ approvals: this.deps.approvals, ctx: helper.ctx })(hookInput, toolUseId, hookOptions) : {};
+    };
     const full: Options = {
       ...options,
       // Its tool acts for whichever reply is running, like the hooks.
