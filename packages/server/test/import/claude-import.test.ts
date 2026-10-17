@@ -22,6 +22,7 @@ const GLOBAL_NOTE = '## Pinned\n\n## Preferences\n- British spelling\n\n## Setup
 const PROJECT_NOTE = '## Pinned\n\n## Goals\n- Raised beds\n\n## Decisions\n\n## Current focus\n- The shed\n\n## Open questions';
 
 let store: Store;
+let db: ReturnType<typeof openDatabase>;
 let bus: AppEventBus;
 let events: AppEvent[];
 let root: string;
@@ -93,7 +94,7 @@ async function runImport(service: ClaudeImportService, over: { memory?: boolean;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'otherbench-claude-import-'));
-  const db = openDatabase(':memory:');
+  db = openDatabase(':memory:');
   runMigrations(db);
   bus = new AppEventBus();
   events = [];
@@ -297,6 +298,16 @@ describe('ClaudeImportService: files saved from claude.ai', () => {
     expect(again.report!.chats).toMatchObject({ imported: 0, existing: 1, updated: 1, files: 2 });
     expect(store.messages.get('u1')!.parts.map((p) => p.type)).toEqual(['text', 'image', 'file', 'text', 'text']);
     expect((await runImport(filesService())).report!.chats).toMatchObject({ existing: 1, updated: 0, files: 0 });
+  });
+
+  it('logs the filled-in messages as changes, so a paired machine gets the files too', async () => {
+    await runImport(makeService());
+    const before = store.sync.latestSeq();
+
+    await runImport(filesService());
+
+    const changed = (db.prepare("SELECT row_id FROM change_log WHERE seq > ? AND tbl = 'message' AND op = 'upsert'").all(before) as { row_id: string }[]).map((r) => r.row_id);
+    expect(changed).toContain('u1');
   });
 
   it('keeps the notes when there is nowhere to store files', async () => {
