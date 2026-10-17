@@ -1238,9 +1238,11 @@ There's no spend cap; usage rows are written as normal.
   the reply attached to it until that reply's own result
   (`user_message_uuids`), so a reply ends on its result and nothing from it
   leaks into the next. Stop interrupts the reply (`Query.interrupt()`) and
-  the reply ends at once; the process keeps running its background tasks,
-  is drained in the background and pooled again, or closed if the turn
-  hasn't ended after 5 s (`INTERRUPT_GRACE_MS`).
+  the reply ends at once; the process keeps running its background tasks and
+  goes straight back to the pool (the next message waits for the stopped turn
+  to end in it), and is closed if the turn hasn't ended after 5 s
+  (`INTERRUPT_GRACE_MS`). A process running a turn is never closed to make
+  room, and deleting a chat closes its processes (`closeChats`).
 - Background helpers and self-started replies (spec
   2026-10-17-claude-background-helpers-design). Helpers and commands Claude
   Code runs in the background (`task_started`/`task_progress`/
@@ -1252,12 +1254,14 @@ There's no spend cap; usage rows are written as normal.
   helper's card in an earlier reply is updated in place (`server/src/background.ts`,
   `messages-changed`). When Claude Code starts a turn by itself while no
   reply is attached (a helper reported back), the engine emits a
-  `SelfStart` and the server runs it as a new reply under the chat's last
-  message (`startSelfStartedTurn`, `TurnRunner.runSelfStarted`) with a
-  notice such as "Carried on after the helper "x" reported back."; it keeps
-  the chat's plan mode, profile and Auto setting from the last reply. A
-  helper's tool call between replies goes through the same gate with the
-  last reply's context and the helper named; its approval card is kept per
+  `SelfStart` and the server runs it as a new reply under the session's last
+  reply (`startSelfStartedTurn`, `TurnRunner.runSelfStarted`) with a
+  notice such as "Carried on after the helper "x" reported back."; it runs
+  with the chat's current Auto and plan mode, like any reply. A helper's tool
+  call between replies goes through the same gate with the last reply's
+  context, the chat's current Auto and plan mode and its profile's current
+  policy (`chatSettings`), tied to the process's own signal, with the helper
+  named; a classifier denial is audited the same way; its approval card is kept per
   chat on the stream (`backgroundApprovals`) and shown under the helper.
   Any other call with no reply running is refused ("No OtherBench reply is
   waiting on this tool call.").
