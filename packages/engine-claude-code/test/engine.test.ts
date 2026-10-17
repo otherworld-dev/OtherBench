@@ -1777,6 +1777,35 @@ describe('ClaudeCodeChatEngine between replies (spec 2026-10-17-claude-backgroun
     expect(starts).toHaveLength(1);
   });
 
+  it('a message sent right after Stop waits for the stopped turn to end in the same process, rather than starting a second one on the session', async () => {
+    let endStopped!: () => void;
+    const slowEnd = new Promise<void>((resolve) => (endStopped = resolve));
+    let first = true;
+    const { query, starts } = chattyLive(async function* ({ prompt, interrupted }) {
+      if (first) {
+        first = false;
+        yield init();
+        yield delta('working');
+        await interrupted;
+        await slowEnd;
+        yield resultFor(prompt, 'error_during_execution');
+        return;
+      }
+      yield delta('two');
+      yield resultFor(prompt);
+    });
+    const e = engine(query);
+    const controller = new AbortController();
+    for await (const ev of e.stream(req({ signal: controller.signal }))) {
+      if (ev.type === 'text-delta') controller.abort();
+    }
+    const next = collect(e.stream(followUp()));
+    await new Promise((r) => setTimeout(r, 0));
+    endStopped();
+    expect(textOfEvents(await next)).toBe('two');
+    expect(starts).toHaveLength(1);
+  });
+
   it('Stop interrupts the turn and keeps the process for the next message', async () => {
     const { query, starts } = chattyLive(async function* ({ prompt, n, interrupted }) {
       if (n === 1) {
@@ -2052,6 +2081,21 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     expect(events[0]).toMatchObject({ type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 'sess-1' } });
     expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'Reviewed.' }]);
     expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    e.dispose();
+  });
+
+  it("a self-started reply whose process ends before the turn's result ends in an error, not as complete", async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewing');
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    const events = await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self' })));
+    expect(events.some((ev) => ev.type === 'error')).toBe(true);
+    expect(events.some((ev) => ev.type === 'finish')).toBe(false);
     e.dispose();
   });
 

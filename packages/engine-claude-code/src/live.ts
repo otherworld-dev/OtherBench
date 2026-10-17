@@ -74,10 +74,20 @@ export class TurnFeed implements AsyncIterable<SDKMessage> {
   }
 }
 
-/** Whether `msg` is the result of the turn that answered the message `uuid`. A result naming no message (an older Claude Code) counts. */
+/** The prefix of the id a turn Claude Code started by itself is attached under (it answers no message of ours). */
+export const SELF_TURN_PREFIX = 'self-';
+
+/**
+ * Whether `msg` is the result of the turn that answered the message `uuid`.
+ * A result naming no message (an older Claude Code) counts, except one of a
+ * turn Claude Code ran by itself (`origin.kind` 'task-notification'), which
+ * ends only a self-started turn: a user's reply that caught the start of such
+ * a turn carries on to its own result.
+ */
 function resultFor(msg: SDKMessage, uuid: string): boolean {
-  const m = msg as unknown as { type?: unknown; user_message_uuid?: unknown; user_message_uuids?: unknown };
+  const m = msg as unknown as { type?: unknown; user_message_uuid?: unknown; user_message_uuids?: unknown; origin?: { kind?: unknown } };
   if (m.type !== 'result') return false;
+  if (m.origin?.kind === 'task-notification') return uuid.startsWith(SELF_TURN_PREFIX);
   const named = [...(typeof m.user_message_uuid === 'string' ? [m.user_message_uuid] : []), ...(Array.isArray(m.user_message_uuids) ? m.user_message_uuids : [])];
   return named.length === 0 || named.includes(uuid);
 }
@@ -291,12 +301,18 @@ export class LivePool {
     return live;
   }
 
-  /** Makes room for one more process: closes the longest-idle ones past the cap, any running background tasks last. */
+  /**
+   * Makes room for one more process: closes the longest-idle ones past the
+   * cap, any running background tasks last. One running a turn (a stopped
+   * reply's, or one Claude Code started by itself) is never closed: the cap
+   * is exceeded until it ends.
+   */
   makeRoom(): void {
     while (this.idle.size >= this.max) {
       let oldest: [string, LiveProcess] | null = null;
       const rank = (live: LiveProcess): number => (live.background?.running ? 1 : 0);
       for (const entry of this.idle) {
+        if (entry[1].isAttached) continue;
         if (!oldest || rank(entry[1]) < rank(oldest[1]) || (rank(entry[1]) === rank(oldest[1]) && entry[1].lastUsed < oldest[1].lastUsed)) oldest = entry;
       }
       if (!oldest) return;

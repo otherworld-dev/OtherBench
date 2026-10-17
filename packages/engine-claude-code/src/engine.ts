@@ -24,7 +24,7 @@ import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding } from './live.js';
+import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
 import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
@@ -218,7 +218,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * With nobody to run it, it's read to its end and dropped.
    */
   private selfStart(live: LiveProcess, first: SDKMessage): void {
-    const placeholder = `self-${randomUUID()}`;
+    const placeholder = `${SELF_TURN_PREFIX}${randomUUID()}`;
     const feed = live.attach(placeholder);
     feed.push(first);
     // Helper cards it starts belong to its reply, whose id comes when it runs.
@@ -292,7 +292,14 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           break;
         }
         pending = null;
-        if (next.done) break;
+        if (next.done) {
+          // The process ended (closed, or died) before the turn's result: the reply didn't finish.
+          if (!req.signal.aborted) {
+            const text = [live.failure instanceof Error ? live.failure.message : 'Claude Code ended before it finished this reply.', ...live.stderr].join('\n');
+            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId }) };
+          }
+          break;
+        }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init' || event.type === 'rate-limited') continue;
@@ -582,7 +589,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {
-        // Stopped mid-turn: the turn is read to its end in the background, then the process waits for the next message.
+        // Stopped mid-turn: the process goes back to the pool at once, so the
+        // session's next message waits for this turn to end in it (its feed is
+        // still attached) rather than starting a second process on the
+        // session. The turn is read to its end in the background.
+        this.pool.release(live);
         void this.finishStopped(live, feed, pending);
       } else if (ended && !live.isClosed && (finished || req.signal.aborted)) {
         // A turn that reached its own result leaves its process waiting for the next message.
@@ -596,9 +607,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
-   * After a stop: reads the interrupted turn to its result, then pools the
-   * process for the next message. One whose turn hasn't ended within
-   * INTERRUPT_GRACE_MS is closed.
+   * After a stop: reads the interrupted turn to its result (the process is
+   * already pooled). One whose turn hasn't ended within INTERRUPT_GRACE_MS is
+   * closed.
    */
   private async finishStopped(live: LiveProcess, feed: AsyncIterator<SDKMessage>, pending: Promise<IteratorResult<SDKMessage>> | null): Promise<void> {
     const timer = setTimeout(() => live.close(), INTERRUPT_GRACE_MS);
@@ -612,8 +623,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ended = false;
     } finally {
       clearTimeout(timer);
-      if (ended && !live.isClosed) this.pool.release(live);
-      else live.close();
+      if (!ended) live.close();
       if (live.isClosed) this.processes.delete(live);
     }
   }

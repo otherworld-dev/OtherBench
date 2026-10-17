@@ -99,6 +99,26 @@ describe('LiveProcess', () => {
     out.end();
     expect(await take(feed)).toEqual([text('half')]);
   });
+
+  it("doesn't end a user's reply on the result of a turn Claude Code ran by itself", async () => {
+    const { live, out, idle } = process();
+    const feed = live.attach('u1');
+    const selfResult = { type: 'result', subtype: 'success', is_error: false, usage: {}, user_message_uuids: [], origin: { kind: 'task-notification' } };
+    out.emit(selfResult);
+    out.emit(text('mine'));
+    out.emit(result(['u1']));
+    expect(await take(feed)).toEqual([text('mine'), result(['u1'])]);
+    expect(idle).toEqual([selfResult]);
+  });
+
+  it('ends a self-started turn on its own result', async () => {
+    const { live, out } = process();
+    const feed = live.attach('self-1');
+    const selfResult = { type: 'result', subtype: 'success', is_error: false, usage: {}, user_message_uuids: [], origin: { kind: 'task-notification' } };
+    out.emit(text('carried on'));
+    out.emit(selfResult);
+    expect(await take(feed)).toEqual([text('carried on'), selfResult]);
+  });
 });
 
 describe('LivePool.takeWhenFree', () => {
@@ -116,5 +136,20 @@ describe('LivePool.takeWhenFree', () => {
     await tick();
     await tick();
     expect(taken).toBe(live);
+  });
+});
+
+describe('LivePool.makeRoom', () => {
+  it('never closes a process that is running a turn, even the longest idle one', async () => {
+    const pool = new LivePool(60_000, 1);
+    const busy = process();
+    busy.live.sessionId = 's1';
+    busy.live.lastUsed = 0;
+    pool.release(busy.live);
+    void take(busy.live.attach('self-started'));
+    const other = process();
+    other.live.sessionId = 's2';
+    pool.release(other.live);
+    expect(busy.live.isClosed).toBe(false);
   });
 });
