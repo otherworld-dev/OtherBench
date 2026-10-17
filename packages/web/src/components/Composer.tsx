@@ -186,7 +186,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[otherbench-web] failed to cancel ${id}:`, err))));
   }
 
-  /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies from the next turn. */
+  /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies at once, to a reply already running too (its Claude Code is switched). */
   async function toggleAutoMode(): Promise<void> {
     if (autoSaving) return;
     const previous = autoMode;
@@ -638,7 +638,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                   ? 'Auto mode needs the Claude login'
                   : autoActive
                     ? 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.'
-                    : 'Let Claude Code decide routine tool calls (from the next turn)'
+                    : 'Let Claude Code decide routine tool calls (applies at once, even to a reply that is running)'
               }
               onClick={() => void toggleAutoMode()}
               className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${

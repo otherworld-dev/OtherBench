@@ -15,3 +15,16 @@ export function closeEngineChatsThatAreGone(events: AppEventBus, engine: Pick<Ch
     else if (e.type === 'sync-applied') engine.closeChats?.((chatId) => !chatExists(chatId));
   });
 }
+
+/**
+ * Tells the engine when a chat's settings change, so a running Claude Code
+ * follows the chat's Auto at once (as VS Code does): a change made here, or
+ * one a paired machine's changes brought (which may touch any chat).
+ * Returns the unsubscribe.
+ */
+export function followChatSettings(events: AppEventBus, engine: Pick<ChatEngine, 'refreshChatSettings'>): () => void {
+  return events.subscribe((e) => {
+    if (e.type === 'chat-updated') engine.refreshChatSettings?.(e.chat.id);
+    else if (e.type === 'sync-applied') engine.refreshChatSettings?.();
+  });
+}

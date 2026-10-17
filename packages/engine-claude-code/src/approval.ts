@@ -155,7 +155,8 @@ export function createGate(deps: {
   approvals: Pick<ToolProvider, 'requestApproval'> & Partial<Pick<ToolProvider, 'askUser'>>;
   policy: ToolPolicy;
   ctx: ToolContext;
-  autoMode?: boolean;
+  /** Whether calls OtherBench would ask about go to Claude Code's classifier instead; a function is asked at each call (the mode can be switched mid-reply). */
+  autoMode?: boolean | (() => boolean);
   /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
   onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
   /** The reply's helpers: a call one of them made says so on its approval card. */
@@ -219,7 +220,8 @@ export function createGate(deps: {
       // Only the PreToolUse hook, and only in auto mode, may hand a call to
       // Claude Code's classifier. canUseTool (reached when the classifier
       // can't decide) always gets a card.
-      const deferAsk = deps.autoMode === true && opts?.mayDefer === true;
+      const auto = typeof deps.autoMode === 'function' ? deps.autoMode() : deps.autoMode === true;
+      const deferAsk = auto && opts?.mayDefer === true;
       // A helper's call is named on its card (best effort: known once its message has been read); the decision is the reply's own.
       const helper = deps.helpers?.ownerOf(opts?.toolUseId);
       const shown = helper ? { shownSubagent: { callId: helper.callId, label: helper.label, parentProfileId: deps.ctx.profileId } } : {};

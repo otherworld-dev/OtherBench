@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, Options, SDKMessage, SDKUserMessage, PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { Gate } from './approval.js';
@@ -43,6 +43,8 @@ export class PromptQueue implements AsyncIterable<SDKUserMessage> {
 export type LiveQuery = AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
   stopTask?(taskId: string): Promise<unknown>;
+  /** Switches the running Claude Code's permission mode (what VS Code does when its mode changes). */
+  setPermissionMode?(mode: PermissionMode): Promise<unknown>;
 };
 
 /**
@@ -151,6 +153,14 @@ export class LiveProcess {
   onIdle: (message: SDKMessage) => void = () => {};
   /** Why the output ended, when it ended with an error. */
   failure: unknown = null;
+  /**
+   * The permission mode Claude Code is running in, as it last said (each
+   * turn's init and its status messages), or as it was started or last
+   * switched. A reply's gate hands calls to the classifier only while this is 'auto'.
+   */
+  permissionMode: string | null = null;
+  /** Whether this process can run in auto mode at all (it runs on the Claude login). */
+  canAuto = false;
   /** The background tasks this process is running for its chat (set by its first reply). */
   background: BackgroundTasks | null = null;
   /**
@@ -180,6 +190,7 @@ export class LiveProcess {
         if (next.done) break;
         // The background tasks see everything, in the order it came.
         this.background?.handle(next.value);
+        this.noteMode(next.value);
         const turn = this.attached;
         if (turn && (next.value as { type?: unknown }).type === 'result' && !resultFor(next.value, turn.uuid)) {
           // Another turn's result (one Claude Code ran by itself) never ends this reply.
@@ -197,6 +208,28 @@ export class LiveProcess {
       this.outputEnded = true;
       this.detach();
     }
+  }
+
+  /** Keeps the mode Claude Code reports: at the start of each turn (init) and when it changes (status). */
+  private noteMode(message: SDKMessage): void {
+    const m = message as unknown as { type?: unknown; subtype?: unknown; permissionMode?: unknown };
+    if (m.type === 'system' && (m.subtype === 'init' || m.subtype === 'status') && typeof m.permissionMode === 'string') this.permissionMode = m.permissionMode;
+  }
+
+  /**
+   * Switches the running Claude Code to `mode`. False when this Claude Code
+   * can't be switched (it has no setPermissionMode), or the switch failed.
+   */
+  async switchMode(mode: PermissionMode): Promise<boolean> {
+    if (!this.query.setPermissionMode || this.closed) return false;
+    try {
+      await this.query.setPermissionMode(mode);
+    } catch (err) {
+      console.error('[engine-claude-code] could not switch Claude Code to ' + mode + ' mode:', err);
+      return false;
+    }
+    this.permissionMode = mode;
+    return true;
   }
 
   /** The output of the turn answering the message `uuid`, up to its result. Attach before sending that message. */
@@ -252,7 +285,7 @@ export class LiveProcess {
 /**
  * The options that fix a process's behaviour for its whole life. A reply can
  * reuse a live process only when these are identical; anything else -- a
- * different model, folder, tool policy, auto mode, Plan mode, system prompt (which
+ * different model, folder, tool policy, Plan mode, system prompt (which
  * carries project memory), extra folders, thinking budget, effort, backend or credentials -- starts
  * a fresh process. `connection` stands in for the child environment, which
  * can't be compared whole: the Agent SDK itself changes the server's
@@ -260,9 +293,10 @@ export class LiveProcess {
  * Hashed, so no second plaintext copy of a credential is kept.
  */
 export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: OtherBenchServerSwitches): string {
-  const { cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
+  // The permission mode is left out: Auto is switched on a live process (LiveProcess.switchMode), as VS Code does.
+  const { cwd, additionalDirectories, model, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, plan: own.plan, relay: own.relay, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, plan: own.plan, relay: own.relay, cwd, additionalDirectories, model, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

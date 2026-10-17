@@ -1271,9 +1271,15 @@ There's no spend cap; usage rows are written as normal.
   user's Claude settings. `canUseTool` uses the same gate as a fallback;
   `permissionMode` is `'default'` unless the chat's Auto toggle is on (next
   bullet).
-- Auto mode (per chat: Composer **Auto** toggle, `chat.auto_mode`, applies
-  from the next turn). On the Claude login, turns run with
-  `permissionMode: 'auto'`. The hook still sends every call through
+- Auto mode (per chat: Composer **Auto** toggle, `chat.auto_mode`). On the
+  Claude login, turns run with `permissionMode: 'auto'`. It applies at
+  once, as in VS Code: a change (here, or synced from a paired machine) calls
+  `refreshChatSettings`, which switches the chat's running Claude Code with
+  `Query.setPermissionMode` (checked live: the next tool call in the same
+  turn goes to the classifier), and a reply's gate hands calls on while its
+  process is in auto mode (`LiveProcess.permissionMode`, from each turn's
+  init and status messages). The mode isn't part of the process key, so a
+  reused process is switched rather than replaced. The hook still sends every call through
   `requestApproval` -> `PermissionBroker` first, so policy denials,
   outside-workspace denials, auto-read and grants behave exactly as before.
   Only a call the broker would *ask* about goes to Claude Code's classifier
