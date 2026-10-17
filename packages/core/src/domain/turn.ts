@@ -569,12 +569,46 @@ export class TurnRunner {
     return { userMessageId: parent.id, assistantMessageId: assistantMessage.id };
   }
 
+  /**
+   * A reply nobody sent a message for: the engine's agent carried on by
+   * itself (Claude Code after a background helper reported back, spec
+   * 2026-10-17-claude-background-helpers-design). It follows `parentId` (the
+   * reply it continues), starts with `notice`, and runs like any reply, but
+   * from `stream` (the engine's own turn) rather than a new engine call. Plan
+   * mode doesn't hold it back: that's for messages the user sends.
+   */
+  async runSelfStarted(input: {
+    chatId: string;
+    parentId: string;
+    profile: ResolvedProfile;
+    notice: string;
+    unattended: boolean;
+    stream: (req: EngineRequest) => AsyncIterable<EngineEvent>;
+  }): Promise<{ assistantMessageId: string }> {
+    const { profile } = input;
+    const message = this.store.messages.create({
+      id: this.generateId(),
+      chatId: input.chatId,
+      parentId: input.parentId,
+      role: 'assistant',
+      parts: [],
+      status: 'streaming',
+      error: null,
+      producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
+    });
+    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice, selfStarted: true }).catch((err: unknown) => {
+      console.error(`[TurnRunner] self-started reply ${message.id} failed outside its own error handling:`, err);
+    });
+    return { assistantMessageId: message.id };
+  }
+
   private async runVariant(
     chatId: string,
     userMessageId: string,
     messageId: string,
     profile: ResolvedProfile,
-    unattended = false
+    unattended = false,
+    variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string; selfStarted?: boolean } = {}
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
@@ -626,7 +660,8 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
-      const planMode = chat?.planMode === true;
+      // Plan mode is for messages the user sends; a self-started reply isn't one.
+      const planMode = chat?.planMode === true && variant.selfStarted !== true;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -714,6 +749,7 @@ export class TurnRunner {
       // a broadcast -- so that part happens right away regardless.
       let pendingNoticeText: string | null = null;
       const notices = [
+        ...(variant.notice ? [variant.notice] : []),
         ...(degraded.length > 0 ? [degradedAttachmentsNotice(degraded, profile.modelId)] : []),
         ...(unread.length > 0 ? [unreadFilesNotice(unread, profile.modelId)] : []),
       ];
@@ -780,7 +816,7 @@ export class TurnRunner {
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
-      for await (const event of this.engine.stream(request)) {
+      for await (const event of variant.stream ? variant.stream(request) : this.engine.stream(request)) {
         if (pendingNoticeText !== null) {
           // Fired on this variant's FIRST live-emitted event, not
           // immediately after computing it above. `runVariant` reaches the
