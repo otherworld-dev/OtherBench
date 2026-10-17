@@ -1226,12 +1226,41 @@ There's no spend cap; usage rows are written as normal.
   session's tip) and the options it started with still match -- folder,
   model, backend and credentials, tool policy, Auto, system prompt (which
   carries project memory), thinking budget. Anything else starts a new
-  process that resumes the session, closing the old one. Stopping a reply,
-  or a reply ending in an error, closes its process. Idle processes close
-  after 30 minutes and at most 3 are kept (each runs its own MCP servers);
-  `container.close()` stops them all. Hooks are fixed when a process starts,
-  so they call through a per-reply binding; a tool call with no reply
-  running is refused.
+  process that resumes the session, closing the old one. A reply ending in
+  an error closes its process. Idle processes close after 30 minutes (not
+  while a background task runs) and at most 3 are kept (each runs its own
+  MCP servers; one with background tasks is closed last); `container.close()`
+  stops them all. Hooks are fixed when a process starts, so they call
+  through a per-reply binding.
+- Reading and Stop. Each live process is read continuously by one reader
+  (`LiveProcess.pump`), which hands every message to the chat's
+  `BackgroundTasks` (`engine-claude-code/src/background.ts`) first, then to
+  the reply attached to it until that reply's own result
+  (`user_message_uuids`), so a reply ends on its result and nothing from it
+  leaks into the next. Stop interrupts the reply (`Query.interrupt()`) and
+  the reply ends at once; the process keeps running its background tasks,
+  is drained in the background and pooled again, or closed if the turn
+  hasn't ended after 5 s (`INTERRUPT_GRACE_MS`).
+- Background helpers and self-started replies (spec
+  2026-10-17-claude-background-helpers-design). Helpers and commands Claude
+  Code runs in the background (`task_started`/`task_progress`/
+  `task_notification`) are kept per chat and sent on the chat's stream as
+  `{type:'helpers'}` (and in its hello); the web shows them above the
+  message box (`components/BackgroundHelpers.tsx`) with their time, last
+  activity and a Stop (`POST /api/chats/:id/helpers/:taskId/stop`,
+  `Query.stopTask`, forwarded to a paired machine running the chat). A
+  helper's card in an earlier reply is updated in place (`server/src/background.ts`,
+  `messages-changed`). When Claude Code starts a turn by itself while no
+  reply is attached (a helper reported back), the engine emits a
+  `SelfStart` and the server runs it as a new reply under the chat's last
+  message (`startSelfStartedTurn`, `TurnRunner.runSelfStarted`) with a
+  notice such as "Carried on after the helper "x" reported back."; it keeps
+  the chat's plan mode, profile and Auto setting from the last reply. A
+  helper's tool call between replies goes through the same gate with the
+  last reply's context and the helper named; its approval card is kept per
+  chat on the stream (`backgroundApprovals`) and shown under the helper.
+  Any other call with no reply running is refused ("No OtherBench reply is
+  waiting on this tool call.").
 - Claude Code executes its own tools; OtherBench gates them. A PreToolUse hook
   (matcher `*`) sends every call through `OtherBenchToolProvider.requestApproval`
   -> `PermissionBroker` (`source: 'agent'`), ahead of any allow-rules in the
