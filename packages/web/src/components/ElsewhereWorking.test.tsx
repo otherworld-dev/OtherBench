@@ -38,6 +38,19 @@ describe('chats a paired machine is working in', () => {
   });
 });
 
+describe('the store hearing what paired machines are doing', () => {
+  it('reloads a chat when a paired machine starts a reply in it, so the reply shows live', () => {
+    const { setMachines } = useOtherBenchStore.getState();
+    setMachines(machines('reachable', []));
+    expect(useOtherBenchStore.getState().chatReloads['office']).toBeUndefined();
+    setMachines(machines('reachable', ['office']));
+    expect(useOtherBenchStore.getState().chatReloads['office']).toBe(1);
+    // Still working: no reload again.
+    setMachines(machines('reachable', ['office']));
+    expect(useOtherBenchStore.getState().chatReloads['office']).toBe(1);
+  });
+});
+
 describe('ElsewhereWorking', () => {
   it('says the PC is replying in this chat', () => {
     useOtherBenchStore.setState({ machines: machines('reachable', ['office']) });

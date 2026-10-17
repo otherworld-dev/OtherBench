@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { chatsWorkingElsewhere } from './machines.js';
+import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import type { PaneState } from './panes.js';

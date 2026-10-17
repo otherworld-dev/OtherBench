@@ -16,7 +16,7 @@ export function ElsewhereWorking({ chat }: { chat: Pick<Chat, 'id'> }): JSX.Elem
   return (
     <div data-testid="elsewhere-working" role="status" className="mx-4 mb-2 flex items-center gap-2 text-xs text-[var(--text-muted)]">
       <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--accent)]" aria-hidden="true" />
-      Replying on {name}… it shows here when it&apos;s done.
+      Replying on {name}…
     </div>
   );
 }

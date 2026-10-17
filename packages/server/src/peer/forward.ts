@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { Hono, type Context, type Next } from 'hono';
 import { encodeHlc } from '@otherbench/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@otherbench/core/domain/sync.js';
@@ -226,6 +227,36 @@ async function eachRecord(response: IncomingMessage, onRecord: (raw: string, eve
       }
       await onRecord(raw, event, data);
     }
+  }
+}
+
+/** The most in-flight messages taken from a paired machine for one chat. */
+const MAX_IN_FLIGHT = 20;
+
+/** A message a paired machine sent for display only: its fields have the right shapes and it belongs to `chatId`. */
+function inFlightMessage(raw: unknown, chatId: string): CanonMessage | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  const ok =
+    isString(m['id']) && m['chatId'] === chatId && (m['role'] === 'user' || m['role'] === 'assistant') &&
+    (m['parentId'] === null || isString(m['parentId'])) && Array.isArray(m['parts']) &&
+    typeof m['createdAt'] === 'number' && (m['status'] === 'streaming' || m['status'] === 'complete');
+  return ok ? (m as unknown as CanonMessage) : null;
+}
+
+/**
+ * The replies `nodeId` is still writing in a chat it runs, with the messages
+ * they answer, for this machine's UI to show live: never stored here (sync
+ * brings each one once it finishes). Empty when that machine can't be asked.
+ */
+export async function fetchInFlight(container: Container, nodeId: string, chatId: string): Promise<{ messages: CanonMessage[]; headMessageId: string | null }> {
+  try {
+    const res = await container.peers!.call(nodeId, { method: 'GET', path: `/api/chats/${chatId}/in-flight` });
+    const body = (res.status === 200 ? res.body : null) as { messages?: unknown; headMessageId?: unknown } | null;
+    const messages = Array.isArray(body?.messages) ? body.messages.slice(0, MAX_IN_FLIGHT).map((m) => inFlightMessage(m, chatId)).filter((m): m is CanonMessage => m !== null) : [];
+    return { messages, headMessageId: isString(body?.headMessageId) ? body.headMessageId : null };
+  } catch {
+    return { messages: [], headMessageId: null };
   }
 }
 
@@ -469,6 +500,16 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     if (result === 'unknown') return c.json({ error: `Question or plan "${c.req.param('id')}" is unknown or was already answered.` }, 404);
     if (typeof result === 'object') return c.json({ error: result.invalid }, 400);
     return c.json({ answered: true });
+  });
+
+  // The replies still being written in a chat, and the messages they answer: a reply isn't synced
+  // until it finishes, so a paired machine showing the chat live gets them here (fetchInFlight).
+  app.get('/chats/:id/in-flight', (c) => {
+    const chat = container.store.chats.get(c.req.param('id'));
+    if (!chat) return c.json({ error: 'Chat not found.' }, 404);
+    const replies = container.store.messages.listByStatus('streaming').filter((m) => m.chatId === chat.id);
+    const asked = replies.flatMap((m) => (m.parentId ? [container.store.messages.get(m.parentId)] : [])).filter((m): m is CanonMessage => m !== null && m.chatId === chat.id);
+    return c.json({ messages: [...asked, ...replies], headMessageId: chat.headMessageId });
   });
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.

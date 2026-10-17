@@ -310,6 +310,28 @@ describe('running a chat on the machine it runs on', () => {
     await expect.poll(activeOnPc).toEqual([]);
   });
 
+  it("shows the laptop a reply the PC is still writing in its chat, without keeping it", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+
+    const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const started = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    const replyId = started.assistantMessageIds[0]!;
+    await expect.poll(() => laptop.container.peers!.activeChats(pc.id)).toEqual([chatId]);
+
+    const view = (await (await laptop.api('GET', `/api/chats/${chatId}/messages`)).json()) as { messages: { id: string; status: string }[]; headMessageId: string | null };
+    expect(view.messages.find((m) => m.id === replyId)).toMatchObject({ status: 'streaming' });
+    expect(view.messages.some((m) => m.id === started.userMessageId)).toBe(true);
+    expect(view.headMessageId).toBe(started.userMessageId);
+    // Shown, never stored: sync brings it once it finishes.
+    expect(laptop.container.store.messages.get(replyId)).toBeNull();
+
+    pc.container.turnRunner.cancel(replyId);
+    await expect.poll(() => laptop.container.peers!.activeChats(pc.id)).toEqual([]);
+    const after = (await (await laptop.api('GET', `/api/chats/${chatId}/messages`)).json()) as { messages: { id: string; status: string }[] };
+    expect(after.messages.find((m) => m.id === replyId)?.status ?? 'not here').not.toBe('streaming');
+  });
+
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     // The laptop takes the chat over (Run here): from now on it runs on the laptop.
