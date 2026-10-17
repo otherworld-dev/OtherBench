@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
+import { contextLineOf, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
@@ -150,6 +151,21 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
   thinking: { type: 'disabled' },
   persistSession: false,
 });
+
+/** A message that starts with a slash command (`/name`, `/plugin:name args`): Claude Code runs it as that command. */
+const COMMAND = /^\/[A-Za-z0-9][\w:.-]*(\s|$)/;
+
+/** What a reply that sent /compact has seen of it: the PostCompact hook's summary and the boundary's token counts. */
+type Compaction = { summary: string | null; preTokens?: number; postTokens?: number | null };
+
+const AUTO_COMPACTED = 'Claude Code compacted the context automatically.';
+
+/** The focus of the /compact the new message is ('' for none), or null when it isn't one. */
+function compactFocus(req: EngineRequest): string | null {
+  const last = req.messages[req.messages.length - 1];
+  const line = last ? contextLineOf(last) : null;
+  return line?.kind === 'compact' ? (line.focus ?? '') : null;
+}
 
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 
@@ -340,6 +356,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init' || event.type === 'rate-limited') continue;
+          if (event.type === 'compacted') {
+            if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
+            continue;
+          }
           if (event.type === 'result-error') {
             if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId }) };
             continue;
@@ -402,7 +422,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean, images.blocks);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
-        yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so OtherBench started a new Claude Code session with this chat's history." };
+        // A /compact has nothing to compact in a new session: runTurn refuses it, without this notice.
+        if (compactFocus(req) === null) yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so OtherBench started a new Claude Code session with this chat's history." };
         yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean, images.blocks);
       }
     } finally {
@@ -429,8 +450,16 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     images: ContentBlock[]
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const profile = req.profile;
+    // /compact compacts the session this chat continues; a new session has nothing to compact, so no process is started.
+    const compacting = compactFocus(req) !== null;
+    if (compacting && plan.mode !== 'continue') {
+      yield { type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } };
+      return 'done';
+    }
     const content = this.userContent(req, plan.mode === 'fresh', images);
     const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = this.prepareReply(req, backend, clean);
+    const compaction: Compaction | null = compacting ? { summary: null } : null;
+    if (compaction) binding.compacted = (summary) => (compaction.summary = summary);
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
     let taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
@@ -455,7 +484,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
     live.binding = binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, policy: profile.toolPolicy, ctx: gateCtx, autoMode, unattended: req.unattended === true };
-    return yield* this.runReplyTurn(req, plan, backend, notice, cwd, live, reused, content, autoMode, helpers, tickets);
+    return yield* this.runReplyTurn(req, plan, backend, notice, cwd, live, reused, content, autoMode, helpers, tickets, compaction);
   }
 
   /**
@@ -550,7 +579,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     content: ContentBlock[],
     autoMode: boolean,
     helpers: HelperRegistry,
-    tickets: ApprovalTickets
+    tickets: ApprovalTickets,
+    compaction: Compaction | null
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
       const text = notice.text;
@@ -606,8 +636,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init') {
-            sawInit = true;
             live.sessionId = event.sessionId;
+            // Claude Code repeats its init mid-turn after compacting, on the same session: only the
+            // turn's first starts it. A later one can say another mode (Auto switched off since),
+            // which isn't auto mode being unavailable.
+            if (sawInit) continue;
+            sawInit = true;
             if (autoMode && event.permissionMode !== 'auto') {
               // Claude Code started in another mode: auto mode isn't available
               // for this account or model. Stop before the model does any work,
@@ -621,6 +655,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             yield* flushNotice();
           } else if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
+          } else if (event.type === 'compacted') {
+            if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
+            else if (compaction) Object.assign(compaction, { preTokens: event.preTokens, postTokens: event.postTokens });
           } else if (event.type === 'result-error') {
             // A stopped reply's interrupted turn: its process carries on for the next message.
             if (req.signal.aborted) return 'done';
@@ -630,7 +667,22 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
             return 'done';
           } else {
-            if (event.type === 'finish') finished = true;
+            if (event.type === 'finish') {
+              finished = true;
+              if (compaction) {
+                // The turn ended without the hook's summary: there is nothing to cut the chat at, so the reply fails.
+                if (compaction.summary === null) {
+                  yield { type: 'error', error: { kind: 'unknown', retryable: false, message: 'Claude Code finished without compacting.' } };
+                  continue;
+                }
+                yield {
+                  type: 'context-summary',
+                  text: compaction.summary,
+                  ...(compaction.preTokens !== undefined ? { preTokens: compaction.preTokens } : {}),
+                  ...(typeof compaction.postTokens === 'number' ? { postTokens: compaction.postTokens } : {}),
+                };
+              }
+            }
             yield event;
           }
         }
@@ -816,6 +868,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const helper = await helperContext(toolUseId ?? undefined);
       return helper ? permissionDeniedHook({ approvals: this.deps.approvals, ctx: helper.ctx })(hookInput, toolUseId, hookOptions) : {};
     };
+    // A /compact's summary, for the reply that sent it. Claude Code compacting by itself is told by its boundary instead.
+    const postCompact: HookCallback = async (hookInput) => {
+      const input = hookInput as PostCompactHookInput;
+      if (input.trigger === 'manual' && typeof input.compact_summary === 'string' && input.compact_summary.trim()) live?.binding?.compacted?.(input.compact_summary);
+      return {};
+    };
     const full: Options = {
       ...options,
       // Its tool acts for whichever reply is running, like the hooks.
@@ -833,6 +891,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         // Classifier blocks are audited as deny:auto (auto mode only).
         // On the Claude login whatever mode it starts in: Auto can be switched on while it runs.
         ...(canAuto ? { PermissionDenied: [{ hooks: [permissionDenied] }] } : {}),
+        PostCompact: [{ hooks: [postCompact] }],
       },
       canUseTool: canUseToolFor(gate),
       ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
@@ -893,10 +952,21 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return { blocks, omitted };
   }
 
-  /** The new user message as content blocks: seeded history for a fresh session, text, then its images (see `newImages`). */
+  /**
+   * The new user message as content blocks: seeded history for a fresh
+   * session, text, then its images (see `newImages`). A /compact is the
+   * command alone. A message starting with any other slash command sends only
+   * that first text part (later ones, such as the artifacts note, would become
+   * its arguments), with a fresh session's history after it: the command still
+   * runs and the model sees the history (live probe, test/fixtures/README.md).
+   */
   private userContent(req: EngineRequest, fresh: boolean, images: ContentBlock[]): ContentBlock[] {
+    const focus = compactFocus(req);
+    if (focus !== null) return [{ type: 'text', text: focus ? `/compact ${focus}` : '/compact' }];
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
+    const first = last?.parts.find((p) => p.type === 'text');
+    if (first?.type === 'text' && COMMAND.test(first.text)) return [{ type: 'text', text: history ? `${first.text}\n\n${history}` : first.text }, ...images];
     const skipped = skippedFiles(last);
     const note = skipped.length > 0 ? `\n\n(Attached files not sent, because Claude Code turns in OtherBench only receive images: ${skipped.join(', ')}.)` : '';
     const text = [history, textOf(last)].filter((s) => s.length > 0).join('\n\n') + note;

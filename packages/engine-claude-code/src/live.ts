@@ -109,6 +109,8 @@ export interface TurnBinding {
   relay?: (spec: ToolSpec, args: unknown) => Promise<unknown>;
   /** This reply's approval tickets for relayed calls with `describeCall` (tickets.ts); cleared when the reply ends. */
   tickets?: ApprovalTickets;
+  /** Keeps the summary of a /compact this reply sent (the PostCompact hook, manual trigger); absent when the reply isn't one. */
+  compacted?: (summary: string) => void;
 }
 
 /** Which of OtherBench's own tools a process's server carries; fixed when it starts. */
