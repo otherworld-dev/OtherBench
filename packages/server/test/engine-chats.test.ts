@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { closeEngineChatsThatAreGone } from '../src/engine-chats.js';
+import { closeEngineChatsThatAreGone, followChatSettings } from '../src/engine-chats.js';
 import { AppEventBus } from '../src/stream/events.js';
 
 describe('closeEngineChatsThatAreGone', () => {
@@ -22,5 +22,17 @@ describe('closeEngineChatsThatAreGone', () => {
     const events = new AppEventBus();
     closeEngineChatsThatAreGone(events, {}, () => false);
     expect(() => events.emit({ type: 'chat-deleted', chatId: 'c1' })).not.toThrow();
+  });
+});
+
+describe('followChatSettings', () => {
+  it("tells the engine a chat's settings changed, and after a sync that any may have", () => {
+    const events = new AppEventBus();
+    const refreshChatSettings = vi.fn();
+    followChatSettings(events, { refreshChatSettings });
+    const chat = { id: 'c1' } as Parameters<AppEventBus['emit']>[0] extends infer E ? (E extends { type: 'chat-updated'; chat: infer C } ? C : never) : never;
+    events.emit({ type: 'chat-updated', chat });
+    events.emit({ type: 'sync-applied', nodeId: 'laptop', changed: 2 });
+    expect(refreshChatSettings.mock.calls).toEqual([['c1'], []]);
   });
 });

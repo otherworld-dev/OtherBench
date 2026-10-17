@@ -50,3 +50,13 @@ Decision: ASK_PATH=hook, TODO_FLAG=env
 - Clean chat (`tools: ['WebSearch', 'WebFetch', 'TodoWrite', 'AskUserQuestion']`, `strictMcpConfig`): init lists exactly those four; the round trip worked (answered Blue through the hook, no `canUseTool` call).
 - `disallowedTools: ['EnterPlanMode', 'ExitPlanMode']`: init lacks them (the runs without it list both).
 - Side note: the three sonnet folder-style runs loaded the user's own MCP servers into init (`mcp__blender__*`, `mcp__nextcloud__*`, ...), and which ones connected varied from run to run; not relevant to the decision.
+
+## Auto mode asks and switching modes live (probe-auto-ask.mjs, probe-set-mode.mjs, SDK 0.3.287, 2026-10-17)
+
+- probe-auto-ask: in `permissionMode: 'auto'` (sonnet, the user's settings), with the hook handing every call on (empty result), `cd "<repo>" && git tag ... && git log ...`, the same without the `cd`, and `cd "<repo>" && git status --short` all ran with no `canUseTool` call. So a reply asking about such calls was not running in auto mode.
+- probe-set-mode, scratch folder, `settingSources: []`, writes (`echo n > probe-n.txt`):
+  - Started in `default`: the hook ran, then `canUseTool` was asked (as expected).
+  - `setPermissionMode('auto')` between turns: a `system`/`status` message reported `permissionMode: 'auto'` and the next turn's init said `auto`; the write ran with no `canUseTool`.
+  - Back to `default`, then `setPermissionMode('auto')` while `canUseTool` was answering the turn's first write: a status message said `auto`, and the same turn's second write ran with no `canUseTool`. So a switch applies from the next tool call, mid-turn.
+  - Read-only git commands never reached `canUseTool` even in `default` mode (Claude Code's read-only fast path).
+- A probe must read one iterator for the whole run: leaving a `for await` over the query closes it ("Query closed before response received" on the next control request).

@@ -501,14 +501,15 @@ describe('ClaudeCodeChatEngine auto mode', () => {
     expect(Object.keys(on.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PreToolUse']);
     expect(on.calls[0]!.options.hooks!.PreToolUse).toHaveLength(1);
     expect(on.calls[0]!.options.hooks!.PermissionDenied).toHaveLength(1);
-    expect(Object.keys(off.calls[0]!.options.hooks!)).toEqual(['PreToolUse']);
+    // Auto can be switched on while the process runs, so its classifier's blocks are audited either way.
+    expect(Object.keys(off.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PreToolUse']);
   });
 
-  it('stays in default mode with no PermissionDenied hook when Auto is off', async () => {
+  it('starts in default mode when Auto is off, with the PermissionDenied hook ready for Auto switched on later', async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     await collect(engine(query).stream(req({ autoMode: false })));
     expect(calls[0]!.options.permissionMode).toBe('default');
-    expect(calls[0]!.options.hooks?.PermissionDenied).toBeUndefined();
+    expect(calls[0]!.options.hooks?.PermissionDenied?.[0]?.hooks).toHaveLength(1);
   });
 
   it('ignores Auto on an endpoint backend', async () => {
@@ -580,6 +581,112 @@ describe('ClaudeCodeChatEngine auto mode', () => {
     });
     const events = await collect(engine(query).stream(req({ autoMode: true })));
     expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'capability', retryable: false, message: AUTO_MSG } });
+  });
+});
+
+describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in VS Code)', () => {
+  /** A fake long-lived Claude Code whose permission mode can be switched while it runs; `mode()` is the current one. */
+  function switchable(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: number; mode: () => string }) => AsyncGenerator<SDKMessage>) {
+    const starts: Options[] = [];
+    const switched: string[] = [];
+    const query: QueryFn = ({ prompt, options }) => {
+      starts.push(options);
+      let mode = options.permissionMode ?? 'default';
+      let n = 0;
+      const gen = (async function* () {
+        for await (const msg of prompt) {
+          if (options.abortController?.signal.aborted) return;
+          n += 1;
+          yield* turn({ options, prompt: msg as SDKUserMessage, n, mode: () => mode });
+        }
+      })();
+      return Object.assign(gen, {
+        interrupt: async () => undefined,
+        setPermissionMode: async (next: string) => {
+          switched.push(next);
+          mode = next;
+        },
+        supportedModels: async () => [],
+        accountInfo: async () => ({}),
+      });
+    };
+    return { query, starts, switched };
+  }
+  const sig = () => ({ signal: new AbortController().signal });
+  const resultOf = (prompt: SDKUserMessage): SDKMessage =>
+    ({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [(prompt as { uuid?: string }).uuid] }) as unknown as SDKMessage;
+  /** Hands a call on (deferred) when OtherBench may, else approves it as a card would. */
+  const approvalsLike = () => ({
+    requestApproval: vi.fn(async (_tool: unknown, _args: unknown, _policy: unknown, _ctx: unknown, opts?: { deferAsk?: boolean }) => (opts?.deferAsk ? { deferred: true } : { allowed: true, grantedBy: 'ask:once' }) as never),
+    recordAgentDenial: vi.fn(),
+  });
+  const make = (query: QueryFn, settings: { autoMode: boolean }) => {
+    const a = approvalsLike();
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, chatSettings: () => ({ autoMode: settings.autoMode, planMode: false, policy: profile().toolPolicy }) });
+    return { e, a };
+  };
+
+  it("switching Auto on mid-reply switches the running Claude Code, and the reply's next call goes to the classifier", async () => {
+    let go!: () => void;
+    const ready = new Promise<void>((resolve) => (go = resolve));
+    let hookOut: unknown;
+    const { query, switched } = switchable(async function* ({ options, prompt, mode }) {
+      yield init('sess-1', mode());
+      await ready;
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never, 't1', sig());
+      yield resultOf(prompt);
+    });
+    const settings = { autoMode: false };
+    const { e, a } = make(query, settings);
+    const run = collect(e.stream(req({ autoMode: false })));
+    await new Promise((r) => setTimeout(r, 0));
+    settings.autoMode = true;
+    e.refreshChatSettings(req().chatId);
+    await vi.waitFor(() => expect(switched).toEqual(['auto']));
+    go();
+    const events = await run;
+    expect(events.some((ev) => ev.type === 'error')).toBe(false);
+    expect(hookOut).toEqual({});
+    expect(a.requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: true });
+    e.dispose();
+  });
+
+  it('switching Auto off mid-reply switches it back, and the next call gets a card', async () => {
+    let go!: () => void;
+    const ready = new Promise<void>((resolve) => (go = resolve));
+    let hookOut: unknown;
+    const { query, switched } = switchable(async function* ({ options, prompt, mode }) {
+      yield init('sess-1', mode());
+      await ready;
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never, 't1', sig());
+      yield resultOf(prompt);
+    });
+    const settings = { autoMode: true };
+    const { e, a } = make(query, settings);
+    const run = collect(e.stream(req({ autoMode: true })));
+    await new Promise((r) => setTimeout(r, 0));
+    settings.autoMode = false;
+    e.refreshChatSettings(req().chatId);
+    await vi.waitFor(() => expect(switched).toEqual(['default']));
+    go();
+    await run;
+    expect(hookOut).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(a.requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: false });
+    e.dispose();
+  });
+
+  it('the next message after Auto is switched goes to the same Claude Code, switched, so its helpers carry on', async () => {
+    const { query, starts, switched } = switchable(async function* ({ prompt, mode }) {
+      yield init('sess-1', mode());
+      yield resultOf(prompt);
+    });
+    const { e } = make(query, { autoMode: true });
+    await collect(e.stream(req({ autoMode: false })));
+    const events = await collect(e.stream(followUp({ autoMode: true })));
+    expect(events.some((ev) => ev.type === 'error')).toBe(false);
+    expect(starts).toHaveLength(1);
+    expect(switched).toEqual(['auto']);
+    e.dispose();
   });
 });
 

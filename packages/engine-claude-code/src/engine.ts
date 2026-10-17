@@ -34,6 +34,8 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
   interrupt(): Promise<unknown>;
   /** Stops one background task (a helper, a background command) by Claude Code's task id. */
   stopTask?(taskId: string): Promise<unknown>;
+  /** Switches the running Claude Code's permission mode. */
+  setPermissionMode?(mode: 'default' | 'auto'): Promise<unknown>;
   supportedModels(): Promise<{ value: string; displayName: string }[]>;
   accountInfo(): Promise<{ email?: string; subscriptionType?: string }>;
   /** The data behind /usage. Experimental in the SDK and may go away, hence optional; its answer is checked, not trusted (plan-usage.ts). */
@@ -210,6 +212,23 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return false;
   }
 
+  /**
+   * A chat's settings changed (any chat's, with no id): its running Claude
+   * Code is switched to the chat's Auto setting at once, mid-reply too, as VS
+   * Code switches modes. A scheduled run's process, and one not on the Claude
+   * login, stay in default mode.
+   */
+  refreshChatSettings(chatId?: string): void {
+    for (const live of this.processes) {
+      const last = live.last;
+      if (!last || live.isClosed || !live.canAuto || last.unattended || (chatId !== undefined && last.chatId !== chatId)) continue;
+      const current = this.deps.chatSettings?.(last.chatId, last.profileId);
+      if (!current) continue;
+      const want = current.autoMode ? 'auto' : 'default';
+      if (live.permissionMode !== want) void live.switchMode(want);
+    }
+  }
+
   /** Closes the processes of the chats `gone` picks, ending their background tasks (a chat that was deleted keeps nothing running). */
   closeChats(gone: (chatId: string) => boolean): void {
     for (const live of [...this.processes]) {
@@ -284,6 +303,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const clean = !req.workspaceRoot;
     const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
     const prepared = this.prepareReply(req, backend, clean);
+    prepared.proc.live = live;
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
     const mapper = this.replyMapper(live, req, prepared.helpers);
@@ -408,14 +428,22 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const profile = req.profile;
     const content = this.userContent(req, plan.mode === 'fresh', images);
-    const { gateCtx, autoMode, own, relay, tickets, helpers, binding } = this.prepareReply(req, backend, clean);
+    const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = this.prepareReply(req, backend, clean);
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
-    const taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
+    let taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
     // Stopped while waiting for the session's busy process (or before it began): no process is started.
     if (taken === null && req.signal.aborted) return 'done';
+    // Auto changed since the process's last reply: it's switched, not replaced, so its helpers carry on.
+    const mode = options.permissionMode === 'auto' ? 'auto' : 'default';
+    if (taken && taken.permissionMode !== mode && !(await taken.switchMode(mode))) {
+      taken.close();
+      this.processes.delete(taken);
+      taken = null;
+    }
     const reused = taken !== null;
-    const live = taken ?? this.startProcess(options, key, plan, own, relay);
+    const live = taken ?? this.startProcess(options, key, plan, own, relay, backend === CLAUDE_BACKEND);
+    proc.live = live;
     // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
     if (req.signal.aborted) {
       if (reused) this.pool.release(live);
@@ -432,7 +460,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * context, policy and auto mode), its own tools and relay, and the switches
    * the process key needs. A user's reply and a self-started one build it the same way.
    */
-  private prepareReply(req: EngineRequest, backend: string, clean: boolean): { gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding } {
+  private prepareReply(
+    req: EngineRequest,
+    backend: string,
+    clean: boolean
+  ): { gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding; proc: { live: LiveProcess | null } } {
     const profile = req.profile;
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
@@ -462,16 +494,22 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const tickets = new ApprovalTickets();
     // The helpers this reply's agent starts: the mapper records them, the gate names them on approval cards.
     const helpers = new HelperRegistry();
+    // The process this reply runs in, once chosen. Its calls go to the
+    // classifier while that Claude Code is in auto mode, which can change
+    // mid-reply (Auto switched, refreshChatSettings); a scheduled run never.
+    const proc: { live: LiveProcess | null } = { live: null };
+    const classifier = backend === CLAUDE_BACKEND && req.unattended !== true;
     const binding: TurnBinding = {
       gate: createGate({
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
-        autoMode,
+        autoMode: () => classifier && proc.live?.permissionMode === 'auto',
         helpers,
         onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
       }),
-      ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
+      // Auto can be switched on mid-reply, so the classifier's blocks are audited whenever it could run.
+      ...(backend === CLAUDE_BACKEND ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
       ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
@@ -484,7 +522,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(relay.tools.size > 0 ? { relay: async (approved: ToolSpec, args: unknown) => runRelayed(currentRelayed(relay, approved), args, gateCtx, tickets) } : {}),
       tickets,
     };
-    return { gateCtx, autoMode, own, relay, tickets, helpers, binding };
+    return { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc };
   }
 
   /** The mapper for one reply on `live`: this process's own tools under the API engines' names, helper cards noted for its background tasks. */
@@ -711,7 +749,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, own: OtherBenchServerSwitches, relay: Relay): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: OtherBenchServerSwitches, relay: Relay, canAuto: boolean): LiveProcess {
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();
@@ -757,7 +795,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         ctx: { ...rest, ...(plan ? { plan } : {}), signal: abortController.signal, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
         policy: current.policy,
         // Claude Code's own mode can't change mid-process: Auto turned on since doesn't make it auto.
-        autoMode: last.autoMode && current.autoMode && !last.unattended,
+        autoMode: current.autoMode && !last.unattended && live.permissionMode === 'auto',
       };
     };
     const gate: Gate = async (toolName, toolInput, signal, opts) => {
@@ -790,12 +828,15 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       hooks: {
         PreToolUse: [{ hooks: [preToolUseHook(gate)], timeout: 86_400 }],
         // Classifier blocks are audited as deny:auto (auto mode only).
-        ...(options.permissionMode === 'auto' ? { PermissionDenied: [{ hooks: [permissionDenied] }] } : {}),
+        // On the Claude login whatever mode it starts in: Auto can be switched on while it runs.
+        ...(canAuto ? { PermissionDenied: [{ hooks: [permissionDenied] }] } : {}),
       },
       canUseTool: canUseToolFor(gate),
       ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
     };
     const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
+    process.permissionMode = options.permissionMode ?? 'default';
+    process.canAuto = canAuto;
     process.artifactTool = ownArtifactTool;
     process.recallTool = ownRecallTool;
     process.planTool = ownPlanTool;

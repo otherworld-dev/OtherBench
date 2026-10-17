@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { LivePool, LiveProcess, PromptQueue } from '../src/live.js';
+import { LivePool, LiveProcess, PromptQueue, liveKey } from '../src/live.js';
 
 /** A fake Claude Code output the test pushes messages into. */
 function output() {
@@ -118,6 +118,25 @@ describe('LiveProcess', () => {
     out.emit(text('carried on'));
     out.emit(selfResult);
     expect(await take(feed)).toEqual([text('carried on'), selfResult]);
+  });
+});
+
+describe('LiveProcess and its permission mode', () => {
+  it('follows the mode Claude Code reports, at the start of each turn and when it changes', async () => {
+    const { live, out } = process();
+    void take(live.attach('u1'));
+    out.emit({ type: 'system', subtype: 'init', permissionMode: 'default' });
+    await tick();
+    expect(live.permissionMode).toBe('default');
+    out.emit({ type: 'system', subtype: 'status', status: null, permissionMode: 'auto' });
+    await tick();
+    expect(live.permissionMode).toBe('auto');
+  });
+
+  it("leaves the mode out of the process key: it's switched on a live process, not a reason for a new one", () => {
+    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const connection = { backend: 'claude', token: null };
+    expect(liveKey({ cwd: 'x', permissionMode: 'auto' }, connection, own)).toBe(liveKey({ cwd: 'x', permissionMode: 'default' }, connection, own));
   });
 });
 
