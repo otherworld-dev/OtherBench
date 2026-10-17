@@ -1,4 +1,5 @@
 ﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
@@ -841,5 +842,16 @@ describe('POST /api/chats/:id/helpers/:taskId/stop', () => {
     expect(stopHelper).toHaveBeenCalledWith('chat-1', 'k1');
     const missing = await app().request('/api/chats/chat-1/helpers/k2/stop', { method: 'POST' });
     expect(missing.status).toBe(404);
+  });
+
+  it("passes on why a helper couldn't be stopped", async () => {
+    container.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const stopHelper = vi.fn(async () => {
+      throw new HelperStopError("This version of Claude Code can't stop one background task.");
+    });
+    container.engine = { ...container.engine, stopHelper } as typeof container.engine;
+    const res = await app().request('/api/chats/chat-1/helpers/k1/stop', { method: 'POST' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "This version of Claude Code can't stop one background task." });
   });
 });

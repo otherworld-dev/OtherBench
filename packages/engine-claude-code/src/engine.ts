@@ -11,7 +11,7 @@ import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/doma
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineBackgroundEvent, EngineEvent, EngineRequest, SelfStart } from '@otherbench/core/ports/chat-engine.js';
+import { HelperStopError, type ChatEngine, type ConnectionTestResult, type DiscoveredModel, type EngineBackgroundEvent, type EngineEvent, type EngineRequest, type SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -99,6 +99,8 @@ const PROBE_TIMEOUT_MS = 20_000;
 
 /** How long a stopped reply's turn may take to end after Claude Code is interrupted before its process is closed. */
 export const INTERRUPT_GRACE_MS = 5_000;
+/** How long a helper's call between replies waits for this process's reader to learn which helper made it. */
+const OWNER_WAIT_MS = 500;
 
 /** A clean chat's folder name under the scratch root: its id, made a plain name so it can't point outside (the server deletes it by the same rule). */
 export function scratchFolderName(chatId: string): string {
@@ -201,7 +203,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   async stopHelper(chatId: string, taskId: string): Promise<boolean> {
     for (const live of this.processes) {
       if (live.isClosed || live.background?.chatId !== chatId || !live.background.has(taskId)) continue;
-      await live.query.stopTask?.(taskId);
+      if (!live.query.stopTask) throw new HelperStopError("This version of Claude Code can't stop one background task. Update Claude Code to stop it from here.");
+      await live.query.stopTask(taskId);
       return true;
     }
     return false;
@@ -742,8 +745,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
      * as they are now. The last reply's signal is dead by then (TurnRunner
      * aborts it when a reply ends), so the call is tied to the process's own.
      */
-    const helperContext = (toolUseId: string | undefined): { ctx: ToolContext; policy: ToolPolicy; autoMode: boolean } | null => {
-      const owner = live?.last && toolUseId ? live.background?.ownerOf(toolUseId) : null;
+    const helperContext = async (toolUseId: string | undefined): Promise<{ ctx: ToolContext; policy: ToolPolicy; autoMode: boolean } | null> => {
+      const owner = live?.last && toolUseId ? await live.background?.whenOwned(toolUseId, OWNER_WAIT_MS) : null;
       if (!live?.last || !owner) return null;
       const last = live.last;
       const current = this.deps.chatSettings ? this.deps.chatSettings(last.chatId, last.profileId) : { autoMode: last.autoMode, planMode: last.ctx.plan !== undefined, policy: last.policy };
@@ -757,17 +760,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         autoMode: last.autoMode && current.autoMode && !last.unattended,
       };
     };
-    const gate: Gate = (toolName, toolInput, signal, opts) => {
+    const gate: Gate = async (toolName, toolInput, signal, opts) => {
       const which = ownTool(toolName);
       if (live?.binding) return live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) });
-      const helper = which ? null : helperContext(opts?.toolUseId);
-      if (!helper) return Promise.resolve({ allow: false, reason: 'No OtherBench reply is waiting on this tool call.' });
+      const helper = which ? null : await helperContext(opts?.toolUseId);
+      // A reply may have begun while this waited: its gate decides.
+      if (live?.binding) return live.binding.gate(toolName, toolInput, signal, opts);
+      if (!helper) return { allow: false, reason: 'No OtherBench reply is waiting on this tool call.' };
       return createGate({ approvals: this.deps.approvals, ...helper })(toolName, toolInput, signal, opts);
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) => {
       if (live?.binding) return live.binding.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
       // A helper's call the classifier blocked between replies is audited against its helper's reply, like any other.
-      const helper = helperContext(toolUseId ?? undefined);
+      const helper = await helperContext(toolUseId ?? undefined);
       return helper ? permissionDeniedHook({ approvals: this.deps.approvals, ctx: helper.ctx })(hookInput, toolUseId, hookOptions) : {};
     };
     const full: Options = {

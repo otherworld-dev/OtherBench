@@ -67,7 +67,22 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
     return;
   }
   container.memory?.noteTurnStarted(chat.id);
-  const { assistantMessageId } = await container.turnRunner.runSelfStarted({ chatId: chat.id, parentId: after.id, profile, notice: start.notice, unattended: start.unattended, stream: start.run });
+  // A reply that ended without running Claude Code's turn (its folder isn't on this machine, say) declines it, so the turn is read and dropped.
+  let ran = false;
+  const { assistantMessageId } = await container.turnRunner.runSelfStarted({
+    chatId: chat.id,
+    parentId: after.id,
+    profile,
+    notice: start.notice,
+    unattended: start.unattended,
+    stream: (req) => {
+      ran = true;
+      return start.run(req);
+    },
+    onEnd: () => {
+      if (!ran) start.decline();
+    },
+  });
   container.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
   container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId] });
 }

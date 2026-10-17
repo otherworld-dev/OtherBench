@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
-import type { BackgroundHelper, ChatLevelEvent } from '@otherbench/core/types/background.js';
+import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
@@ -213,7 +213,7 @@ export interface OtherBenchState {
    * stored messages changed, an approval card for a reply that isn't streaming
    * (a background helper's, kept for the strip), or a reply's own event.
    */
-  applyChatEvent(chatId: string, event: TurnEvent | ChatLevelEvent): void;
+  applyChatEvent(chatId: string, event: (TurnEvent & Partial<BackgroundMark>) | ChatLevelEvent): void;
 
   /**
    * Optimistically resets a message right before a retry request goes out
@@ -613,7 +613,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     }
     const state = get();
     const background = state.backgroundApprovals[chatId] ?? [];
-    if (event.type === 'approval-request' && state.messages[event.messageId]?.status !== 'streaming' && !state.pendingEvents[event.messageId]) {
+    // The server marks a background helper's card; a reply's own goes to the reply, loaded here yet or not.
+    if (event.type === 'approval-request' && 'background' in event && event.background === true) {
       set({ backgroundApprovals: { ...state.backgroundApprovals, [chatId]: [...background.filter((r) => r.id !== event.request.id), event.request] } });
       return;
     }

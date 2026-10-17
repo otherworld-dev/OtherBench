@@ -165,11 +165,16 @@ export type EngineBackgroundEvent =
   /** A change to a helper's card in an earlier reply `messageId`: it finished, or went back to work. */
   | { type: 'helper-event'; chatId: string; messageId: string; callId: string; event: SubagentEvent };
 
+/** A background task that is running but can't be stopped from here; its message says why, for the person who asked. */
+export class HelperStopError extends Error {
+  override readonly name = 'HelperStopError';
+}
+
 export interface ChatEngine {
   stream(req: EngineRequest): AsyncIterable<EngineEvent>;
   /** Where the engine reports work its agent does between replies (one handler; a later call replaces it). */
   onBackground?(handler: (event: EngineBackgroundEvent) => void): void;
-  /** Stops one of a chat's background tasks; false when no such task is running. */
+  /** Stops one of a chat's background tasks; false when no such task is running. Throws HelperStopError when it can't be stopped. */
   stopHelper?(chatId: string, taskId: string): Promise<boolean>;
   /** Ends what the engine keeps running for the chats `gone` picks (they were deleted): their processes and background tasks. */
   closeChats?(gone: (chatId: string) => boolean): void;

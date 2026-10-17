@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1896,6 +1897,19 @@ describe('ClaudeCodeChatEngine and background helpers', () => {
     e.dispose();
   });
 
+  it("stopHelper says so, rather than claiming it stopped, when this Claude Code can't stop one task", async () => {
+    const { query } = withHelper();
+    const noStopTask: QueryFn = (args) => {
+      const q = query(args);
+      delete (q as { stopTask?: unknown }).stopTask;
+      return q;
+    };
+    const e = new ClaudeCodeChatEngine({ query: noStopTask, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    await collect(e.stream(req()));
+    await expect(e.stopHelper(req().chatId, 'k1')).rejects.toThrow(HelperStopError);
+    e.dispose();
+  });
+
   it('reports the chat\'s helpers, and stopHelper stops the task in the process holding it', async () => {
     const { query, stopTask } = withHelper();
     const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
@@ -2059,6 +2073,27 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     const denied = out.options!.hooks!.PermissionDenied![0]!.hooks[0]!;
     await denied({ hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1', reason: 'risky' } as never, 'c1', { signal: new AbortController().signal });
     expect(recordAgentDenial).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'm1', chatId: 'chat' }), 'Bash', expect.anything(), 'risky');
+    e.dispose();
+  });
+
+  it("a helper's call between replies still gets its card when Claude Code asks before OtherBench has read which helper made it", async () => {
+    let hookAnswer: unknown;
+    const { query } = scripted(async function* ({ options, nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      await new Promise((r) => setTimeout(r, 0));
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      // The hook comes first; the helper's message naming the call is read after.
+      const asked = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'c1' } as never, 'c1', { signal: new AbortController().signal });
+      await new Promise((r) => setTimeout(r, 20));
+      yield msg({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'npm test' } }] }, parent_tool_use_id: 'task-1' });
+      hookAnswer = await asked;
+      await new Promise(() => {});
+    });
+    const { e, requestApproval } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(hookAnswer).toBeDefined());
+    expect(requestApproval).toHaveBeenCalled();
+    expect(hookAnswer).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
     e.dispose();
   });
 

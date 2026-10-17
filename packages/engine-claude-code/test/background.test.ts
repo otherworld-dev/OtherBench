@@ -76,6 +76,34 @@ describe('BackgroundTasks', () => {
     expect(cardEvents().at(-1)).toEqual({ type: 'helper-event', chatId: 'chat-1', messageId: 'm1', callId: 't1', event: { type: 'background', at: 1000 } });
   });
 
+  it('forgets which helper made each call once the helper finishes, and learns again when it is resumed', () => {
+    const { tasks } = make();
+    tasks.noteCard('t1', 'm1');
+    tasks.handle(system('task_started', { task_id: 'k1', tool_use_id: 't1', description: 'implementer', is_backgrounded: true }));
+    tasks.handle(assistant([{ type: 'tool_use', id: 'c1', name: 'Bash', input: {} }], 't1'));
+    expect(tasks.ownerOf('c1')).toMatchObject({ callId: 't1' });
+    tasks.handle(system('task_notification', { task_id: 'k1', status: 'completed', summary: '', output_file: '' }));
+    expect(tasks.ownerOf('c1')).toBeNull();
+    tasks.handle(system('task_started', { task_id: 'k1', tool_use_id: 'send-1', description: 'implementer', is_backgrounded: true }));
+    tasks.handle(assistant([{ type: 'tool_use', id: 'c2', name: 'Bash', input: {} }], 't1'));
+    expect(tasks.ownerOf('c2')).toMatchObject({ callId: 't1', messageId: 'm1' });
+  });
+
+  it('remembers only the most recently finished helpers, so a long-lived process does not grow without end', () => {
+    const { tasks, cardEvents } = make();
+    for (let i = 0; i < 60; i++) {
+      tasks.noteCard(`t${i}`, `m${i}`);
+      tasks.handle(system('task_started', { task_id: `k${i}`, tool_use_id: `t${i}`, description: `helper ${i}`, is_backgrounded: true }));
+      tasks.handle(system('task_notification', { task_id: `k${i}`, status: 'completed', summary: '', output_file: '' }));
+    }
+    const before = cardEvents().length;
+    // The oldest is forgotten: resumed, it has no card to go back to. A recent one still has its card.
+    tasks.handle(system('task_started', { task_id: 'k0', tool_use_id: 'send-0', description: 'helper 0', is_backgrounded: true }));
+    expect(cardEvents()).toHaveLength(before);
+    tasks.handle(system('task_started', { task_id: 'k59', tool_use_id: 'send-59', description: 'helper 59', is_backgrounded: true }));
+    expect(cardEvents().at(-1)).toMatchObject({ messageId: 'm59', callId: 't59', event: { type: 'background' } });
+  });
+
   it('close ends every helper as stopped', () => {
     const { tasks, helpers, cardEvents } = make();
     tasks.noteCard('t1', 'm1');

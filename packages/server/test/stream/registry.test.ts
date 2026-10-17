@@ -613,14 +613,14 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
     expect(registry.chatState('c1').helpers).toEqual([]);
   });
 
-  it('background approval reaches a chat subscriber and the hello, and leaves both when resolved', () => {
+  it('background approval reaches a chat subscriber, marked as no reply\'s own, and the hello, and leaves both when resolved', () => {
     const { registry, got, approve } = setup();
     const request = { id: 'r1', chatId: 'c1', messageId: 'm-old', toolName: 'Bash', risk: 'execute' as const, source: 'agent' as const, args: { command: 'npm test' }, summary: 'npm test', subagent: { callId: 't1', label: 'implementer', parentProfileId: 'p' } };
     approve({ type: 'request', request });
-    expect(got).toEqual([{ messageId: 'm-old', type: 'approval-request', request }]);
+    expect(got).toEqual([{ messageId: 'm-old', type: 'approval-request', request, background: true }]);
     expect(registry.chatState('c1').backgroundApprovals).toEqual([request]);
     approve({ type: 'resolved', requestId: 'r1', messageId: 'm-old', choice: 'once' });
-    expect(got.at(-1)).toEqual({ messageId: 'm-old', type: 'approval-resolved', requestId: 'r1', choice: 'once' });
+    expect(got.at(-1)).toEqual({ messageId: 'm-old', type: 'approval-resolved', requestId: 'r1', choice: 'once', background: true });
     expect(registry.chatState('c1').backgroundApprovals).toEqual([]);
   });
 
@@ -649,12 +649,12 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
 
     // A reconnect's hello carries it, so the card stays while the helper waits.
     expect(registry.chatState('c1').backgroundApprovals).toEqual([request]);
-    expect(got).toEqual([{ messageId, type: 'approval-request', request }]);
+    expect(got).toEqual([{ messageId, type: 'approval-request', request, background: true }]);
     expect(registry.snapshot('c1').find((b) => b.messageId === messageId)?.events.map((e) => e.type)).not.toContain('approval-request');
 
     approvalListener!({ type: 'resolved', requestId: 'r1', messageId, choice: 'once' });
     expect(registry.chatState('c1').backgroundApprovals).toEqual([]);
-    expect(got.at(-1)).toEqual({ messageId, type: 'approval-resolved', requestId: 'r1', choice: 'once' });
+    expect(got.at(-1)).toEqual({ messageId, type: 'approval-resolved', requestId: 'r1', choice: 'once', background: true });
   });
 
   it('tells subscribers when stored messages changed', () => {

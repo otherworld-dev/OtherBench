@@ -18,3 +18,13 @@ export interface BackgroundHelper {
 
 /** What a chat's live stream carries besides its replies' events: its background tasks, and that its stored messages changed. */
 export type ChatLevelEvent = { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] } | { type: 'messages-changed'; chatId: string };
+
+/**
+ * On a chat's stream, a background helper's approval card and its answer
+ * carry this mark: they belong to no reply that is streaming, so the web
+ * shows them with the helpers rather than in a reply (it can't tell from
+ * what it has loaded).
+ */
+export interface BackgroundMark {
+  background: true;
+}

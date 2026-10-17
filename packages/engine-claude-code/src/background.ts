@@ -4,6 +4,11 @@ type Obj = Record<string, unknown>;
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/** How many finished tasks are remembered (for SendMessage to resume one onto its card); older ones are forgotten. */
+const KEEP_ENDED = 50;
+/** How many helper cards are remembered beyond those of the tasks kept. */
+const KEEP_CARDS = 200;
+
 /** One task Claude Code reported, and where its card is. */
 interface Task {
   helper: BackgroundHelper;
@@ -30,6 +35,8 @@ export class BackgroundTasks {
   private readonly cards = new Map<string, string>();
   /** Which helper made each tool call. */
   private readonly owners = new Map<string, string>();
+  /** Who is waiting to learn which helper made a call (whenOwned). */
+  private readonly ownerWaiters = new Map<string, (() => void)[]>();
   private lastSent = '';
   /** The task that finished most recently: what a turn Claude Code starts by itself is carrying on after. */
   lastFinished: BackgroundHelper | null = null;
@@ -76,6 +83,31 @@ export class BackgroundTasks {
     return messageId !== undefined && task ? { callId, label: task.helper.label, messageId } : null;
   }
 
+  /**
+   * The helper that made tool call `toolUseId`, waiting up to `ms` for the
+   * message that says so: Claude Code can ask about a call (its PreToolUse
+   * hook) a moment before this process's reader has read the helper's message
+   * naming it. Null when no helper is running, or none claims it in time.
+   */
+  async whenOwned(toolUseId: string, ms: number): Promise<{ callId: string; label: string; messageId: string } | null> {
+    const known = this.ownerOf(toolUseId);
+    if (known || !this.running) return known;
+    await new Promise<void>((resolve) => {
+      const waiters = this.ownerWaiters.get(toolUseId) ?? [];
+      const done = (): void => {
+        clearTimeout(timer);
+        const left = (this.ownerWaiters.get(toolUseId) ?? []).filter((w) => w !== done);
+        if (left.length > 0) this.ownerWaiters.set(toolUseId, left);
+        else this.ownerWaiters.delete(toolUseId);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      timer.unref?.();
+      this.ownerWaiters.set(toolUseId, [...waiters, done]);
+    });
+    return this.ownerOf(toolUseId);
+  }
+
   handle(raw: unknown): void {
     if (typeof raw !== 'object' || raw === null) return;
     const m = raw as Obj;
@@ -97,6 +129,7 @@ export class BackgroundTasks {
 
   /** The process is gone: every task ends as stopped. */
   closeAll(): void {
+    for (const waiters of [...this.ownerWaiters.values()]) for (const wake of waiters) wake();
     for (const task of this.tasks.values()) {
       if (task.ended) continue;
       task.ended = true;
@@ -113,7 +146,10 @@ export class BackgroundTasks {
     for (const block of Array.isArray(content) ? content : []) {
       if (typeof block !== 'object' || block === null || (block as Obj)['type'] !== 'tool_use') continue;
       const id = str((block as Obj)['id']);
-      if (id) this.owners.set(id, parent);
+      if (id) {
+        this.owners.set(id, parent);
+        for (const wake of this.ownerWaiters.get(id) ?? []) wake();
+      }
       const name = str((block as Obj)['name']);
       if (task && name) task.helper = { ...task.helper, lastActivity: name };
     }
@@ -145,6 +181,7 @@ export class BackgroundTasks {
     }
     // Replace semantics: a task no longer listed has finished (its card hears from its notification).
     for (const [taskId, task] of this.tasks) if (!task.ended && !live.has(taskId)) task.ended = true;
+    this.prune();
     this.sendList();
   }
 
@@ -165,6 +202,7 @@ export class BackgroundTasks {
     };
     const resumed = known?.ended === true;
     const task = { helper, ended: false };
+    this.tasks.delete(taskId);
     this.tasks.set(taskId, task);
     if (resumed) this.cardEvent(task, { type: 'background', at: this.now() });
     this.sendList();
@@ -196,7 +234,35 @@ export class BackgroundTasks {
         this.cardEvent(task, { type: 'end', status: 'cancelled', at });
       }
     }
+    this.prune();
     this.sendList();
+  }
+
+  /**
+   * Forgets what a long-lived process no longer needs: the calls of helpers
+   * that finished (a resumed one's new calls are learnt again), finished tasks
+   * past the most recent KEEP_ENDED with their cards, and cards past
+   * KEEP_CARDS that no task kept has.
+   */
+  private prune(): void {
+    const working = new Set([...this.tasks.values()].filter((t) => !t.ended).map((t) => t.helper.callId));
+    for (const [toolUseId, callId] of this.owners) if (!working.has(callId)) this.owners.delete(toolUseId);
+    let ended = [...this.tasks.values()].filter((t) => t.ended).length;
+    for (const [taskId, task] of this.tasks) {
+      if (ended <= KEEP_ENDED) break;
+      if (!task.ended) continue;
+      this.tasks.delete(taskId);
+      if (task.helper.callId !== null) this.cards.delete(task.helper.callId);
+      ended--;
+    }
+    const kept = new Set([...this.tasks.values()].map((t) => t.helper.callId));
+    let extra = this.cards.size - kept.size - KEEP_CARDS;
+    for (const callId of this.cards.keys()) {
+      if (extra <= 0) break;
+      if (kept.has(callId)) continue;
+      this.cards.delete(callId);
+      extra--;
+    }
   }
 
   /** A change to the task's card, when it has one in an earlier reply. */

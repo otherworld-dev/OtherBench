@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
@@ -299,7 +300,14 @@ export function turnsRoutes(container: Container): Hono {
   app.post('/chats/:id/helpers/:taskId/stop', async (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
-    const stopped = container.engine.stopHelper ? await container.engine.stopHelper(chatId, c.req.param('taskId')) : false;
+    let stopped: boolean;
+    try {
+      stopped = container.engine.stopHelper ? await container.engine.stopHelper(chatId, c.req.param('taskId')) : false;
+    } catch (err) {
+      // Running, but this engine can't stop it on its own: say why.
+      if (err instanceof HelperStopError) return c.json({ error: err.message }, 409);
+      throw err;
+    }
     if (!stopped) return c.json({ error: 'That background task is not running.' }, 404);
     return c.json({ stopped: true });
   });

@@ -100,6 +100,19 @@ describe('startSelfStartedTurn', () => {
     expect(start.declined()).toBe(false);
   });
 
+  it("declines a self-start whose reply ends before it runs (the chat's folder is on another machine), so Claude Code's turn is read and dropped", async () => {
+    const { store, seen, deps } = setup();
+    store.chats.create({ id: 'chat-2', title: 'Away', profileId: 'p1', headMessageId: null, workspace: { kind: 'machine', nodeId: 'node-elsewhere', root: 'E:\\Git' }, pinned: false, archivedAt: null });
+    store.messages.create({ id: 'a2', chatId: 'chat-2', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const start = selfStart({ chatId: 'chat-2', afterMessageId: 'a2' });
+
+    await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
+
+    const started = seen.find((e) => e.type === 'turn-started') as Extract<typeof seen[number], { type: 'turn-started' }>;
+    await vi.waitFor(() => expect(store.messages.get(started.messageIds[0]!)!.status).toBe('error'));
+    await vi.waitFor(() => expect(start.declined()).toBe(true));
+  });
+
   it('declines a self-start for a deleted chat, or a reply that is gone', async () => {
     const { deps } = setup();
     const gone = selfStart({ chatId: 'nope' });
