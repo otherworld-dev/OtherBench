@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
@@ -1820,6 +1820,65 @@ describe('ClaudeCodeChatEngine between replies (spec 2026-10-17-claude-backgroun
       expect(starts[0]!.stopped()).toBe(false);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(starts[0]!.stopped()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('ClaudeCodeChatEngine and background helpers', () => {
+  /** A live Claude Code whose first turn starts helper k1 in the background; later turns just answer. */
+  function withHelper(stopTask = vi.fn(async () => undefined)) {
+    const query: QueryFn = ({ prompt, options }) => {
+      const gen = (async function* () {
+        let n = 0;
+        for await (const msg of prompt) {
+          if (options.abortController?.signal.aborted) return;
+          n += 1;
+          const uuid = (msg as { uuid?: string }).uuid;
+          if (n === 1) {
+            yield init();
+            yield ({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it', subagent_type: 'general-purpose' } }] }, parent_tool_use_id: null } as unknown as SDKMessage);
+            yield ({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: true } as unknown as SDKMessage);
+            yield ({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'k1', task_type: 'local_agent', description: 'implementer' }] } as unknown as SDKMessage);
+            yield ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] }, parent_tool_use_id: null } as unknown as SDKMessage);
+          }
+          yield ({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [uuid] } as unknown as SDKMessage);
+        }
+      })();
+      return Object.assign(gen, { interrupt: async () => undefined, stopTask, supportedModels: async () => [], accountInfo: async () => ({}) });
+    };
+    return { query, stopTask };
+  }
+
+  it('reports the chat\'s helpers, and stopHelper stops the task in the process holding it', async () => {
+    const { query, stopTask } = withHelper();
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const events = await collect(e.stream(req()));
+    expect(events.find((ev) => ev.type === 'subagent' && ev.event.type === 'background')).toBeDefined();
+    expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ chatId: req().chatId, helpers: [{ taskId: 'k1', callId: 'task-1', label: 'implementer' }] });
+    expect(await e.stopHelper('nope', 'k1')).toBe(false);
+    expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+    expect(stopTask).toHaveBeenCalledWith('k1');
+    e.dispose();
+  });
+
+  it('keeps a process with a helper running past its idle time, and closes it once the helper is done', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { query } = withHelper();
+      const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, liveIdleMs: 1_000 });
+      const seen: EngineBackgroundEvent[] = [];
+      e.onBackground((ev) => seen.push(ev));
+      await collect(e.stream(req()));
+      await vi.advanceTimersByTimeAsync(5_000);
+      // Still kept: its helper is running.
+      expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [{ taskId: 'k1' }] });
+      expect(await e.stopHelper(req().chatId, 'k1')).toBe(true);
+      e.dispose();
+      expect(seen.filter((ev) => ev.type === 'helpers').at(-1)).toMatchObject({ helpers: [] });
     } finally {
       vi.useRealTimers();
     }

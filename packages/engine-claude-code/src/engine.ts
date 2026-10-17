@@ -11,7 +11,7 @@ import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@otherbench/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
-import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -22,6 +22,7 @@ import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
+import { BackgroundTasks } from './background.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
@@ -160,6 +161,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private readonly pool: LivePool;
   /** Every process started, so `dispose` can stop the busy ones too. */
   private readonly processes = new Set<LiveProcess>();
+  /** Where work Claude Code does between replies is reported (spec 2026-10-17-claude-background-helpers-design). */
+  private backgroundHandler: ((event: EngineBackgroundEvent) => void) | null = null;
 
   constructor(private readonly deps: ClaudeCodeEngineDeps) {
     this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
@@ -170,6 +173,24 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     this.pool.closeAll();
     for (const live of this.processes) live.close();
     this.processes.clear();
+  }
+
+  onBackground(handler: (event: EngineBackgroundEvent) => void): void {
+    this.backgroundHandler = handler;
+  }
+
+  async stopHelper(chatId: string, taskId: string): Promise<boolean> {
+    for (const live of this.processes) {
+      if (live.isClosed || live.background?.chatId !== chatId || !live.background.has(taskId)) continue;
+      await live.query.stopTask?.(taskId);
+      return true;
+    }
+    return false;
+  }
+
+  /** What Claude Code does while no reply is attached to the process. */
+  private handleIdle(live: LiveProcess, message: SDKMessage): void {
+    live.background?.handle(message);
   }
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
@@ -301,6 +322,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return 'done';
     }
     live.binding = binding;
+    // The process's background tasks, for this chat; this reply's own helper cards are left to its mapper.
+    live.background ??= new BackgroundTasks(req.chatId, (event) => this.backgroundHandler?.(event));
+    live.background.current = req.messageId;
+    live.onIdle = (message) => this.handleIdle(live, message);
     // This reply's turn, up to its own result: attached before the message
     // goes, so nothing of it is missed and nothing else reaches it.
     const uuid = randomUUID();
@@ -325,7 +350,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
     if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
     for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
-    const mapper = new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: profile.id, modelId: profile.modelId });
+    const mapper = new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: profile.id, modelId: profile.modelId, onCard: (callId) => live.background?.noteCard(callId, req.messageId) });
     let sawInit = false;
     let finished = false;
     // The turn's own result arrived (a success or not): the process is in a known state.
@@ -336,7 +361,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       while (!finished) {
         pending ??= feed.next();
         const next = await Promise.race([pending, stoppedNow]);
-        if ('stopped' in next) break;
+        if ('stopped' in next) {
+          // Its helpers working in the background carry on: their cards say so rather than stopped.
+          yield* mapper.backgroundOpen() as EngineEvent[];
+          break;
+        }
         pending = null;
         if (next.done) {
           // The output ended (the process died) unless this turn's result was the last thing.
@@ -344,6 +373,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           break;
         }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
+        live.background.handle(next.value);
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init') {
             sawInit = true;
@@ -384,6 +414,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      if (live.background.current === req.messageId) live.background.current = null;
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Gate } from './approval.js';
+import type { BackgroundTasks } from './background.js';
 import type { ApprovalTickets } from './tickets.js';
 
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
@@ -139,6 +140,8 @@ export class LiveProcess {
   onIdle: (message: SDKMessage) => void = () => {};
   /** Why the output ended, when it ended with an error. */
   failure: unknown = null;
+  /** The background tasks this process is running for its chat (set by its first reply). */
+  background: BackgroundTasks | null = null;
   private attached: { uuid: string; feed: TurnFeed } | null = null;
   private freeWaiters: (() => void)[] = [];
   private outputEnded = false;
@@ -218,8 +221,9 @@ export class LiveProcess {
     this.closed = true;
     clearTimeout(this.idleTimer);
     this.binding = null;
-    // Whatever was reading this process's turn learns it's over.
+    // Whatever was reading this process's turn learns it's over, and its background tasks end with it.
     this.detach();
+    this.background?.closeAll();
     this.input.end();
     this.abortController.abort();
   }
@@ -277,11 +281,14 @@ export class LivePool {
     return live;
   }
 
-  /** Makes room for one more process: closes the longest-idle ones past the cap. */
+  /** Makes room for one more process: closes the longest-idle ones past the cap, any running background tasks last. */
   makeRoom(): void {
     while (this.idle.size >= this.max) {
       let oldest: [string, LiveProcess] | null = null;
-      for (const entry of this.idle) if (!oldest || entry[1].lastUsed < oldest[1].lastUsed) oldest = entry;
+      const rank = (live: LiveProcess): number => (live.background?.running ? 1 : 0);
+      for (const entry of this.idle) {
+        if (!oldest || rank(entry[1]) < rank(oldest[1]) || (rank(entry[1]) === rank(oldest[1]) && entry[1].lastUsed < oldest[1].lastUsed)) oldest = entry;
+      }
       if (!oldest) return;
       this.idle.delete(oldest[0]);
       oldest[1].close();
@@ -308,7 +315,16 @@ export class LivePool {
       return;
     }
     this.idle.set(live.sessionId, live);
+    this.armIdleTimer(live);
+  }
+
+  /** Closes an idle process after idleMs, unless it has background tasks running (then it looks again later). */
+  private armIdleTimer(live: LiveProcess): void {
     live.idleTimer = setTimeout(() => {
+      if (live.background?.running || live.isAttached) {
+        this.armIdleTimer(live);
+        return;
+      }
       if (this.idle.get(live.sessionId!) === live) this.idle.delete(live.sessionId!);
       live.close();
     }, this.idleMs);

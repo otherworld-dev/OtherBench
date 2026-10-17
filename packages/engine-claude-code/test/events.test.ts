@@ -163,6 +163,24 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     ]);
   });
 
+  it('moves a backgrounded helper to the background as the reply finishes', () => {
+    const { mapper } = make();
+    mapper.map(task('task-1'));
+    mapper.map(system({ subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'Find the bug', is_backgrounded: true }));
+    mapper.map(user([{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }]));
+    const out = mapper.map({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } } as unknown as SDKMessage);
+    expect(out[0]).toEqual({ type: 'subagent', callId: 'task-1', event: { type: 'background', at: 1000 } });
+    expect(out.at(-1)).toMatchObject({ type: 'finish' });
+    expect(mapper.openBackgroundHelpers()).toEqual([]);
+  });
+
+  it('tells the reply each helper card it starts', () => {
+    const cards: string[] = [];
+    const mapper = new SdkEventMapper({ onCard: (id) => cards.push(id) });
+    mapper.map(task('task-1'));
+    expect(cards).toEqual(['task-1']);
+  });
+
   it("leaves a subagent's calls with the reply when it never saw the Task call that started it", () => {
     const { mapper } = make();
     expect(mapper.map(assistant([{ type: 'tool_use', id: 'g1', name: 'Grep', input: {} }], 'unknown-task'))).toEqual([{ type: 'tool-call', id: 'g1', name: 'Grep', args: {} }]);
