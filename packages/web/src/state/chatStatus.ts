@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { chatsWorkingElsewhere } from './machines.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import type { PaneState } from './panes.js';
@@ -30,12 +31,18 @@ export function groupStatus(statuses: readonly (ChatStatus | null)[]): ChatStatu
   return URGENCY.find((s) => statuses.includes(s)) ?? null;
 }
 
-/** The chats with an approval pending, and with a reply running, from the app-wide events. */
+/**
+ * The chats with an approval pending, and with a reply running, from the
+ * app-wide events. A reply a paired machine is writing counts as running too
+ * (its activity, state/machines.ts), so a chat working on the PC shows as
+ * working on the laptop.
+ */
 export function useChatActivity(): { waiting: ReadonlySet<string>; working: ReadonlySet<string> } {
   const pending = useOtherBenchStore((s) => s.appPendingApprovals);
   const running = useOtherBenchStore((s) => s.appRunningTurns);
+  const machines = useOtherBenchStore((s) => s.machines);
   const waiting = useMemo(() => new Set(Object.values(pending).map((p) => p.chatId)), [pending]);
-  const working = useMemo(() => new Set(Object.values(running)), [running]);
+  const working = useMemo(() => new Set([...Object.values(running), ...chatsWorkingElsewhere(machines)]), [running, machines]);
   return { waiting, working };
 }
 

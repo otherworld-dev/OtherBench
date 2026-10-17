@@ -6,6 +6,7 @@ import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
+import { ElsewhereWorking } from '../components/ElsewhereWorking.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
 import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
@@ -447,6 +448,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </div>
           <ComputerBanner chat={chat} />
           <UnreachableBanner chat={chat} />
+          <ElsewhereWorking chat={chat} />
           <WorkspacePrompt chat={chat} />
           <Composer
             key={chat.id}
