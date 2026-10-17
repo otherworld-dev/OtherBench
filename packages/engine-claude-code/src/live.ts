@@ -266,6 +266,13 @@ export function liveKey(options: Options, connection: { backend: string; token: 
     .digest('hex');
 }
 
+/** Resolves when `signal` aborts (never, without one). */
+function abortedPromise(signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) return new Promise(() => {});
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+}
+
 /**
  * The idle live processes, by Claude Code session id. A reply that continues
  * session S (the session planner already checked S's tip is the message being
@@ -284,11 +291,16 @@ export class LivePool {
   /**
    * The pooled process on `sessionId`, if its options match `key`; it's now
    * busy. One running a turn Claude Code started by itself is waited for
-   * first. A mismatched one is closed.
+   * first, unless `signal` (the reply's) aborts meanwhile: then nothing is
+   * taken and the process stays for the next message. A mismatched one is
+   * closed.
    */
-  async takeWhenFree(sessionId: string, key: string): Promise<LiveProcess | null> {
+  async takeWhenFree(sessionId: string, key: string, signal?: AbortSignal): Promise<LiveProcess | null> {
     const waiting = this.idle.get(sessionId);
-    if (waiting?.isAttached) await waiting.whenFree();
+    if (waiting?.isAttached) {
+      await Promise.race([waiting.whenFree(), abortedPromise(signal)]);
+      if (signal?.aborted) return null;
+    }
     const live = this.idle.get(sessionId);
     if (!live) return null;
     this.idle.delete(sessionId);

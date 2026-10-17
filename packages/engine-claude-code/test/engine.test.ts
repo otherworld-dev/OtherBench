@@ -369,11 +369,11 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
 describe('ClaudeCodeChatEngine abort handling', () => {
   const aborted = (): AbortSignal => { const ac = new AbortController(); ac.abort(); return ac.signal; };
 
-  it('hands the SDK an already-aborted controller when the turn signal aborted before the listener was wired', async () => {
+  it('starts no Claude Code at all for a turn stopped before it began', async () => {
     const seen: boolean[] = [];
     const { query } = fakeQuery(async function* ({ options }) { seen.push(options.abortController!.signal.aborted); yield init(); yield success(); });
-    await collect(engine(query).stream(req({ signal: aborted() })));
-    expect(seen).toEqual([true]);
+    expect(await collect(engine(query).stream(req({ signal: aborted() })))).toEqual([]);
+    expect(seen).toEqual([]);
   });
 
   it('does the same for a utility call', async () => {
@@ -2129,6 +2129,39 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(2));
     expect(selfStarts(seen).map((s) => s.notice)).toEqual(['Carried on after the helper "implementer" reported back.', 'Carried on after a background task finished.']);
     for (const start of selfStarts(seen)) start.decline();
+    e.dispose();
+  });
+
+  it('a reply stopped while it waits for a process busy with a turn Claude Code started ends at once, and leaves the process for the next message', async () => {
+    let finishSelf!: () => void;
+    const selfDone = new Promise<void>((resolve) => (finishSelf = resolve));
+    const { query, starts } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewing');
+      await selfDone;
+      yield selfResult();
+      const p2 = await nextPrompt();
+      yield delta('two');
+      yield resultOf(p2);
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    selfStarts(seen)[0]!.decline();
+
+    const controller = new AbortController();
+    const waiting = collect(e.stream(followUp({ signal: controller.signal })));
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    const outcome = await Promise.race([waiting.then(() => 'ended'), new Promise((r) => setTimeout(() => r('still waiting'), 200))]);
+    expect(outcome).toBe('ended');
+
+    finishSelf();
+    const next = await collect(e.stream(followUp()));
+    expect(next.flatMap((ev) => (ev.type === 'text-delta' ? [ev.text] : [])).join('')).toBe('two');
+    expect(starts).toHaveLength(1);
     e.dispose();
   });
 
