@@ -143,6 +143,16 @@ export class SdkEventMapper {
     return typeof parent === 'string' && this.openHelpers.has(parent) ? parent : null;
   }
 
+  /**
+   * A helper's message this reply didn't start the helper of: an earlier
+   * reply's helper still working in the background (or a helper's own
+   * helper). It isn't this reply's, so it's left out; the engine's background
+   * tasks show what it does.
+   */
+  private isStrangers(m: Record<string, unknown>): boolean {
+    return typeof m['parent_tool_use_id'] === 'string' && this.helperOf(m) === null;
+  }
+
   map(msg: SDKMessage): MappedEvent[] {
     const m = msg as unknown as Record<string, unknown>;
     switch (m['type']) {
@@ -161,6 +171,7 @@ export class SdkEventMapper {
         return [];
       }
       case 'assistant': {
+        if (this.isStrangers(m)) return [];
         const out: MappedEvent[] = [];
         const isMain = m['parent_tool_use_id'] === null;
         const helper = this.helperOf(m);
@@ -185,6 +196,7 @@ export class SdkEventMapper {
         return out;
       }
       case 'user': {
+        if (this.isStrangers(m)) return [];
         const out: MappedEvent[] = [];
         const helper = this.helperOf(m);
         for (const block of blocksOf(m['message'])) {

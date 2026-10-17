@@ -105,6 +105,12 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     return { helpers, mapper, tick: (ms: number) => (clock += ms) };
   };
 
+  it("leaves out the calls and results of a helper it didn't start (an earlier reply's, still working in the background)", () => {
+    const { mapper } = make();
+    expect(mapper.map(assistant([{ type: 'tool_use', id: 'grep-1', name: 'Grep', input: { pattern: 'x' } }], 'old-task'))).toEqual([]);
+    expect(mapper.map(user([{ type: 'tool_result', tool_use_id: 'grep-1', content: 'found' }], 'old-task'))).toEqual([]);
+  });
+
   it('gives a Task call a card: its own calls and results go on it, and the Task result is its report', () => {
     const { helpers, mapper, tick } = make();
     expect(mapper.map(task('task-1'))).toEqual([
@@ -179,10 +185,5 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     const mapper = new SdkEventMapper({ onCard: (id) => cards.push(id) });
     mapper.map(task('task-1'));
     expect(cards).toEqual(['task-1']);
-  });
-
-  it("leaves a subagent's calls with the reply when it never saw the Task call that started it", () => {
-    const { mapper } = make();
-    expect(mapper.map(assistant([{ type: 'tool_use', id: 'g1', name: 'Grep', input: {} }], 'unknown-task'))).toEqual([{ type: 'tool-call', id: 'g1', name: 'Grep', args: {} }]);
   });
 });
