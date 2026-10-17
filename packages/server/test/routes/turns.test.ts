@@ -7,7 +7,7 @@ import { NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
-import { CLEAR_MID_REPLY } from '../../src/routes/turns.js';
+import { CLEAR_MID_REPLY, CLEAR_ON_ITS_OWN } from '../../src/routes/turns.js';
 import type { Container } from '../../src/container.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -955,6 +955,43 @@ describe('context commands in POST /api/chats/:id/turns', () => {
     expect(body.profileIds).toEqual(profileIds);
     expect(body.userParts).toEqual([{ type: 'text', text: '/clear' }]);
     expect(container.store.messages.get(body.userMessageId)!.parts).toEqual([{ type: 'text', text: '/clear' }]);
+  });
+
+  it('a clear name in any case is a clear', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+    const parentId = claudeReply(chatId, profileIds[0]!);
+
+    const res = await post(chatId, { parentId, parts: [{ type: 'text', text: '/Clear' }], profileIds });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { assistantMessageIds: string[]; userParts: Part[] };
+    expect(body).toMatchObject({ assistantMessageIds: [], userParts: [{ type: 'context', kind: 'clear' }] });
+  });
+
+  it('a clear name with text after it is refused in a Claude Code chat, writing nothing', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    claudeCode(0);
+    const parentId = claudeReply(chatId, profileIds[0]!);
+    const run = vi.spyOn(container.turnRunner, 'run');
+
+    for (const text of ['/clear now', '/Reset everything', '/NEW chat']) {
+      const res = await post(chatId, { parentId, parts: [{ type: 'text', text }], profileIds });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: CLEAR_ON_ITS_OWN });
+    }
+    expect(CLEAR_ON_ITS_OWN).toBe('Send /clear on its own.');
+    expect(container.store.messages.children(parentId)).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('/clear now with only API profiles is an ordinary message', async () => {
+    const { chatId, profileIds } = seedChat(1);
+
+    const res = await post(chatId, { parts: [{ type: 'text', text: '/clear now' }], profileIds });
+
+    expect(res.status).toBe(202);
+    expect(((await res.json()) as { userParts: Part[] }).userParts).toEqual([{ type: 'text', text: '/clear now' }]);
   });
 
   it('/clear with an attachment is refused', async () => {

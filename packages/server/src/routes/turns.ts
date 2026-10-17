@@ -3,7 +3,7 @@ import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
-import { contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ContextCommand } from '@otherbench/core/domain/context-lines.js';
+import { CLEAR_ON_ITS_OWN, contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ParsedCommand } from '@otherbench/core/domain/context-lines.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
@@ -37,6 +37,9 @@ export const COMMAND_WITH_ATTACHMENTS = "A command can't carry attachments. Send
 
 /** Refused when a /clear comes while a reply in the chat is still being written: closing its process would cut it off. */
 export const CLEAR_MID_REPLY = 'Wait for the reply to finish, or stop it, before clearing.';
+
+/** Refused when /clear (or /reset, /new) comes with more text after it in a Claude Code chat. */
+export { CLEAR_ON_ITS_OWN };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -132,7 +135,7 @@ function parseParentId(value: unknown): string | null {
  * the profiles; typed `/clear` or `/compact` text is one only when a Claude Code
  * profile is answering, so an API chat can still say "/clear" to its model.
  */
-function contextCommandOf(parts: Part[], profiles: ResolvedProfile[]): ContextCommand | null {
+function contextCommandOf(parts: Part[], profiles: ResolvedProfile[]): ParsedCommand | null {
   for (const p of parts) {
     if (p.type === 'context') return p.kind === 'compact' ? { kind: 'compact', focus: p.focus?.trim() ?? '' } : { kind: 'clear' };
   }
@@ -191,6 +194,7 @@ export function turnsRoutes(container: Container): Hono {
     let userParts = parts;
 
     const command = contextCommandOf(parts, profiles);
+    if (command?.kind === 'clear-with-text') return c.json({ error: CLEAR_ON_ITS_OWN }, 400);
     if (command) {
       if (parts.some((p) => p.type === 'image' || p.type === 'file')) throw new HTTPException(400, { message: COMMAND_WITH_ATTACHMENTS });
       userParts = [contextPart(command)];

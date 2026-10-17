@@ -6,7 +6,7 @@ import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKM
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
-import { contextLineOf, NOTHING_TO_COMPACT, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { CLEAR_ON_ITS_OWN, contextLineOf, isClearName, NOTHING_TO_COMPACT, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
@@ -156,7 +156,7 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
 });
 
 /** A message that starts with a slash command (`/name`, `/plugin:name args`): Claude Code runs it as that command. */
-const COMMAND = /^\/[A-Za-z0-9][\w:.-]*(\s|$)/;
+const COMMAND = /^\/([A-Za-z0-9][\w:.-]*)(\s|$)/;
 
 /** What a reply that sent /compact has seen of it: the PostCompact hook's summary and the boundary's token counts. */
 type Compaction = { summary: string | null; preTokens?: number; postTokens?: number | null; failure?: string };
@@ -168,6 +168,17 @@ function compactFocus(req: EngineRequest): string | null {
   const last = req.messages[req.messages.length - 1];
   const line = last ? contextLineOf(last) : null;
   return line?.kind === 'compact' ? (line.focus ?? '') : null;
+}
+
+/**
+ * Whether the new message starts with Claude Code's own /clear (or /reset,
+ * /new) in any case. It is never sent: OtherBench would still think the
+ * session holds the whole chat. The turns route refuses it first; this is the backstop.
+ */
+function sendsClear(req: EngineRequest): boolean {
+  const first = req.messages[req.messages.length - 1]?.parts.find((p) => p.type === 'text');
+  const name = first?.type === 'text' ? COMMAND.exec(first.text)?.[1] : undefined;
+  return name !== undefined && isClearName(name);
 }
 
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
@@ -486,6 +497,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const compacting = compactFocus(req) !== null;
     if (compacting && plan.mode !== 'continue') {
       yield { type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } };
+      return 'done';
+    }
+    if (sendsClear(req)) {
+      yield { type: 'error', error: { kind: 'unknown', retryable: false, message: CLEAR_ON_ITS_OWN } };
       return 'done';
     }
     const content = this.userContent(req, plan.mode === 'fresh', images);

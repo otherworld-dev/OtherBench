@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanonMessage, EngineMeta, Part } from '../src/types/messages.js';
-import { COMPACT_PREAMBLE, contextLineOf, contextPart, cutAtContextLine, parseContextCommand } from '../src/domain/context-lines.js';
+import { COMPACT_PREAMBLE, contextLineOf, contextPart, cutAtContextLine, isClearName, parseContextCommand } from '../src/domain/context-lines.js';
 
 let n = 0;
 function msg(id: string, role: 'user' | 'assistant', parts: Part[], extra: Partial<CanonMessage> = {}): CanonMessage {
@@ -23,8 +23,23 @@ describe('parseContextCommand', () => {
     expect(parseContextCommand('/compact')).toEqual({ kind: 'compact', focus: '' });
     expect(parseContextCommand('/compact keep the API notes')).toEqual({ kind: 'compact', focus: 'keep the API notes' });
   });
+  it('in any case', () => {
+    for (const t of ['/Clear', '/CLEAR', '/Reset', '/NEW']) expect(parseContextCommand(t)).toEqual({ kind: 'clear' });
+    expect(parseContextCommand('/Compact Keep it')).toEqual({ kind: 'compact', focus: 'Keep it' });
+  });
+  it('a clear name with text after it is clear-with-text, never plain text', () => {
+    for (const t of ['/clear now', '/Clear now', '/reset all of it', '/NEW chat', '/clear\nand more'])
+      expect(parseContextCommand(t)).toEqual({ kind: 'clear-with-text' });
+  });
   it('leaves everything else alone', () => {
-    for (const t of ['/clearly', '/compactify', 'please /clear', '/clear now']) expect(parseContextCommand(t)).toBeNull();
+    for (const t of ['/clearly', '/compactify', 'please /clear', '/newer', '/clear:x']) expect(parseContextCommand(t)).toBeNull();
+  });
+});
+
+describe('isClearName', () => {
+  it('is clear, reset or new in any case', () => {
+    for (const n of ['clear', 'Clear', 'RESET', 'new']) expect(isClearName(n)).toBe(true);
+    for (const n of ['compact', 'clearly', 'review']) expect(isClearName(n)).toBe(false);
   });
 });
 

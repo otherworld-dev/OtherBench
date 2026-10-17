@@ -425,7 +425,8 @@ of work landed after that plan closed out:
 - **`/clear` and `/compact` in Claude Code chats.** A command is a user message
   with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
   selected profile is a Claude Code profile is written by the server as a line
-  of its own: no reply, no Claude Code process. `TurnRunner.buildRequestMessages`
+  of its own: no reply, no Claude Code process. Names match in any case; a
+  clear name with text after it is refused (400), never sent on. `TurnRunner.buildRequestMessages`
   cuts every engine's history at the latest line, so a reply after it (Claude
   Code or an API profile) sees only what follows. `/compact` runs as a Claude
   Code turn and its summary shows in the thread. The thread draws a line as a
@@ -1391,9 +1392,13 @@ Known gaps:
 - Unverified live: the `PermissionDenied` hook and its `deny:auto` audit row
   (no classifier block was ever observed, Task 1 or Task 11), and
   `canUseTool` on an undecided call. Both are covered by unit tests only.
-- Typed `/clear` and `/compact` are handled by OtherBench and never passed to
-  Claude Code as text. Any other `/command` goes to Claude Code as a command,
-  with inline shell (the `!` form) still disabled.
+- Typed `/clear` and `/compact` (and `/reset`, `/new`, in any case) are
+  handled by OtherBench and never passed to Claude Code as text. A clear name
+  with more text after it (`/clear now`) is refused with "Send /clear on its
+  own." by the turns route, and the engine refuses any `/clear`, `/reset` or
+  `/new` that still reaches it, so Claude Code's own clear never runs. Any
+  other `/command` goes to Claude Code as a command, with inline shell (the
+  `!` form) still disabled.
 
 ### Clean chats, relayed MCP and the Claude Desktop import
 

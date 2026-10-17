@@ -18,7 +18,7 @@ import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { FakeToolProvider } from '@otherbench/core/testing/fakes.js';
-import { NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
+import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-cce-')); });
@@ -2477,6 +2477,18 @@ describe('ClaudeCodeChatEngine slash commands', () => {
     const events = await collect(engine(query).stream(req({ messages: [{ ...compactMessage(), id: 'u1' }] })));
     expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } }]);
     expect(calls).toHaveLength(0);
+  });
+
+  it("Claude Code's own clear is never sent, in any case, on a new or continued session", async () => {
+    for (const text of ['/clear now', '/Clear', '/RESET it', '/new']) {
+      const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+      const last: CanonMessage = { ...user(text), id: 'u2' };
+      for (const r of [compactReq(last), req({ messages: [{ ...last, id: 'u1' }] })]) {
+        const events = await collect(engine(query).stream(r));
+        expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: CLEAR_ON_ITS_OWN } }]);
+      }
+      expect(calls).toHaveLength(0);
+    }
   });
 
   it('compact on a session that is gone is refused, without the new-session notice', async () => {
