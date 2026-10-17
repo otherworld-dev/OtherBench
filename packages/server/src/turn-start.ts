@@ -1,3 +1,4 @@
+import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import type { SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
@@ -50,12 +51,14 @@ export async function startTurn(container: TurnStartDeps, input: TurnInput): Pro
  * 2026-10-17-claude-background-helpers-design) as a reply after the one it
  * continues: announced, streamed and summarised like any other. The chat's
  * head stays where it is; the thread follows on to the new reply by itself.
- * A chat or reply that's gone, or a profile that can't be resolved, declines it.
+ * A chat or reply that's gone, or a profile that can't be resolved, declines it,
+ * as does a /clear or /compact line on the chat's thread after that reply: the
+ * conversation it would carry on has been put aside (spec 2026-10-17-claude-slash-commands).
  */
 export async function startSelfStartedTurn(container: TurnStartDeps & { resolveProfile: (id: string) => Promise<ResolvedProfile> }, start: SelfStart): Promise<void> {
   const chat = container.store.chats.get(start.chatId);
   const after = container.store.messages.get(start.afterMessageId);
-  if (!chat || !after || after.chatId !== chat.id) {
+  if (!chat || !after || after.chatId !== chat.id || lineAfter(container, chat.headMessageId, after.id)) {
     start.decline();
     return;
   }
@@ -63,6 +66,12 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
   try {
     profile = await container.resolveProfile(start.profileId);
   } catch {
+    start.decline();
+    return;
+  }
+  // Checked again: a /clear, or the chat deleted, while the profile resolved (a secret read) puts it aside too.
+  const now = container.store.chats.get(chat.id);
+  if (!now || lineAfter(container, now.headMessageId, after.id)) {
     start.decline();
     return;
   }
@@ -85,4 +94,12 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
   });
   container.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
   container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId] });
+}
+
+/** Whether the thread to `headId` has a context line (/clear, /compact) after message `afterId` on it. */
+function lineAfter(container: Pick<TurnStartDeps, 'store'>, headId: string | null, afterId: string): boolean {
+  if (!headId) return false;
+  const path = container.store.messages.pathToRoot(headId);
+  const at = path.findIndex((m) => m.id === afterId);
+  return at !== -1 && path.slice(at + 1).some((m) => contextLineOf(m) !== null);
 }

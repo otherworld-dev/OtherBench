@@ -18,6 +18,7 @@ import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { FakeToolProvider } from '@otherbench/core/testing/fakes.js';
+import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-cce-')); });
@@ -498,11 +499,11 @@ describe('ClaudeCodeChatEngine auto mode', () => {
     await collect(engine(on.query).stream(req({ autoMode: true })));
     const off = fakeQuery(async function* () { yield init(); yield success(); });
     await collect(engine(off.query).stream(req({ autoMode: false })));
-    expect(Object.keys(on.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PreToolUse']);
+    expect(Object.keys(on.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PostCompact', 'PreToolUse']);
     expect(on.calls[0]!.options.hooks!.PreToolUse).toHaveLength(1);
     expect(on.calls[0]!.options.hooks!.PermissionDenied).toHaveLength(1);
     // Auto can be switched on while the process runs, so its classifier's blocks are audited either way.
-    expect(Object.keys(off.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PreToolUse']);
+    expect(Object.keys(off.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PostCompact', 'PreToolUse']);
   });
 
   it('starts in default mode when Auto is off, with the PermissionDenied hook ready for Auto switched on later', async () => {
@@ -710,6 +711,58 @@ describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in V
     expect(events.some((ev) => ev.type === 'error')).toBe(false);
     expect(starts).toHaveLength(1);
     expect(switched).toEqual(['auto']);
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine.listCommands', () => {
+  const cmds = [{ name: 'deploy', description: 'Deploy', argumentHint: '' }, { name: 'config', description: 'c', argumentHint: '', builtin: true }, { name: 'init', description: 'i', argumentHint: '', builtin: true, aliases: [] }];
+  const withCommands = (list = cmds) => {
+    const starts: Options[] = [];
+    const asked = { n: 0 };
+    const query: QueryFn = ({ prompt, options }) => {
+      starts.push(options);
+      const gen = (async function* () { for await (const _ of prompt) { yield init('sess-1'); yield success(); } })();
+      return Object.assign(gen, { interrupt: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}), supportedCommands: async () => { asked.n += 1; return list; } });
+    };
+    return { query, starts, asked };
+  };
+  const input = { chatId: 'chat', profile: profile(), workspaceRoot: ws };
+
+  it("uses the chat's live process and starts no new query", async () => {
+    const { query, starts, asked } = withCommands();
+    const e = engine(query);
+    await collect(e.stream(req()));
+    const before = asked.n;
+    const rows = await e.listCommands(input);
+    expect(asked.n).toBe(before + 1);
+    expect(starts).toHaveLength(1);
+    expect(rows.map((r) => r.name)).toEqual(['deploy', 'init']);
+    e.dispose();
+  });
+
+  it('listCommands with no live process returns the remembered list and starts no query', async () => {
+    const { query, starts } = withCommands();
+    const e = engine(query);
+    expect(await e.listCommands(input)).toEqual([]);
+    expect(starts).toHaveLength(0);
+    await collect(e.stream(req()));
+    await e.listCommands(input);
+    e.closeChats(() => true);
+    const n = starts.length;
+    expect((await e.listCommands(input)).map((r) => r.name)).toEqual(['deploy', 'init']);
+    expect(await e.listCommands({ ...input, chatId: 'other' })).toEqual([]);
+    expect(starts).toHaveLength(n);
+    e.dispose();
+  });
+
+  it('a finished reply refreshes the remembered list', async () => {
+    const { query } = withCommands();
+    const e = engine(query);
+    await collect(e.stream(req()));
+    await new Promise((r) => setTimeout(r, 20));
+    e.closeChats(() => true);
+    expect((await e.listCommands(input)).map((r) => r.name)).toEqual(['deploy', 'init']);
     e.dispose();
   });
 });
@@ -2364,5 +2417,172 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'still mine' }]);
     expect(selfStarts(seen)).toHaveLength(0);
     e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine slash commands', () => {
+  const sys = (o: Record<string, unknown>): SDKMessage => ({ type: 'system', ...o }) as unknown as SDKMessage;
+  const boundary = (trigger: 'manual' | 'auto', pre = 100, post = 10): SDKMessage => sys({ subtype: 'compact_boundary', compact_metadata: { trigger, pre_tokens: pre, post_tokens: post, duration_ms: 5 } });
+  const commandResult = (): SDKMessage => ({ type: 'result', subtype: 'success', is_error: false, result: '', num_turns: 0, stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } }) as unknown as SDKMessage;
+  const compactMessage = (extra: CanonMessage['parts'] = []): CanonMessage =>
+    ({ ...user(''), id: 'u2', parts: [{ type: 'context', kind: 'compact', focus: 'keep x' }, ...extra] as CanonMessage['parts'] });
+  const compactReq = (last: CanonMessage, o: Partial<EngineRequest> = {}): EngineRequest => followUp({ messages: [user('q1'), answered(), last], ...o });
+  const promptContent = (p: SDKUserMessage): unknown => (p.message as { content: unknown }).content;
+  const promptText = (p: SDKUserMessage): string => ((p.message as { content: { text?: string }[] }).content[0]!.text ?? '');
+  /** What Claude Code did for /compact in the live probe (fixtures README, "Slash commands"), the hook call optional. */
+  const compactTurn = (opts: { hook: boolean }) =>
+    async function* ({ options }: { options: Options }): AsyncGenerator<SDKMessage> {
+      yield init('sess-1');
+      yield sys({ subtype: 'status', status: 'compacting' });
+      if (opts.hook) {
+        const hook = options.hooks!.PostCompact![0]!.hooks[0]!;
+        expect(await hook({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'S' } as never, undefined, { signal: new AbortController().signal })).toEqual({});
+      }
+      yield sys({ subtype: 'status', status: null });
+      yield init('sess-1');
+      yield boundary('manual');
+      yield { type: 'user', message: { role: 'user', content: 'summary as the model sees it' }, parent_tool_use_id: null } as unknown as SDKMessage;
+      yield { type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' }, parent_tool_use_id: null } as unknown as SDKMessage;
+      yield commandResult();
+    };
+
+  it('compact continues the session and yields its summary', async () => {
+    const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+    const events = await collect(engine(query).stream(compactReq(compactMessage())));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.options.resume).toBe('sess-1');
+    expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: '/compact keep x' }]);
+    const types = events.map((e) => e.type);
+    expect(types.slice(-2)).toEqual(['context-summary', 'finish']);
+    expect(events.at(-2)).toEqual({ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
+    // The second init after compaction is the same session: no second engine-meta, no error.
+    expect(types.filter((t) => t === 'engine-meta')).toHaveLength(1);
+    expect(types).not.toContain('error');
+  });
+
+  it('compact without a focus sends a bare /compact', async () => {
+    const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+    await collect(engine(query).stream(compactReq({ ...compactMessage(), parts: [{ type: 'context', kind: 'compact' }] as CanonMessage['parts'] })));
+    expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: '/compact' }]);
+  });
+
+  it('compact sends only the command text', async () => {
+    const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+    await collect(engine(query).stream(compactReq(compactMessage([{ type: 'text', text: '(Artifacts in this chat: a.html)' }] as CanonMessage['parts']))));
+    expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: '/compact keep x' }]);
+  });
+
+  it('compact with no session to continue is refused', async () => {
+    const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+    const events = await collect(engine(query).stream(req({ messages: [{ ...compactMessage(), id: 'u1' }] })));
+    expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } }]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("Claude Code's own clear is never sent, in any case, on a new or continued session", async () => {
+    for (const text of ['/clear now', '/Clear', '/RESET it', '/new']) {
+      const { query, calls } = fakeQuery(compactTurn({ hook: true }));
+      const last: CanonMessage = { ...user(text), id: 'u2' };
+      for (const r of [compactReq(last), req({ messages: [{ ...last, id: 'u1' }] })]) {
+        const events = await collect(engine(query).stream(r));
+        expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: CLEAR_ON_ITS_OWN } }]);
+      }
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it('compact on a session that is gone is refused, without the new-session notice', async () => {
+    const { query, calls } = fakeQuery(async function* () {
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: sess-1'], usage: {} } as unknown as SDKMessage;
+    });
+    const events = await collect(engine(query).stream(compactReq(compactMessage())));
+    expect(calls).toHaveLength(1);
+    expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } }]);
+  });
+
+  it('compact that never reports a summary errors', async () => {
+    const { query } = fakeQuery(compactTurn({ hook: false }));
+    const events = await collect(engine(query).stream(compactReq(compactMessage())));
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain('finish');
+    expect(types).not.toContain('context-summary');
+    expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'unknown', retryable: false, message: 'Claude Code finished without compacting.' } });
+  });
+
+  it("a failed compact shows Claude Code's own reason", async () => {
+    // Built-ins fail with a stderr user message and a success result (fixtures README, Q3 /security-review).
+    const { query } = fakeQuery(async function* () {
+      yield init('sess-1');
+      yield { type: 'user', message: { role: 'user', content: '<local-command-stderr>Error: Not enough messages to compact.\n</local-command-stderr>' }, parent_tool_use_id: null } as unknown as SDKMessage;
+      yield commandResult();
+    });
+    const events = await collect(engine(query).stream(compactReq(compactMessage())));
+    expect(events.map((e) => e.type)).not.toContain('finish');
+    expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'unknown', retryable: false, message: 'Error: Not enough messages to compact.' } });
+  });
+
+  it('a second init mid-turn does not re-run the auto-mode check', async () => {
+    // Auto switched off mid-reply: the init after compaction says default, which must not read as auto being unavailable.
+    let inits = 0;
+    const { query } = fakeQuery(async function* (ctx) {
+      for await (const m of compactTurn({ hook: true })(ctx)) {
+        if ((m as { subtype?: unknown }).subtype !== 'init') yield m;
+        else yield init('sess-1', inits++ === 0 ? 'auto' : 'default');
+      }
+    });
+    const events = await collect(engine(query).stream(compactReq(compactMessage(), { autoMode: true })));
+    expect(events.map((e) => e.type)).not.toContain('error');
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('auto compaction is a notice', async () => {
+    const { query } = fakeQuery(async function* () { yield init(); yield boundary('auto', 150_000, 20_000); yield delta('carrying on'); yield success(); });
+    const events = await collect(engine(query).stream(followUp()));
+    expect(events).toContainEqual({ type: 'notice', text: 'Claude Code compacted the context automatically.' });
+    expect(events.map((e) => e.type)).not.toContain('context-summary');
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('a manual summary outside a compact reply is ignored', async () => {
+    const { query } = fakeQuery(compactTurn({ hook: true }));
+    const events = await collect(engine(query).stream(followUp()));
+    expect(events.map((e) => e.type)).not.toContain('context-summary');
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('a command in a fresh session goes first', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const prev: CanonMessage = { ...user('earlier answer'), id: 'a1', role: 'assistant' };
+    await collect(engine(query).stream(req({ messages: [user('q1'), prev, { ...user('/echo-args hi'), id: 'u2' }] })));
+    const text = promptText(calls[0]!.prompt);
+    expect(text.startsWith('/echo-args hi\n\n<otherbench-history>')).toBe(true);
+    expect(text).toContain('earlier answer');
+  });
+
+  it('a command leaves out later text parts', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const last: CanonMessage = { ...user(''), id: 'u2', parts: [{ type: 'text', text: '/echo-args hi' }, { type: 'text', text: '(Artifacts in this chat: a.html)' }] };
+    await collect(engine(query).stream(followUp({ messages: [user('q1'), answered(), last] })));
+    expect(calls[0]!.options.resume).toBe('sess-1');
+    expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: '/echo-args hi' }]);
+  });
+
+  it('text that does not start with a command keeps all its text parts', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const last: CanonMessage = { ...user(''), id: 'u2', parts: [{ type: 'text', text: 'see /echo-args' }, { type: 'text', text: 'note' }] };
+    await collect(engine(query).stream(followUp({ messages: [user('q1'), answered(), last] })));
+    expect(promptText(calls[0]!.prompt)).toBe('see /echo-args\nnote');
+  });
+
+  it('a command answered without stream deltas reaches the reply (/context)', async () => {
+    const table = '## Context Usage\n\n| Category | Tokens |\n|---|---|\n| Messages | 120 |';
+    const { query } = fakeQuery(async function* () {
+      yield init();
+      yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: table }] }, parent_tool_use_id: null } as unknown as SDKMessage;
+      yield commandResult();
+    });
+    const events = await collect(engine(query).stream(followUp({ messages: [user('q1'), answered(), { ...user('/context'), id: 'u2' }] })));
+    expect(events.filter((e) => e.type === 'text-delta')).toEqual([{ type: 'text-delta', text: table }]);
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
   });
 });

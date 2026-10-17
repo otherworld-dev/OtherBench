@@ -1,4 +1,5 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
+import type { CommandRow } from '../domain/context-lines.js';
 import type { SubagentEvent } from '../domain/parts.js';
 import type { BackgroundHelper } from '../types/background.js';
 export type { BackgroundHelper } from '../types/background.js';
@@ -115,6 +116,7 @@ export type EngineEvent =
   | { type: 'error'; error: SerializedError }
   | { type: 'engine-meta'; meta: EngineMeta }
   | { type: 'notice'; text: string }
+  | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
   /**
    * A helper the engine's own agent started (Claude Code's Task or Agent
    * tool), told the way an API sub-agent is: `callId` is the tool call that
@@ -180,6 +182,8 @@ export interface ChatEngine {
   refreshChatSettings?(chatId?: string): void;
   /** Ends what the engine keeps running for the chats `gone` picks (they were deleted): their processes and background tasks. */
   closeChats?(gone: (chatId: string) => boolean): void;
+  /** The slash commands the engine's agent offers in a chat, for the chat's slash menu. Only the Claude Code engine has any. */
+  listCommands?(input: { chatId: string; profile: ResolvedProfile; workspaceRoot: string | null }): Promise<CommandRow[]>;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
   /**

@@ -79,6 +79,16 @@ export function applyEventToMessage(
       // hydrates from GET .../messages later reconstructs an identical
       // parts array.
       return { message: { ...message, parts: [...message.parts, { type: 'notice', text: event.text }] }, extras };
+    case 'context-summary': {
+      // Same part TurnRunner stores, so a later reload reconstructs it identically.
+      const part: Part = {
+        type: 'context-summary',
+        text: event.text,
+        ...(event.preTokens !== undefined ? { preTokens: event.preTokens } : {}),
+        ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
+      };
+      return { message: { ...message, parts: [...message.parts, part] }, extras };
+    }
     case 'approval-request':
       return { message, extras: { ...extras, pendingApprovals: [...extras.pendingApprovals, event.request] } };
     case 'approval-resolved':

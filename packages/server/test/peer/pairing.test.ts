@@ -68,7 +68,7 @@ describe('pairing', () => {
     expect((await laptop.service.call('node-PC', { method: 'GET', path: '/peer/info' })).body).toEqual({
       nodeId: 'node-PC',
       name: 'PC',
-      protocolVersion: 1,
+      protocolVersion: 2,
       schemaVersion: 12,
       platform: 'win32',
     });

@@ -422,6 +422,23 @@ of work landed after that plan closed out:
       a proxy so it can sign in from many forwarded addresses; its port is
       `OTHERBENCH_E2E_REMOTE_PORT` (default 4781).
 
+- **`/clear` and `/compact` in Claude Code chats.** A command is a user message
+  with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
+  selected profile is a Claude Code profile is written by the server as a line
+  of its own: no reply, no Claude Code process. Names match in any case; a
+  clear name with text after it is refused (400), never sent on. A compact's
+  reply can't be regenerated (409, "Send /compact again"), and the thread
+  offers no Regenerate on it. `TurnRunner.buildRequestMessages`
+  cuts every engine's history at the latest line, so a reply after it (Claude
+  Code or an API profile) sees only what follows. `/compact` runs as a Claude
+  Code turn and its summary shows in the thread. The thread draws a line as a
+  separator reading `Context cleared` or `Context compacted`; earlier messages
+  stay above it. In the composer, typing `/` with a Claude Code profile selected
+  opens a menu of `/clear` and `/compact` at once, plus the chat's own commands
+  once known; ArrowDown/Enter or Tab fills the box without sending, and Enter
+  again sends. Tests: `web/e2e/slash-commands.spec.ts` (the mock records no
+  requests, so it reads the last reply's recorded input tokens).
+
 ### The model's browser (Deck #926)
 
 Spec: `docs/superpowers/specs/2026-10-12-model-browser-design.md`; plan: `docs/superpowers/plans/2026-10-12-model-browser.md`.
@@ -1377,6 +1394,13 @@ Known gaps:
 - Unverified live: the `PermissionDenied` hook and its `deny:auto` audit row
   (no classifier block was ever observed, Task 1 or Task 11), and
   `canUseTool` on an undecided call. Both are covered by unit tests only.
+- Typed `/clear` and `/compact` (and `/reset`, `/new`, in any case) are
+  handled by OtherBench and never passed to Claude Code as text. A clear name
+  with more text after it (`/clear now`) is refused with "Send /clear on its
+  own." by the turns route, and the engine refuses any `/clear`, `/reset` or
+  `/new` that still reaches it, so Claude Code's own clear never runs. Any
+  other `/command` goes to Claude Code as a command, with inline shell (the
+  `!` form) still disabled.
 
 ### Clean chats, relayed MCP and the Claude Desktop import
 
@@ -1769,6 +1793,10 @@ this on startup.
   approval and one that changes args asks for that call only; a Claude Code
   chat making one with relayed tool names; viewing from the paired laptop.
 - **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
+- **Slash commands.** Claude Code's own automatic compaction draws no line in
+  the thread. A chat's own commands appear in the `/` menu only after its first
+  reply since the server started; listing them any other way would run the
+  folder's SessionStart hooks.
 
 ## Integration (feat/cowork-parity-all)
 

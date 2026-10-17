@@ -779,6 +779,30 @@ describe('Thread regenerate, edit and branch switching', () => {
     await waitFor(() => expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2'));
   });
 
+  it('a message edited into /clear keeps a switcher back to the original', async () => {
+    const line = makeMessage('c2', 'chat-1', { role: 'user', parentId: 'a1', createdAt: 5, parts: [{ type: 'context', kind: 'clear' }] });
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), usr('u2', 'a1', 3, 'original'), asst('a2', 'u2', 4), line);
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('c2');
+    const scroll = within(screen.getByTestId('thread-scroll'));
+    expect(within(document.getElementById('msg-c2')!).getByRole('separator')).toHaveTextContent('Context cleared');
+    expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2');
+    expect(document.getElementById('msg-c2')).toContainElement(screen.getByTestId('branch-switcher'));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'a2'));
+    expect(scroll.getByText('original')).toBeInTheDocument();
+    expect(scroll.queryByText('Context cleared')).not.toBeInTheDocument();
+  });
+
+  it("offers no Regenerate on a compact's reply", () => {
+    const line = makeMessage('k', 'chat-1', { role: 'user', parentId: 'a1', createdAt: 3, parts: [{ type: 'context', kind: 'compact' }] });
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), line, asst('s', 'k', 4, { parts: [{ type: 'context-summary', text: 'S' }] }));
+    mount('s');
+    // Only a1's: the compact's reply has none.
+    expect(screen.getAllByRole('button', { name: 'Regenerate' })).toHaveLength(1);
+    expect(within(document.getElementById('msg-s')!).queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
+  });
+
   it('disables Regenerate and Edit while any reply in the chat is streaming', () => {
     load(usr('u1', null, 1), asst('a1', 'u1', 2), usr('u2', 'a1', 3), asst('a2', 'u2', 4, { status: 'streaming', parts: [] }));
     mount('u2');

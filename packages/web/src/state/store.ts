@@ -457,7 +457,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
           const running = { ...state.appRunningTurns };
           for (const id of event.messageIds) running[id] = event.chatId;
           // Replies this window knows nothing of: show them by reloading the chat.
-          const unknown = event.messageIds.some((id) => !state.messages[id]);
+          // A turn with none (a /clear) has only the line, which a paired machine may not have synced yet.
+          const unknown = event.messageIds.length === 0 || event.messageIds.some((id) => !state.messages[id]);
           return { appRunningTurns: running, ...(unknown ? { chatReloads: bump(state.chatReloads, event.chatId) } : {}) };
         }
         case 'turn-finished': {

@@ -7,7 +7,11 @@ export type MappedEvent =
   | EngineEvent
   | { type: 'init'; sessionId: string; tools: string[]; mcpServers: { name: string; status: string }[]; permissionMode: string | null }
   | { type: 'result-error'; text: string }
-  | { type: 'rate-limited'; resetsAt: number | null };
+  | { type: 'rate-limited'; resetsAt: number | null }
+  /** Claude Code swapped the conversation for a summary: on /compact (manual) or by itself near the context limit (auto). */
+  | { type: 'compacted'; trigger: 'manual' | 'auto'; preTokens: number; postTokens: number | null }
+  /** A slash command's own failure, from its `<local-command-stderr>` (tags stripped, trimmed). */
+  | { type: 'command-error'; text: string };
 
 type Block = { type: string; [k: string]: unknown };
 
@@ -30,6 +34,15 @@ function resultText(content: unknown): unknown {
       .join('\n');
   }
   return content;
+}
+
+/** The text of a user message whose string content is wrapped in `<local-command-stderr>`, or null. */
+function commandStderr(message: unknown): string | null {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  if (typeof content !== 'string') return null;
+  const match = /^\s*<local-command-stderr>([\s\S]*)<\/local-command-stderr>\s*$/.exec(content);
+  const inner = match?.[1]?.trim();
+  return inner ? inner : null;
 }
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
@@ -158,6 +171,12 @@ export class SdkEventMapper {
     switch (m['type']) {
       case 'system': {
         if (m['subtype'] === 'task_started' || m['subtype'] === 'task_updated' || m['subtype'] === 'task_notification') return this.taskMessage(m);
+        if (m['subtype'] === 'compact_boundary') return this.compactBoundary(m);
+        if (m['subtype'] === 'local_command_output') {
+          // A local command's answer (not seen in the live probe, mapped anyway): the reply's text, unless a helper's.
+          const content = m['content'];
+          return m['parent_tool_use_id'] == null && typeof content === 'string' && content ? [{ type: 'text-delta', text: content }] : [];
+        }
         if (m['subtype'] !== 'init') return [];
         const servers = (m['mcp_servers'] as { name: string; status: string }[] | undefined) ?? [];
         return [{ type: 'init', sessionId: String(m['session_id']), tools: (m['tools'] as string[] | undefined) ?? [], mcpServers: servers.map(({ name, status }) => ({ name, status })), permissionMode: typeof m['permissionMode'] === 'string' ? (m['permissionMode'] as string) : null }];
@@ -197,6 +216,9 @@ export class SdkEventMapper {
       }
       case 'user': {
         if (this.isStrangers(m)) return [];
+        // A built-in command that failed says why in a user message of its own (live probe, /security-review).
+        const stderr = m['parent_tool_use_id'] == null ? commandStderr(m['message']) : null;
+        if (stderr !== null) return [{ type: 'command-error', text: stderr }];
         const out: MappedEvent[] = [];
         const helper = this.helperOf(m);
         for (const block of blocksOf(m['message'])) {
@@ -245,6 +267,13 @@ export class SdkEventMapper {
       finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason'] as string) : 'stop',
       usage: { tokensIn: num(u['input_tokens']) + cached + num(u['cache_creation_input_tokens']), tokensOut: num(u['output_tokens']), tokensCached: cached, tokensReasoning: 0 },
     }];
+  }
+
+  /** A compaction's boundary: what triggered it and the context's size either side. */
+  private compactBoundary(m: Record<string, unknown>): MappedEvent[] {
+    const meta = (m['compact_metadata'] ?? {}) as Record<string, unknown>;
+    const post = meta['post_tokens'];
+    return [{ type: 'compacted', trigger: meta['trigger'] === 'auto' ? 'auto' : 'manual', preTokens: num(meta['pre_tokens']), postTokens: typeof post === 'number' ? post : null }];
   }
 
   /** Claude Code's task messages: a helper moving to the background, and a background helper finishing. */

@@ -75,6 +75,17 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
           events.push({ messageId: message.id, type: 'subagent', callId: part.callId, event });
         }
         break;
+      case 'context-summary':
+        // A compact reply's summary, rebuilt like the live event so a reconnecting client keeps it.
+        events.push({
+          messageId: message.id,
+          type: 'context-summary',
+          text: part.text,
+          ...(part.preTokens !== undefined ? { preTokens: part.preTokens } : {}),
+          ...(part.postTokens !== undefined ? { postTokens: part.postTokens } : {}),
+        });
+        break;
+      case 'context':
       case 'image':
       case 'file':
         break;

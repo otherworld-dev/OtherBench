@@ -11,6 +11,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { Message } from '../components/Message.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
 const mockedPatch = vi.mocked(api.chats.patch);
@@ -185,6 +186,39 @@ describe('ConversationStrip', () => {
     expect(entries[1]).toHaveTextContent('…');
     expect(entries[2]).toHaveTextContent('(no reply)');
     expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('abandoned branch');
+  });
+
+  it('names a /clear or /compact line by what it did, and peeks at a compact summary', async () => {
+    useOtherBenchStore.getState().loadMessages('chat-1', [
+      user('u1', null, 'first'), reply('a1', 'u1', 'r'),
+      msg('k1', { role: 'user', parentId: 'a1', parts: [{ type: 'context', kind: 'compact', focus: 'the API' }] }),
+      msg('s1', { parentId: 'k1', parts: [{ type: 'context-summary', text: 'We built   the API.' }] }),
+      msg('c1', { role: 'user', parentId: 's1', parts: [{ type: 'context', kind: 'clear' }] }),
+    ], null);
+    renderFor('c1');
+    const strip = screen.getByRole('region', { name: 'Conversation' });
+    expect(strip).toHaveTextContent('Context cleared');
+    expect(strip).not.toHaveTextContent('(attachment)');
+    await open();
+    expect(screen.getByTestId('outline-k1')).toHaveTextContent('Context compacted');
+    expect(screen.getByTestId('outline-k1')).toHaveTextContent('We built the API.');
+    expect(screen.getByTestId('outline-c1')).toHaveTextContent('Context cleared');
+    expect(screen.getByTestId('outline-c1')).not.toHaveTextContent('(no reply)');
+    expect(screen.getByTestId('outline-k1')).not.toHaveTextContent('(no reply)');
+    expect(screen.getByRole('button', { name: 'Go to: Context cleared' })).toBeInTheDocument();
+  });
+
+  it('Go to a context line scrolls to the line Message draws', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const clear = msg('c1', { role: 'user', parentId: 'a1', parts: [{ type: 'context', kind: 'clear' }] });
+    useOtherBenchStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), clear], null);
+    render(<Message message={clear} />);
+    const target = document.getElementById('msg-c1')!;
+    const spy = vi.spyOn(target, 'scrollIntoView');
+    renderFor('c1');
+    await open();
+    await userEvent.setup().click(screen.getByTestId('outline-c1'));
+    expect(spy).toHaveBeenCalledWith({ block: 'start' });
   });
 
   it('truncates long user text to one line of about 60 characters', async () => {

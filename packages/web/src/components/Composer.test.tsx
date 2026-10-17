@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
+import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { Composer } from './Composer.js';
 
@@ -14,7 +15,7 @@ vi.mock('../state/api.js', () => ({
       cancel: vi.fn(),
       setHead: vi.fn(),
     },
-    chats: { patch: vi.fn() },
+    chats: { patch: vi.fn(), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
     claude: { planUsage: vi.fn(async () => ({ usage: null })) },
     attachments: {
       upload: vi.fn(),
@@ -172,6 +173,43 @@ describe('Composer', () => {
     Object.defineProperty(textbox, 'scrollHeight', { configurable: true, get: () => 120 });
     await userEvent.setup().type(textbox, 'a');
     expect(textbox.style.height).toBe('120px');
+  });
+
+  it('sends /compact to the one profile the server ran, with one reply stub', async () => {
+    const p2 = makeProfile({ id: 'p2', name: 'Other' });
+    useOtherBenchStore.getState().setProfiles([makeProfile(), p2]);
+    mockedCreate.mockResolvedValue({
+      userMessageId: 'u1',
+      assistantMessageIds: ['a1'],
+      profileIds: ['p2'],
+      userParts: [{ type: 'context', kind: 'compact' }],
+    });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Other' }));
+    await user.type(screen.getByRole('textbox', { name: /message/i }), '/compact');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    expect(mockedCreate.mock.calls[0]![1].profileIds).toEqual(['p1', 'p2']);
+    const { messages } = useOtherBenchStore.getState();
+    expect(messages['u1']!.parts).toEqual([{ type: 'context', kind: 'compact' }]);
+    expect(messages['a1']!.producedBy?.profileId).toBe('p2');
+    expect(Object.keys(messages).sort()).toEqual(['a1', 'u1']);
+  });
+
+  it('shows /clear as its line at once, with no reply stub', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [], profileIds: [], userParts: [{ type: 'context', kind: 'clear' }] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.type(screen.getByRole('textbox', { name: /message/i }), '/clear');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    await waitFor(() => expect(useOtherBenchStore.getState().messages['u1']).toBeDefined());
+    expect(useOtherBenchStore.getState().messages['u1']!.parts).toEqual([{ type: 'context', kind: 'clear' }]);
+    expect(Object.keys(useOtherBenchStore.getState().messages)).toEqual(['u1']);
   });
 
   it('sending posts the right body to the turns API', async () => {
@@ -990,5 +1028,149 @@ describe('Composer message history (Up and Down)', () => {
     await user.click(box());
     await user.keyboard('{ArrowUp}');
     expect(box()).toHaveValue('');
+  });
+});
+
+describe('Composer / command menu', () => {
+  const conn = (id: string, kind: Connection['kind']): Connection => ({
+    id, name: id, kind, baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null,
+  });
+  beforeEach(() => {
+    reset();
+    vi.mocked(api.chats.commands).mockReset();
+    vi.mocked(api.chats.commands).mockResolvedValue({ commands: [...OWN_COMMANDS] });
+    useOtherBenchStore.getState().setConnections([conn('cc', 'claude_code'), conn('oll', 'ollama')]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
+      makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
+    ]);
+  });
+  afterEach(cleanup);
+  const box = () => screen.getByRole('textbox', { name: /message/i });
+
+  it('opens on / in a Claude Code chat; ArrowDown then Enter fills /compact and does not send, Enter again sends', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(screen.getByRole('option', { name: /\/clear/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /\/compact/ })).toBeInTheDocument();
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(box()).toHaveValue('/compact ');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+  });
+
+  it('opens no menu in an API-only chat', async () => {
+    await userEvent.setup().type((render(<Composer chat={makeChat({ profileId: 'qwen' })} />), box()), '/');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+  });
+
+  it('Esc closes the menu and keeps the text', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/co');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    expect(box()).toHaveValue('/co');
+  });
+
+  it('keeps focus in the box and points aria-activedescendant at the active option', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(box()).toHaveFocus();
+    const active = within(screen.getByRole('listbox', { name: 'Commands' })).getByRole('option', { selected: true });
+    expect(box()).toHaveAttribute('aria-activedescendant', active.id);
+    await user.keyboard('{ArrowDown}');
+    expect(box()).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name: /\/compact/ }).id);
+  });
+
+  it('picking /clear leaves no trailing space and closes the menu; a space closes it too', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/cl{Enter}');
+    expect(box()).toHaveValue('/clear');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+    await user.clear(box());
+    await user.type(box(), '/compact ');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).not.toBeInTheDocument();
+  });
+
+  it('Enter on a typed /clear sends it at once; Tab still only fills', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/clear');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Tab}');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    await user.clear(box());
+    await user.type(box(), '/clear');
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ parts: [{ type: 'text', text: '/clear' }] })));
+  });
+
+  it('Enter on a typed /compact still fills it for a focus, without sending', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/compact');
+    await user.keyboard('{Enter}');
+    expect(box()).toHaveValue('/compact ');
+    expect(mockedCreate).not.toHaveBeenCalled();
+  });
+
+  it('lists the fetched commands and shows the warning as a last row that is not an option', async () => {
+    vi.mocked(api.chats.commands).mockResolvedValue({ commands: [{ name: 'clear', description: '', argumentHint: '', aliases: [] }, { name: 'deploy', description: 'Ship it', argumentHint: '', aliases: [] }], warning: "Couldn't load this chat's own commands." });
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/deploy/ })).toBeInTheDocument();
+    expect(vi.mocked(api.chats.commands)).toHaveBeenCalledWith('chat-1', 'sonnet');
+    expect(screen.getByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
+    expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
+  });
+
+  it('retries after a fetch was cut short by closing the menu before it answered', async () => {
+    let release!: (v: { commands: CommandRow[] }) => void;
+    vi.mocked(api.chats.commands).mockReturnValueOnce(new Promise((r) => (release = r)));
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    await user.keyboard('{Escape}');
+    release({ commands: [...OWN_COMMANDS, { name: 'deploy', description: '', argumentHint: '', aliases: [] }] });
+    await user.clear(box());
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/deploy/ })).toBeInTheDocument();
+  });
+
+  it('shows each chat its own list when switching A to B and back', async () => {
+    const cmd = (name: string): CommandRow => ({ name, description: '', argumentHint: '', aliases: [] });
+    vi.mocked(api.chats.commands).mockImplementation(async (chatId) => ({ commands: [cmd(chatId === 'chat-1' ? 'alpha' : 'beta')] }));
+    const user = userEvent.setup();
+    const view = render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByRole('option', { name: /\/alpha/ })).toBeInTheDocument();
+    view.rerender(<Composer chat={makeChat({ id: 'chat-2', profileId: 'sonnet' })} />);
+    expect(await screen.findByRole('option', { name: /\/beta/ })).toBeInTheDocument();
+    view.rerender(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    expect(await screen.findByRole('option', { name: /\/alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /\/beta/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the built-ins and says so when the fetch fails', async () => {
+    vi.mocked(api.chats.commands).mockRejectedValue(new Error('network'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/');
+    expect(await screen.findByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
+    expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
   });
 });

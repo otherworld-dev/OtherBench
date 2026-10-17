@@ -1,3 +1,4 @@
+import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
@@ -12,6 +13,10 @@ export class RoutingChatEngine implements ChatEngine {
 
   stream(req: EngineRequest): AsyncIterable<EngineEvent> {
     return this.pick(req.profile.connection.kind).stream(req);
+  }
+
+  async listCommands(input: Parameters<NonNullable<ChatEngine['listCommands']>>[0]): Promise<CommandRow[]> {
+    return input.profile.connection.kind === 'claude_code' && this.claudeCode.listCommands ? this.claudeCode.listCommands(input) : [];
   }
 
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]> {

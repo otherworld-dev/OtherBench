@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
 import type { StreamTimings } from '../../src/stream/sse.js';
@@ -405,6 +406,35 @@ describe('running a chat on the machine it runs on', () => {
       expect(events.filter((e) => e.data.messageId === replyId && (e.data.type === 'error' || e.data.type === 'status'))).toEqual([]);
       expect(laptop.container.store.messages.get(replyId)).toMatchObject({ status: 'complete', error: null });
     });
+  });
+
+  it('the commands GET is forwarded for a chat on another machine', async () => {
+    const { pc, laptop, chatId, profileId, folder } = await setup();
+    const row = { name: 'code-review', description: 'Review the diff', argumentHint: '', aliases: ['review'] };
+    const asked: { chatId: string; workspaceRoot: string | null }[] = [];
+    pc.container.engine.listCommands = async (input) => {
+      asked.push({ chatId: input.chatId, workspaceRoot: input.workspaceRoot });
+      return [row];
+    };
+
+    const res = await laptop.api('GET', `/api/chats/${chatId}/commands?profileId=${profileId}`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ commands: [...OWN_COMMANDS, row] });
+    // The PC answered it, in its own folder.
+    expect(asked).toEqual([{ chatId, workspaceRoot: folder }]);
+  });
+
+  it('a /clear sent from the laptop is written on the PC, with no reply', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    pc.container.store.connections.update(pc.container.store.profiles.get(profileId)!.connectionId, { kind: 'claude_code' });
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: '/clear' }], profileIds: [profileId] });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageIds: string[]; userParts: unknown[] };
+    expect(body).toMatchObject({ assistantMessageIds: [], userParts: [{ type: 'context', kind: 'clear' }] });
+    expect(pc.container.store.messages.get(body.userMessageId)!.parts).toEqual([{ type: 'context', kind: 'clear' }]);
   });
 
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {

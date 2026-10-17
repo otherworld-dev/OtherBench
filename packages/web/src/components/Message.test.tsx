@@ -26,6 +26,42 @@ function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
 describe('Message', () => {
   afterEach(cleanup);
 
+  it('renders a context line as a separator, not a user bubble', () => {
+    render(<Message message={base({ role: 'user', producedBy: null, parts: [{ type: 'context', kind: 'clear' }] })} />);
+    expect(screen.getByRole('separator')).toHaveTextContent('Context cleared');
+    expect(screen.queryByText('You')).toBeNull();
+  });
+
+  it("a context line carries the message's id and, with siblings, the branch switcher", async () => {
+    const onSelect = vi.fn();
+    const line = base({ id: 'k1', role: 'user', producedBy: null, parts: [{ type: 'context', kind: 'compact', focus: 'the API' }] });
+    const { container, rerender } = render(<Message message={line} branch={{ index: 1, total: 2, onSelect }} />);
+    expect(container.querySelector('#msg-k1')).toContainElement(screen.getByRole('separator'));
+    expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2');
+    // Outside the separator, whose children are presentational.
+    expect(screen.getByRole('separator')).not.toContainElement(screen.getByTestId('branch-switcher'));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    expect(onSelect).toHaveBeenCalledWith(-1);
+    rerender(<Message message={line} />);
+    expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
+  });
+
+  it('renders a compact summary closed, with the token counts, and the summary once opened', async () => {
+    const message = base({ parts: [{ type: 'context-summary', text: 'The **gist**', preTokens: 120000, postTokens: 8000 }] });
+    render(<Message message={message} />);
+    const summary = screen.getByText(`Context compacted · ${(120000).toLocaleString()} → ${(8000).toLocaleString()} tokens`);
+    const details = summary.closest('details')!;
+    expect(details.open).toBe(false);
+    await userEvent.setup().click(summary);
+    expect(details.open).toBe(true);
+    expect(screen.getByText('gist').tagName).toBe('STRONG');
+  });
+
+  it('leaves the counts off a compact summary that has none', () => {
+    render(<Message message={base({ parts: [{ type: 'context-summary', text: 's' }] })} />);
+    expect(screen.getByText('Context compacted')).toBeInTheDocument();
+  });
+
   it('renders text parts as markdown', () => {
     render(<Message message={base()} />);
     const strong = screen.getByText('world');

@@ -187,3 +187,30 @@ describe('SdkEventMapper and the helpers the main agent starts', () => {
     expect(cards).toEqual(['task-1']);
   });
 });
+
+describe('SdkEventMapper on slash commands', () => {
+  const sys = (o: Record<string, unknown>): SDKMessage => ({ type: 'system', ...o }) as unknown as SDKMessage;
+
+  it('local_command_output maps to text', () => {
+    const mapper = new SdkEventMapper();
+    expect(mapper.map(sys({ subtype: 'local_command_output', content: 'Total cost: $0.01', uuid: 'u', session_id: 's' }))).toEqual([{ type: 'text-delta', text: 'Total cost: $0.01' }]);
+    // A helper's own output isn't the reply's text, like its stream events.
+    expect(mapper.map(sys({ subtype: 'local_command_output', content: 'x', parent_tool_use_id: 'task-1' }))).toEqual([]);
+    expect(mapper.map(sys({ subtype: 'local_command_output', content: '' }))).toEqual([]);
+  });
+
+  it("a command's local-command-stderr maps to command-error", () => {
+    const mapper = new SdkEventMapper();
+    const userMsg = (content: unknown, parent: string | null = null): SDKMessage => ({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: parent }) as unknown as SDKMessage;
+    expect(mapper.map(userMsg('<local-command-stderr>  Permission denied.\n</local-command-stderr>'))).toEqual([{ type: 'command-error', text: 'Permission denied.' }]);
+    expect(mapper.map(userMsg('<local-command-stdout>Compacted</local-command-stdout>'))).toEqual([]);
+    expect(mapper.map(userMsg('<local-command-stderr> </local-command-stderr>'))).toEqual([]);
+    expect(mapper.map(userMsg('<local-command-stderr>x</local-command-stderr>', 'task-1'))).toEqual([]);
+  });
+
+  it('compact_boundary maps to compacted with its token counts', () => {
+    const mapper = new SdkEventMapper();
+    expect(mapper.map(sys({ subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 20264, post_tokens: 4992, duration_ms: 1 } }))).toEqual([{ type: 'compacted', trigger: 'manual', preTokens: 20264, postTokens: 4992 }]);
+    expect(mapper.map(sys({ subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 9 } }))).toEqual([{ type: 'compacted', trigger: 'auto', preTokens: 9, postTokens: null }]);
+  });
+});

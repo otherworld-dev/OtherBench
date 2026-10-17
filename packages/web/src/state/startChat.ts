@@ -1,6 +1,6 @@
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Part } from '@otherbench/core/types/messages.js';
-import { api } from './api.js';
+import { api, type TurnResult } from './api.js';
 import { buildAssistantStub, buildUserStub } from './stubs.js';
 import { useOtherBenchStore } from './store.js';
 
@@ -34,7 +34,7 @@ export async function startChat(opts: { projectId?: string; profileId?: string; 
     useOtherBenchStore.getState().upsertChat(chat);
   }
   const parts: Part[] = [{ type: 'text', text: opts.text }];
-  let result: { userMessageId: string; assistantMessageIds: string[] };
+  let result: TurnResult;
   try {
     result = await api.turns.create(chat.id, { parentId: null, parts, profileIds: [chat.profileId] });
   } catch (err) {
@@ -43,7 +43,7 @@ export async function startChat(opts: { projectId?: string; profileId?: string; 
   // The message has gone: a problem from here on mustn't read as a failed send, or a retry would send it twice.
   try {
     const { registerMessage, profiles } = useOtherBenchStore.getState();
-    registerMessage(buildUserStub(chat, result.userMessageId, null, parts));
+    registerMessage(buildUserStub(chat, result.userMessageId, null, result.userParts ?? parts));
     // Profiles are always loaded where a chat can be started. Without one the reply still arrives with the chat's sync.
     const profile = profiles.find((p) => p.id === chat.profileId);
     if (profile) for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
