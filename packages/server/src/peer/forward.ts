@@ -416,6 +416,12 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
+  app.post('/chats/:id/helpers/:taskId/stop', async (c, next) => {
+    const chatId = c.req.param('id');
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return next();
+    return forward(container, c, nodeId, `/chats/${chatId}/helpers/${encodeURIComponent(c.req.param('taskId'))}/stop`);
+  });
   app.get('/chats/:id/stream', async (c, next) => {
     const chatId = c.req.param('id');
     const nodeId = remoteNode(chatId);

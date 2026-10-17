@@ -295,6 +295,15 @@ export function turnsRoutes(container: Container): Hono {
     return c.json(chatView(container, updated));
   });
 
+  // One of the chat's background tasks (a helper, a background command), stopped (spec 2026-10-17-claude-background-helpers-design).
+  app.post('/chats/:id/helpers/:taskId/stop', async (c) => {
+    const chatId = c.req.param('id');
+    getChatOrThrow(container, chatId);
+    const stopped = container.engine.stopHelper ? await container.engine.stopHelper(chatId, c.req.param('taskId')) : false;
+    if (!stopped) return c.json({ error: 'That background task is not running.' }, 404);
+    return c.json({ stopped: true });
+  });
+
   app.get('/chats/:id/stream', (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
@@ -311,6 +320,7 @@ export function turnsRoutes(container: Container): Hono {
       const snapshot = container.streamRegistry.snapshot(chatId);
       sink.send('hello', {
         inFlight: snapshot.map((b) => ({ messageId: b.messageId, status: b.status, events: b.events })),
+        ...container.streamRegistry.chatState(chatId),
       });
       // A reply can go quiet for minutes (thinking, an approval card): the
       // keepalive tells a machine relaying this stream that it's still alive.

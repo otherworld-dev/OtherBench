@@ -15,3 +15,6 @@ export interface BackgroundHelper {
   /** What it did last: its progress summary or the last tool it used. */
   lastActivity: string | null;
 }
+
+/** What a chat's live stream carries besides its replies' events: its background tasks, and that its stored messages changed. */
+export type ChatLevelEvent = { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] } | { type: 'messages-changed'; chatId: string };

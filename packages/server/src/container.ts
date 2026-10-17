@@ -44,6 +44,7 @@ import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
 import { forwardedApi, RemoteRuns } from './peer/forward.js';
+import { handleBackground } from './background.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
@@ -620,6 +621,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   forwarded = forwardedApi(container);
   peers.startMonitoring();
   syncer.start();
+  // Work Claude Code does between replies: its helpers, their cards, and turns it starts by itself.
+  engine.onBackground?.((event) => handleBackground(container, event));
 
   return container;
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { TurnRunner, type TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolApprovalEvent, ToolProvider } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ModelInfo, ResolvedProfile } from '@otherbench/core/types/config.js';
 import { applySubagentEvent, type SubagentEvent } from '@otherbench/core/domain/parts.js';
 import type { Part } from '@otherbench/core/types/messages.js';
@@ -587,5 +588,45 @@ describe('StreamRegistry', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('StreamRegistry and background work (spec 2026-10-17-claude-background-helpers-design)', () => {
+  const helper = { taskId: 'k1', callId: 't1', kind: 'local_agent', label: 'implementer', startedAt: 1, lastActivity: 'Bash' };
+  function setup() {
+    const store = new InMemoryStore();
+    let approvalListener: ((event: ToolApprovalEvent) => void) | null = null;
+    const toolProvider = { onApprovalEvent: (cb: (event: ToolApprovalEvent) => void) => { approvalListener = cb; return () => {}; } } as unknown as ToolProvider;
+    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) } as ChatEngine, { toolProvider });
+    const registry = new StreamRegistry(runner, store);
+    const got: unknown[] = [];
+    registry.subscribe('c1', (e) => got.push(e));
+    return { registry, got, approve: (event: ToolApprovalEvent) => approvalListener!(event) };
+  }
+
+  it('helpers reach subscribers and the hello', () => {
+    const { registry, got } = setup();
+    registry.setHelpers('c1', [helper]);
+    expect(got).toEqual([{ type: 'helpers', chatId: 'c1', helpers: [helper] }]);
+    expect(registry.chatState('c1')).toEqual({ helpers: [helper], backgroundApprovals: [] });
+    registry.setHelpers('c1', []);
+    expect(registry.chatState('c1').helpers).toEqual([]);
+  });
+
+  it('background approval reaches a chat subscriber and the hello, and leaves both when resolved', () => {
+    const { registry, got, approve } = setup();
+    const request = { id: 'r1', chatId: 'c1', messageId: 'm-old', toolName: 'Bash', risk: 'execute' as const, source: 'agent' as const, args: { command: 'npm test' }, summary: 'npm test', subagent: { callId: 't1', label: 'implementer', parentProfileId: 'p' } };
+    approve({ type: 'request', request });
+    expect(got).toEqual([{ messageId: 'm-old', type: 'approval-request', request }]);
+    expect(registry.chatState('c1').backgroundApprovals).toEqual([request]);
+    approve({ type: 'resolved', requestId: 'r1', messageId: 'm-old', choice: 'once' });
+    expect(got.at(-1)).toEqual({ messageId: 'm-old', type: 'approval-resolved', requestId: 'r1', choice: 'once' });
+    expect(registry.chatState('c1').backgroundApprovals).toEqual([]);
+  });
+
+  it('tells subscribers when stored messages changed', () => {
+    const { registry, got } = setup();
+    registry.messagesChanged('c1');
+    expect(got).toEqual([{ type: 'messages-changed', chatId: 'c1' }]);
   });
 });
