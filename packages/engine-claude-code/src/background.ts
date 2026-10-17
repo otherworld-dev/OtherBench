@@ -4,6 +4,11 @@ type Obj = Record<string, unknown>;
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/** How many finished tasks are remembered (for SendMessage to resume one onto its card); older ones are forgotten. */
+const KEEP_ENDED = 50;
+/** How many helper cards are remembered beyond those of the tasks kept. */
+const KEEP_CARDS = 200;
+
 /** One task Claude Code reported, and where its card is. */
 interface Task {
   helper: BackgroundHelper;
@@ -145,6 +150,7 @@ export class BackgroundTasks {
     }
     // Replace semantics: a task no longer listed has finished (its card hears from its notification).
     for (const [taskId, task] of this.tasks) if (!task.ended && !live.has(taskId)) task.ended = true;
+    this.prune();
     this.sendList();
   }
 
@@ -165,6 +171,7 @@ export class BackgroundTasks {
     };
     const resumed = known?.ended === true;
     const task = { helper, ended: false };
+    this.tasks.delete(taskId);
     this.tasks.set(taskId, task);
     if (resumed) this.cardEvent(task, { type: 'background', at: this.now() });
     this.sendList();
@@ -196,7 +203,35 @@ export class BackgroundTasks {
         this.cardEvent(task, { type: 'end', status: 'cancelled', at });
       }
     }
+    this.prune();
     this.sendList();
+  }
+
+  /**
+   * Forgets what a long-lived process no longer needs: the calls of helpers
+   * that finished (a resumed one's new calls are learnt again), finished tasks
+   * past the most recent KEEP_ENDED with their cards, and cards past
+   * KEEP_CARDS that no task kept has.
+   */
+  private prune(): void {
+    const working = new Set([...this.tasks.values()].filter((t) => !t.ended).map((t) => t.helper.callId));
+    for (const [toolUseId, callId] of this.owners) if (!working.has(callId)) this.owners.delete(toolUseId);
+    let ended = [...this.tasks.values()].filter((t) => t.ended).length;
+    for (const [taskId, task] of this.tasks) {
+      if (ended <= KEEP_ENDED) break;
+      if (!task.ended) continue;
+      this.tasks.delete(taskId);
+      if (task.helper.callId !== null) this.cards.delete(task.helper.callId);
+      ended--;
+    }
+    const kept = new Set([...this.tasks.values()].map((t) => t.helper.callId));
+    let extra = this.cards.size - kept.size - KEEP_CARDS;
+    for (const callId of this.cards.keys()) {
+      if (extra <= 0) break;
+      if (kept.has(callId)) continue;
+      this.cards.delete(callId);
+      extra--;
+    }
   }
 
   /** A change to the task's card, when it has one in an earlier reply. */
