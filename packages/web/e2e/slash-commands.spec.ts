@@ -37,6 +37,8 @@ test('/clear from the menu cuts what the next reply is sent, and leaves the thre
   await page.getByRole('button', { name: '+ New chat' }).click();
   const main = page.getByRole('main');
   const box = page.getByRole('textbox', { name: /message/i });
+  // The outline in the strip names the line too, so the line is looked for in the thread itself.
+  const thread = main.getByTestId('thread-scroll');
 
   await chooseProfile(page, MOCK);
   const replies = main.getByRole('article').filter({ hasText: /Here is a mock reply from OtherBench/ });
@@ -62,7 +64,7 @@ test('/clear from the menu cuts what the next reply is sent, and leaves the thre
   await expect(main.getByText('Context cleared')).toHaveCount(0);
   await box.press('Enter');
 
-  await expect(main.getByText('Context cleared')).toBeVisible();
+  await expect(thread.getByText('Context cleared')).toBeVisible();
   await expect(main.getByText(FIRST)).toBeVisible();
   await expect(main.getByText(SECOND)).toBeVisible();
 

@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
+import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -399,7 +400,12 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                             : undefined
                         }
                         actionsDisabled={chatStreaming || editBusy}
-                        onRegenerate={m.role === 'assistant' && m.parentId !== null && !compare ? () => void regenerate(m) : undefined}
+                        onRegenerate={
+                          // A compact's reply can't be redone in place (the server refuses it): /compact is sent again instead.
+                          m.role === 'assistant' && m.parentId !== null && !compare && contextLineOf(messages[m.parentId] ?? m)?.kind !== 'compact'
+                            ? () => void regenerate(m)
+                            : undefined
+                        }
                         onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
                         editing={
                           editingId === m.id

@@ -679,7 +679,18 @@ export function Message({
   framed = false,
 }: MessageProps): JSX.Element {
   const line = contextLineOf(message);
-  if (line) return <ContextLine kind={line.kind} {...(line.focus !== undefined ? { focus: line.focus } : {})} at={message.createdAt} />;
+  if (line) {
+    // A line edited from another message (or edited into one) still has its siblings to switch to.
+    return (
+      <ContextLine
+        id={`msg-${message.id}`}
+        kind={line.kind}
+        {...(line.focus !== undefined ? { focus: line.focus } : {})}
+        at={message.createdAt}
+        aside={branch && branch.total > 1 ? <BranchSwitcher branch={branch} /> : undefined}
+      />
+    );
+  }
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
   // Assistant messages already render image/file parts inline, in order,

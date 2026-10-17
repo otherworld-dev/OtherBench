@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type JSX } from 'react';
+import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import { activePath, childrenOf, extendToTip } from '@otherbench/core/domain/tree.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
@@ -12,10 +13,34 @@ const OUTLINE_USER_CHARS = 60;
 const OUTLINE_REPLY_CHARS = 80;
 export const OUTLINE_OPEN_KEY = 'otherbench.outlineOpen';
 
-/** Text parts only, whitespace collapsed to one line, cut to `max` chars with an ellipsis. */
+/** Whitespace collapsed to one line, cut to `max` chars with an ellipsis. */
+function clip(text: string, max: number): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+/** Text parts only, as one clipped line. */
 function oneLine(message: CanonMessage, max: number): string {
-  const text = message.parts.map((p) => (p.type === 'text' ? p.text : '')).join(' ').replace(/\s+/g, ' ').trim();
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return clip(message.parts.map((p) => (p.type === 'text' ? p.text : '')).join(' '), max);
+}
+
+/** How a prompt reads in the outline: a /clear or /compact line by what it did. */
+function promptLabel(user: CanonMessage): string {
+  const line = contextLineOf(user);
+  if (line) return line.kind === 'clear' ? 'Context cleared' : 'Context compacted';
+  return oneLine(user, OUTLINE_USER_CHARS) || '(attachment)';
+}
+
+/** The peek under a prompt; null for none (a /clear has no reply, a compact shows its summary). */
+function replyPreview(user: CanonMessage, reply: CanonMessage | null): string | null {
+  if (contextLineOf(user)) {
+    const summary = reply?.parts.find((p) => p.type === 'context-summary');
+    if (summary?.type === 'context-summary') return clip(summary.text, OUTLINE_REPLY_CHARS);
+    return reply?.status === 'streaming' ? '…' : null;
+  }
+  if (!reply) return '(no reply)';
+  if (reply.status === 'streaming') return `${oneLine(reply, OUTLINE_REPLY_CHARS)}…`;
+  return oneLine(reply, OUTLINE_REPLY_CHARS) || '(no reply)';
 }
 
 function readOpen(): boolean {
@@ -43,7 +68,7 @@ function writeOpen(open: boolean): void {
  * Collapsed the outline is one row (count + latest prompt); expanded it
  * lists every prompt, each with a one-line peek at the reply, newest at the
  * bottom. Clicking one scrolls the thread to that message (Message gives its
- * article the DOM id `msg-<id>`) and leaves the outline open. Always renders,
+ * article, or a /clear or /compact line, the DOM id `msg-<id>`) and leaves the outline open. Always renders,
  * even before the first message. Scoped to this chat's messages for the same
  * reason Thread is: the store's message pool is cross-chat.
  */
@@ -133,7 +158,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
             {open ? (
               <span className="flex-1" />
             ) : (
-              <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-faint)]">{oneLine(latest.user, OUTLINE_USER_CHARS) || '(attachment)'}</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-faint)]">{promptLabel(latest.user)}</span>
             )}
             <button
               type="button"
@@ -179,18 +204,18 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
       {open && latest && (
         <ul data-testid="outline-list" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-2">
           {turns.map(({ user, reply }) => {
-            const preview = !reply ? '(no reply)' : reply.status === 'streaming' ? `${oneLine(reply, OUTLINE_REPLY_CHARS)}…` : oneLine(reply, OUTLINE_REPLY_CHARS) || '(no reply)';
+            const preview = replyPreview(user, reply);
             return (
               <li key={user.id}>
                 <button
                   type="button"
                   data-testid={`outline-${user.id}`}
-                  aria-label={`Go to: ${oneLine(user, OUTLINE_USER_CHARS) || '(attachment)'}`}
+                  aria-label={`Go to: ${promptLabel(user)}`}
                   onClick={() => document.getElementById(`msg-${user.id}`)?.scrollIntoView({ block: 'start' })}
                   className="block w-full rounded px-1 py-0.5 text-left hover:bg-[var(--bg-sunken)]"
                 >
-                  <span className="block truncate text-sm">{oneLine(user, OUTLINE_USER_CHARS) || '(attachment)'}</span>
-                  <span className="block truncate text-xs text-[var(--text-muted)]">{preview}</span>
+                  <span className="block truncate text-sm">{promptLabel(user)}</span>
+                  {preview !== null && <span className="block truncate text-xs text-[var(--text-muted)]">{preview}</span>}
                 </button>
               </li>
             );
