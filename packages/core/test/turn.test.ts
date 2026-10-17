@@ -2558,3 +2558,26 @@ describe('TurnRunner.runSelfStarted (a reply Claude Code started by itself)', ()
     expect(store.usage.list('chat-1').some((u) => u.messageId === assistantMessageId && u.tokensIn === 5)).toBe(true);
   });
 });
+
+describe('TurnRunner.runSelfStarted and plan mode', () => {
+  it("keeps the chat's plan gate: a self-started reply in a planning chat can't change anything before a plan is approved", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode: true });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const proposePlan = { name: 'propose_plan', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null };
+    const runner = new TurnRunner(store, new FakeChatEngine([]), { toolProvider: new FakeToolProvider({ tools: [proposePlan] }) });
+    const requests: EngineRequest[] = [];
+
+    const { assistantMessageId } = await runner.runSelfStarted({
+      chatId: 'chat-1', parentId: 'a1', profile: makeResolvedProfile(), notice: 'Carried on.', unattended: false,
+      stream: async function* (req) {
+        requests.push(req);
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(requests[0]!.plan).toBeDefined();
+    expect(requests[0]!.plan!.approved).toBe(false);
+  });
+});

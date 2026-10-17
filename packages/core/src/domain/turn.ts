@@ -574,8 +574,9 @@ export class TurnRunner {
    * itself (Claude Code after a background helper reported back, spec
    * 2026-10-17-claude-background-helpers-design). It follows `parentId` (the
    * reply it continues), starts with `notice`, and runs like any reply, but
-   * from `stream` (the engine's own turn) rather than a new engine call. Plan
-   * mode doesn't hold it back: that's for messages the user sends.
+   * from `stream` (the engine's own turn) rather than a new engine call. It
+   * gets a fresh, closed plan gate when the chat is in plan mode, so it can't
+   * change anything before a plan is approved.
    */
   async runSelfStarted(input: {
     chatId: string;
@@ -596,7 +597,7 @@ export class TurnRunner {
       error: null,
       producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
     });
-    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice, selfStarted: true }).catch((err: unknown) => {
+    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice }).catch((err: unknown) => {
       console.error(`[TurnRunner] self-started reply ${message.id} failed outside its own error handling:`, err);
     });
     return { assistantMessageId: message.id };
@@ -608,7 +609,7 @@ export class TurnRunner {
     messageId: string,
     profile: ResolvedProfile,
     unattended = false,
-    variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string; selfStarted?: boolean } = {}
+    variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string } = {}
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
@@ -660,8 +661,9 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
-      // Plan mode is for messages the user sends; a self-started reply isn't one.
-      const planMode = chat?.planMode === true && variant.selfStarted !== true;
+      // A self-started reply is held to the chat's plan mode like any other (a fresh, closed gate):
+      // nothing changes before a plan is approved, however the turn began.
+      const planMode = chat?.planMode === true;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
