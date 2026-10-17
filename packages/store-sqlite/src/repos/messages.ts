@@ -8,6 +8,7 @@ import type {
   ProducedBy,
   Role,
   SerializedError,
+  SubagentStatus,
 } from '@otherbench/core/types/messages.js';
 import { atomic, fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 import { selfIdOf } from './nodes.js';
@@ -22,7 +23,7 @@ import { clockOf, type SyncClock } from './clock.js';
 // unmodified against both this adapter and InMemoryStore:
 //   - create(): duplicate id throws (the PRIMARY KEY does this for free)
 //   - get(): null for an unknown id
-//   - updateParts()/updateStatus(): throw when the id does not exist
+//   - updateParts()/reviseParts()/updateStatus(): throw when the id does not exist
 //   - pathToRoot(): returns [] for an unknown id, it does NOT throw
 
 /** The columns of `message` that map onto CanonMessage, in a fixed order. */
@@ -224,6 +225,17 @@ export class SqliteMessageRepo implements MessageRepo {
     }
   }
 
+  // updateParts leaves `hlc` alone, so a streaming checkpoint never counts as a change; this
+  // stamps it, so the change-log trigger logs it and paired machines are sent the new parts.
+  reviseParts(id: string, parts: Part[]): void {
+    const result = this.db
+      .prepare(`UPDATE message SET parts = ?, search_text = ?, hlc = ? WHERE id = ?`)
+      .run(toJson(parts), deriveSearchText(parts), this.clock.stamp(), id);
+    if (Number(result.changes) === 0) {
+      throw new Error(`message: not found: ${id}`);
+    }
+  }
+
   // `error` omitted means "clear it" rather than "leave it": a message moving
   // to `complete` after a failed attempt must not keep the stale error.
   //
@@ -253,6 +265,21 @@ export class SqliteMessageRepo implements MessageRepo {
   listByStatus(status: MessageStatus): CanonMessage[] {
     const rows = this.db
       .prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`)
+      .all(status) as Record<string, unknown>[];
+    return rows.map(fromRow);
+  }
+
+  // `instr` skips the JSON parse for the many messages with no sub-agent card at all; `json_each`
+  // then checks the top-level cards themselves, so a card's status mentioned in text never matches.
+  listWithSubagentStatus(status: SubagentStatus): CanonMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${COLUMNS} FROM message
+          WHERE instr(parts, '"type":"subagent"') > 0
+            AND EXISTS (SELECT 1 FROM json_each(message.parts) p
+                         WHERE json_extract(p.value, '$.type') = 'subagent' AND json_extract(p.value, '$.status') = ?)
+          ORDER BY created_at ASC, id ASC`
+      )
       .all(status) as Record<string, unknown>[];
     return rows.map(fromRow);
   }

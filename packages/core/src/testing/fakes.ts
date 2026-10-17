@@ -82,7 +82,7 @@ import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
 import { normaliseWindowsPath, toSandboxPath } from '../domain/sandbox-paths.js';
 import type { ModelInfo, Profile } from '../types/config.js';
-import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError, SubagentStatus } from '../types/messages.js';
 
 // ---------------------------------------------------------------------------
 // FakeChatEngine
@@ -1090,6 +1090,11 @@ class InMemoryMessageRepo implements MessageRepo {
     m.parts = structuredClone(parts);
   }
 
+  // Nothing here is synced, so this is updateParts: SqliteMessageRepo's also stamps the change.
+  reviseParts(id: string, parts: Part[]): void {
+    this.updateParts(id, parts);
+  }
+
   updateStatus(id: string, status: MessageStatus, error: SerializedError | null = null): void {
     const m = this.byId.get(id);
     if (!m) {
@@ -1101,6 +1106,12 @@ class InMemoryMessageRepo implements MessageRepo {
 
   listByStatus(status: MessageStatus): CanonMessage[] {
     return [...this.byId.values()].filter((m) => m.status === status).map((m) => structuredClone(m));
+  }
+
+  listWithSubagentStatus(status: SubagentStatus): CanonMessage[] {
+    return [...this.byId.values()]
+      .filter((m) => m.parts.some((p) => p.type === 'subagent' && p.status === status))
+      .map((m) => structuredClone(m));
   }
 
   updateEngineMeta(id: string, meta: EngineMeta): void {

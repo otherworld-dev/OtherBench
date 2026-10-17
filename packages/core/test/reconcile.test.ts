@@ -158,6 +158,31 @@ describe('reconcileInterruptedTurns', () => {
     expect((untouched.parts as Extract<Part, { type: 'subagent' }>[])[0]!.status).toBe('queued');
   });
 
+  it("closes a helper card left 'working in the background' as stopped, since the process it ran in is gone", () => {
+    const store = new InMemoryStore();
+    seedChatChain(store, 'chat-a');
+    const card = (callId: string, status: 'background' | 'running' | 'complete'): Part => ({
+      type: 'subagent', callId, label: callId, prompt: 'p', profileId: 'p', profileName: 'P', modelId: 'm', status, parts: [{ type: 'text', text: 'working' }], startedAt: 1,
+    });
+    store.messages.create({ id: 'user-1', chatId: 'chat-a', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'done', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [{ type: 'text', text: 'ok' }, card('a', 'background'), card('b', 'complete')], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'orphan', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [card('c', 'background'), card('d', 'running')], status: 'streaming', error: null, producedBy: null });
+    // A reply another machine wrote: its helpers ran in that machine's process, which this restart didn't touch.
+    store.messages.create({ id: 'theirs', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [card('e', 'background')], status: 'complete', error: null, producedBy: null, originNode: 'other-machine' });
+
+    const reconciled = reconcileInterruptedTurns(store);
+
+    // Only the streaming reply is reported (the startup log is about those); the finished one keeps its status.
+    expect(reconciled.map((m) => m.id)).toEqual(['orphan']);
+    const done = store.messages.get('done')!;
+    expect(done.status).toBe('complete');
+    expect(done.parts.map((p) => (p.type === 'subagent' ? [p.callId, p.status] : p.type))).toEqual(['text', ['a', 'cancelled'], ['b', 'complete']]);
+    expect(done.parts[1]).toMatchObject({ parts: [{ type: 'text', text: 'working' }], startedAt: 1 });
+    const orphan = store.messages.get('orphan')!;
+    expect(orphan.parts.map((p) => (p.type === 'subagent' ? [p.callId, p.status] : p.type))).toEqual([['c', 'cancelled'], ['d', 'error']]);
+    expect((store.messages.get('theirs')!.parts[0] as Extract<Part, { type: 'subagent' }>).status).toBe('background');
+  });
+
   it('leaves complete, error, and cancelled messages alone', () => {
     const store = new InMemoryStore();
     seedChatChain(store, 'chat-a');

@@ -179,7 +179,10 @@ export class StreamRegistry {
   private handleEvent(event: TurnEvent): void {
     const buffer = this.buffers.get(event.messageId);
     // A card for a reply that isn't live: a background helper's, kept for the chat until it's answered.
-    if (!buffer && event.type === 'approval-request') {
+    // A finished reply keeps its buffer for the retention window, so a helper asking soon after its
+    // reply ended still counts: in that buffer the card would be missing from a reconnect's hello.
+    const live = buffer !== undefined && buffer.status === 'streaming';
+    if (!live && event.type === 'approval-request') {
       const chatId = event.request.chatId;
       const pending = this.backgroundApprovals.get(chatId) ?? new Map<string, ApprovalRequest>();
       pending.set(event.request.id, event.request);
@@ -187,13 +190,17 @@ export class StreamRegistry {
       this.broadcast(chatId, event);
       return;
     }
-    if (!buffer && event.type === 'approval-resolved') {
+    if (!live && event.type === 'approval-resolved') {
+      let background = false;
       for (const [chatId, pending] of this.backgroundApprovals) {
         if (!pending.delete(event.requestId)) continue;
+        background = true;
         if (pending.size === 0) this.backgroundApprovals.delete(chatId);
         this.broadcast(chatId, event);
       }
-      return;
+      // Not a background card: one the reply itself asked for, settled just after it ended
+      // (a Stop), so it goes on with that reply's events below.
+      if (background || !buffer) return;
     }
     if (!buffer) return; // Unknown to us -- registerTurn() was never called for it; nothing to attach this to.
 

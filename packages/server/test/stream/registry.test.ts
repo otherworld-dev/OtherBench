@@ -624,6 +624,39 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
     expect(registry.chatState('c1').backgroundApprovals).toEqual([]);
   });
 
+  it("a helper's approval soon after its reply finished is a background one, though the reply's buffer is still kept", async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    let approvalListener: ((event: ToolApprovalEvent) => void) | null = null;
+    const toolProvider = new FakeToolProvider();
+    const listen = toolProvider.onApprovalEvent.bind(toolProvider);
+    toolProvider.onApprovalEvent = (cb) => {
+      approvalListener = cb;
+      return listen(cb);
+    };
+    const runner = new TurnRunner(store, engine, { toolProvider });
+    const registry = new StreamRegistry(runner, store, { retentionMs: 60_000 });
+    const result = await runner.run({ chatId: 'c1', parentId: null, userParts: [{ type: 'text', text: 'Hi' }], profiles: [makeResolvedProfile()] });
+    registry.registerTurn('c1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+    push(messageId, FINISH);
+    await vi.waitFor(() => expect(registry.snapshot('c1').find((b) => b.messageId === messageId)?.status).toBe('complete'));
+
+    const got: unknown[] = [];
+    registry.subscribe('c1', (e) => got.push(e));
+    const request = { id: 'r1', chatId: 'c1', messageId, toolName: 'Bash', risk: 'execute' as const, source: 'agent' as const, args: { command: 'npm test' }, summary: 'npm test', subagent: { callId: 't1', label: 'implementer', parentProfileId: 'p' } };
+    approvalListener!({ type: 'request', request });
+
+    // A reconnect's hello carries it, so the card stays while the helper waits.
+    expect(registry.chatState('c1').backgroundApprovals).toEqual([request]);
+    expect(got).toEqual([{ messageId, type: 'approval-request', request }]);
+    expect(registry.snapshot('c1').find((b) => b.messageId === messageId)?.events.map((e) => e.type)).not.toContain('approval-request');
+
+    approvalListener!({ type: 'resolved', requestId: 'r1', messageId, choice: 'once' });
+    expect(registry.chatState('c1').backgroundApprovals).toEqual([]);
+    expect(got.at(-1)).toEqual({ messageId, type: 'approval-resolved', requestId: 'r1', choice: 'once' });
+  });
+
   it('tells subscribers when stored messages changed', () => {
     const { registry, got } = setup();
     registry.messagesChanged('c1');

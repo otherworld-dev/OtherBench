@@ -332,6 +332,81 @@ describe('running a chat on the machine it runs on', () => {
     expect(after.messages.find((m) => m.id === replyId)?.status ?? 'not here').not.toBe('streaming');
   });
 
+  describe('between replies (spec 2026-10-17-claude-background-helpers-design)', () => {
+    /** A reply the PC finished in its chat, whose helper can go on asking after it. */
+    async function finishedReply(pc: Machine, chatId: string, profileId: string): Promise<string> {
+      const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'hi' }], profileIds: [profileId] });
+      const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+      await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('complete');
+      return replyId;
+    }
+
+    /** A helper of `messageId` asking the PC's gate to read a file after its reply ended, as Claude Code's gate does. */
+    async function helperAsks(pc: Machine, chatId: string, profileId: string, folder: string, messageId: string): Promise<{ outcome: Promise<unknown>; requestId: () => string }> {
+      const policy = { fs: 'read' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+      const read = (await pc.container.toolProvider.listTools(policy)).find((t) => t.name === 'read_file')!;
+      const outcome = pc.container.toolProvider.requestApproval(read, { path: 'note.txt' }, policy, { chatId, messageId, profileId, workspaceRoot: folder, signal: new AbortController().signal });
+      await expect.poll(() => pc.container.streamRegistry.chatState(chatId).backgroundApprovals.length).toBe(1);
+      return { outcome, requestId: () => pc.container.streamRegistry.chatState(chatId).backgroundApprovals[0]!.id };
+    }
+
+    it("the laptop answers a helper's card the PC raised before the laptop was watching", async () => {
+      const { pc, laptop, chatId, profileId, folder } = await setup();
+      const replyId = await finishedReply(pc, chatId, profileId);
+      const { outcome } = await helperAsks(pc, chatId, profileId, folder, replyId);
+
+      // The laptop connects afterwards: the card comes in its hello, not as an event.
+      const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+      const [hello] = await readStream(stream, (e) => e.event === 'hello');
+      const cards = hello!.data['backgroundApprovals'] as { id: string }[];
+      expect(cards).toHaveLength(1);
+
+      const answered = await laptop.api('POST', `/api/approvals/${cards[0]!.id}/resolve`, { choice: 'once' });
+      expect(answered.status).toBe(200);
+      expect(await outcome).toMatchObject({ allowed: true });
+    });
+
+    it('a Stop from the laptop reaches a reply the PC started without it', async () => {
+      const { pc, laptop, chatId, profileId } = await setup();
+      const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+      let replyId = '';
+      const events = await readStream(stream, async (e) => {
+        // A reply the laptop never asked for (as one Claude Code starts by itself), once the laptop is watching.
+        if (e.event === 'hello') {
+          const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+          replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+        }
+        if (e.data.type === 'text-delta' && e.data.messageId === replyId) {
+          expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
+        }
+        return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'cancelled';
+      });
+
+      expect(events.at(-1)!.data).toMatchObject({ type: 'status', status: 'cancelled' });
+      expect(pc.container.store.messages.get(replyId)!.status).toBe('cancelled');
+    });
+
+    it("a helper's card for a finished reply doesn't make the reply fail here when the PC goes away", async () => {
+      const { pc, laptop, chatId, profileId, folder } = await setup();
+      const replyId = await finishedReply(pc, chatId, profileId);
+      await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+      const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+      let stopped = false;
+      const events = await readStream(stream, async (e) => {
+        if (e.event === 'hello') await helperAsks(pc, chatId, profileId, folder, replyId);
+        if (!stopped && e.data.type === 'approval-request') {
+          stopped = true;
+          await pc.container.peers!.listener.stop();
+        }
+        return false;
+      });
+
+      expect(stopped).toBe(true);
+      expect(events.filter((e) => e.data.messageId === replyId && (e.data.type === 'error' || e.data.type === 'status'))).toEqual([]);
+      expect(laptop.container.store.messages.get(replyId)).toMatchObject({ status: 'complete', error: null });
+    });
+  });
+
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     // The laptop takes the chat over (Run here): from now on it runs on the laptop.

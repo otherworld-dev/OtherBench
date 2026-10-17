@@ -21,7 +21,8 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
       if (!message || message.chatId !== event.chatId) return;
       const parts = applySubagentEvent(message.parts, event.callId, event.event);
       if (parts === message.parts) return;
-      container.store.messages.updateParts(message.id, parts);
+      // Stamped for sync, so a paired machine's copy of the card updates too.
+      container.store.messages.reviseParts(message.id, parts);
       container.streamRegistry.messagesChanged(event.chatId);
       return;
     }
