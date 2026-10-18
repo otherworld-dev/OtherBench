@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherbench/core/types/background.js';
+import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
 import { api } from './api.js';
 import { SseClient } from './sse.js';
 import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } from './store.js';
@@ -18,6 +19,9 @@ interface ChatHello {
   inFlight?: HelloBuffer[];
   helpers?: BackgroundHelper[];
   backgroundApprovals?: ApprovalRequest[];
+  /** Messages waiting for the chat's replies to end, and what became of the ones already resolved. */
+  notes?: ReplyNote[];
+  noteOutcomes?: { noteId: string; outcome: NoteOutcome }[];
 }
 
 export function useChatSync(chatId: string | null, reportStatus = true): void {
@@ -77,13 +81,14 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
       });
 
-    const { applyChatEvent, setChatBackground } = useOtherBenchStore.getState();
+    const { applyChatEvent, setChatBackground, setChatNotes } =useOtherBenchStore.getState();
     const client = new SseClient<ChatHello, (TurnEvent & Partial<BackgroundMark>) | ChatLevelEvent>({
       url: api.streamUrl(chatId),
       readHello: (payload) => payload as ChatHello,
       onHello: (hello) => {
         applyHello(hello.inFlight ?? []);
         setChatBackground(chatId, hello.helpers ?? [], hello.backgroundApprovals ?? []);
+        setChatNotes(chatId, hello.notes ?? [], hello.noteOutcomes ?? []);
       },
       onEvent: (event) => applyChatEvent(chatId, event),
       onStatusChange: report,

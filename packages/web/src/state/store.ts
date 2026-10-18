@@ -7,6 +7,8 @@ import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
+import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import {
@@ -210,6 +212,24 @@ export interface OtherBenchState {
   backgroundApprovals: Record<string, ApprovalRequest[]>;
   /** The chat stream's hello: what's background for the chat, besides its replies in flight. */
   setChatBackground(chatId: string, helpers: BackgroundHelper[], approvals: ApprovalRequest[]): void;
+
+  // --- messages sent while a reply runs (spec 2026-10-18-send-while-replying-design) ---
+  /** Each chat's notes still waiting for its replies to end, as its stream last said. */
+  chatNotes: Record<string, ReplyNote[]>;
+  /** The notes this tab sent that haven't been resolved yet, by id. */
+  sentNotes: Record<string, ReplyNote>;
+  /** Notes handed back to this tab's composer (a stopped or lost reply), not yet taken. */
+  returnedNotes: ReplyNote[];
+  /** This tab sent a note: remember it until it resolves. */
+  noteSent(note: ReplyNote): void;
+  /** The chat's returned notes, removed from the store: the composer puts them back in the box. */
+  takeReturnedNotes(chatId: string): ReplyNote[];
+  /**
+   * The chat stream's hello. A note this tab sent that the server no longer
+   * holds and never delivered (`folded`/`turn`) was lost with a reply: it
+   * goes back to the composer; a delivered one is simply forgotten.
+   */
+  setChatNotes(chatId: string, notes: ReplyNote[], outcomes: { noteId: string; outcome: NoteOutcome }[]): void;
   /**
    * One event from a chat's stream: its background tasks, a reload when its
    * stored messages changed, an approval card for a reply that isn't streaming
@@ -613,6 +633,28 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   backgroundApprovals: {},
   setChatBackground: (chatId, helpers, approvals) =>
     set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: helpers }, backgroundApprovals: { ...state.backgroundApprovals, [chatId]: approvals } })),
+  chatNotes: {},
+  sentNotes: {},
+  returnedNotes: [],
+  noteSent: (note) => set((state) => ({ sentNotes: { ...state.sentNotes, [note.id]: note } })),
+  takeReturnedNotes: (chatId) => {
+    const taken = get().returnedNotes.filter((n) => n.chatId === chatId);
+    if (taken.length > 0) set((state) => ({ returnedNotes: state.returnedNotes.filter((n) => n.chatId !== chatId) }));
+    return taken;
+  },
+  setChatNotes: (chatId, notes, outcomes) =>
+    set((state) => {
+      const waiting = new Set(notes.map((n) => n.id));
+      const delivered = new Set(outcomes.filter((o) => o.outcome === 'folded' || o.outcome === 'turn').map((o) => o.noteId));
+      const sentNotes = { ...state.sentNotes };
+      const lost: ReplyNote[] = [];
+      for (const note of Object.values(state.sentNotes)) {
+        if (note.chatId !== chatId || waiting.has(note.id)) continue;
+        delete sentNotes[note.id];
+        if (!delivered.has(note.id)) lost.push(note);
+      }
+      return { chatNotes: { ...state.chatNotes, [chatId]: notes }, sentNotes, returnedNotes: [...state.returnedNotes, ...lost] };
+    }),
   applyChatEvent: (chatId, event) => {
     if (event.type === 'helpers') {
       set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: event.helpers } }));
@@ -622,8 +664,18 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       set((state) => ({ chatReloads: bump(state.chatReloads, chatId) }));
       return;
     }
-    // Placeholder: note events are handled in a later task.
-    if (event.type === 'notes' || event.type === 'note-resolved') return;
+    if (event.type === 'notes') {
+      set((state) => ({ chatNotes: { ...state.chatNotes, [chatId]: event.notes } }));
+      return;
+    }
+    if (event.type === 'note-resolved') {
+      set((state) => {
+        const { [event.noteId]: _resolved, ...sentNotes } = state.sentNotes;
+        const back = event.outcome === 'returned' && event.clientId === CLIENT_ID && event.note;
+        return { sentNotes, ...(back ? { returnedNotes: [...state.returnedNotes, event.note as ReplyNote] } : {}) };
+      });
+      return;
+    }
     const state = get();
     const background = state.backgroundApprovals[chatId] ?? [];
     // The server marks a background helper's card; a reply's own goes to the reply, loaded here yet or not.

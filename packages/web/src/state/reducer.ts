@@ -56,6 +56,8 @@ export function applyEventToMessage(
         },
         extras,
       };
+    case 'user-note':
+      return { message: { ...message, parts: [...message.parts, event.part] }, extras };
     case 'finish':
       return { message, extras: { ...extras, usage: event.usage } };
     case 'error': {
