@@ -4,7 +4,7 @@ import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
-import { INSPECTOR_COLLAPSED_STORAGE_KEY,loadInspectorCollapsed, selectPendingApprovalCount, useOtherBenchStore } from './store.js';
+import { INSPECTOR_COLLAPSED_STORAGE_KEY, loadInspectorCollapsed, selectPendingApprovalCount, useOtherBenchStore } from './store.js';
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -715,6 +715,15 @@ describe('notes (messages sent while a reply runs)', () => {
     expect(after.returnedNotes.map((n) => n.id)).toEqual(['n1']);
     expect(after.takeReturnedNotes('c1').map((n) => n.id)).toEqual(['n1']);
     expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
+  });
+
+  it('after a reload, a taken-back note stays gone; a returned one, or one with no outcome, is restored', () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['removed', 'returned', 'unknown']) s.noteSent(note(id));
+    s.setChatNotes('c1', [], [{ noteId: 'removed', outcome: 'removed' }, { noteId: 'returned', outcome: 'returned' }]);
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id).sort()).toEqual(['returned', 'unknown']);
+    expect(after.sentNotes).toEqual({});
   });
 
   it("after a reload, a sent note the server no longer has and never delivered comes back; a delivered one doesn't", () => {

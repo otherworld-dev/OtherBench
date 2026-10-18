@@ -226,8 +226,10 @@ export interface OtherBenchState {
   takeReturnedNotes(chatId: string): ReplyNote[];
   /**
    * The chat stream's hello. A note this tab sent that the server no longer
-   * holds and never delivered (`folded`/`turn`) was lost with a reply: it
-   * goes back to the composer; a delivered one is simply forgotten.
+   * holds goes back to the composer if it was `returned` or the server has no
+   * word of it (lost with a reply). One that was delivered (`folded`/`turn`)
+   * or taken back (`removed`, the withdrawing tab already restored it) is
+   * simply forgotten.
    */
   setChatNotes(chatId: string, notes: ReplyNote[], outcomes: { noteId: string; outcome: NoteOutcome }[]): void;
   /**
@@ -645,7 +647,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   setChatNotes: (chatId, notes, outcomes) =>
     set((state) => {
       const waiting = new Set(notes.map((n) => n.id));
-      const delivered = new Set(outcomes.filter((o) => o.outcome === 'folded' || o.outcome === 'turn').map((o) => o.noteId));
+      const delivered = new Set(outcomes.filter((o) => o.outcome === 'folded' || o.outcome === 'turn' || o.outcome === 'removed').map((o) => o.noteId));
       const sentNotes = { ...state.sentNotes };
       const lost: ReplyNote[] = [];
       for (const note of Object.values(state.sentNotes)) {

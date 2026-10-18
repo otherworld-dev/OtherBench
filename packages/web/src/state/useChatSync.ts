@@ -81,7 +81,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
       });
 
-    const { applyChatEvent, setChatBackground, setChatNotes } =useOtherBenchStore.getState();
+    const { applyChatEvent, setChatBackground, setChatNotes } = useOtherBenchStore.getState();
     const client = new SseClient<ChatHello, (TurnEvent & Partial<BackgroundMark>) | ChatLevelEvent>({
       url: api.streamUrl(chatId),
       readHello: (payload) => payload as ChatHello,
