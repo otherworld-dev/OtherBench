@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
 import { createApp } from '../../src/app.js';
+import { handleBackground } from '../../src/background.js';
 import { createContainer, type Container } from '../../src/container.js';
 import type { StreamTimings } from '../../src/stream/sse.js';
 import { freezableProxy } from './helpers.js';
@@ -309,6 +310,25 @@ describe('running a chat on the machine it runs on', () => {
 
     pc.container.turnRunner.cancel(replyId);
     await expect.poll(activeOnPc).toEqual([]);
+  });
+
+  it("tells the laptop which of the PC's chats have background tasks running, for its sidebar", async () => {
+    const { pc, laptop, chatId } = await setup();
+    const backgroundOnPc = async (): Promise<string[]> => {
+      const overview = (await (await laptop.api('GET', '/api/peers')).json()) as { peers: { nodeId: string; backgroundChats?: string[] }[] };
+      return overview.peers.find((p) => p.nodeId === pc.id)?.backgroundChats ?? [];
+    };
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    expect(await backgroundOnPc()).toEqual([]);
+
+    const helper = { taskId: 'k1', callId: null, kind: 'local_bash', label: 'npm test', startedAt: 1, lastActivity: null };
+    handleBackground(pc.container, { type: 'helpers', chatId, helpers: [helper] });
+    await expect.poll(backgroundOnPc).toEqual([chatId]);
+    // Not this machine's own background work: the laptop's app-wide events don't list it.
+    expect(laptop.container.events!.backgroundChats()).toEqual([]);
+
+    handleBackground(pc.container, { type: 'helpers', chatId, helpers: [] });
+    await expect.poll(backgroundOnPc).toEqual([]);
   });
 
   it("shows the laptop a reply the PC is still writing in its chat, without keeping it", async () => {

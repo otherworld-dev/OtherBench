@@ -108,6 +108,8 @@ export interface OtherBenchState {
   appRunningTurns: Record<string, string>;
   /** Chats controlling this computer (computer use), by chat id, with their last action (`actionSummary`: never typed text). */
   computerSessions: Record<string, { lastAction?: string }>;
+  /** Chats with background tasks running anywhere in the app, by chat id, with how many. */
+  appBackgroundChats: Record<string, number>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
   /**
@@ -411,6 +413,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   appPendingApprovals: {},
   appRunningTurns: {},
   computerSessions: {},
+  appBackgroundChats: {},
   syncRevision: 0,
   chatReloads: {},
   machines: null,
@@ -429,6 +432,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
       appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
       computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction)])),
+      appBackgroundChats: Object.fromEntries((hello.backgroundChats ?? []).filter((c) => c.count > 0).map((c) => [c.chatId, c.count])),
     }),
   applyAppEvent: (event) =>
     set((state) => {
@@ -491,6 +495,12 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
             delete next[event.chatId];
           }
           return { computerSessions: next };
+        }
+        case 'background-tasks': {
+          const next = { ...state.appBackgroundChats };
+          if (event.count > 0) next[event.chatId] = event.count;
+          else delete next[event.chatId];
+          return { appBackgroundChats: next };
         }
         default:
           return state;

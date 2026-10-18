@@ -84,4 +84,32 @@ describe('handleBackground', () => {
     handleBackground(c, { type: 'helpers', chatId: 'chat-1', helpers: [] });
     expect(set).toHaveBeenCalledWith('chat-1', []);
   });
+
+  it('announces how many background tasks the chat has app-wide, so the sidebar marks it, and clears it at none', () => {
+    const c = container();
+    const events = new AppEventBus();
+    (c as { events?: AppEventBus }).events = events;
+    const heard: unknown[] = [];
+    events.subscribe((e) => heard.push(e));
+    const helper = { taskId: 'k1', callId: null, kind: 'local_bash', label: 'npm test', startedAt: 1, lastActivity: null };
+    handleBackground(c, { type: 'helpers', chatId: 'chat-1', helpers: [helper, { ...helper, taskId: 'k2' }] });
+    expect(heard).toEqual([{ type: 'background-tasks', chatId: 'chat-1', count: 2 }]);
+    expect(events.backgroundChats()).toEqual([{ chatId: 'chat-1', count: 2 }]);
+    handleBackground(c, { type: 'helpers', chatId: 'chat-1', helpers: [] });
+    expect(events.backgroundChats()).toEqual([]);
+  });
+
+  it("doesn't announce a helper's progress app-wide, only a change in how many are running", () => {
+    const c = container();
+    const events = new AppEventBus();
+    (c as { events?: AppEventBus }).events = events;
+    const heard: unknown[] = [];
+    events.subscribe((e) => heard.push(e));
+    const helper = { taskId: 'k1', callId: null, kind: 'local_agent', label: 'review', startedAt: 1, lastActivity: 'Read a.ts' };
+    handleBackground(c, { type: 'helpers', chatId: 'chat-1', helpers: [helper] });
+    handleBackground(c, { type: 'helpers', chatId: 'chat-1', helpers: [{ ...helper, lastActivity: 'Read b.ts' }] });
+    // Nothing running, and nothing was: not news either.
+    handleBackground(c, { type: 'helpers', chatId: 'chat-2', helpers: [] });
+    expect(heard).toEqual([{ type: 'background-tasks', chatId: 'chat-1', count: 1 }]);
+  });
 });

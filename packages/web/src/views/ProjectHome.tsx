@@ -211,7 +211,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
-  const { waiting, working } = useChatActivity();
+  const { waiting, working, background } = useChatActivity();
   // The sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
     const group = allGroups(buildSidebar(chats, projects, null)).find((g) => g.key === projectId);
@@ -226,7 +226,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
       ) : (
         <ul className="space-y-0.5">
           {listed.map((c) => {
-            const status = chatStatus(c, waiting, working);
+            const status = chatStatus(c, waiting, working, background);
             return (
               <li key={c.id} data-chat-id={c.id} className="flex items-center rounded-sm hover:bg-[var(--bg-sunken)]">
                 <button type="button" onClick={() => setActiveChatId(c.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">

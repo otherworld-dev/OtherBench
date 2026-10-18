@@ -25,6 +25,7 @@ export function eventsRoutes(container: Container): Hono {
         pendingApprovals: container.events?.pendingApprovals() ?? [],
         runningTurns: container.events?.runningTurns() ?? [],
         computerSessions: container.events?.computerSessions() ?? [],
+        backgroundChats: container.events?.backgroundChats() ?? [],
       };
       sink.send('hello', hello);
       const keepalive = setInterval(() => sink.comment('keepalive'), EVENTS_KEEPALIVE_MS);

@@ -11,7 +11,7 @@ import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { setChatPinned } from '../state/chatActions.js';
-import { chatStatus, groupStatus, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
+import { chatStatus, groupStatus, groupStatusSummary, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
@@ -129,7 +129,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const collapsedGroups = useCollapsedGroups();
   const groupSorts = useGroupSorts();
   const now = useNow(60_000);
-  const { waiting, working } = useChatActivity();
+  const { waiting, working, background } = useChatActivity();
   const reading = useReadingChatIds(useMediaQuery(NARROW_BREAKPOINT));
 
   const [query, setQuery] = useState('');
@@ -171,11 +171,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       chats
         .filter((c) => trimmedQuery === '' || titleMatches(c.title, trimmedQuery) || searchChatIds?.has(c.id) === true)
         // The chips never hide the open chat: reading a reply clears its dot, and a new chat runs here.
-        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working) !== null)
+        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working, background) !== null)
         .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
         .map((c) => c.id)
     );
-  }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working]);
+  }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working, background]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
   const lookup = useMemo(() => projectLookup(projects), [projects]);
   /** Sidebar order: each top-level project, then its sub-projects. */
@@ -627,8 +627,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** A reply ready in a chat the user is reading isn't news: useMarkRead is clearing it. */
   function statusOf(chat: Chat): ChatStatus | null {
-    const status = chatStatus(chat, waiting, working);
-    return status === 'ready' && reading.has(chat.id) ? null : status;
+    return chatStatus(reading.has(chat.id) ? { id: chat.id, unread: false } : chat, waiting, working, background);
   }
 
   /** A pinned chat's project, named after its parent when it's a sub-project. */
@@ -654,6 +653,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const expanded = searching || expandedGroups.has(group.key);
     const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
     const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
+    const groupStatuses = groupChats(group).map(statusOf);
     return (
       <ProjectGroup
         key={group.key}
@@ -662,7 +662,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         count={group.total}
         empty={group.total === 0 && group.children.length === 0}
         collapsed={!searching && collapsedGroups.has(group.key)}
-        status={groupStatus(groupChats(group).map(statusOf))}
+        status={groupStatus(groupStatuses)}
+        statusSummary={groupStatusSummary(groupStatuses)}
         dropActive={dropTarget === group.key}
         onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
         onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}

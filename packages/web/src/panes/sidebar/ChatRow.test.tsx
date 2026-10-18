@@ -74,6 +74,24 @@ describe('ChatRow', () => {
 
     renderRow({ status: 'waiting' });
     expect(screen.getByRole('img', { name: 'waiting for you' })).toHaveAttribute('data-status', 'waiting');
+    cleanup();
+
+    renderRow({ status: 'background' });
+    expect(screen.getByRole('img', { name: 'working in the background' })).toHaveAttribute('data-status', 'background');
+    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
+  });
+
+  it('says what each dot means on hover', () => {
+    for (const [status, title] of [
+      ['ready', "Reply ready: you haven't opened it since"],
+      ['working', 'Replying'],
+      ['waiting', 'Waiting for you: an approval, question or plan'],
+      ['background', 'Working in the background: no reply running, but its tasks are'],
+    ] as const) {
+      renderRow({ status });
+      expect(screen.getByTestId('chat-status-chat-1')).toHaveAttribute('title', title);
+      cleanup();
+    }
   });
 
   it('selects on click and marks the active row', async () => {

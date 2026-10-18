@@ -112,6 +112,17 @@ describe('AppEventBus', () => {
     expect(bus.pendingApprovals()).toEqual([]);
   });
 
+  it("keeps a background helper's approval pending after its reply finished, until it's answered", () => {
+    const bus = new AppEventBus();
+    bus.emit({ type: 'turn-started', chatId: 'c', messageIds: ['m1'] });
+    bus.emit({ type: 'turn-finished', chatId: 'c', messageId: 'm1', status: 'complete' });
+    // The helper that reply started asks afterwards, under the reply's id.
+    bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'Bash' });
+    expect(bus.pendingApprovals().map((p) => p.chatId)).toEqual(['c']);
+    bus.emit({ type: 'approval-resolved', chatId: 'c', requestId: 'r1' });
+    expect(bus.pendingApprovals()).toEqual([]);
+  });
+
   it('keeps the kind of a pending question or plan for the hello', () => {
     const bus = new AppEventBus();
     bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });

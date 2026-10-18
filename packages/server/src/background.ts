@@ -35,6 +35,11 @@ function holdUntilWritten(container: Container, event: HelperEvent): boolean {
   return true;
 }
 
+/** How many background tasks the app-wide events last said `chatId` has. */
+function countOf(container: Container, chatId: string): number {
+  return container.events?.backgroundChats().find((c) => c.chatId === chatId)?.count ?? 0;
+}
+
 /**
  * What the engine reports its agent doing between replies (spec
  * 2026-10-17-claude-background-helpers-design): a chat's background tasks go
@@ -46,6 +51,11 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
   switch (event.type) {
     case 'helpers':
       container.streamRegistry.setHelpers(event.chatId, event.helpers);
+      // App-wide too, so the sidebar marks the chat whether it's open or not. The list changes with
+      // every helper's progress; only a change in how many is news there (and to paired machines).
+      if (container.events && countOf(container, event.chatId) !== event.helpers.length) {
+        container.events.emit({ type: 'background-tasks', chatId: event.chatId, count: event.helpers.length });
+      }
       return;
     case 'helper-event': {
       const message = container.store.messages.get(event.messageId);

@@ -50,7 +50,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const projectsLoaded = useOtherBenchStore((s) => s.projectsLoaded);
   const paneState = useOtherBenchStore((s) => s.paneState);
   const activeChatId = useOtherBenchStore((s) => s.activeChatId);
-  const { waiting, working } = useChatActivity();
+  const { waiting, working, background } = useChatActivity();
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const openTab = useOtherBenchStore((s) => s.openTab);
   const closeTab = useOtherBenchStore((s) => s.closeTab);
@@ -134,7 +134,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
           const pane = paneOf(t.id);
           const active = t.id === activeChatId;
           // Only a chat has a reply to wait on; a viewer or project tab never shows a dot.
-          const status = !isChatTab(t.id) ? null : waiting.has(t.id) ? 'waiting' : working.has(t.id) ? 'working' : null;
+          const status = !isChatTab(t.id) ? null : waiting.has(t.id) ? 'waiting' : working.has(t.id) ? 'working' : background.has(t.id) ? 'background' : null;
           return (
             <div
               key={t.id}
