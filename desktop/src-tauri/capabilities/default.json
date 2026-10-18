@@ -19,6 +19,7 @@
     "allow-open-chat",
     "allow-show-notification",
     "allow-open-site",
-    "allow-save-download"
+    "allow-save-download",
+    "allow-open-terminal"
   ]
 }
