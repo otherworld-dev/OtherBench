@@ -1352,10 +1352,10 @@ There's no spend cap; usage rows are written as normal.
   whole folder is filtered by Claude Code itself: every process gets deny
   rules for these paths on the SDK's flag-settings layer
   (`SECRET_DENY_RULES`), which Claude Code turns into exclusions inside
-  those tools, whatever the project's own settings say. That last part comes
-  from reading the bundled CLI, not a live probe (the auto-mode classifier
-  blocked the probe). The shell can still `cat` them unless the profile's
-  shell runs in the sandbox.
+  those tools, whatever the project's own settings say, in the chat's folder
+  and in any other folder a search starts in (live probe,
+  `scripts/probe-secret-search.mjs`, test/fixtures/README.md). The shell can
+  still `cat` them unless the profile's shell runs in the sandbox.
 - Every Claude Code reply with a folder lets Claude Code's file tools read
   the user's `skills/` and `plugins/cache/` (under an absolute
   `CLAUDE_CONFIG_DIR`, else `~/.claude`) as read-only folders
