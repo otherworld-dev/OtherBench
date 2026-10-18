@@ -513,14 +513,19 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   });
   const syncer = new Syncer({ store, secrets, blobStore, peers, events });
   peers.attachSyncer(syncer);
-  // Which of this machine's own chats have a reply running, for paired
-  // machines' "also active" hint (#790); told again whenever one starts or ends.
-  peers.attachActivity(() => {
+  // Which of this machine's own chats have a reply running, and which have
+  // background tasks running, for paired machines' "also active" hint (#790)
+  // and their sidebar; told again whenever either changes.
+  const ownChats = (ids: Iterable<string>): string[] => {
     const self = store.nodes.self().id;
-    return [...new Set(events.runningTurns().map((t) => t.chatId))].filter((id) => store.chats.get(id)?.runsOn === self);
-  });
+    return [...new Set(ids)].filter((id) => store.chats.get(id)?.runsOn === self);
+  };
+  peers.attachActivity(
+    () => ownChats(events.runningTurns().map((t) => t.chatId)),
+    () => ownChats(events.backgroundChats().map((c) => c.chatId))
+  );
   events.subscribe((e) => {
-    if (e.type === 'turn-started' || e.type === 'turn-finished') peers.announce('activity', peers.activity());
+    if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks') peers.announce('activity', peers.activity());
   });
 
   // What close() set going without waiting, for settled().

@@ -51,7 +51,7 @@ describe('PeerMonitor', () => {
 
     // Its running replies come first, right after the hello (none here).
     await expect.poll(() => heard).toEqual([
-      { nodeId: 'node-PC', event: 'activity', data: { chatIds: [] } },
+      { nodeId: 'node-PC', event: 'activity', data: { chatIds: [], backgroundChatIds: [] } },
       { nodeId: 'node-PC', event: 'changes-available', data: { seq: 7 } },
     ]);
   });

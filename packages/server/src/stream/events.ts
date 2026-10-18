@@ -1,6 +1,6 @@
 import type { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { Chat, ChatRepo, NewChat, Store } from '@otherbench/core/ports/store.js';
-import type { AppEvent, ComputerSessionSummary, PendingApprovalSummary, RunningTurnSummary } from '@otherbench/core/types/events.js';
+import type { AppEvent, BackgroundChatSummary, ComputerSessionSummary, PendingApprovalSummary, RunningTurnSummary } from '@otherbench/core/types/events.js';
 
 /**
  * The app-wide event bus behind `GET /api/events` (v2 plan, Task 34). Chat
@@ -19,6 +19,10 @@ import type { AppEvent, ComputerSessionSummary, PendingApprovalSummary, RunningT
  * And it keeps the chats that are controlling this computer (computer use),
  * with the one-line summary of their last action, from the
  * `computer-session` events `ComputerSessions` emits: the same hello.
+ *
+ * And how many background tasks each chat has running, from the
+ * `background-tasks` events `handleBackground` emits, so the sidebar can mark
+ * a chat working in the background with no reply running.
  */
 export class AppEventBus {
   private readonly listeners = new Set<(e: AppEvent) => void>();
@@ -27,6 +31,8 @@ export class AppEventBus {
   private readonly running = new Map<string, string>();
   /** Chats controlling this computer, each with its last action's summary once it has acted. */
   private readonly computer = new Map<string, string | undefined>();
+  /** Chats with background tasks running, by how many. */
+  private readonly background = new Map<string, number>();
 
   emit(e: AppEvent): void {
     if (e.type === 'approval-requested') {
@@ -41,6 +47,9 @@ export class AppEventBus {
     } else if (e.type === 'computer-session') {
       if (e.active) this.computer.set(e.chatId, e.lastAction ?? this.computer.get(e.chatId));
       else this.computer.delete(e.chatId);
+    } else if (e.type === 'background-tasks') {
+      if (e.count > 0) this.background.set(e.chatId, e.count);
+      else this.background.delete(e.chatId);
     }
     for (const fn of this.listeners) {
       // One subscriber failing (a closed connection) must not stop the others hearing it.
@@ -72,6 +81,11 @@ export class AppEventBus {
   /** Chats controlling this computer, with their last action. */
   computerSessions(): ComputerSessionSummary[] {
     return [...this.computer].map(([chatId, lastAction]) => (lastAction === undefined ? { chatId } : { chatId, lastAction }));
+  }
+
+  /** Chats with background tasks running. */
+  backgroundChats(): BackgroundChatSummary[] {
+    return [...this.background].map(([chatId, count]) => ({ chatId, count }));
   }
 
   /** Turns the runner's per-message events into app events. Returns the unsubscribe. */

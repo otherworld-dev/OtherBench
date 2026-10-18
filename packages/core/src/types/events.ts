@@ -41,7 +41,9 @@ export type AppEvent =
       detail: string | null;
     }
   /** A chat started or stopped controlling this computer, or acted (computer use); `lastAction` is a one-line summary. */
-  | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string };
+  | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string }
+  /** How many background tasks a chat's agent has running now (spec 2026-10-17-claude-background-helpers-design); 0 when none. */
+  | { type: 'background-tasks'; chatId: string; count: number };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {
@@ -65,6 +67,12 @@ export interface ComputerSessionSummary {
   lastAction?: string;
 }
 
+/** A chat with background tasks running, as the app-wide stream reports it. */
+export interface BackgroundChatSummary {
+  chatId: string;
+  count: number;
+}
+
 /** The `hello` that opens `GET /api/events`: the state a new subscriber can't rebuild from later events. */
 export interface AppEventsHello {
   pendingApprovals: PendingApprovalSummary[];
@@ -72,4 +80,6 @@ export interface AppEventsHello {
   runningTurns: RunningTurnSummary[];
   /** Chats controlling this computer right now (computer use), so a window opened mid-session shows the banner. */
   computerSessions?: ComputerSessionSummary[];
+  /** Chats with background tasks running, so a window opened meanwhile marks them in the sidebar. */
+  backgroundChats?: BackgroundChatSummary[];
 }

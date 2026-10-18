@@ -100,6 +100,11 @@ function plainIp(address: string): string {
 /** At most this many of a peer's running chats are kept: far more than anyone has running at once. */
 const MAX_ACTIVE_CHATS = 200;
 
+/** A peer's list of chat ids, as far as it is one: strings only, capped. */
+function chatIdsOf(ids: unknown): string[] {
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').slice(0, MAX_ACTIVE_CHATS) : [];
+}
+
 /**
  * Machines this one is paired with, and the peer listener they reach it on
  * (v2 plan, Tasks 46-47). Owns pairing in both directions, revocation, and
@@ -122,8 +127,11 @@ export class PeerService {
   private syncer: Syncer | null = null;
   /** This machine's chats with a reply running, as told to its peers (attached by the container). */
   private runningHere: () => string[] = () => [];
+  private backgroundHere: () => string[] = () => [];
   /** Each peer's chats with a reply running there, as it last said. */
   private readonly activityByPeer = new Map<string, string[]>();
+  /** The chats each paired machine last said have background tasks running there. */
+  private readonly backgroundByPeer = new Map<string, string[]>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -144,8 +152,10 @@ export class PeerService {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
         if (event === 'activity') {
-          const ids = (data as { chatIds?: unknown } | null)?.chatIds;
-          this.activityByPeer.set(nodeId, Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').slice(0, MAX_ACTIVE_CHATS) : []);
+          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown } | null;
+          this.activityByPeer.set(nodeId, chatIdsOf(said?.chatIds));
+          // An older machine doesn't say: none in the background, as far as we know.
+          this.backgroundByPeer.set(nodeId, chatIdsOf(said?.backgroundChatIds));
           options.events?.emit({ type: 'peer-activity', nodeId });
         }
       },
@@ -160,19 +170,28 @@ export class PeerService {
     return this.syncer;
   }
 
-  /** Where this machine's running replies come from: the ids of its own chats with one running. */
-  attachActivity(runningHere: () => string[]): void {
+  /**
+   * Where this machine's activity comes from: the ids of its own chats with a reply running,
+   * and of those with background tasks running.
+   */
+  attachActivity(runningHere: () => string[], backgroundHere: () => string[] = () => []): void {
     this.runningHere = runningHere;
+    this.backgroundHere = backgroundHere;
   }
 
-  /** What this machine tells its peers about its running replies (#790's "also active" hint). */
-  activity(): { chatIds: string[] } {
-    return { chatIds: this.runningHere() };
+  /** What this machine tells its peers about its running replies (#790's "also active" hint) and background tasks. */
+  activity(): { chatIds: string[]; backgroundChatIds: string[] } {
+    return { chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere() };
   }
 
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
   activeChats(nodeId: string): string[] {
     return this.status(nodeId).status === 'reachable' ? (this.activityByPeer.get(nodeId) ?? []) : [];
+  }
+
+  /** The chats with background tasks running on `nodeId`, as it last said; none while it isn't reachable. */
+  backgroundChats(nodeId: string): string[] {
+    return this.status(nodeId).status === 'reachable' ? (this.backgroundByPeer.get(nodeId) ?? []) : [];
   }
 
   /** The syncer, for the peer listener's sync routes. */
@@ -408,6 +427,7 @@ export class PeerService {
     this.streams.delete(peer.nodeId);
     this.closers.delete(peer.nodeId);
     this.activityByPeer.delete(peer.nodeId);
+    this.backgroundByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------
