@@ -74,12 +74,12 @@ function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: nu
 /**
  * A fake long-lived Claude Code that takes notes: the test plays its output
  * with `emit`, every message pushed into its input is recorded, and it
- * answers interrupt (recording its options) and cancelAsyncMessage (with
- * `cancelled`) as the real one does.
+ * answers cancelAsyncMessage with `cancelled`. `log` has its interrupt and
+ * cancel calls in order (an interrupt with its arguments, if any).
  */
 function noteQuery(o: { cancelled?: boolean } = {}) {
   const pushed: SDKUserMessage[] = [];
-  const interrupts: unknown[] = [];
+  const log: string[] = [];
   const cancels: string[] = [];
   const queued: SDKMessage[] = [];
   let wake: (() => void) | null = null;
@@ -104,13 +104,17 @@ function noteQuery(o: { cancelled?: boolean } = {}) {
       }
     })();
     return Object.assign(gen, {
-      interrupt: async (opts?: { cancelQueued?: boolean }) => { interrupts.push(opts); },
-      cancelAsyncMessage: async (uuid: string) => { cancels.push(uuid); return o.cancelled ?? true; },
+      interrupt: async (...args: unknown[]) => { log.push(args.length > 0 ? `interrupt ${JSON.stringify(args)}` : 'interrupt'); },
+      cancelAsyncMessage: async (uuid: string) => {
+        cancels.push(uuid);
+        log.push(`cancel ${uuid}`);
+        return o.cancelled ?? true;
+      },
       supportedModels: async () => [],
       accountInfo: async () => ({}),
     });
   };
-  return { query, pushed, interrupts, cancels, emit };
+  return { query, pushed, log, cancels, emit };
 }
 const NOTE_CAPABILITIES = ['msg_lifecycle_v1', 'interrupt_cancel_queued_v1'];
 
@@ -2861,10 +2865,11 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     e.dispose();
   });
 
-  it("Stop interrupts with cancelQueued and forgets the reply's notes", async () => {
+  it("Stop cancels the reply's own notes, then interrupts without cancel_queued (which would drop a helper's report)", async () => {
     const f = noteQuery();
     const e = engine(f.query);
     const controller = new AbortController();
+    // This Claude Code offers interrupt_cancel_queued_v1; it still isn't used.
     const r = await running(e, f, req({ signal: controller.signal }));
     await e.sendToReply('m1', note('n1'));
     await e.sendToReply('m1', note('n2'));
@@ -2872,12 +2877,14 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     await vi.waitFor(() => expect(r.events).toContainEqual({ type: 'note-picked', noteId: 'n1' }));
     controller.abort();
     await r.done;
-    expect(f.interrupts).toEqual([{ cancelQueued: true }]);
+    // Only the note not yet started is cancelled, before the interrupt, which has no arguments.
+    expect(f.log).toEqual(['cancel n2', 'interrupt']);
     // The note already picked stays where it was read.
     expect(shape(r.events)).toEqual(['text A', 'note-picked n1']);
-    // The other is no longer this engine's to take back...
+    // Claude Code confirmed the cancel: the note is no longer this engine's to take back...
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(await e.withdrawNote('n2')).toBe(false);
-    expect(f.cancels).toEqual([]);
+    expect(f.cancels).toEqual(['n2']);
     // ...and never lands in a later turn.
     f.emit(resultNaming([r.uuid], 'error_during_execution'));
     const next = await running(e, f, followUp());
@@ -2888,42 +2895,59 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     e.dispose();
   });
 
-  it("Stop without interrupt_cancel_queued_v1 interrupts plainly and cancels the reply's notes one by one", async () => {
-    const f = noteQuery();
-    const e = engine(f.query);
-    const controller = new AbortController();
-    const r = await running(e, f, req({ signal: controller.signal }), ['msg_lifecycle_v1']);
-    await e.sendToReply('m1', note('n1'));
-    controller.abort();
-    await r.done;
-    expect(f.interrupts).toEqual([undefined]);
-    expect(f.cancels).toEqual(['n1']);
-    e.dispose();
-  });
-
-  it('a reply that fails cancels its unstarted notes in Claude Code', async () => {
-    const f = noteQuery();
-    const e = engine(f.query);
+  /** A first reply on `f`, then a turn Claude Code starts by itself (text "Reviewing"), run as reply m-self; resolves once that reply is running. */
+  async function selfStartedReply(e: ClaudeCodeChatEngine, f: Fake) {
     const seen: EngineBackgroundEvent[] = [];
     e.onBackground((ev) => seen.push(ev));
     const first = await running(e, f);
     f.emit(resultNaming([first.uuid]));
     await first.done;
-    // Claude Code carries on by itself: a self-started reply, which stays in its process when it fails.
     f.emit(delta('Reviewing'));
     await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
     const start = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!;
     const events: EngineEvent[] = [];
     const done = (async () => { for await (const ev of start.run(req({ messageId: 'm-self' }))) events.push(ev); })();
     await vi.waitFor(() => expect(events.some((ev) => ev.type === 'text-delta')).toBe(true));
+    return { events, done };
+  }
+  const selfFailure = () => ({ ...resultNaming([], 'error_during_execution'), origin: { kind: 'task-notification' } });
+
+  it('a reply that fails cancels its unstarted notes in Claude Code', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    // A self-started reply stays in its process when it fails.
+    const r = await selfStartedReply(e, f);
     expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
     expect(await e.sendToReply('m-self', note('n2'))).toBe(true);
     f.emit(lifecycle('n1', 'started'));
-    f.emit({ ...resultNaming([], 'error_during_execution'), origin: { kind: 'task-notification' } });
-    await done;
-    expect(shape(events)).toEqual(['text Reviewing', 'note-picked n1', 'error']);
+    f.emit(selfFailure());
+    await r.done;
+    expect(shape(r.events)).toEqual(['text Reviewing', 'note-picked n1', 'error']);
     expect(f.cancels).toEqual(['n2']);
+    // Forgotten once Claude Code confirmed the cancel: withdrawing finds nothing to ask about.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(await e.withdrawNote('n2')).toBe(false);
+    expect(f.cancels).toEqual(['n2']);
+    e.dispose();
+  });
+
+  it('a note Claude Code had already started when a failed reply cancels it stays tracked', async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const r = await selfStartedReply(e, f);
+    expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
+    f.emit(selfFailure());
+    await r.done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.cancels).toEqual(['n1']);
+    // Still in the process's notes: withdrawing asks Claude Code again.
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual(['n1', 'n1']);
+    // So its `started` frame is still recognised (held for the follow-on), after which there is nothing to ask about.
+    f.emit(lifecycle('n1', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual(['n1', 'n1']);
     e.dispose();
   });
 });

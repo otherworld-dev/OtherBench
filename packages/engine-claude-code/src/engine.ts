@@ -35,12 +35,7 @@ import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
-  /**
-   * Stops the running turn. `cancelQueued` also drops every message still
-   * queued (sent as `cancel_queued`); untyped in SDK 0.3.287, so only passed
-   * when init's capabilities list `interrupt_cancel_queued_v1`.
-   */
-  interrupt(opts?: { cancelQueued?: boolean }): Promise<unknown>;
+  interrupt(): Promise<unknown>;
   /** Drops one queued message by its uuid: true when it was still queued, false once started. Untyped in SDK 0.3.287. */
   cancelAsyncMessage?(uuid: string): Promise<boolean>;
   /** Stops one background task (a helper, a background command) by Claude Code's task id. */
@@ -359,28 +354,35 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return [...(lines.length > 0 ? [{ type: 'text' as const, text: lines.join('\n') }] : []), ...images];
   }
 
-  /** Stops the turn on `live` for reply `messageId`, dropping its notes still queued in Claude Code. */
+  /**
+   * Stops the turn on `live` for reply `messageId`: its own notes are
+   * cancelled first, so none starts as the turn ends, then the turn is
+   * interrupted. Not with interrupt's cancel_queued, which would also drop a
+   * background helper's queued report.
+   */
   private stopTurn(live: LiveProcess, messageId: string): void {
-    if (live.capabilities.includes('interrupt_cancel_queued_v1')) {
-      void live.query.interrupt({ cancelQueued: true }).catch(() => live.close());
-      this.forgetNotes(live, messageId);
-    } else {
-      // An older Claude Code drops them one by one, first, so none starts as the turn ends.
-      this.cancelNotes(live, messageId);
-      void live.query.interrupt().catch(() => live.close());
-    }
+    this.cancelNotes(live, messageId);
+    void live.query.interrupt().catch(() => live.close());
   }
 
-  /** Forgets reply `messageId`'s notes Claude Code hasn't started. */
-  private forgetNotes(live: LiveProcess, messageId: string): string[] {
-    const ids = [...live.notes].flatMap(([id, owner]) => (owner === messageId ? [id] : []));
-    for (const id of ids) live.notes.delete(id);
-    return ids;
-  }
-
-  /** Cancels reply `messageId`'s unstarted notes in Claude Code, so none runs after a reply that didn't finish, and forgets them. */
+  /**
+   * Asks Claude Code to drop reply `messageId`'s unstarted notes, so none
+   * runs after a reply that didn't finish. Each is forgotten once Claude Code
+   * confirms; one it had already started (or can't cancel) stays tracked, so
+   * the pump still routes its `started` frame.
+   */
   private cancelNotes(live: LiveProcess, messageId: string): void {
-    for (const id of this.forgetNotes(live, messageId)) void live.query.cancelAsyncMessage?.(id).catch(() => undefined);
+    const query = live.query;
+    if (!query.cancelAsyncMessage) return;
+    for (const [id, owner] of live.notes) {
+      if (owner !== messageId) continue;
+      void query.cancelAsyncMessage(id).then(
+        (cancelled) => {
+          if (cancelled) live.notes.delete(id);
+        },
+        () => undefined
+      );
+    }
   }
 
   /**
