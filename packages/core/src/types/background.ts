@@ -1,3 +1,5 @@
+import type { NoteOutcome, ReplyNote } from './notes.js';
+
 /**
  * A background task an engine's agent has running for a chat (spec
  * 2026-10-17-claude-background-helpers-design): a Claude Code helper (Task or
@@ -17,7 +19,13 @@ export interface BackgroundHelper {
 }
 
 /** What a chat's live stream carries besides its replies' events: its background tasks, and that its stored messages changed. */
-export type ChatLevelEvent = { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] } | { type: 'messages-changed'; chatId: string };
+export type ChatLevelEvent =
+  | { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] }
+  | { type: 'messages-changed'; chatId: string }
+  /** The chat's waiting notes, the whole set. */
+  | { type: 'notes'; chatId: string; notes: ReplyNote[] }
+  /** A note left the waiting set; `note` is present for `returned`. */
+  | { type: 'note-resolved'; chatId: string; noteId: string; outcome: NoteOutcome; clientId: string; note?: ReplyNote };
 
 /**
  * On a chat's stream, a background helper's approval card and its answer

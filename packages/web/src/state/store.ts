@@ -622,6 +622,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       set((state) => ({ chatReloads: bump(state.chatReloads, chatId) }));
       return;
     }
+    // Placeholder: note events are handled in a later task.
+    if (event.type === 'notes' || event.type === 'note-resolved') return;
     const state = get();
     const background = state.backgroundApprovals[chatId] ?? [];
     // The server marks a background helper's card; a reply's own goes to the reply, loaded here yet or not.

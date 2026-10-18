@@ -25,8 +25,23 @@ export interface PendingMark {
   pending?: true;
 }
 
+export interface NoteAttachment {
+  attachmentId: string;
+  mime: string;
+  filename: string;
+}
+
+/** A message the user sent while this reply was running, at the point Claude read it. Never sent by a client. */
+export interface UserNotePart {
+  type: 'user-note';
+  noteId: string;
+  text: string;
+  attachments: NoteAttachment[];
+}
+
 export type Part =
   | { type: 'text'; text: string }
+  | UserNotePart
   | { type: 'reasoning'; text: string }
   | ({ type: 'image'; attachmentId: string; mime: string } & PendingMark)
   | ({ type: 'file'; attachmentId: string; mime: string; filename: string } & PendingMark)

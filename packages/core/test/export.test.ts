@@ -125,6 +125,18 @@ describe('chatToMarkdown', () => {
     expect(md).not.toContain('<b>');
   });
 
+  it('exports a user-note as the user\'s words inside the reply', () => {
+    const ms = [
+      msg({ id: 'u1', createdAt: 1 }),
+      msg({
+        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'),
+        parts: [{ type: 'text', text: 'A' }, { type: 'user-note', noteId: 'n1', text: 'stop', attachments: [] }, { type: 'text', text: 'B' }],
+      }),
+    ];
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).toContain('A\n\n**You:** stop\n\nB');
+  });
+
   it('fences tool output with more backticks than it contains, so it cannot break out', () => {
     const ms = [
       msg({ id: 'u1', createdAt: 1 }),
