@@ -414,18 +414,36 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
   }
 
-  /** What Claude Code does while no reply is attached to the process. */
+  /**
+   * What Claude Code does while no reply is attached to the process. A turn
+   * beginning after Claude Code started notes is theirs (a follow-on); any
+   * other is one it began by itself.
+   */
   private handleIdle(live: LiveProcess, message: SDKMessage): void {
-    if (startsOwnTurn(message)) this.selfStart(live, message);
+    if (!startsOwnTurn(message)) return;
+    this.selfStart(live, message, live.starting.length > 0 ? live.starting.splice(0) : undefined);
+  }
+
+  /** Tells the server which notes a process that closed never read, for its chat. Never throws: the process calls it unguarded. */
+  private reportDropped(live: LiveProcess, dropped: string[]): void {
+    try {
+      const chatId = live.background?.chatId ?? live.last?.chatId;
+      if (dropped.length === 0 || chatId === undefined) return;
+      this.backgroundHandler?.({ type: 'notes-dropped', chatId, noteIds: dropped });
+    } catch (err) {
+      console.error('[engine-claude-code] could not report the notes a closed process never read:', err);
+    }
   }
 
   /**
-   * Claude Code began a turn by itself (a helper reported back): it's handed
-   * to whoever runs replies as a self-start, its output buffered until then.
-   * With nobody to run it, it's read to its end and dropped.
+   * Claude Code began a turn by itself (a helper reported back), or ran notes
+   * `noteIds` the user sent mid-reply after that reply ended (a follow-on): it's
+   * handed to whoever runs replies as a self-start, its output buffered until
+   * then. With nobody to run it, it's read to its end and dropped.
    */
-  private selfStart(live: LiveProcess, first: SDKMessage): void {
-    const placeholder = `${SELF_TURN_PREFIX}${randomUUID()}`;
+  private selfStart(live: LiveProcess, first: SDKMessage, noteIds?: string[]): void {
+    // A follow-on's result names its notes, so it's attached under the first; any other names no message of ours.
+    const placeholder = noteIds?.[0] ?? `${SELF_TURN_PREFIX}${randomUUID()}`;
     const feed = live.attach(placeholder);
     feed.push(first);
     // Helper cards it starts belong to its reply, whose id comes when it runs.
@@ -443,20 +461,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       void drain();
       return;
     }
-    const finished = live.background?.lastFinished ?? null;
-    // Named once: a later turn it starts with no helper finished since is not this helper's.
-    if (live.background) live.background.lastFinished = null;
-    const notice = finished === null
-      ? 'Carried on after a background task finished.'
-      : finished.kind === 'local_agent'
-        ? `Carried on after the helper "${finished.label}" reported back.`
-        : `Carried on after the background task "${finished.label}" finished.`;
     const start: SelfStart = {
       chatId: last.chatId,
       afterMessageId: last.messageId,
       profileId: last.profileId,
-      notice,
-      unattended: last.unattended,
+      // The user asked for a follow-on: it's attended, and needs no notice.
+      ...(noteIds ? { notice: '', unattended: false, noteIds } : { notice: this.selfStartNotice(live), unattended: last.unattended }),
       run: (req) => {
         if (taken) throw new Error('A self-started turn runs once.');
         taken = true;
@@ -470,6 +480,18 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       },
     };
     this.backgroundHandler({ type: 'self-start', start });
+  }
+
+  /** Why Claude Code carried on by itself: the helper or task that last finished, named once. */
+  private selfStartNotice(live: LiveProcess): string {
+    const finished = live.background?.lastFinished ?? null;
+    // Named once: a later turn it starts with no helper finished since is not this helper's.
+    if (live.background) live.background.lastFinished = null;
+    return finished === null
+      ? 'Carried on after a background task finished.'
+      : finished.kind === 'local_agent'
+        ? `Carried on after the helper "${finished.label}" reported back.`
+        : `Carried on after the background task "${finished.label}" finished.`;
   }
 
   /** A self-started turn, for the reply `req` describes: gated and mapped like a user's reply, from the output already buffered. */
@@ -767,6 +789,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.background ??= new BackgroundTasks(req.chatId, (event) => this.backgroundHandler?.(event));
     live.background.current = req.messageId;
     live.onIdle = (message) => this.handleIdle(live, message);
+    live.onClosed = (dropped) => this.reportDropped(live, dropped);
     // This reply's turn, up to its own result: attached before the message
     // goes, so nothing of it is missed and nothing else reaches it.
     const uuid = randomUUID();

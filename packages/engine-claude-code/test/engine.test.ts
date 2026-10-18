@@ -75,7 +75,8 @@ function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: nu
  * A fake long-lived Claude Code that takes notes: the test plays its output
  * with `emit`, every message pushed into its input is recorded, and it
  * answers cancelAsyncMessage with `cancelled`. `log` has its interrupt and
- * cancel calls in order (an interrupt with its arguments, if any).
+ * cancel calls in order (an interrupt with its arguments, if any). `end`
+ * ends its output, as a process that dies.
  */
 function noteQuery(o: { cancelled?: boolean } = {}) {
   const pushed: SDKUserMessage[] = [];
@@ -114,7 +115,7 @@ function noteQuery(o: { cancelled?: boolean } = {}) {
       accountInfo: async () => ({}),
     });
   };
-  return { query, pushed, log, cancels, emit };
+  return { query, pushed, log, cancels, emit, end };
 }
 const NOTE_CAPABILITIES = ['msg_lifecycle_v1', 'interrupt_cancel_queued_v1'];
 
@@ -2949,5 +2950,116 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     expect(await e.withdrawNote('n1')).toBe(false);
     expect(f.cancels).toEqual(['n1', 'n1']);
     e.dispose();
+  });
+
+  /**
+   * A first reply with notes `ids` sent into it, ended by its own result
+   * before Claude Code starts them; Claude Code then starts them, as the real
+   * CLI orders a late turn (the reply's lifecycle completed, each note's
+   * started, init), and the follow-on's text "Late" begins.
+   */
+  async function lateNotes(e: ClaudeCodeChatEngine, f: Fake, ids: string[]) {
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    for (const id of ids) expect(await e.sendToReply('m1', note(id))).toBe(true);
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle(first.uuid, 'completed'));
+    for (const id of ids) f.emit(lifecycle(id, 'started'));
+    f.emit({ ...(init() as object), capabilities: NOTE_CAPABILITIES });
+    f.emit(delta('Late'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    return { first, seen, starts: seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : [])) };
+  }
+
+  it('a note Claude Code runs after the reply ended comes as a follow-on self-start with its note id', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { first, starts } = await lateNotes(e, f, ['n1']);
+    expect(shape(first.events)).toEqual(['text A', 'finish']);
+    // Only the follow-on: nothing comes as an ordinary self-start.
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ chatId: 'chat', afterMessageId: 'm1', profileId: 'p', notice: '', unattended: false, noteIds: ['n1'] });
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    f.emit(delta(' reply'));
+    f.emit(resultNaming(['n1']));
+    await done;
+    expect(shape(events)).toEqual(['text Late', 'text  reply', 'finish']);
+    e.dispose();
+  });
+
+  it('two notes started together become one follow-on with both ids in order', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts } = await lateNotes(e, f, ['n1', 'n2']);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ notice: '', noteIds: ['n1', 'n2'] });
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    // Claude Code's result for a batched turn names both notes.
+    f.emit(resultNaming(['n1', 'n2']));
+    await done;
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    e.dispose();
+  });
+
+  it("a follow-on's result ends the follow-on", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts } = await lateNotes(e, f, ['n1']);
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    // The result names only the note, never a turn id of OtherBench's own: it still ends the follow-on.
+    f.emit(resultNaming(['n1']));
+    const outcome = await Promise.race([done.then(() => 'ended'), new Promise((resolve) => setTimeout(() => resolve('still running'), 200))]);
+    expect(outcome).toBe('ended');
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    // The process is free again: the session's next message runs in it, and the follow-on sees none of it.
+    const next = await running(e, f, followUp());
+    f.emit(resultNaming([next.uuid]));
+    await next.done;
+    expect(shape(next.events)).toEqual(['text A', 'finish']);
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    e.dispose();
+  });
+
+  it('closing a process with a queued note reports notes-dropped for its chat', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const r = await running(e, f, req({ chatId: 'chat-7' }));
+    await e.sendToReply('m1', note('n1'));
+    await e.sendToReply('m1', note('n2'));
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    // n2 was started but its turn never began; n1 was never started.
+    f.emit(lifecycle('n2', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+    // The process dies.
+    f.end();
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1));
+    expect(seen.find((ev) => ev.type === 'notes-dropped')).toEqual({ type: 'notes-dropped', chatId: 'chat-7', noteIds: ['n1', 'n2'] });
+    // Reported once: closing it afterwards reports nothing more.
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1);
+    expect(seen.some((ev) => ev.type === 'self-start')).toBe(false);
+  });
+
+  it('a process closed with nothing queued reports nothing', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
   });
 });
