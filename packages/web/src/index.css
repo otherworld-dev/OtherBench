@@ -242,10 +242,18 @@ body {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/*
+ * Inline code is usually the thing a reply is pointing at (a name, a path, a
+ * key), so it gets an accent-tinted chip rather than a sunken fill, which in
+ * dark is too close to --bg to see. The box, not underline, keeps it apart
+ * from links.
+ */
 .markdown-body code:not(pre code) {
-  background: var(--bg-sunken);
-  border-radius: 2px;
-  padding: 0.1em 0.35em;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: color-mix(in srgb, var(--accent) 45%, var(--text));
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
   font-size: 0.9em;
 }
 .markdown-body pre {
