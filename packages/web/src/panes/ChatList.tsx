@@ -238,7 +238,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     try {
       const chat = await api.chats.create(body);
       upsertChat(chat);
-      setActiveChatId(chat.id);
+      // A new chat is one to keep at hand, so it gets a tab rather than just taking over the pane.
+      openTab(chat.id);
     } catch (err) {
       console.error('[otherbench-web] failed to create chat:', err);
       setError(errorText(err, "Couldn't create the chat"));
