@@ -3049,6 +3049,79 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     expect(seen.some((ev) => ev.type === 'self-start')).toBe(false);
   });
 
+  it("a note whose turn ends before showing anything doesn't make a later helper's turn a follow-on", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    // Claude Code answers the note with nothing but a result (an early error).
+    f.emit(resultNaming(['n1'], 'error_during_execution'));
+    f.emit(lifecycle('n1', 'completed'));
+    // Then a background task's report starts a turn of its own.
+    f.emit(delta('Reviewing'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    const starts = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []));
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.noteIds).toBeUndefined();
+    expect(starts[0]!.notice).toBe('Carried on after a background task finished.');
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-self' }))) events.push(ev); })();
+    f.emit({ ...resultNaming([]), origin: { kind: 'task-notification' } });
+    const outcome = await Promise.race([done.then(() => 'ended'), new Promise((resolve) => setTimeout(() => resolve('still running'), 200))]);
+    expect(outcome).toBe('ended');
+    expect(shape(events)).toEqual(['text Reviewing', 'finish']);
+    // Claude Code answered n1: it isn't reported as dropped.
+    f.end();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+    e.dispose();
+  });
+
+  it("the session's next message waits while a started note's turn is about to begin, then runs with only its own output", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The user sends the next message before the note's turn shows anything.
+    const nextEvents: EngineEvent[] = [];
+    const nextDone = (async () => { for await (const ev of e.stream(followUp())) nextEvents.push(ev); })();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // It waits: nothing more is sent to Claude Code yet.
+    expect(f.pushed).toHaveLength(2);
+    f.emit({ ...(init() as object), capabilities: NOTE_CAPABILITIES });
+    f.emit(delta('Late'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    const start = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!;
+    expect(start.noteIds).toEqual(['n1']);
+    const lateEvents = await (async () => {
+      const out: EngineEvent[] = [];
+      const run = (async () => { for await (const ev of start.run(req({ messageId: 'm-late' }))) out.push(ev); })();
+      f.emit(resultNaming(['n1']));
+      await run;
+      return out;
+    })();
+    expect(shape(lateEvents)).toEqual(['text Late', 'finish']);
+    // Now the next message goes, and its reply reads only its own turn.
+    await vi.waitFor(() => expect(f.pushed).toHaveLength(3));
+    const uuid = uuidOf(f.pushed[2]!);
+    f.emit(delta('Mine'));
+    f.emit(resultNaming([uuid]));
+    await nextDone;
+    expect(shape(nextEvents)).toEqual(['text Mine', 'finish']);
+    e.dispose();
+  });
+
   it('a process closed with nothing queued reports nothing', async () => {
     const f = noteQuery();
     const e = engine(f.query);

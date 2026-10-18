@@ -238,6 +238,79 @@ describe('LiveProcess and notes', () => {
     expect(calls).toEqual([['n1', 'n2']]);
   });
 
+  /** A process with notes `ids` that Claude Code started after the reply's turn ended. */
+  async function started(ids: string[]) {
+    const p = process();
+    const feed = p.live.attach('u1');
+    for (const id of ids) p.live.notes.set(id, 'm1');
+    p.out.emit(result(['u1']));
+    await take(feed);
+    for (const id of ids) p.out.emit(lifecycle(id, 'started'));
+    await tick();
+    return p;
+  }
+
+  it("a started note keeps the process in a turn until its follow-on's result", async () => {
+    const { live, out } = await started(['n1']);
+    let free = false;
+    void live.whenFree().then(() => (free = true));
+    expect(live.inTurn).toBe(true);
+    await tick();
+    expect(free).toBe(false);
+    expect(live.takeStarting(text('late') as unknown as SDKMessage)).toEqual(['n1']);
+    const feed = live.attach('n1');
+    out.emit(text('late'));
+    await tick();
+    expect(free).toBe(false);
+    out.emit(result(['n1']));
+    await take(feed);
+    await tick();
+    expect(free).toBe(true);
+    expect(live.inTurn).toBe(false);
+  });
+
+  it('a result naming a started note whose turn showed nothing frees the process, as does its completion', async () => {
+    const { live, out } = await started(['n1', 'n2']);
+    let free = false;
+    void live.whenFree().then(() => (free = true));
+    out.emit(result(['n1']));
+    await tick();
+    expect(live.starting).toEqual(['n2']);
+    expect(free).toBe(false);
+    out.emit(lifecycle('n2', 'completed'));
+    await tick();
+    expect(live.starting).toEqual([]);
+    expect(free).toBe(true);
+  });
+
+  it("takeStarting takes the notes a turn's first frame runs, and none for a background task's turn or another message's", async () => {
+    const { live } = await started(['n1', 'n2']);
+    const frame = (o: object) => ({ ...text('x'), ...o }) as unknown as SDKMessage;
+    expect(live.takeStarting(frame({ origin: { kind: 'task-notification' } }))).toEqual([]);
+    expect(live.takeStarting(frame({ user_message_uuid: 'tn-1' }))).toEqual([]);
+    expect(live.starting).toEqual(['n1', 'n2']);
+    expect(live.takeStarting(frame({ user_message_uuids: ['n2'] }))).toEqual(['n2']);
+    expect(live.starting).toEqual(['n1']);
+    // A frame naming no message is the started notes' turn.
+    expect(live.takeStarting(frame({}))).toEqual(['n1']);
+    expect(live.takeStarting(frame({}))).toEqual([]);
+  });
+
+  it('takeWhenFree waits for a pooled process whose started note has not begun its turn', async () => {
+    const pool = new LivePool(60_000, 3);
+    const { live, out } = await started(['n1']);
+    live.sessionId = 's1';
+    pool.release(live);
+    let taken: LiveProcess | null | undefined;
+    void pool.takeWhenFree('s1', 'key').then((p) => (taken = p));
+    await tick();
+    expect(taken).toBeUndefined();
+    out.emit(result(['n1']));
+    await tick();
+    await tick();
+    expect(taken).toBe(live);
+  });
+
   it('reports dropped notes when the output ends', async () => {
     const { live, out } = process();
     const calls: string[][] = [];

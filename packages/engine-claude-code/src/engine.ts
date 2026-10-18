@@ -416,12 +416,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /**
    * What Claude Code does while no reply is attached to the process. A turn
-   * beginning after Claude Code started notes is theirs (a follow-on); any
-   * other is one it began by itself.
+   * running notes Claude Code started is theirs (a follow-on, see
+   * LiveProcess.takeStarting); any other is one it began by itself.
    */
   private handleIdle(live: LiveProcess, message: SDKMessage): void {
     if (!startsOwnTurn(message)) return;
-    this.selfStart(live, message, live.starting.length > 0 ? live.starting.splice(0) : undefined);
+    const notes = live.takeStarting(message);
+    this.selfStart(live, message, notes.length > 0 ? notes : undefined);
   }
 
   /** Tells the server which notes a process that closed never read, for its chat. Never throws: the process calls it unguarded. */

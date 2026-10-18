@@ -91,11 +91,17 @@ export const SELF_TURN_PREFIX = 'self-';
  * a turn carries on to its own result.
  */
 function resultFor(msg: SDKMessage, uuid: string): boolean {
-  const m = msg as unknown as { type?: unknown; user_message_uuid?: unknown; user_message_uuids?: unknown; origin?: { kind?: unknown } };
+  const m = msg as unknown as { type?: unknown; origin?: { kind?: unknown } };
   if (m.type !== 'result') return false;
   if (m.origin?.kind === 'task-notification') return uuid.startsWith(SELF_TURN_PREFIX);
-  const named = [...(typeof m.user_message_uuid === 'string' ? [m.user_message_uuid] : []), ...(Array.isArray(m.user_message_uuids) ? m.user_message_uuids : [])];
+  const named = messagesNamed(msg);
   return named.length === 0 || named.includes(uuid);
+}
+
+/** The messages of ours a frame says its turn answers (`user_message_uuid(s)`, on results and on a turn's frames). */
+function messagesNamed(msg: SDKMessage): string[] {
+  const m = msg as unknown as { user_message_uuid?: unknown; user_message_uuids?: unknown };
+  return [...(typeof m.user_message_uuid === 'string' ? [m.user_message_uuid] : []), ...(Array.isArray(m.user_message_uuids) ? m.user_message_uuids.filter((u): u is string => typeof u === 'string') : [])];
 }
 
 /** The synthetic message the pump puts in a reply's feed when Claude Code starts reading a note mid-turn. */
@@ -237,7 +243,12 @@ export class LiveProcess {
           } else if (life.state === 'cancelled' || life.state === 'completed') {
             this.notes.delete(life.uuid);
           }
+        } else if (life && (life.state === 'cancelled' || life.state === 'completed')) {
+          // A started note whose turn never began here (it ended at once): nothing waits for it now.
+          this.forgetStarting([life.uuid]);
         }
+        // Likewise a result naming a started note whose turn showed nothing before it (an early error).
+        if ((next.value as { type?: unknown }).type === 'result') this.forgetStarting(messagesNamed(next.value));
         if (turn && (next.value as { type?: unknown }).type === 'result' && !resultFor(next.value, turn.uuid)) {
           // Another turn's result (one Claude Code ran by itself) never ends this reply.
           this.onIdle(next.value);
@@ -272,7 +283,34 @@ export class LiveProcess {
     const dropped = [...this.notes.keys(), ...this.starting];
     this.notes.clear();
     this.starting.length = 0;
+    this.wakeIfFree();
     this.onClosed(dropped);
+  }
+
+  /** Takes `ids` out of `starting`: their turns are over (or never came). */
+  private forgetStarting(ids: string[]): void {
+    if (!ids.some((id) => this.starting.includes(id))) return;
+    const left = this.starting.filter((id) => !ids.includes(id));
+    this.starting.splice(0, this.starting.length, ...left);
+    this.wakeIfFree();
+  }
+
+  /**
+   * The started notes whose turn begins with `message` (a main-agent frame
+   * read while nothing is attached), taken out of `starting`; [] when it isn't
+   * theirs. A turn Claude Code runs for a background task (origin
+   * 'task-notification') isn't, nor one whose frame names only other
+   * messages. A frame naming none is taken to be theirs: Claude Code runs a
+   * note it started next. The caller attaches the turn at once.
+   */
+  takeStarting(message: SDKMessage): string[] {
+    if (this.starting.length === 0) return [];
+    if ((message as unknown as { origin?: { kind?: unknown } }).origin?.kind === 'task-notification') return [];
+    const named = messagesNamed(message);
+    if (named.length === 0) return this.starting.splice(0);
+    const theirs = this.starting.filter((id) => named.includes(id));
+    if (theirs.length > 0) this.starting.splice(0, this.starting.length, ...this.starting.filter((id) => !named.includes(id)));
+    return theirs;
   }
 
   /**
@@ -303,14 +341,26 @@ export class LiveProcess {
     return feed;
   }
 
-  get isAttached(): boolean {
-    return this.attached !== null;
+  /**
+   * Whether a turn is running in this process or about to: one is attached,
+   * or Claude Code started a note whose turn hasn't begun (its frames would
+   * reach any reply that attached meanwhile).
+   */
+  get inTurn(): boolean {
+    return this.attached !== null || this.starting.length > 0;
   }
 
-  /** Resolves once no reply is attached. */
+  /** Resolves once no turn is running or about to (see `inTurn`). */
   whenFree(): Promise<void> {
-    if (!this.attached) return Promise.resolve();
+    if (!this.inTurn) return Promise.resolve();
     return new Promise((resolve) => this.freeWaiters.push(resolve));
+  }
+
+  private wakeIfFree(): void {
+    if (this.inTurn) return;
+    const waiters = this.freeWaiters;
+    this.freeWaiters = [];
+    for (const wake of waiters) wake();
   }
 
   private detach(): void {
@@ -318,9 +368,7 @@ export class LiveProcess {
     this.attached.feed.end();
     this.attached = null;
     if (this.background) this.background.current = null;
-    const waiters = this.freeWaiters;
-    this.freeWaiters = [];
-    for (const wake of waiters) wake();
+    this.wakeIfFree();
   }
 
   get isClosed(): boolean {
@@ -384,14 +432,15 @@ export class LivePool {
 
   /**
    * The pooled process on `sessionId`, if its options match `key`; it's now
-   * busy. One running a turn Claude Code started by itself is waited for
-   * first, unless `signal` (the reply's) aborts meanwhile: then nothing is
-   * taken and the process stays for the next message. A mismatched one is
-   * closed.
+   * busy. One running a turn it didn't start for this reply (Claude Code's
+   * own, or a note's follow-on, also while that is about to begin: `inTurn`)
+   * is waited for first, unless `signal` (the reply's) aborts meanwhile:
+   * then nothing is taken and the process stays for the next message. A
+   * mismatched one is closed.
    */
   async takeWhenFree(sessionId: string, key: string, signal?: AbortSignal): Promise<LiveProcess | null> {
     const waiting = this.idle.get(sessionId);
-    if (waiting?.isAttached) {
+    if (waiting?.inTurn) {
       await Promise.race([waiting.whenFree(), abortedPromise(signal)]);
       if (signal?.aborted) return null;
     }
@@ -410,15 +459,15 @@ export class LivePool {
   /**
    * Makes room for one more process: closes the longest-idle ones past the
    * cap, any running background tasks last. One running a turn (a stopped
-   * reply's, or one Claude Code started by itself) is never closed: the cap
-   * is exceeded until it ends.
+   * reply's, one Claude Code started by itself, or a note's follow-on, also
+   * about to begin) is never closed: the cap is exceeded until it ends.
    */
   makeRoom(): void {
     while (this.idle.size >= this.max) {
       let oldest: [string, LiveProcess] | null = null;
       const rank = (live: LiveProcess): number => (live.background?.running ? 1 : 0);
       for (const entry of this.idle) {
-        if (entry[1].isAttached) continue;
+        if (entry[1].inTurn) continue;
         if (!oldest || rank(entry[1]) < rank(oldest[1]) || (rank(entry[1]) === rank(oldest[1]) && entry[1].lastUsed < oldest[1].lastUsed)) oldest = entry;
       }
       if (!oldest) return;
@@ -453,7 +502,7 @@ export class LivePool {
   /** Closes an idle process after idleMs, unless it has background tasks running (then it looks again later). */
   private armIdleTimer(live: LiveProcess): void {
     live.idleTimer = setTimeout(() => {
-      if (live.background?.running || live.isAttached) {
+      if (live.background?.running || live.inTurn) {
         this.armIdleTimer(live);
         return;
       }
