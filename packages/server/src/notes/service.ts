@@ -41,6 +41,12 @@ export interface SendNoteInput {
 /** A waiting note. The holder stays the same when the note changes path. */
 interface Held {
   note: ReplyNote;
+  /**
+   * The user message notes delivered after this one was sent made under its
+   * parent: the composer hadn't shown them yet, so its turn goes on from
+   * there rather than beside them.
+   */
+  follows?: string;
 }
 
 /**
@@ -278,17 +284,19 @@ export class NotesService {
   }
 
   private async sendAsTurn(chatId: string, due: Held[]): Promise<void> {
-    const notes = this.startDelivering(chatId, due);
     // The first note's parent and profiles: what the composer showed when the user started sending.
+    const parentId = this.turnParent(due[0]!);
+    const notes = this.startDelivering(chatId, due);
     const first = notes[0]!;
     let sent = false;
     try {
-      const parent = first.parentId === null ? null : this.store.messages.get(first.parentId);
-      if (first.parentId !== null && parent?.chatId !== chatId) throw new Error(`the message they follow (${first.parentId}) is gone`);
+      const parent = parentId === null ? null : this.store.messages.get(parentId);
+      if (parentId !== null && parent?.chatId !== chatId) throw new Error(`the message they follow (${parentId}) is gone`);
       if (first.profileIds.length === 0) throw new Error('no profile was picked');
       const profiles = await Promise.all(first.profileIds.map((id) => this.resolveProfile(id)));
       // TurnRunner.run binds the notes' attachments to the new user message.
-      await this.startTurn({ chatId, parentId: first.parentId, userParts: notesToParts(notes), profiles });
+      const { userMessageId } = await this.startTurn({ chatId, parentId, userParts: notesToParts(notes), profiles });
+      this.delivered(chatId, parentId, userMessageId);
       sent = true;
     } catch (err) {
       console.error(`[otherbench-server] could not send the notes waiting in chat ${chatId}; they go back to the message box:`, err);
@@ -327,6 +335,7 @@ export class NotesService {
         if (!ran) start.decline();
       },
     });
+    this.delivered(chat.id, after.id, userMessageId);
     try {
       this.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
       // The head goes to the new user message, as a normal send does.
@@ -336,6 +345,34 @@ export class NotesService {
       console.error(`[otherbench-server] could not announce the follow-on reply ${assistantMessageId}:`, err);
     }
     return true;
+  }
+
+  /** Notes went out as user message `userMessageId` under `parentId`: notes still waiting on that parent go on from it. */
+  private delivered(chatId: string, parentId: string | null, userMessageId: string): void {
+    for (const held of this.waitingIn(chatId)) {
+      if (held.follows === undefined && held.note.parentId === parentId) held.follows = userMessageId;
+    }
+  }
+
+  /**
+   * Where a turn made from `held` goes: its parent, or, when notes delivered
+   * after it was sent went under that parent, the tail of their branch
+   * (following single children, as the thread's tail does). An unresolved
+   * compare turn there leaves it on its parent: which variant to go on from
+   * is the user's call.
+   */
+  private turnParent(held: Held): string | null {
+    if (held.follows === undefined) return held.note.parentId;
+    let id = held.follows;
+    const seen = new Set([id]);
+    for (;;) {
+      const children = this.store.messages.children(id);
+      const only = children.length === 1 ? children[0]! : undefined;
+      if (!only || seen.has(only.id)) break;
+      id = only.id;
+      seen.add(id);
+    }
+    return this.store.messages.get(id)?.role === 'assistant' ? id : held.note.parentId;
   }
 
   /** Moves notes from waiting to in flight. They stay listed, so the set clients see doesn't change. */

@@ -518,7 +518,7 @@ describe('NotesService', () => {
     expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [waiting], noteOutcomes: [] });
   });
 
-  it('wait notes hold while a live note waits for its follow-on, then go after it', async () => {
+  it('wait notes hold while a live note waits for its follow-on, then go after it, under its reply', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
     const live = (await ctx.notes.send(input({ text: 'live', parentId: r! })))!;
@@ -533,7 +533,8 @@ describe('NotesService', () => {
     await ctx.ended(reply!.id);
 
     await vi.waitFor(() => expect(ctx.startTurnSpy).toHaveBeenCalledTimes(1));
-    expect(ctx.startTurnSpy.mock.calls[0]![0]).toMatchObject({ parentId: r, userParts: [{ type: 'text', text: 'waiting' }], profiles: [{ id: 'p2' }] });
+    // Not beside the follow-on, which would move the head away from the answer just shown.
+    expect(ctx.startTurnSpy.mock.calls[0]![0]).toMatchObject({ parentId: reply!.id, userParts: [{ type: 'text', text: 'waiting' }], profiles: [{ id: 'p2' }] });
     await vi.waitFor(() => expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[live.id, 'turn'], [waiting.id, 'turn']]));
   });
 
@@ -601,6 +602,50 @@ describe('NotesService', () => {
 
     expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[first.id, 'turn'], [during.id, 'returned']]);
     expect(ctx.startTurnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a note sent while earlier notes go out as a turn follows that turn instead of forking beside it', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    await ctx.notes.send(input({ text: 'first', parentId: r!, profileIds: ['p2'] }));
+    let release!: (p: ResolvedProfile) => void;
+    ctx.resolveProfile.mockImplementationOnce(() => new Promise<ResolvedProfile>((resolve) => (release = resolve)));
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    await vi.waitFor(() => expect(ctx.resolveProfile).toHaveBeenCalledTimes(1));
+    // The composer still shows r: the first notes' turn hasn't reached it yet.
+    await ctx.notes.send(input({ text: 'during', parentId: r!, profileIds: ['p2'] }));
+    release(profile('p2'));
+    await vi.waitFor(() => expect(ctx.resolved()).toHaveLength(1));
+    const turn = (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
+
+    ctx.engine.finish(turn.assistantMessageIds[0]!);
+
+    await vi.waitFor(() => expect(ctx.startTurnSpy).toHaveBeenCalledTimes(2));
+    expect(ctx.startTurnSpy.mock.calls[1]![0]).toMatchObject({ parentId: turn.assistantMessageIds[0], userParts: [{ type: 'text', text: 'during' }] });
+    const next = (await ctx.startTurnSpy.mock.results[1]!.value) as Awaited<ReturnType<typeof startTurn>>;
+    expect(ctx.store.chats.get('chat-1')!.headMessageId).toBe(next.userMessageId);
+    expect(ctx.store.messages.children(r!).map((m) => m.id)).toEqual([turn.userMessageId]);
+  });
+
+  it("a note that would follow an unresolved compare turn goes where it was sent: which variant to go on from is the user's call", async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    await ctx.notes.send(input({ text: 'first', parentId: r!, profileIds: ['p1', 'p2'] }));
+    let release!: (p: ResolvedProfile) => void;
+    ctx.resolveProfile.mockImplementationOnce(() => new Promise<ResolvedProfile>((resolve) => (release = resolve)));
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    await vi.waitFor(() => expect(ctx.resolveProfile).toHaveBeenCalled());
+    await ctx.notes.send(input({ text: 'during', parentId: r!, profileIds: ['p2'] }));
+    release(profile('p1'));
+    await vi.waitFor(() => expect(ctx.resolved()).toHaveLength(1));
+    const turn = (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
+
+    for (const id of turn.assistantMessageIds) ctx.engine.finish(id);
+
+    await vi.waitFor(() => expect(ctx.startTurnSpy).toHaveBeenCalledTimes(2));
+    expect(ctx.startTurnSpy.mock.calls[1]![0]).toMatchObject({ parentId: r, userParts: [{ type: 'text', text: 'during' }] });
   });
 
   it('notes being made into a follow-on stay listed until resolved', async () => {
