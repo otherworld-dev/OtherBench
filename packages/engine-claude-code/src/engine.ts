@@ -15,7 +15,7 @@ import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
 import { HelperStopError, type ChatEngine, type ConnectionTestResult, type DiscoveredModel, type EngineBackgroundEvent, type EngineEvent, type EngineRequest, type SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
-import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { CanonMessage, NoteAttachment, Part } from '@otherbench/core/types/messages.js';
 import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
@@ -27,7 +27,7 @@ import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
 import { claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
+import { LivePool, LiveProcess, liveKey, NOTE_PICKED, PromptQueue, type NotePickedMessage, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
 import { toPlanUsage } from './plan-usage.js';
 import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
@@ -35,7 +35,14 @@ import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
-  interrupt(): Promise<unknown>;
+  /**
+   * Stops the running turn. `cancelQueued` also drops every message still
+   * queued (sent as `cancel_queued`); untyped in SDK 0.3.287, so only passed
+   * when init's capabilities list `interrupt_cancel_queued_v1`.
+   */
+  interrupt(opts?: { cancelQueued?: boolean }): Promise<unknown>;
+  /** Drops one queued message by its uuid: true when it was still queued, false once started. Untyped in SDK 0.3.287. */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
   /** Stops one background task (a helper, a background command) by Claude Code's task id. */
   stopTask?(taskId: string): Promise<unknown>;
   /** Switches the running Claude Code's permission mode. */
@@ -141,6 +148,12 @@ type PendingNotice = { text: string | null };
 
 type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
+/** The note Claude Code started reading, when `message` is the pump's NOTE_PICKED (live.ts); else null. */
+function pickedNote(message: SDKMessage): string | null {
+  const m = message as unknown as Partial<NotePickedMessage>;
+  return m.type === NOTE_PICKED && typeof m.noteId === 'string' ? m.noteId : null;
+}
+
 /**
  * Whether a message read while no reply is attached begins a turn of the
  * main agent: Claude Code carrying on by itself. A helper's own messages
@@ -241,6 +254,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private backgroundHandler: ((event: EngineBackgroundEvent) => void) | null = null;
   /** Each chat's last command list from a live process, so the menu has one while no process is running. */
   private readonly commandLists = new Map<string, CommandRow[]>();
+  /** The replies running now (a user's or a self-started one), by message id: where a note sent to one goes. */
+  private readonly running = new Map<string, { live: LiveProcess; req: EngineRequest }>();
 
   constructor(private readonly deps: ClaudeCodeEngineDeps) {
     this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
@@ -291,6 +306,81 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Pushes a note into the running reply's Claude Code with the note's id as
+   * its uuid, so its command lifecycle says where it was read (live.ts).
+   * False when the reply isn't running here, or this Claude Code doesn't
+   * report a message's lifecycle.
+   */
+  async sendToReply(messageId: string, note: { id: string; text: string; attachments: NoteAttachment[] }): Promise<boolean> {
+    const run = this.running.get(messageId);
+    if (!run || run.live.isClosed || run.req.signal.aborted || !run.live.capabilities.includes('msg_lifecycle_v1')) return false;
+    const content = await this.noteContent(run.req, note);
+    // The reply may have ended while its images were read.
+    if (this.running.get(messageId) !== run || run.live.isClosed || run.req.signal.aborted) return false;
+    run.live.notes.set(note.id, messageId);
+    run.live.input.push(userMessage(content, note.id));
+    return true;
+  }
+
+  /** Takes back a note Claude Code hasn't started. False when no process holds it, it can't cancel one, or it had already started. */
+  async withdrawNote(noteId: string): Promise<boolean> {
+    const live = [...this.processes].find((p) => !p.isClosed && p.notes.has(noteId));
+    if (!live?.query.cancelAsyncMessage) return false;
+    const cancelled = await live.query.cancelAsyncMessage(noteId);
+    if (cancelled) live.notes.delete(noteId);
+    return cancelled;
+  }
+
+  /**
+   * A note as content blocks: its text, then its images. A file, or an image
+   * over the per-file cap or whose bytes aren't an image, becomes a line in
+   * the text instead: Claude Code turns only take images.
+   */
+  private async noteContent(req: EngineRequest, note: { text: string; attachments: NoteAttachment[] }): Promise<ContentBlock[]> {
+    const lines = note.text ? [note.text] : [];
+    const images: ContentBlock[] = [];
+    const notSent = (a: NoteAttachment): void => {
+      lines.push(`(${listedName(a.filename) || 'unnamed file'} wasn't sent: Claude Code only takes images.)`);
+    };
+    for (const a of note.attachments) {
+      const size = req.attachmentSize?.(a.attachmentId);
+      if (!a.mime.startsWith('image/') || !req.loadAttachment || (typeof size === 'number' && size > MAX_REQUEST_ATTACHMENT_BYTES)) {
+        notSent(a);
+        continue;
+      }
+      const bytes = await req.loadAttachment(a.attachmentId);
+      const mediaType = bytes.length > MAX_REQUEST_ATTACHMENT_BYTES ? null : sniffToolImageMime(bytes);
+      if (mediaType === null) notSent(a);
+      else images.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
+    }
+    return [...(lines.length > 0 ? [{ type: 'text' as const, text: lines.join('\n') }] : []), ...images];
+  }
+
+  /** Stops the turn on `live` for reply `messageId`, dropping its notes still queued in Claude Code. */
+  private stopTurn(live: LiveProcess, messageId: string): void {
+    if (live.capabilities.includes('interrupt_cancel_queued_v1')) {
+      void live.query.interrupt({ cancelQueued: true }).catch(() => live.close());
+      this.forgetNotes(live, messageId);
+    } else {
+      // An older Claude Code drops them one by one, first, so none starts as the turn ends.
+      this.cancelNotes(live, messageId);
+      void live.query.interrupt().catch(() => live.close());
+    }
+  }
+
+  /** Forgets reply `messageId`'s notes Claude Code hasn't started. */
+  private forgetNotes(live: LiveProcess, messageId: string): string[] {
+    const ids = [...live.notes].flatMap(([id, owner]) => (owner === messageId ? [id] : []));
+    for (const id of ids) live.notes.delete(id);
+    return ids;
+  }
+
+  /** Cancels reply `messageId`'s unstarted notes in Claude Code, so none runs after a reply that didn't finish, and forgets them. */
+  private cancelNotes(live: LiveProcess, messageId: string): void {
+    for (const id of this.forgetNotes(live, messageId)) void live.query.cancelAsyncMessage?.(id).catch(() => undefined);
   }
 
   /**
@@ -390,16 +480,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
     const mapper = this.replyMapper(live, req, prepared.helpers);
+    this.running.set(req.messageId, { live, req });
     let stopped!: () => void;
     const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
     const onAbort = (): void => {
-      void live.query.interrupt().catch(() => live.close());
+      this.stopTurn(live, req.messageId);
       stopped();
     };
     req.signal.addEventListener('abort', onAbort, { once: true });
     if (req.signal.aborted) onAbort();
     let pending: Promise<IteratorResult<SDKMessage>> | null = null;
     let ended = false;
+    // The turn ended in its own successful result: notes still queued then run as a follow-on.
+    let finished = false;
     try {
       yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, cwd, tools: [], mcpServers: [] } };
       for (;;) {
@@ -418,6 +511,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           }
           break;
         }
+        const picked = pickedNote(next.value);
+        if (picked !== null) {
+          yield { type: 'note-picked', noteId: picked };
+          continue;
+        }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init' || event.type === 'rate-limited') continue;
@@ -430,14 +528,17 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId }) };
             continue;
           }
+          if (event.type === 'finish') finished = true;
           yield event;
         }
         if (ended) break;
       }
     } finally {
+      this.running.delete(req.messageId);
       prepared.tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       live.binding = null;
+      if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
       // Stopped mid-turn: read the rest in the background (the process stays pooled, as it already is).
       if (req.signal.aborted && !ended && !live.isClosed) void this.finishSelfStopped(live, feed, pending);
     }
@@ -676,11 +777,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     let stopped!: () => void;
     const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
     const onAbort = (): void => {
-      void live.query.interrupt().catch(() => live.close());
+      this.stopTurn(live, req.messageId);
       stopped();
     };
     req.signal.addEventListener('abort', onAbort, { once: true });
     live.input.push(userMessage(content, uuid));
+    this.running.set(req.messageId, { live, req });
 
     const mapper = this.replyMapper(live, req, helpers);
     let sawInit = false;
@@ -703,6 +805,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           // The output ended (the process died) unless this turn's result was the last thing.
           if (live.failure !== null && !ended) throw live.failure;
           break;
+        }
+        const picked = pickedNote(next.value);
+        if (picked !== null) {
+          yield { type: 'note-picked', noteId: picked };
+          continue;
         }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
@@ -771,6 +878,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      this.running.delete(req.messageId);
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {
@@ -787,6 +895,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       } else {
         live.close();
       }
+      // A reply that didn't finish cleanly leaves no note to run after it (a closed process takes them with it).
+      if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
       if (live.isClosed) this.processes.delete(live);
     }
     return 'done';

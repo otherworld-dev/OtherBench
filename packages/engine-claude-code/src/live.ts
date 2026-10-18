@@ -41,7 +41,10 @@ export class PromptQueue implements AsyncIterable<SDKUserMessage> {
 
 /** What a live process reads from: Claude Code's output, and the controls of the query that produces it. */
 export type LiveQuery = AsyncIterable<SDKMessage> & {
-  interrupt(): Promise<unknown>;
+  /** `cancelQueued` also drops the queued messages (untyped in SDK 0.3.287; see QueryFn). */
+  interrupt(opts?: { cancelQueued?: boolean }): Promise<unknown>;
+  /** Drops one queued message by uuid; true when it was still queued (untyped in SDK 0.3.287). */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
   stopTask?(taskId: string): Promise<unknown>;
   /** Switches the running Claude Code's permission mode (what VS Code does when its mode changes). */
   setPermissionMode?(mode: PermissionMode): Promise<unknown>;
