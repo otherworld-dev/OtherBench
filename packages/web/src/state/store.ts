@@ -49,6 +49,9 @@ export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
 
+/** A note on its way back to the box; `takenBack` when the user took it back, rather than it not being sent. */
+export type ReturnedNote = ReplyNote & { takenBack?: true };
+
 export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
   connections: Connection[];
@@ -218,12 +221,14 @@ export interface OtherBenchState {
   chatNotes: Record<string, ReplyNote[]>;
   /** The notes this tab sent that haven't been resolved yet, by id. */
   sentNotes: Record<string, ReplyNote>;
-  /** Notes handed back to this tab's composer (a stopped or lost reply), not yet taken. */
-  returnedNotes: ReplyNote[];
+  /** Notes handed back to this tab's composer (a stopped or lost reply, or one taken back), not yet taken. */
+  returnedNotes: ReturnedNote[];
   /** This tab sent a note: remember it until it resolves. */
   noteSent(note: ReplyNote): void;
+  /** A waiting note was taken back from this tab: forget it as sent, and hand it to the composer. */
+  noteTakenBack(note: ReplyNote): void;
   /** The chat's returned notes, removed from the store: the composer puts them back in the box. */
-  takeReturnedNotes(chatId: string): ReplyNote[];
+  takeReturnedNotes(chatId: string): ReturnedNote[];
   /**
    * The chat stream's hello. A note this tab sent that the server no longer
    * holds goes back to the composer if it was `returned` or the server has no
@@ -639,6 +644,11 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   sentNotes: {},
   returnedNotes: [],
   noteSent: (note) => set((state) => ({ sentNotes: { ...state.sentNotes, [note.id]: note } })),
+  noteTakenBack: (note) =>
+    set((state) => {
+      const { [note.id]: _taken, ...sentNotes } = state.sentNotes;
+      return { sentNotes, returnedNotes: [...state.returnedNotes, { ...note, takenBack: true }] };
+    }),
   takeReturnedNotes: (chatId) => {
     const taken = get().returnedNotes.filter((n) => n.chatId === chatId);
     if (taken.length > 0) set((state) => ({ returnedNotes: state.returnedNotes.filter((n) => n.chatId !== chatId) }));

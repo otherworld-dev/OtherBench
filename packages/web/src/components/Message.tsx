@@ -16,6 +16,7 @@ import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
 import { SubagentCard, subagentDisplayStatus } from './SubagentCard.js';
 import { TodoChecklist } from './TodoChecklist.js';
+import { UserNoteBlock } from './UserNoteBlock.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { browserCallLabel, browserPageOf, displayLines, oneLine } from '../viewer/browser.js';
 import { useViewer } from '../viewer/ViewerContext.js';
@@ -325,6 +326,8 @@ function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element
       return <NoticeBlock key={key} text={part.text} />;
     case 'context-summary':
       return <ContextSummaryBlock key={key} part={part} />;
+    case 'user-note':
+      return <UserNoteBlock key={key} part={part} />;
     case 'image':
     case 'file':
       return (

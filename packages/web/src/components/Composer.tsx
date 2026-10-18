@@ -3,15 +3,31 @@ import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
 import { promptHistory } from '../lib/promptHistory.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
 import { useChatCommands } from '../state/useChatCommands.js';
-import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { parseContextCommand, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
+
+/** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
+type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
+
+/** Said when a command is sent while a reply runs (the server's own refusal says the same). */
+const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before sending a command.';
+/** Said above the box when a message sent while a reply ran comes back into it. */
+const NOTE_RETURNED = "Not sent: the reply ended before it was read. It's back in the box.";
+
+/** Whether typed text is a command: /clear or /compact (and their aliases), or a Claude Code command the `/` menu offers. */
+function isCommandText(text: string, commands: CommandRow[]): boolean {
+  if (parseContextCommand(text)) return true;
+  const name = /^\/(\S+)/.exec(text.trim())?.[1]?.toLowerCase();
+  return name !== undefined && commands.some((c) => [c.name, ...c.aliases].some((n) => n.toLowerCase() === name));
+}
 
 /**
  * The `Part` an uploaded attachment becomes on the outgoing message (task
@@ -20,7 +36,7 @@ import { remoteUnreachable } from '../state/machines.js';
  * real visual content or degrade -- `file` for everything else (PDFs, text,
  * CSVs, ...), which `toModelMessages` sends as file content unconditionally.
  */
-function attachmentToPart(attachment: PublicAttachment): Part {
+function attachmentToPart(attachment: ChipAttachment): Part {
   return attachment.mime.startsWith('image/')
     ? { type: 'image', attachmentId: attachment.id, mime: attachment.mime }
     : { type: 'file', attachmentId: attachment.id, mime: attachment.mime, filename: attachment.filename };
@@ -113,7 +129,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [pickerOpen, setPickerOpen] = useState(false);
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>(() => (chat.profileId ? [chat.profileId] : []));
-  const [attachments, setAttachments] = useState<PublicAttachment[]>([]);
+  const [attachments, setAttachments] = useState<ChipAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -122,6 +138,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [effortError, setEffortError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [noteReturned, setNoteReturned] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
   const [planSaving, setPlanSaving] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -193,6 +210,25 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     [messages, chat.id]
   );
   const isStreaming = inFlightIds.length > 0;
+  // While a reply runs, or messages sent during one still wait, Send makes a note (spec 2026-10-18-send-while-replying-design).
+  const waitingCount = useOtherBenchStore((s) => s.chatNotes[chat.id]?.length ?? 0);
+  const busy = isStreaming || waitingCount > 0;
+  const noteSent = useOtherBenchStore((s) => s.noteSent);
+
+  // A note that comes back (a stopped or lost reply, or one taken back) goes after the draft, its attachments as chips again.
+  const returnedCount = useOtherBenchStore((s) => s.returnedNotes.filter((n) => n.chatId === chat.id).length);
+  useEffect(() => {
+    if (returnedCount === 0) return;
+    const taken = useOtherBenchStore.getState().takeReturnedNotes(chat.id);
+    if (taken.length === 0) return;
+    setText((draft) => [draft, ...taken.map((n) => n.text)].filter((t) => t.trim().length > 0).join('\n\n'));
+    setBrowsing(null);
+    setAttachments((prev) => [
+      ...prev,
+      ...taken.flatMap((n) => n.attachments).filter((a) => !prev.some((p) => p.id === a.attachmentId)).map((a) => ({ id: a.attachmentId, filename: a.filename, mime: a.mime })),
+    ]);
+    if (taken.some((n) => !n.takenBack)) setNoteReturned(true);
+  }, [returnedCount, chat.id]);
 
   async function handleStop(): Promise<void> {
     await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[otherbench-web] failed to cancel ${id}:`, err))));
@@ -359,16 +395,60 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   async function handleSend(): Promise<void> {
     const trimmed = text.trim();
     if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
-    // The same rules as the Send button, which Enter reaches without: never
-    // while a reply is still running (that would start a second reply beside
-    // it). A Claude Code chat with no folder is a clean chat and may send.
-    if (isStreaming || folderUnresolved || elsewhereUnreachable) return;
+    // The same rules as the Send button, which Enter reaches without. A
+    // Claude Code chat with no folder is a clean chat and may send.
+    if (folderUnresolved || elsewhereUnreachable) return;
+    // A message sent while a reply runs waits for it or goes into it; a command can't.
+    if (busy && claudeCodeProfiles.length > 0 && isCommandText(trimmed, chatCommands.commands)) {
+      setSendError(COMMAND_MID_REPLY);
+      return;
+    }
 
     setSending(true);
     // A stale remove-failure message from before this send must not linger
     // over the (possibly different) attachments actually being sent now.
     setRemoveError(null);
     setSendError(null);
+    try {
+      // The chat went quiet between the click and the server: a normal message after all.
+      if (!busy || !(await sendNote(trimmed))) await sendTurn(trimmed);
+      setNoteReturned(false);
+      // Only what was sent: a note that came back meanwhile went after it, and stays.
+      const sentIds = new Set(attachments.map((a) => a.id));
+      setText((now) => (now.startsWith(text) ? now.slice(text.length).trimStart() : now));
+      setBrowsing(null);
+      setAttachments((now) => now.filter((a) => !sentIds.has(a.id)));
+      textareaRef.current?.focus();
+    } catch (err) {
+      console.error('[otherbench-web] failed to send:', err);
+      // The message stays in the box to send again; say why it didn't go.
+      setSendError(
+        err instanceof ApiError ? (err.kind === 'command' ? err.message : `Couldn't send: ${err.message}`) : "Couldn't send the message. Please try again."
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  /** Sends the box as a note to the running reply; false when the server says nothing is running (send it as a turn). */
+  async function sendNote(trimmed: string): Promise<boolean> {
+    try {
+      const note = await api.notes.send(chat.id, {
+        text: trimmed,
+        attachments: attachments.map((a) => ({ attachmentId: a.id })),
+        parentId: parentId ?? chat.headMessageId,
+        profileIds: selectedProfileIds,
+        clientId: CLIENT_ID,
+      });
+      noteSent(note);
+      return true;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.kind === 'idle') return false;
+      throw err;
+    }
+  }
+
+  async function sendTurn(trimmed: string): Promise<void> {
     const parts: Part[] = [
       ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
       ...attachments.map(attachmentToPart),
@@ -376,40 +456,27 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // The effective tail to parent this turn on -- see ComposerProps.parentId's
     // doc for why this must NOT just be chat.headMessageId.
     const effectiveParentId = parentId ?? chat.headMessageId;
-    try {
-      const result = await api.turns.create(chat.id, { parentId: effectiveParentId, parts, profileIds: selectedProfileIds });
+    const result = await api.turns.create(chat.id, { parentId: effectiveParentId, parts, profileIds: selectedProfileIds });
 
-      // What the server stored and ran, not what was typed: a /clear is a context line, and a /compact runs one profile.
-      registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, result.userParts ?? parts));
-      const ranProfileIds = result.profileIds ?? selectedProfileIds;
-      result.assistantMessageIds.forEach((id, i) => {
-        const profile = profiles.find((p) => p.id === ranProfileIds[i]);
-        if (!profile) return;
-        registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
-      });
+    // What the server stored and ran, not what was typed: a /clear is a context line, and a /compact runs one profile.
+    registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, result.userParts ?? parts));
+    const ranProfileIds = result.profileIds ?? selectedProfileIds;
+    result.assistantMessageIds.forEach((id, i) => {
+      const profile = profiles.find((p) => p.id === ranProfileIds[i]);
+      if (!profile) return;
+      registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
+    });
 
-      // Head always advances to the new USER message, never straight to one
-      // of its assistant replies -- picking a reply is an explicit choice
-      // (task 27: `POST .../head`), never automatic, even for a single
-      // profile. `Thread` walks forward through any run of single-child
-      // messages on its own (`extendForward`, packages/core/src/domain/tree.ts),
-      // so a single-profile reply still renders immediately; a multi-profile
-      // (compare) turn instead surfaces as an open tab strip right after
-      // this message, since its several replies are NOT a single-child run.
-      setHeadMessageId(chat.id, result.userMessageId);
-      void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
-
-      setText('');
-      setBrowsing(null);
-      setAttachments([]);
-      textareaRef.current?.focus();
-    } catch (err) {
-      console.error('[otherbench-web] failed to send turn:', err);
-      // The message stays in the box to send again; say why it didn't go.
-      setSendError(err instanceof ApiError ? `Couldn't send: ${err.message}` : "Couldn't send the message. Please try again.");
-    } finally {
-      setSending(false);
-    }
+    // Head always advances to the new USER message, never straight to one
+    // of its assistant replies -- picking a reply is an explicit choice
+    // (task 27: `POST .../head`), never automatic, even for a single
+    // profile. `Thread` walks forward through any run of single-child
+    // messages on its own (`extendForward`, packages/core/src/domain/tree.ts),
+    // so a single-profile reply still renders immediately; a multi-profile
+    // (compare) turn instead surfaces as an open tab strip right after
+    // this message, since its several replies are NOT a single-child run.
+    setHeadMessageId(chat.id, result.userMessageId);
+    void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
   }
 
   /** What picking a row puts in the box: `/clear` whole, anything else ready for its arguments. */
@@ -551,6 +618,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {sendError}
         </div>
+      )}
+
+      {noteReturned && (
+        <p role="status" className="mb-1.5 text-xs text-[var(--text-muted)]">
+          {NOTE_RETURNED}
+        </p>
       )}
 
       {continuesFrom && (
@@ -763,7 +836,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
             {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
-            {isStreaming ? (
+            {/* While a reply runs, Send stays beside Stop: what's sent then waits for the reply or goes into it. */}
+            {isStreaming && (
               <button
                 type="button"
                 onClick={() => void handleStop()}
@@ -771,16 +845,15 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               >
                 Stop
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || folderUnresolved || elsewhereUnreachable}
-                className="btn btn-primary px-3 py-1"
-              >
-                Send
-              </button>
             )}
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || folderUnresolved || elsewhereUnreachable}
+              className="btn btn-primary px-3 py-1"
+            >
+              Send
+            </button>
           </div>
         </div>
       </div>
