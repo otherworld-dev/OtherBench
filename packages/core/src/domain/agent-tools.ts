@@ -61,18 +61,53 @@ export const AGENT_PATH_ARG_KEYS: readonly string[] = ['file_path', 'notebook_pa
  * short-name segment always gets a card.
  */
 export function isProtectedAgentPath(relPath: string): boolean {
-  const segments = relPath
+  const segments = pathSegments(relPath);
+  const last = segments[segments.length - 1];
+  if (segments.some((s) => /~\d/.test(s)) || last === '.mcp.json' || last === 'claude.md' || last === 'claude.local.md') return true;
+  return segments.some((s, i) => s === '.claude' && !isClaudeDataPath(segments, i));
+}
+
+/**
+ * The folders of the claude-setup standard that Claude Code never reads as
+ * configuration: `.claude/private/` (plans, specs) and `.claude/history/`
+ * (transcripts copied by the user's own scripts), anything inside them; and
+ * plain `.md` notes directly in `.claude/memory/` (auto memory). A write
+ * there follows the usual rules (Auto, grants) instead of always asking.
+ * `at` is the index of the `.claude` segment; a further `.claude` deeper in
+ * the path is checked on its own, so `.claude/private/.claude/settings.json`
+ * stays protected.
+ */
+function isClaudeDataPath(segments: readonly string[], at: number): boolean {
+  const folder = segments[at + 1];
+  const rest = segments.length - (at + 2);
+  if (folder === 'private' || folder === 'history') return rest >= 1;
+  return folder === 'memory' && rest === 1 && (segments[at + 2] ?? '').endsWith('.md');
+}
+
+/**
+ * True for a path Claude Code's tools may not touch at all, read or write, in
+ * the claude-setup standard: anything under `.claude/certificates/`, and a
+ * `.env` or `.env.*` file in any folder. OtherBench refuses these itself, so
+ * it doesn't depend on Claude Code applying the project's own deny rules
+ * after OtherBench's hook has answered. Pass the path relative to the folder
+ * that contains it, as for isProtectedAgentPath: a Windows 8.3 short-name
+ * segment counts too (fail closed: it could be either), and a folder root that
+ * is itself a short name (`C:\Users\RUNNER~1\...`) must not count.
+ */
+export function isSecretAgentPath(path: string): boolean {
+  const segments = pathSegments(path);
+  const last = segments[segments.length - 1] ?? '';
+  if (last === '.env' || last.startsWith('.env.')) return true;
+  if (segments.some((s) => /~\d/.test(s))) return true;
+  return segments.some((s, i) => s === '.claude' && segments[i + 1] === 'certificates');
+}
+
+/** A path's segments compared the way Windows opens them: an NTFS stream suffix cut, trailing dots and spaces dropped, lower case. */
+function pathSegments(path: string): string[] {
+  return path
     .split(/[\\/]+/)
     .map((s) => s.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase())
     .filter((s) => s.length > 0);
-  const last = segments[segments.length - 1];
-  return (
-    segments.includes('.claude') ||
-    segments.some((s) => /~\d/.test(s)) ||
-    last === '.mcp.json' ||
-    last === 'claude.md' ||
-    last === 'claude.local.md'
-  );
 }
 
 export function classifyAgentTool(name: string): { category: AgentToolCategory; risk: RiskClass } {

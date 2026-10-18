@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from '../src/domain/agent-tools.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath, isSecretAgentPath } from '../src/domain/agent-tools.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
@@ -63,6 +63,36 @@ describe('isProtectedAgentPath', () => {
   });
   it.each(['src/a.ts', '.', 'README.md', 'claude.mdx', 'my.claude/x', '.claudex/settings.json', 'mcp.json', '.mcp.json.bak', 'CLAUDE.md/inner.txt', 'docs/CLAUDE-notes.md'])('does not protect %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(false);
+  });
+
+  // The claude-setup standard's data folders: Claude Code never loads private/ or history/,
+  // and memory/ holds plain notes. Everything else under .claude stays protected.
+  it.each([
+    '.claude/private/plan.md', '.claude/private/specs/2026-10-18-x-design.md', '.claude/history/abc.jsonl', '.claude/history/abc/tool-results/1.txt',
+    '.claude/memory/MEMORY.md', '.claude/memory/user_role.md', '.Claude/Private/x.md', 'sub/.claude/private/x.md',
+    '.claude/private./x.md',
+  ])('treats %s as data', (p) => {
+    expect(isProtectedAgentPath(p)).toBe(false);
+  });
+  it.each([
+    '.claude/private', '.claude/history', '.claude/memory', '.claude/memory/notes.txt', '.claude/memory/sub/x.md', '.claude/memory/settings.json',
+    '.claude/private/.claude/settings.json', '.claude/history/x/.claude/hooks/h.sh', '.claude/private/CLAUDE.md', '.claude/memory/CLAUDE.md',
+    '.claude/private/.mcp.json', '.claude/memory/CLAUDE~1.MD', 'CLAUDE~1/private/x.md', '.claude/PRIVAT~1/x.md', '.claude/certificates/key.pem',
+    '.claude/specs/x.md', '.claude/rules/r.md', '.claude/setup-version',
+  ])('still protects %s', (p) => {
+    expect(isProtectedAgentPath(p)).toBe(true);
+  });
+});
+
+describe('isSecretAgentPath', () => {
+  it.each([
+    '.claude/certificates/key.pem', '.claude/certificates', 'sub/.claude/certificates/a/b.p12', '.Claude/Certificates/x', '.claude./certificates /x',
+    '.env', '.env.local', '.env.production', 'app/.env', 'E:\\Git\\X\\.env', 'E:/Git/X/.claude/certificates/k', '.ENV', '.env.', '.env::$DATA',
+  ])('keeps %s from Claude Code', (p) => {
+    expect(isSecretAgentPath(p)).toBe(true);
+  });
+  it.each(['.envrc', 'env', 'x.env', '.environment', 'certificates/key.pem', '.claude/private/certificates.md', 'src/.env-loader.ts', '.'])('lets %s through', (p) => {
+    expect(isSecretAgentPath(p)).toBe(false);
   });
 });
 
