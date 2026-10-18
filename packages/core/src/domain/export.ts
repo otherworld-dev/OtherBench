@@ -92,6 +92,8 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
   switch (part.type) {
     case 'text':
       return part.text;
+    case 'user-note':
+      return [`**You:** ${part.text}`, ...part.attachments.map((a) => `*[${a.mime.startsWith('image/') ? 'Image' : 'File'}: ${a.filename}]*`)].join('\n\n');
     case 'reasoning':
       return `<details>\n<summary>Thinking</summary>\n\n${part.text}\n\n</details>`;
     case 'image':

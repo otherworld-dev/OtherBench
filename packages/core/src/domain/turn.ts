@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Project, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
-import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, MessageStatus, Part, SerializedError, UserNotePart } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
@@ -67,6 +67,8 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'notice'; text: string }
   /** A sub-agent's progress (spec 2026-10-12-api-subagents-design), folded into the reply's parts with `applySubagentEvent`. */
   | { type: 'subagent'; callId: string; event: SubagentEvent }
+  /** A note the user sent mid-reply, folded into the reply at the point Claude read it (replaces the engine's `note-picked`). */
+  | { type: 'user-note'; part: UserNotePart }
 );
 
 export interface TurnInput {
@@ -143,6 +145,15 @@ export interface TurnResult {
 }
 
 export interface TurnRunnerOptions {
+  /** Hands over the note Claude just picked up in reply `messageId` as a part, or null when nobody holds it (then it is ignored). */
+  takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
+  /**
+   * Whether attachment `attachmentId` is on a note waiting in chat `chatId`.
+   * Such an attachment is unsent (it is bound only once the note is
+   * delivered), yet the reply the note goes into must load its images: a
+   * reply's loader accepts it too, still only from that chat and within the cap.
+   */
+  heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** Overridable clock, so the 500ms checkpoint throttle is testable without real delays. */
   now?: () => number;
   /** Overridable id generator; defaults to `randomUUID`. */
@@ -298,6 +309,10 @@ export class TurnRunner {
   private readonly saveToolImage?: SaveToolImage;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
+  /** Running variants' chat and unattended flag, kept and cleared with `controllers`. */
+  private readonly running = new Map<string, { chatId: string; unattended: boolean }>();
+  private readonly takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
+  private readonly heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
   private readonly globalBlocks = new Map<string, { block: string | null; at: number; userStamp: string }>();
 
@@ -310,6 +325,8 @@ export class TurnRunner {
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
+    this.takeNote = options.takeNote;
+    this.heldAttachment = options.heldAttachment;
     this.resolveProfile = options.resolveProfile;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
@@ -439,6 +456,11 @@ export class TurnRunner {
   /** Aborts one variant's stream. A no-op if `messageId` isn't currently running (already finished, or unknown). */
   cancel(messageId: string): void {
     this.controllers.get(messageId)?.abort();
+  }
+
+  /** The chat and unattended flag of a reply running now, or null when it isn't running here. */
+  runningInfo(messageId: string): { chatId: string; unattended: boolean } | null {
+    return this.running.get(messageId) ?? null;
   }
 
   /**
@@ -608,6 +630,55 @@ export class TurnRunner {
     return { assistantMessageId: message.id };
   }
 
+  /**
+   * A user turn the engine runs itself: the notes the user sent mid-reply,
+   * which Claude Code carries on with after the reply ended. Makes the user
+   * message (`userParts`) under `parentId` and a reply under it, then runs the
+   * reply from `stream` like `runSelfStarted`; attended, with no notice.
+   */
+  async runFollowOn(input: {
+    chatId: string;
+    parentId: string;
+    userParts: Part[];
+    profile: ResolvedProfile;
+    stream: (req: EngineRequest) => AsyncIterable<EngineEvent>;
+    /** Called once the reply has ended, however it ended. */
+    onEnd?: () => void;
+  }): Promise<{ userMessageId: string; assistantMessageId: string }> {
+    const { profile } = input;
+    const userMessage = this.store.messages.create({
+      id: this.generateId(),
+      chatId: input.chatId,
+      parentId: input.parentId,
+      role: 'user',
+      parts: input.userParts,
+      status: 'complete',
+      error: null,
+      producedBy: null,
+    });
+    // Its attachments are bound to it as run() binds a turn's (the notes' attachments were held unsent until now).
+    for (const id of attachmentIdsIn(input.userParts)) {
+      const attachment = this.store.attachments.get(id);
+      if (attachment?.chatId === input.chatId && attachment.messageId === null) this.store.attachments.update(id, { messageId: userMessage.id });
+    }
+    const message = this.store.messages.create({
+      id: this.generateId(),
+      chatId: input.chatId,
+      parentId: userMessage.id,
+      role: 'assistant',
+      parts: [],
+      status: 'streaming',
+      error: null,
+      producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
+    });
+    void this.runVariant(input.chatId, userMessage.id, message.id, profile, false, { stream: input.stream })
+      .catch((err: unknown) => {
+        console.error(`[TurnRunner] follow-on reply ${message.id} failed outside its own error handling:`, err);
+      })
+      .finally(() => input.onEnd?.());
+    return { userMessageId: userMessage.id, assistantMessageId: message.id };
+  }
+
   private async runVariant(
     chatId: string,
     userMessageId: string,
@@ -618,6 +689,7 @@ export class TurnRunner {
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
+    this.running.set(messageId, { chatId, unattended });
     const startedAt = this.now();
 
     let parts: Part[] = [];
@@ -732,7 +804,7 @@ export class TurnRunner {
           }
         : undefined;
       const toolImageSize: ToolImageSizer | undefined = loadStored ? (ref) => toolImageRow(ref)?.size ?? null : undefined;
-      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentInChat(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
+      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentLoadable(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -856,6 +928,16 @@ export class TurnRunner {
           this.store.messages.updateEngineMeta(messageId, event.meta);
           continue;
         }
+        if (event.type === 'note-picked') {
+          // Claude read a note the user sent mid-reply: it becomes a part here, in order, and the client gets the part, not the pick.
+          const part = this.takeNote?.(messageId, event.noteId) ?? null;
+          if (part) {
+            parts = [...parts, part];
+            checkpoint(true);
+            this.emit({ messageId, type: 'user-note', part });
+          }
+          continue;
+        }
         // Images in a tool result go to the blob store before anyone sees
         // the result (spec 2026-10-12-computer-use-design section 6): base64
         // never reaches an SSE client or a message row.
@@ -925,6 +1007,7 @@ export class TurnRunner {
           : classifyProviderError(err);
     } finally {
       this.controllers.delete(messageId);
+      this.running.delete(messageId);
       cancelled = controller.signal.aborted;
       // Whatever ended this variant (finish, error, throw, cancel), nothing
       // may still be waiting on it. Aborting releases anything tied to its
@@ -1009,10 +1092,18 @@ export class TurnRunner {
     return attachmentBound(row, row.messageId === null ? null : (this.store.messages.get(row.messageId)?.chatId ?? null));
   }
 
-  /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */
+  /** Whether a reply in chat `chatId` may load attachment `id`: one it may replay, or one on a note waiting in that chat (in the chat, within the cap). */
+  private attachmentLoadable(id: string, chatId: string): boolean {
+    if (this.attachmentInChat(id, chatId)) return true;
+    if (!this.heldAttachment?.(id, chatId)) return false;
+    const row = this.store.attachments.get(id);
+    return row !== null && row.chatId === chatId && row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES;
+  }
+
+  /** `load` for one chat: it refuses an attachment `attachmentLoadable` would not let through, and bytes over the cap, so no engine can read across chats by id. */
   private chatScopedLoader(load: (id: string) => Promise<Buffer>, chatId: string): (id: string) => Promise<Buffer> {
     return async (id) => {
-      if (!this.attachmentInChat(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
+      if (!this.attachmentLoadable(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
       const bytes = await load(id);
       if (bytes.length > MAX_HISTORY_ATTACHMENT_BYTES) throw new Error(`Attachment "${id}" is over the size limit.`);
       return bytes;

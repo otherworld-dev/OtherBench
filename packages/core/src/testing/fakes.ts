@@ -117,6 +117,13 @@ export class FakeChatEngine implements ChatEngine {
   /** Result `testConnection` returns; override per-test as needed. */
   connectionTestResult: ConnectionTestResult = { ok: true, message: 'ok', latencyMs: 0 };
 
+  /** Set per test to stand in for the engine's `sendToReply`; unset, the fake doesn't take notes. */
+  sendToReply?: ChatEngine['sendToReply'];
+  /** Set per test to stand in for the engine's `withdrawNote`. */
+  withdrawNote?: ChatEngine['withdrawNote'];
+  /** Set per test to stand in for the engine's `knowsNote`. */
+  knowsNote?: ChatEngine['knowsNote'];
+
   constructor(private readonly script: EngineScript) {}
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
@@ -920,6 +927,11 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
     return this.repo.list().filter((a) => a.chatId === chatId);
   }
   update(id: string, patch: Partial<Omit<Attachment, 'id'>>): Attachment {
+    // As in store-sqlite: the message an attachment was sent with is set once.
+    const current = this.repo.get(id);
+    if (current && patch.messageId !== undefined && patch.messageId !== current.messageId && current.messageId !== null) {
+      throw new Error(`Attachment "${id}" was already sent with message "${current.messageId}".`);
+    }
     return this.repo.update(id, patch);
   }
   delete(id: string): void {

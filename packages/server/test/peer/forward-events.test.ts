@@ -11,6 +11,28 @@ describe('withEvent (a kept copy of a reply running on another machine)', () => 
     expect(parts).toEqual([{ type: 'subagent', callId: 'c1', label: 'Helper', prompt: 'p', profileId: 'pid', profileName: 'P', modelId: 'm', status: 'running', parts: [{ type: 'text', text: 'hi' }] }]);
   });
 
+  it('withEvent keeps a user-note part, so a relayed reply cut off keeps its note in place', () => {
+    const note = { type: 'user-note', noteId: 'n1', text: 'and the tests', attachments: [{ attachmentId: 'a1', mime: 'image/png', filename: 'shot.png' }] };
+    let parts: Part[] = [];
+    parts = withEvent(parts, { messageId: 'm1', type: 'text-delta', text: 'Looking' });
+    parts = withEvent(parts, { messageId: 'm1', type: 'user-note', part: note });
+    parts = withEvent(parts, { messageId: 'm1', type: 'text-delta', text: 'Tests pass' });
+    expect(parts).toEqual([{ type: 'text', text: 'Looking' }, note, { type: 'text', text: 'Tests pass' }]);
+  });
+
+  it('ignores a malformed user-note event', () => {
+    const parts: Part[] = [{ type: 'text', text: 'x' }];
+    for (const bad of [
+      { type: 'user-note' },
+      { type: 'user-note', part: { type: 'user-note', noteId: 1, text: 'x', attachments: [] } },
+      { type: 'user-note', part: { type: 'user-note', noteId: 'n', text: 'x', attachments: 'none' } },
+      { type: 'user-note', part: { type: 'user-note', noteId: 'n', text: 'x', attachments: [{ attachmentId: 'a', mime: 3, filename: 'f' }] } },
+      { type: 'user-note', part: { type: 'text', noteId: 'n', text: 'x', attachments: [] } },
+    ]) {
+      expect(withEvent(parts, bad)).toBe(parts);
+    }
+  });
+
   it('ignores a malformed subagent event', () => {
     const parts: Part[] = [{ type: 'text', text: 'x' }];
     for (const bad of [{ type: 'subagent' }, { type: 'subagent', callId: 3, event: { type: 'running' } }, { type: 'subagent', callId: 'c', event: 'start' }, { type: 'subagent', callId: 'c', event: { type: 'start', label: 1 } }]) {

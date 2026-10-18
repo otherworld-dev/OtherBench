@@ -19,6 +19,7 @@ import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-too
 import { UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { FakeToolProvider } from '@otherbench/core/testing/fakes.js';
 import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
+import { MAX_REQUEST_ATTACHMENT_BYTES } from '@otherbench/core/domain/request-budget.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-cce-')); });
@@ -69,6 +70,59 @@ function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: nu
   };
   return { query, starts };
 }
+
+/**
+ * A fake long-lived Claude Code that takes notes: the test plays its output
+ * with `emit`, every message pushed into its input is recorded, and it
+ * answers cancelAsyncMessage with `cancelled`. `log` has its interrupt and
+ * cancel calls in order (an interrupt with its arguments, if any). `end`
+ * ends its output, as a process that dies.
+ */
+/** `cancelFrames`: a cancel also emits Claude Code's `cancelled` lifecycle frame, read before the cancel resolves. */
+function noteQuery(o: { cancelled?: boolean; cancelFrames?: boolean } = {}) {
+  const pushed: SDKUserMessage[] = [];
+  const log: string[] = [];
+  const cancels: string[] = [];
+  const queued: SDKMessage[] = [];
+  let wake: (() => void) | null = null;
+  let ended = false;
+  const emit = (message: object): void => {
+    queued.push(message as unknown as SDKMessage);
+    wake?.();
+  };
+  const end = (): void => {
+    ended = true;
+    wake?.();
+  };
+  const query: QueryFn = ({ prompt, options }) => {
+    void (async () => { for await (const m of prompt) pushed.push(m); })();
+    options.abortController?.signal.addEventListener('abort', end, { once: true });
+    const gen = (async function* () {
+      for (;;) {
+        while (queued.length > 0) yield queued.shift()!;
+        if (ended) return;
+        await new Promise<void>((resolve) => (wake = resolve));
+        wake = null;
+      }
+    })();
+    return Object.assign(gen, {
+      interrupt: async (...args: unknown[]) => { log.push(args.length > 0 ? `interrupt ${JSON.stringify(args)}` : 'interrupt'); },
+      cancelAsyncMessage: async (uuid: string) => {
+        cancels.push(uuid);
+        log.push(`cancel ${uuid}`);
+        if (o.cancelFrames) {
+          emit({ type: 'command_lifecycle', command_uuid: uuid, state: 'cancelled' });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        return o.cancelled ?? true;
+      },
+      supportedModels: async () => [],
+      accountInfo: async () => ({}),
+    });
+  };
+  return { query, pushed, log, cancels, emit, end };
+}
+const NOTE_CAPABILITIES = ['msg_lifecycle_v1', 'interrupt_cancel_queued_v1'];
 
 const answered = (sessionId = 'sess-1'): CanonMessage => ({ ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId, backend: 'claude', cwd: ws } });
 const followUp = (o: Partial<EngineRequest> = {}): EngineRequest =>
@@ -2645,5 +2699,572 @@ describe("the claude-setup standard's secrets inside Claude Code's own search", 
       expect(settings.disableSkillShellExecution).toBe(true);
       expect(settings.permissions?.deny).toEqual(expect.arrayContaining(['Read(**/.env)', 'Read(**/.env.*)', 'Read(**/.claude/certificates/**)', 'Edit(**/.claude/certificates/**)']));
     }
+  });
+});
+
+describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-send-while-replying)', () => {
+  type Fake = ReturnType<typeof noteQuery>;
+  const uuidOf = (m: SDKUserMessage): string => (m as { uuid?: string }).uuid!;
+  const contentOf = (m: SDKUserMessage): unknown => (m.message as { content: unknown }).content;
+  const lifecycle = (uuid: string, state: string) => ({ type: 'command_lifecycle', command_uuid: uuid, state });
+  const resultNaming = (uuids: string[], subtype = 'success') =>
+    ({ type: 'result', subtype, is_error: subtype !== 'success', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: uuids });
+  const note = (id: string, text = 'also this', attachments: { attachmentId: string; mime: string; filename: string }[] = []) => ({ id, text, attachments });
+  /** The events a test checks the order of, as short lines. */
+  const shape = (events: EngineEvent[]): string[] =>
+    events.flatMap((ev) => {
+      if (ev.type === 'text-delta') return [`text ${ev.text}`];
+      if (ev.type === 'note-picked') return [`note-picked ${ev.noteId}`];
+      if (ev.type === 'tool-call' || ev.type === 'tool-result') return [`${ev.type} ${ev.id}`];
+      if (ev.type === 'finish' || ev.type === 'error') return [ev.type];
+      return [];
+    });
+
+  /** Starts reply `r` on `f`, plays its init (with `capabilities`) and text "A", and waits until the reply has read them. */
+  async function running(e: ClaudeCodeChatEngine, f: Fake, r: EngineRequest = req(), capabilities = NOTE_CAPABILITIES) {
+    const events: EngineEvent[] = [];
+    const before = f.pushed.length;
+    const done = (async () => { for await (const ev of e.stream(r)) events.push(ev); })();
+    await vi.waitFor(() => expect(f.pushed).toHaveLength(before + 1));
+    f.emit({ ...(init() as object), capabilities });
+    f.emit(delta('A'));
+    await vi.waitFor(() => expect(events.some((ev) => ev.type === 'text-delta')).toBe(true));
+    return { events, done, uuid: uuidOf(f.pushed[before]!) };
+  }
+
+  it("sendToReply pushes the note into the running reply's process with the note id as uuid", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    await vi.waitFor(() => expect(f.pushed).toHaveLength(2));
+    expect(f.pushed[1]).toMatchObject({ type: 'user', uuid: 'n1', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: 'also this' }] } });
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    e.dispose();
+  });
+
+  it("sendToReply is false for a reply that isn't running, and when Claude Code lacks msg_lifecycle_v1", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    expect(await e.sendToReply('nope', note('n0'))).toBe(false);
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    // The reply has ended.
+    expect(await e.sendToReply('m1', note('n1'))).toBe(false);
+    expect(f.pushed).toHaveLength(1);
+    e.dispose();
+
+    const old = noteQuery();
+    const e2 = engine(old.query);
+    const r2 = await running(e2, old, req(), ['interrupt_cancel_queued_v1']);
+    expect(await e2.sendToReply('m1', note('n1'))).toBe(false);
+    expect(old.pushed).toHaveLength(1);
+    old.emit(resultNaming([r2.uuid]));
+    await r2.done;
+    e2.dispose();
+  });
+
+  it('an image attachment goes as an image block; a file becomes a not-sent line', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const load = vi.fn(async (id: string) => (id === 'shot' ? FAKE_PNG : Buffer.from('%PDF-1.7')));
+    const size = (id: string) => (id === 'huge' ? MAX_REQUEST_ATTACHMENT_BYTES + 1 : 10);
+    const r = await running(e, f, req({ loadAttachment: load, attachmentSize: size }));
+    const shot = { attachmentId: 'shot', mime: 'image/png', filename: 'shot.png' };
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: FAKE_PNG.toString('base64') } };
+    expect(await e.sendToReply('m1', note('n1', 'look', [shot, { attachmentId: 'doc', mime: 'application/pdf', filename: 'spec.pdf' }, { attachmentId: 'huge', mime: 'image/png', filename: 'huge.png' }]))).toBe(true);
+    expect(await e.sendToReply('m1', note('n2', '', [shot]))).toBe(true);
+    await vi.waitFor(() => expect(f.pushed).toHaveLength(3));
+    expect(contentOf(f.pushed[1]!)).toEqual([
+      { type: 'text', text: "look\n(spec.pdf wasn't sent: Claude Code only takes images.)\n(huge.png wasn't sent: Claude Code only takes images.)" },
+      image,
+    ]);
+    // No text, so no text block.
+    expect(contentOf(f.pushed[2]!)).toEqual([image]);
+    // Neither the file nor the image over the cap is read.
+    expect(load.mock.calls.map(([id]) => id)).toEqual(['shot', 'shot']);
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    e.dispose();
+  });
+
+  it('a note Claude Code starts mid-turn yields note-picked between the text around it', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(lifecycle('n1', 'queued'));
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(delta('B'));
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    expect(shape(r.events)).toEqual(['text A', 'note-picked n1', 'text B', 'finish']);
+    e.dispose();
+  });
+
+  it("a note picked during a tool step comes after that step's tool results, never between a call and its result", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }] }, parent_tool_use_id: null });
+    f.emit(lifecycle('n1', 'queued'));
+    f.emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'a.txt' }] }, parent_tool_use_id: null });
+    // Claude Code reads a pushed message only at a step boundary, after the step's tool results.
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(delta('B'));
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    expect(shape(r.events)).toEqual(['text A', 'tool-call c1', 'tool-result c1', 'note-picked n1', 'text B', 'finish']);
+    e.dispose();
+  });
+
+  it("a note started after the reply's result is not picked in that reply", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([r.uuid]));
+    f.emit(lifecycle('n1', 'started'));
+    await r.done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shape(r.events)).toEqual(['text A', 'finish']);
+    // It's Claude Code's now: there is nothing left to take back.
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual([]);
+    e.dispose();
+  });
+
+  it('withdrawNote cancels a queued note through cancelAsyncMessage, and is false once Claude Code has started it', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    expect(await e.withdrawNote('n1')).toBe(true);
+    expect(f.cancels).toEqual(['n1']);
+    expect(await e.withdrawNote('n1')).toBe(false);
+
+    await e.sendToReply('m1', note('n2'));
+    f.emit(lifecycle('n2', 'started'));
+    await vi.waitFor(() => expect(r.events).toContainEqual({ type: 'note-picked', noteId: 'n2' }));
+    expect(await e.withdrawNote('n2')).toBe(false);
+    expect(f.cancels).toEqual(['n1']);
+    f.emit(resultNaming([r.uuid, 'n2']));
+    await r.done;
+    e.dispose();
+  });
+
+  it('withdrawNote is false when Claude Code says the note had already started', async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual(['n1']);
+    // Still tracked, so it's picked where Claude Code reads it.
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    expect(shape(r.events)).toEqual(['text A', 'note-picked n1', 'finish']);
+    e.dispose();
+  });
+
+  it("Stop cancels the reply's own notes, then interrupts without cancel_queued (which would drop a helper's report)", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const controller = new AbortController();
+    // This Claude Code offers interrupt_cancel_queued_v1; it still isn't used.
+    const r = await running(e, f, req({ signal: controller.signal }));
+    await e.sendToReply('m1', note('n1'));
+    await e.sendToReply('m1', note('n2'));
+    f.emit(lifecycle('n1', 'started'));
+    await vi.waitFor(() => expect(r.events).toContainEqual({ type: 'note-picked', noteId: 'n1' }));
+    controller.abort();
+    await r.done;
+    // Only the note not yet started is cancelled, before the interrupt, which has no arguments.
+    expect(f.log).toEqual(['cancel n2', 'interrupt']);
+    // The note already picked stays where it was read.
+    expect(shape(r.events)).toEqual(['text A', 'note-picked n1']);
+    // Claude Code confirmed the cancel: the note is no longer this engine's to take back...
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await e.withdrawNote('n2')).toBe(false);
+    expect(f.cancels).toEqual(['n2']);
+    // ...and never lands in a later turn.
+    f.emit(resultNaming([r.uuid], 'error_during_execution'));
+    const next = await running(e, f, followUp());
+    f.emit(lifecycle('n2', 'started'));
+    f.emit(resultNaming([next.uuid]));
+    await next.done;
+    expect(shape(next.events)).toEqual(['text A', 'finish']);
+    e.dispose();
+  });
+
+  /** A first reply on `f`, then a turn Claude Code starts by itself (text "Reviewing"), run as reply m-self; resolves once that reply is running. */
+  async function selfStartedReply(e: ClaudeCodeChatEngine, f: Fake, over: Partial<EngineRequest> = {}) {
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(delta('Reviewing'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    const start = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!;
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of start.run(req({ messageId: 'm-self', ...over }))) events.push(ev); })();
+    await vi.waitFor(() => expect(events.some((ev) => ev.type === 'text-delta')).toBe(true));
+    return { events, done, seen };
+  }
+  const selfFailure = () => ({ ...resultNaming([], 'error_during_execution'), origin: { kind: 'task-notification' } });
+
+  it('a reply that fails cancels its unstarted notes in Claude Code', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    // A self-started reply stays in its process when it fails.
+    const r = await selfStartedReply(e, f);
+    expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
+    expect(await e.sendToReply('m-self', note('n2'))).toBe(true);
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(selfFailure());
+    await r.done;
+    expect(shape(r.events)).toEqual(['text Reviewing', 'note-picked n1', 'error']);
+    expect(f.cancels).toEqual(['n2']);
+    // Forgotten once Claude Code confirmed the cancel: withdrawing finds nothing to ask about.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await e.withdrawNote('n2')).toBe(false);
+    expect(f.cancels).toEqual(['n2']);
+    e.dispose();
+  });
+
+  it('a note Claude Code had already started when a failed reply cancels it stays tracked', async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const r = await selfStartedReply(e, f);
+    expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
+    f.emit(selfFailure());
+    await r.done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.cancels).toEqual(['n1']);
+    // Still in the process's notes: withdrawing asks Claude Code again.
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual(['n1', 'n1']);
+    // So its `started` frame is still recognised (held for the follow-on), after which there is nothing to ask about.
+    f.emit(lifecycle('n1', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await e.withdrawNote('n1')).toBe(false);
+    expect(f.cancels).toEqual(['n1', 'n1']);
+    e.dispose();
+  });
+
+  /**
+   * A first reply with notes `ids` sent into it, ended by its own result
+   * before Claude Code starts them; Claude Code then starts them, as the real
+   * CLI orders a late turn (the reply's lifecycle completed, each note's
+   * started, init), and the follow-on's text "Late" begins.
+   */
+  async function lateNotes(e: ClaudeCodeChatEngine, f: Fake, ids: string[]) {
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    for (const id of ids) expect(await e.sendToReply('m1', note(id))).toBe(true);
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle(first.uuid, 'completed'));
+    for (const id of ids) f.emit(lifecycle(id, 'started'));
+    f.emit({ ...(init() as object), capabilities: NOTE_CAPABILITIES });
+    f.emit(delta('Late'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    return { first, seen, starts: seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : [])) };
+  }
+
+  it('a note Claude Code runs after the reply ended comes as a follow-on self-start with its note id', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { first, starts } = await lateNotes(e, f, ['n1']);
+    expect(shape(first.events)).toEqual(['text A', 'finish']);
+    // Only the follow-on: nothing comes as an ordinary self-start.
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ chatId: 'chat', afterMessageId: 'm1', profileId: 'p', notice: '', unattended: false, noteIds: ['n1'] });
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    f.emit(delta(' reply'));
+    f.emit(resultNaming(['n1']));
+    await done;
+    expect(shape(events)).toEqual(['text Late', 'text  reply', 'finish']);
+    e.dispose();
+  });
+
+  it('two notes started together become one follow-on with both ids in order', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts } = await lateNotes(e, f, ['n1', 'n2']);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ notice: '', noteIds: ['n1', 'n2'] });
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    // Claude Code's result for a batched turn names both notes.
+    f.emit(resultNaming(['n1', 'n2']));
+    await done;
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    e.dispose();
+  });
+
+  it("a follow-on's result ends the follow-on", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts } = await lateNotes(e, f, ['n1']);
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-late' }))) events.push(ev); })();
+    // The result names only the note, never a turn id of OtherBench's own: it still ends the follow-on.
+    f.emit(resultNaming(['n1']));
+    const outcome = await Promise.race([done.then(() => 'ended'), new Promise((resolve) => setTimeout(() => resolve('still running'), 200))]);
+    expect(outcome).toBe('ended');
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    // The process is free again: the session's next message runs in it, and the follow-on sees none of it.
+    const next = await running(e, f, followUp());
+    f.emit(resultNaming([next.uuid]));
+    await next.done;
+    expect(shape(next.events)).toEqual(['text A', 'finish']);
+    expect(shape(events)).toEqual(['text Late', 'finish']);
+    e.dispose();
+  });
+
+  it('closing a process with a queued note reports notes-dropped for its chat', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const r = await running(e, f, req({ chatId: 'chat-7' }));
+    await e.sendToReply('m1', note('n1'));
+    await e.sendToReply('m1', note('n2'));
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    // n2 was started but its turn never began; n1 was never started.
+    f.emit(lifecycle('n2', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+    // The process dies.
+    f.end();
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1));
+    expect(seen.find((ev) => ev.type === 'notes-dropped')).toEqual({ type: 'notes-dropped', chatId: 'chat-7', noteIds: ['n1', 'n2'] });
+    // Reported once: closing it afterwards reports nothing more.
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1);
+    expect(seen.some((ev) => ev.type === 'self-start')).toBe(false);
+  });
+
+  it("a note whose turn ends before showing anything doesn't make a later helper's turn a follow-on", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    // Claude Code answers the note with nothing but a result (an early error).
+    f.emit(resultNaming(['n1'], 'error_during_execution'));
+    f.emit(lifecycle('n1', 'completed'));
+    // Then a background task's report starts a turn of its own.
+    f.emit(delta('Reviewing'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    const starts = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []));
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.noteIds).toBeUndefined();
+    expect(starts[0]!.notice).toBe('Carried on after a background task finished.');
+    const events: EngineEvent[] = [];
+    const done = (async () => { for await (const ev of starts[0]!.run(req({ messageId: 'm-self' }))) events.push(ev); })();
+    f.emit({ ...resultNaming([]), origin: { kind: 'task-notification' } });
+    const outcome = await Promise.race([done.then(() => 'ended'), new Promise((resolve) => setTimeout(() => resolve('still running'), 200))]);
+    expect(outcome).toBe('ended');
+    expect(shape(events)).toEqual(['text Reviewing', 'finish']);
+    // n1 got no turn: it was reported dropped once, at its result, and not again on close.
+    f.end();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([{ type: 'notes-dropped', chatId: 'chat', noteIds: ['n1'] }]);
+    e.dispose();
+  });
+
+  it("the session's next message waits while a started note's turn is about to begin, then runs with only its own output", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The user sends the next message before the note's turn shows anything.
+    const nextEvents: EngineEvent[] = [];
+    const nextDone = (async () => { for await (const ev of e.stream(followUp())) nextEvents.push(ev); })();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // It waits: nothing more is sent to Claude Code yet.
+    expect(f.pushed).toHaveLength(2);
+    f.emit({ ...(init() as object), capabilities: NOTE_CAPABILITIES });
+    f.emit(delta('Late'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    const start = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!;
+    expect(start.noteIds).toEqual(['n1']);
+    const lateEvents = await (async () => {
+      const out: EngineEvent[] = [];
+      const run = (async () => { for await (const ev of start.run(req({ messageId: 'm-late' }))) out.push(ev); })();
+      f.emit(resultNaming(['n1']));
+      await run;
+      return out;
+    })();
+    expect(shape(lateEvents)).toEqual(['text Late', 'finish']);
+    // Now the next message goes, and its reply reads only its own turn.
+    await vi.waitFor(() => expect(f.pushed).toHaveLength(3));
+    const uuid = uuidOf(f.pushed[2]!);
+    f.emit(delta('Mine'));
+    f.emit(resultNaming([uuid]));
+    await nextDone;
+    expect(shape(nextEvents)).toEqual(['text Mine', 'finish']);
+    e.dispose();
+  });
+
+  it("a started note whose turn produced nothing but a result is reported dropped, once", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming(['n1'], 'error_during_execution'));
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1));
+    expect(seen.find((ev) => ev.type === 'notes-dropped')).toEqual({ type: 'notes-dropped', chatId: 'chat', noteIds: ['n1'] });
+    f.emit(lifecycle('n1', 'completed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1);
+    expect(seen.some((ev) => ev.type === 'self-start')).toBe(false);
+  });
+
+  it("a follow-on's notes are not reported dropped when it ends", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts, seen } = await lateNotes(e, f, ['n1']);
+    const done = (async () => { for await (const _ of starts[0]!.run(req({ messageId: 'm-late' }))); })();
+    f.emit(resultNaming(['n1']));
+    f.emit(lifecycle('n1', 'completed'));
+    await done;
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+  });
+
+  const droppedIn = (seen: EngineBackgroundEvent[]): string[][] => seen.flatMap((ev) => (ev.type === 'notes-dropped' ? [ev.noteIds] : []));
+
+  it('a queued note Claude Code drops unasked is reported dropped; one taken back or cancelled by Stop is not', async () => {
+    const f = noteQuery({ cancelFrames: true });
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const controller = new AbortController();
+    const r = await running(e, f, req({ signal: controller.signal }));
+    for (const id of ['n1', 'n2', 'n3']) expect(await e.sendToReply('m1', note(id))).toBe(true);
+    f.emit(lifecycle('n1', 'cancelled'));
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    // Claude Code's `cancelled` frame for a cancel we asked for comes before the cancel resolves.
+    expect(await e.withdrawNote('n2')).toBe(true);
+    controller.abort();
+    await r.done;
+    await vi.waitFor(() => expect(f.cancels).toEqual(['n2', 'n3']));
+    f.emit(resultNaming([r.uuid], 'error_during_execution'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it('a declined self-start reports a note picked in its turn dropped', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    // A helper's report starts a turn of Claude Code's own, and Claude reads the note in it.
+    f.emit(delta('Reviewing'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    f.emit(lifecycle('n1', 'started'));
+    seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!.decline();
+    f.emit(selfFailure());
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it('a note picked in the rest of a stopped turn is reported dropped', async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const controller = new AbortController();
+    const r = await running(e, f, req({ signal: controller.signal }));
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    controller.abort();
+    await r.done;
+    // Claude Code had started it as Stop came: the stopped reply never shows it.
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming([r.uuid, 'n1'], 'error_during_execution'));
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it("a note picked in the rest of a stopped self-started turn is reported dropped", async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const controller = new AbortController();
+    const r = await selfStartedReply(e, f, { signal: controller.signal });
+    expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
+    controller.abort();
+    await r.done;
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(selfFailure());
+    await vi.waitFor(() => expect(droppedIn(r.seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(r.seen)).toEqual([['n1']]);
+  });
+
+  it('knowsNote is true while an open process has the note queued, started or read, and false otherwise', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    expect(await e.sendToReply('m1', note('n2'))).toBe(true);
+    expect(e.knowsNote('n1')).toBe(true);
+    f.emit(lifecycle('n1', 'started'));
+    await vi.waitFor(() => expect(r.events).toContainEqual({ type: 'note-picked', noteId: 'n1' }));
+    expect(e.knowsNote('n1')).toBe(true);
+    expect(await e.withdrawNote('n2')).toBe(true);
+    expect(e.knowsNote('n2')).toBe(false);
+    expect(e.knowsNote('n-other')).toBe(false);
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    e.dispose();
+    expect(e.knowsNote('n1')).toBe(false);
+  });
+
+  it('a process closed with nothing queued reports nothing', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const r = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
   });
 });

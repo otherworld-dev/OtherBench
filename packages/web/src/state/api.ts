@@ -13,6 +13,7 @@ import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
 import type { PublicPeer } from '@otherbench/core/types/peer.js';
 import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
+import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { apiFetch, apiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
@@ -31,19 +32,25 @@ export interface AuthStatus {
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** The `kind` a refusal's body names (a note's 409: `idle`, `command`, `workspace_unresolved`), when it has one. */
+  readonly kind?: string;
+  constructor(status: number, message: string, kind?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    if (kind !== undefined) this.kind = kind;
   }
 }
 
-async function extractErrorMessage(res: Response): Promise<string> {
-  const body: unknown = await res.json().catch(() => null);
+function errorMessageOf(res: Response, body: unknown): string {
   if (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string') {
     return (body as { error: string }).error;
   }
   return res.statusText || `HTTP ${res.status}`;
+}
+
+async function extractErrorMessage(res: Response): Promise<string> {
+  return errorMessageOf(res, await res.json().catch(() => null));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,9 +58,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
-  if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
+  if (!res.ok) {
+    const body: unknown = await res.json().catch(() => null);
+    const kind = body && typeof body === 'object' && 'kind' in body && typeof (body as { kind: unknown }).kind === 'string' ? (body as { kind: string }).kind : undefined;
+    throw new ApiError(res.status, errorMessageOf(res, body), kind);
+  }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** `POST /api/chats/:id/notes`: the server reads each attachment's type and name from its own row. */
+export interface SendNoteBody {
+  text: string;
+  attachments: { attachmentId: string }[];
+  parentId: string | null;
+  profileIds: string[];
+  clientId: string;
 }
 
 /** `POST /api/schedules` (spec 2026-10-12-scheduled-tasks-design). The server sets the time zone. */
@@ -683,6 +703,20 @@ export const api = {
   asks: {
     /** Answers a question or plan card; 404 once it's settled, 400 when the reply doesn't fit it. */
     answer: (askId: string, reply: AskReply) => post<{ answered: boolean }>(`/asks/${askId}/answer`, reply),
+  },
+
+  notes: {
+    /** Sends a message while a reply runs; 409 `kind` `idle` means nothing is running (send it as a normal turn). */
+    send: async (chatId: string, body: SendNoteBody): Promise<ReplyNote> => (await post<{ note: ReplyNote }>(`/chats/${chatId}/notes`, body)).note,
+    /** Takes a waiting note back; null when Claude has already read it or it has gone out (409 `read`). */
+    withdraw: async (chatId: string, noteId: string): Promise<ReplyNote | null> => {
+      try {
+        return (await request<{ note: ReplyNote }>(`/chats/${chatId}/notes/${noteId}`, { method: 'DELETE' })).note;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && err.kind === 'read') return null;
+        throw err;
+      }
+    },
   },
 
   attachments: {

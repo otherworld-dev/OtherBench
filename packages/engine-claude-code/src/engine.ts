@@ -15,7 +15,7 @@ import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
 import { HelperStopError, type ChatEngine, type ConnectionTestResult, type DiscoveredModel, type EngineBackgroundEvent, type EngineEvent, type EngineRequest, type SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
-import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { CanonMessage, NoteAttachment, Part } from '@otherbench/core/types/messages.js';
 import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
@@ -27,7 +27,7 @@ import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
 import { claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
+import { LivePool, LiveProcess, liveKey, NOTE_PICKED, PromptQueue, type NotePickedMessage, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
 import { toPlanUsage } from './plan-usage.js';
 import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
@@ -36,6 +36,8 @@ import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
+  /** Drops one queued message by its uuid: true when it was still queued, false once started. Untyped in SDK 0.3.287. */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
   /** Stops one background task (a helper, a background command) by Claude Code's task id. */
   stopTask?(taskId: string): Promise<unknown>;
   /** Switches the running Claude Code's permission mode. */
@@ -141,6 +143,12 @@ type PendingNotice = { text: string | null };
 
 type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
+/** The note Claude Code started reading, when `message` is the pump's NOTE_PICKED (live.ts); else null. */
+function pickedNote(message: SDKMessage): string | null {
+  const m = message as unknown as Partial<NotePickedMessage>;
+  return m.type === NOTE_PICKED && typeof m.noteId === 'string' ? m.noteId : null;
+}
+
 /**
  * Whether a message read while no reply is attached begins a turn of the
  * main agent: Claude Code carrying on by itself. A helper's own messages
@@ -241,6 +249,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private backgroundHandler: ((event: EngineBackgroundEvent) => void) | null = null;
   /** Each chat's last command list from a live process, so the menu has one while no process is running. */
   private readonly commandLists = new Map<string, CommandRow[]>();
+  /** The replies running now (a user's or a self-started one), by message id: where a note sent to one goes. */
+  private readonly running = new Map<string, { live: LiveProcess; req: EngineRequest }>();
 
   constructor(private readonly deps: ClaudeCodeEngineDeps) {
     this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
@@ -294,6 +304,99 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
+   * Pushes a note into the running reply's Claude Code with the note's id as
+   * its uuid, so its command lifecycle says where it was read (live.ts).
+   * False when the reply isn't running here, or this Claude Code doesn't
+   * report a message's lifecycle.
+   */
+  async sendToReply(messageId: string, note: { id: string; text: string; attachments: NoteAttachment[] }): Promise<boolean> {
+    const run = this.running.get(messageId);
+    if (!run || run.live.isClosed || run.req.signal.aborted || !run.live.capabilities.includes('msg_lifecycle_v1')) return false;
+    const content = await this.noteContent(run.req, note);
+    // The reply may have ended while its images were read.
+    if (this.running.get(messageId) !== run || run.live.isClosed || run.req.signal.aborted) return false;
+    run.live.notes.set(note.id, messageId);
+    run.live.input.push(userMessage(content, note.id));
+    return true;
+  }
+
+  /** Takes back a note Claude Code hasn't started. False when no process holds it, it can't cancel one, or it had already started. */
+  async withdrawNote(noteId: string): Promise<boolean> {
+    const live = [...this.processes].find((p) => !p.isClosed && p.notes.has(noteId));
+    return live ? this.cancelNote(live, noteId) : false;
+  }
+
+  /** Whether an open process still has note `noteId` (queued, starting or read): false means nothing here will ever report it. */
+  knowsNote(noteId: string): boolean {
+    return [...this.processes].some((p) => !p.isClosed && p.knows(noteId));
+  }
+
+  /**
+   * Asks Claude Code to drop queued note `noteId`; forgotten once it
+   * confirms. Its `cancelled` frame meanwhile isn't reported dropped: the
+   * caller accounts for it.
+   */
+  private async cancelNote(live: LiveProcess, noteId: string): Promise<boolean> {
+    if (!live.query.cancelAsyncMessage) return false;
+    live.cancelling.add(noteId);
+    try {
+      const cancelled = await live.query.cancelAsyncMessage(noteId);
+      if (cancelled) live.notes.delete(noteId);
+      return cancelled;
+    } finally {
+      live.cancelling.delete(noteId);
+    }
+  }
+
+  /**
+   * A note as content blocks: its text, then its images. A file, or an image
+   * over the per-file cap or whose bytes aren't an image, becomes a line in
+   * the text instead: Claude Code turns only take images.
+   */
+  private async noteContent(req: EngineRequest, note: { text: string; attachments: NoteAttachment[] }): Promise<ContentBlock[]> {
+    const lines = note.text ? [note.text] : [];
+    const images: ContentBlock[] = [];
+    const notSent = (a: NoteAttachment): void => {
+      lines.push(`(${listedName(a.filename) || 'unnamed file'} wasn't sent: Claude Code only takes images.)`);
+    };
+    for (const a of note.attachments) {
+      const size = req.attachmentSize?.(a.attachmentId);
+      if (!a.mime.startsWith('image/') || !req.loadAttachment || (typeof size === 'number' && size > MAX_REQUEST_ATTACHMENT_BYTES)) {
+        notSent(a);
+        continue;
+      }
+      const bytes = await req.loadAttachment(a.attachmentId);
+      const mediaType = bytes.length > MAX_REQUEST_ATTACHMENT_BYTES ? null : sniffToolImageMime(bytes);
+      if (mediaType === null) notSent(a);
+      else images.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
+    }
+    return [...(lines.length > 0 ? [{ type: 'text' as const, text: lines.join('\n') }] : []), ...images];
+  }
+
+  /**
+   * Stops the turn on `live` for reply `messageId`: its own notes are
+   * cancelled first, so none starts as the turn ends, then the turn is
+   * interrupted. Not with interrupt's cancel_queued, which would also drop a
+   * background helper's queued report.
+   */
+  private stopTurn(live: LiveProcess, messageId: string): void {
+    this.cancelNotes(live, messageId);
+    void live.query.interrupt().catch(() => live.close());
+  }
+
+  /**
+   * Asks Claude Code to drop reply `messageId`'s unstarted notes, so none
+   * runs after a reply that didn't finish. Each is forgotten once Claude Code
+   * confirms; one it had already started (or can't cancel) stays tracked, so
+   * the pump still routes its `started` frame.
+   */
+  private cancelNotes(live: LiveProcess, messageId: string): void {
+    for (const [id, owner] of live.notes) {
+      if (owner === messageId) void this.cancelNote(live, id).catch(() => undefined);
+    }
+  }
+
+  /**
    * A chat's settings changed (any chat's, with no id): its running Claude
    * Code is switched to the chat's Auto setting at once, mid-reply too, as VS
    * Code switches modes. A scheduled run's process, and one not on the Claude
@@ -322,18 +425,37 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
   }
 
-  /** What Claude Code does while no reply is attached to the process. */
+  /**
+   * What Claude Code does while no reply is attached to the process. A turn
+   * running notes Claude Code started is theirs (a follow-on, see
+   * LiveProcess.takeStarting); any other is one it began by itself.
+   */
   private handleIdle(live: LiveProcess, message: SDKMessage): void {
-    if (startsOwnTurn(message)) this.selfStart(live, message);
+    if (!startsOwnTurn(message)) return;
+    const notes = live.takeStarting(message);
+    this.selfStart(live, message, notes.length > 0 ? notes : undefined);
+  }
+
+  /** Tells the server which notes a process never ran (it closed, or their turn ended at once), for its chat. Never throws: the process calls it unguarded. */
+  private reportDropped(live: LiveProcess, dropped: string[]): void {
+    try {
+      const chatId = live.background?.chatId ?? live.last?.chatId;
+      if (dropped.length === 0 || chatId === undefined) return;
+      this.backgroundHandler?.({ type: 'notes-dropped', chatId, noteIds: dropped });
+    } catch (err) {
+      console.error('[engine-claude-code] could not report the notes a closed process never read:', err);
+    }
   }
 
   /**
-   * Claude Code began a turn by itself (a helper reported back): it's handed
-   * to whoever runs replies as a self-start, its output buffered until then.
-   * With nobody to run it, it's read to its end and dropped.
+   * Claude Code began a turn by itself (a helper reported back), or ran notes
+   * `noteIds` the user sent mid-reply after that reply ended (a follow-on): it's
+   * handed to whoever runs replies as a self-start, its output buffered until
+   * then. With nobody to run it, it's read to its end and dropped.
    */
-  private selfStart(live: LiveProcess, first: SDKMessage): void {
-    const placeholder = `${SELF_TURN_PREFIX}${randomUUID()}`;
+  private selfStart(live: LiveProcess, first: SDKMessage, noteIds?: string[]): void {
+    // A follow-on's result names its notes, so it's attached under the first; any other names no message of ours.
+    const placeholder = noteIds?.[0] ?? `${SELF_TURN_PREFIX}${randomUUID()}`;
     const feed = live.attach(placeholder);
     feed.push(first);
     // Helper cards it starts belong to its reply, whose id comes when it runs.
@@ -343,28 +465,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
     const iterator = feed[Symbol.asyncIterator]();
     let taken = false;
-    const drain = async (): Promise<void> => {
-      for (let next = await iterator.next(); !next.done; next = await iterator.next());
-    };
+    // Nobody shows this turn: it's read to its end, and a note picked in it reported dropped.
+    const drain = (): Promise<boolean> => this.readUnshown(live, iterator);
     const last = live.last;
     if (!last || !this.backgroundHandler) {
       void drain();
       return;
     }
-    const finished = live.background?.lastFinished ?? null;
-    // Named once: a later turn it starts with no helper finished since is not this helper's.
-    if (live.background) live.background.lastFinished = null;
-    const notice = finished === null
-      ? 'Carried on after a background task finished.'
-      : finished.kind === 'local_agent'
-        ? `Carried on after the helper "${finished.label}" reported back.`
-        : `Carried on after the background task "${finished.label}" finished.`;
     const start: SelfStart = {
       chatId: last.chatId,
       afterMessageId: last.messageId,
       profileId: last.profileId,
-      notice,
-      unattended: last.unattended,
+      // The user asked for a follow-on: it's attended, and needs no notice.
+      ...(noteIds ? { notice: '', unattended: false, noteIds } : { notice: this.selfStartNotice(live), unattended: last.unattended }),
       run: (req) => {
         if (taken) throw new Error('A self-started turn runs once.');
         taken = true;
@@ -380,6 +493,18 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     this.backgroundHandler({ type: 'self-start', start });
   }
 
+  /** Why Claude Code carried on by itself: the helper or task that last finished, named once. */
+  private selfStartNotice(live: LiveProcess): string {
+    const finished = live.background?.lastFinished ?? null;
+    // Named once: a later turn it starts with no helper finished since is not this helper's.
+    if (live.background) live.background.lastFinished = null;
+    return finished === null
+      ? 'Carried on after a background task finished.'
+      : finished.kind === 'local_agent'
+        ? `Carried on after the helper "${finished.label}" reported back.`
+        : `Carried on after the background task "${finished.label}" finished.`;
+  }
+
   /** A self-started turn, for the reply `req` describes: gated and mapped like a user's reply, from the output already buffered. */
   private async *runSelfStarted(live: LiveProcess, req: EngineRequest, feed: AsyncIterator<SDKMessage>): AsyncGenerator<EngineEvent> {
     const backend = backendOf(req.profile.connection);
@@ -390,16 +515,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
     const mapper = this.replyMapper(live, req, prepared.helpers);
+    this.running.set(req.messageId, { live, req });
     let stopped!: () => void;
     const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
     const onAbort = (): void => {
-      void live.query.interrupt().catch(() => live.close());
+      this.stopTurn(live, req.messageId);
       stopped();
     };
     req.signal.addEventListener('abort', onAbort, { once: true });
     if (req.signal.aborted) onAbort();
     let pending: Promise<IteratorResult<SDKMessage>> | null = null;
     let ended = false;
+    // The turn ended in its own successful result: notes still queued then run as a follow-on.
+    let finished = false;
     try {
       yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, cwd, tools: [], mcpServers: [] } };
       for (;;) {
@@ -418,6 +546,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           }
           break;
         }
+        const picked = pickedNote(next.value);
+        if (picked !== null) {
+          yield { type: 'note-picked', noteId: picked };
+          continue;
+        }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
           if (event.type === 'init' || event.type === 'rate-limited') continue;
@@ -430,14 +563,17 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId }) };
             continue;
           }
+          if (event.type === 'finish') finished = true;
           yield event;
         }
         if (ended) break;
       }
     } finally {
+      this.running.delete(req.messageId);
       prepared.tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       live.binding = null;
+      if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
       // Stopped mid-turn: read the rest in the background (the process stays pooled, as it already is).
       if (req.signal.aborted && !ended && !live.isClosed) void this.finishSelfStopped(live, feed, pending);
     }
@@ -448,7 +584,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const timer = setTimeout(() => live.close(), INTERRUPT_GRACE_MS);
     timer.unref?.();
     try {
-      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next());
+      await this.readUnshown(live, feed, pending);
     } catch {
       live.close();
     } finally {
@@ -664,6 +800,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.background ??= new BackgroundTasks(req.chatId, (event) => this.backgroundHandler?.(event));
     live.background.current = req.messageId;
     live.onIdle = (message) => this.handleIdle(live, message);
+    live.onClosed = (dropped) => this.reportDropped(live, dropped);
+    live.onDropped = (dropped) => this.reportDropped(live, dropped);
     // This reply's turn, up to its own result: attached before the message
     // goes, so nothing of it is missed and nothing else reaches it.
     const uuid = randomUUID();
@@ -676,11 +814,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     let stopped!: () => void;
     const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
     const onAbort = (): void => {
-      void live.query.interrupt().catch(() => live.close());
+      this.stopTurn(live, req.messageId);
       stopped();
     };
     req.signal.addEventListener('abort', onAbort, { once: true });
     live.input.push(userMessage(content, uuid));
+    this.running.set(req.messageId, { live, req });
 
     const mapper = this.replyMapper(live, req, helpers);
     let sawInit = false;
@@ -703,6 +842,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           // The output ended (the process died) unless this turn's result was the last thing.
           if (live.failure !== null && !ended) throw live.failure;
           break;
+        }
+        const picked = pickedNote(next.value);
+        if (picked !== null) {
+          yield { type: 'note-picked', noteId: picked };
+          continue;
         }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
@@ -771,6 +915,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      this.running.delete(req.messageId);
       tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {
@@ -787,9 +932,26 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       } else {
         live.close();
       }
+      // A reply that didn't finish cleanly leaves no note to run after it (a closed process takes them with it).
+      if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
       if (live.isClosed) this.processes.delete(live);
     }
     return 'done';
+  }
+
+  /**
+   * Reads the rest of a turn nobody shows (a declined self-start, a stopped
+   * reply's): a note picked in it is reported dropped, since no reply will
+   * fold it. True when the turn's result came.
+   */
+  private async readUnshown(live: LiveProcess, feed: AsyncIterator<SDKMessage>, pending: Promise<IteratorResult<SDKMessage>> | null = null): Promise<boolean> {
+    let ended = false;
+    for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next()) {
+      const picked = pickedNote(next.value);
+      if (picked !== null) this.reportDropped(live, [picked]);
+      else if ((next.value as { type?: unknown }).type === 'result') ended = true;
+    }
+    return ended;
   }
 
   /**
@@ -802,9 +964,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     timer.unref?.();
     let ended = false;
     try {
-      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next()) {
-        if ((next.value as { type?: unknown }).type === 'result') ended = true;
-      }
+      ended = await this.readUnshown(live, feed, pending);
     } catch {
       ended = false;
     } finally {

@@ -85,6 +85,10 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
           ...(part.postTokens !== undefined ? { postTokens: part.postTokens } : {}),
         });
         break;
+      case 'user-note':
+        // A note Claude read mid-reply, in place, as it came live.
+        events.push({ messageId: message.id, type: 'user-note', part });
+        break;
       case 'context':
       case 'image':
       case 'file':
@@ -318,6 +322,11 @@ export class StreamRegistry {
   /** What a new subscriber needs besides the replies in flight: the chat's background tasks and their open approval cards. */
   chatState(chatId: string): { helpers: BackgroundHelper[]; backgroundApprovals: ApprovalRequest[] } {
     return { helpers: this.helpers.get(chatId) ?? [], backgroundApprovals: [...(this.backgroundApprovals.get(chatId)?.values() ?? [])] };
+  }
+
+  /** Tells the chat's subscribers something about the chat itself (its waiting notes, say). */
+  broadcastChat(chatId: string, event: ChatLevelEvent): void {
+    this.broadcast(chatId, event);
   }
 
   private broadcast(chatId: string, event: ChatStreamEvent): void {

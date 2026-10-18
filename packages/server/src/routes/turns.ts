@@ -41,6 +41,9 @@ export const CLEAR_MID_REPLY = 'Wait for the reply to finish, or stop it, before
 /** Refused when /clear (or /reset, /new) comes with more text after it in a Claude Code chat. */
 export { CLEAR_ON_ITS_OWN };
 
+/** Refused when a turn is sent while messages sent during the reply are still waiting to go out. */
+export const NOTES_WAITING = 'Messages you sent are still waiting for this reply.';
+
 /** Refused when a compact's reply is regenerated: it compacted a session that has moved on since. */
 export const COMPACT_NO_REGENERATE = "A compact can't be retried in place. Send /compact again.";
 
@@ -120,7 +123,7 @@ function parseParts(value: unknown): Part[] {
   return value as Part[];
 }
 
-function parseProfileIds(value: unknown): string[] {
+export function parseProfileIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0 || !value.every((v) => typeof v === 'string' && v.length > 0)) {
     throw new HTTPException(400, { message: '"profileIds" must be a non-empty array of non-empty strings.' });
   }
@@ -138,7 +141,7 @@ function parseParentId(value: unknown): string | null {
  * the profiles; typed `/clear` or `/compact` text is one only when a Claude Code
  * profile is answering, so an API chat can still say "/clear" to its model.
  */
-function contextCommandOf(parts: Part[], profiles: ResolvedProfile[]): ParsedCommand | null {
+export function contextCommandOf(parts: Part[], profiles: ResolvedProfile[]): ParsedCommand | null {
   for (const p of parts) {
     if (p.type === 'context') return p.kind === 'compact' ? { kind: 'compact', focus: p.focus?.trim() ?? '' } : { kind: 'clear' };
   }
@@ -162,7 +165,7 @@ async function compactProfile(container: Container, chatId: string, parentId: st
   }
 }
 
-function getChatOrThrow(container: Container, chatId: string) {
+export function getChatOrThrow(container: Container, chatId: string) {
   const chat = container.store.chats.get(chatId);
   if (!chat) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
   return chat;
@@ -173,11 +176,20 @@ function getChatOrThrow(container: Container, chatId: string) {
  * row is written (v2 spec §6): the UI asks where the folder is instead. The
  * turn runner refuses too, for anything that reaches it some other way.
  */
-function workspaceRefusal(container: Container, c: Context, chatId: string): Response | null {
+export function workspaceRefusal(container: Container, c: Context, chatId: string): Response | null {
   const chat = getChatOrThrow(container, chatId);
   const status = workspaceResolver(container)(chat.workspace);
   if (status.status !== 'unresolved') return null;
   return c.json({ error: workspaceUnresolvedMessage(status), kind: 'workspace_unresolved', workspaceStatus: status }, 409);
+}
+
+/**
+ * A 409 while messages sent during the chat's reply are still to go out:
+ * they go first, as the next turn, so a turn, regenerate or retry now would
+ * jump them.
+ */
+function notesWaiting(container: Container, c: Context, chatId: string): Response | null {
+  return container.notes?.hasWaiting(chatId) ? c.json({ kind: 'notes-waiting', error: NOTES_WAITING }, 409) : null;
 }
 
 export function turnsRoutes(container: Container): Hono {
@@ -185,7 +197,7 @@ export function turnsRoutes(container: Container): Hono {
 
   app.post('/chats/:id/turns', async (c) => {
     const chatId = c.req.param('id');
-    const refusal = workspaceRefusal(container, c, chatId);
+    const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
 
     const body = (await c.req.json().catch(() => ({}))) as TurnBody;
@@ -275,7 +287,7 @@ export function turnsRoutes(container: Container): Hono {
     if (message.error?.kind === 'peer_unreachable') {
       throw new HTTPException(409, { message: `Message "${messageId}" was cut off on another machine; regenerate it instead.` });
     }
-    const refusal = workspaceRefusal(container, c, message.chatId);
+    const refusal = workspaceRefusal(container, c, message.chatId) ?? notesWaiting(container, c, message.chatId);
     if (refusal) return refusal;
 
     const profile = await resolveProfile(container, message.producedBy.profileId);
@@ -301,7 +313,7 @@ export function turnsRoutes(container: Container): Hono {
   // streams in the background like POST .../turns.
   app.post('/chats/:id/regenerate', async (c) => {
     const chatId = c.req.param('id');
-    const refusal = workspaceRefusal(container, c, chatId);
+    const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
 
     const body = (await c.req.json().catch(() => ({}))) as RegenerateBody;
@@ -402,6 +414,8 @@ export function turnsRoutes(container: Container): Hono {
       sink.send('hello', {
         inFlight: snapshot.map((b) => ({ messageId: b.messageId, status: b.status, events: b.events })),
         ...container.streamRegistry.chatState(chatId),
+        // The chat's waiting notes, and what became of recent ones, so a reload doesn't lose or repeat them.
+        ...(container.notes?.helloState(chatId) ?? { notes: [], noteOutcomes: [] }),
       });
       // A reply can go quiet for minutes (thinking, an approval card): the
       // keepalive tells a machine relaying this stream that it's still alive.

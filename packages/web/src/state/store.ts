@@ -7,6 +7,8 @@ import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
+import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import {
@@ -46,6 +48,9 @@ export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?
 
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
+
+/** A note on its way back to the box; `takenBack` when the user took it back, rather than it not being sent. */
+export type ReturnedNote = ReplyNote & { takenBack?: true };
 
 export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -210,6 +215,34 @@ export interface OtherBenchState {
   backgroundApprovals: Record<string, ApprovalRequest[]>;
   /** The chat stream's hello: what's background for the chat, besides its replies in flight. */
   setChatBackground(chatId: string, helpers: BackgroundHelper[], approvals: ApprovalRequest[]): void;
+
+  // --- messages sent while a reply runs (spec 2026-10-18-send-while-replying-design) ---
+  /** Each chat's notes still waiting for its replies to end, as its stream last said. */
+  chatNotes: Record<string, ReplyNote[]>;
+  /** The notes this tab sent that haven't been resolved yet, by id. Kept in sessionStorage, so a reload of the tab keeps them. */
+  sentNotes: Record<string, ReplyNote>;
+  /** Notes handed back to this tab's composer (a stopped or lost reply, or one taken back), not yet taken. */
+  returnedNotes: ReturnedNote[];
+  /**
+   * This tab's notes the stream said were resolved before their send returned
+   * (the server can resolve one before it answers). Each is consumed by its
+   * `noteSent`, which every send reaches, so the set stays small.
+   */
+  earlyResolved: Record<string, true>;
+  /** This tab sent a note: remember it until it resolves (unless it already has). */
+  noteSent(note: ReplyNote): void;
+  /** A waiting note was taken back from this tab: forget it as sent, and hand it to the composer. */
+  noteTakenBack(note: ReplyNote): void;
+  /** The chat's returned notes, removed from the store: the composer puts them back in the box. */
+  takeReturnedNotes(chatId: string): ReturnedNote[];
+  /**
+   * The chat stream's hello. A note this tab sent that the server no longer
+   * holds goes back to the composer if it was `returned` or the server has no
+   * word of it (lost with a reply). One that was delivered (`folded`/`turn`)
+   * or taken back (`removed`, the withdrawing tab already restored it) is
+   * simply forgotten.
+   */
+  setChatNotes(chatId: string, notes: ReplyNote[], outcomes: { noteId: string; outcome: NoteOutcome }[]): void;
   /**
    * One event from a chat's stream: its background tasks, a reload when its
    * stored messages changed, an approval card for a reply that isn't streaming
@@ -295,6 +328,47 @@ function saveInspectorCollapsed(collapsed: boolean): void {
   } catch {
     // storage blocked or full -- the choice still applies for this session.
   }
+}
+
+/** sessionStorage key: the notes this tab sent that aren't resolved yet. Per tab, so a reload keeps them. */
+export const SENT_NOTES_STORAGE_KEY = 'otherbench.sentNotes';
+
+function loadSentNotes(): Record<string, ReplyNote> {
+  try {
+    const parsed: unknown = JSON.parse(window.sessionStorage.getItem(SENT_NOTES_STORAGE_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const notes: Record<string, ReplyNote> = {};
+    for (const [id, n] of Object.entries(parsed as Record<string, Partial<ReplyNote> | null>)) {
+      if (n && n.id === id && typeof n.chatId === 'string' && typeof n.text === 'string' && Array.isArray(n.attachments)) notes[id] = n as ReplyNote;
+    }
+    return notes;
+  } catch {
+    return {};
+  }
+}
+
+function saveSentNotes(notes: Record<string, ReplyNote>): void {
+  try {
+    window.sessionStorage.setItem(SENT_NOTES_STORAGE_KEY, JSON.stringify(notes));
+  } catch {
+    // storage blocked or full -- they're still held for this load.
+  }
+}
+
+/**
+ * Note ids the chat's loaded replies show as `user-note` parts, and those in
+ * reply events waiting for their message: Claude read those notes.
+ */
+function readNoteIds(state: Pick<OtherBenchState, 'messages' | 'pendingEvents'>, chatId: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of Object.values(state.messages)) {
+    if (m.chatId !== chatId) continue;
+    for (const p of m.parts) if (p.type === 'user-note') ids.add(p.noteId);
+  }
+  for (const events of Object.values(state.pendingEvents)) {
+    for (const e of events) if (e.type === 'user-note') ids.add(e.part.noteId);
+  }
+  return ids;
 }
 
 function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
@@ -613,6 +687,42 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   backgroundApprovals: {},
   setChatBackground: (chatId, helpers, approvals) =>
     set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: helpers }, backgroundApprovals: { ...state.backgroundApprovals, [chatId]: approvals } })),
+  chatNotes: {},
+  sentNotes: loadSentNotes(),
+  returnedNotes: [],
+  earlyResolved: {},
+  noteSent: (note) =>
+    set((state) => {
+      if (!state.earlyResolved[note.id]) return { sentNotes: { ...state.sentNotes, [note.id]: note } };
+      const { [note.id]: _consumed, ...earlyResolved } = state.earlyResolved;
+      return { earlyResolved };
+    }),
+  noteTakenBack: (note) =>
+    set((state) => {
+      const { [note.id]: _taken, ...sentNotes } = state.sentNotes;
+      return { sentNotes, returnedNotes: [...state.returnedNotes, { ...note, takenBack: true }] };
+    }),
+  takeReturnedNotes: (chatId) => {
+    const taken = get().returnedNotes.filter((n) => n.chatId === chatId);
+    if (taken.length > 0) set((state) => ({ returnedNotes: state.returnedNotes.filter((n) => n.chatId !== chatId) }));
+    return taken;
+  },
+  setChatNotes: (chatId, notes, outcomes) =>
+    set((state) => {
+      const waiting = new Set(notes.map((n) => n.id));
+      const delivered = new Set(outcomes.filter((o) => o.outcome === 'folded' || o.outcome === 'turn' || o.outcome === 'removed').map((o) => o.noteId));
+      const sentNotes = { ...state.sentNotes };
+      const lost: ReplyNote[] = [];
+      for (const note of Object.values(state.sentNotes)) {
+        if (note.chatId !== chatId || waiting.has(note.id)) continue;
+        delete sentNotes[note.id];
+        if (!delivered.has(note.id)) lost.push(note);
+      }
+      // A reply that shows the note was read is word enough, with no outcome kept for it.
+      const read = lost.length > 0 ? readNoteIds(state, chatId) : new Set<string>();
+      const back = lost.filter((n) => !read.has(n.id));
+      return { chatNotes: { ...state.chatNotes, [chatId]: notes }, sentNotes, returnedNotes: [...state.returnedNotes, ...back] };
+    }),
   applyChatEvent: (chatId, event) => {
     if (event.type === 'helpers') {
       set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: event.helpers } }));
@@ -620,6 +730,25 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     }
     if (event.type === 'messages-changed') {
       set((state) => ({ chatReloads: bump(state.chatReloads, chatId) }));
+      return;
+    }
+    if (event.type === 'notes') {
+      set((state) => ({ chatNotes: { ...state.chatNotes, [chatId]: event.notes } }));
+      return;
+    }
+    if (event.type === 'note-resolved') {
+      set((state) => {
+        const { [event.noteId]: _resolved, ...sentNotes } = state.sentNotes;
+        const back = event.outcome === 'returned' && event.clientId === CLIENT_ID && event.note;
+        // This tab's note, resolved before its send returned: `noteSent` mustn't then remember it.
+        // (Never `removed`: taking a note back needs its id, so its send has returned.)
+        const early = event.clientId === CLIENT_ID && event.outcome !== 'removed' && !(event.noteId in state.sentNotes);
+        return {
+          sentNotes,
+          ...(back ? { returnedNotes: [...state.returnedNotes, event.note as ReplyNote] } : {}),
+          ...(early ? { earlyResolved: { ...state.earlyResolved, [event.noteId]: true as const } } : {}),
+        };
+      });
       return;
     }
     const state = get();
@@ -720,8 +849,10 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
 export const selectPendingApprovalCount = (s: OtherBenchState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
-// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
+// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device;
+// the notes this tab sent, in this tab.
 useOtherBenchStore.subscribe((state, previous) => {
   if (state.paneState !== previous.paneState) savePaneState(state.paneState);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
+  if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
 });

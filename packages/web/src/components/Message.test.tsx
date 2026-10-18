@@ -811,3 +811,28 @@ describe('Message sub-agent cards', () => {
     });
   });
 });
+
+describe('Message user notes', () => {
+  afterEach(cleanup);
+
+  it('renders a user note inside a reply with its label', () => {
+    const message = base({
+      parts: [
+        { type: 'text', text: 'Looking at it.' },
+        { type: 'user-note', noteId: 'n1', text: 'also check the tests', attachments: [{ attachmentId: 'att-1', mime: 'application/pdf', filename: 'spec.pdf' }] },
+        { type: 'text', text: 'Checking the tests too.' },
+      ],
+    });
+    render(<Message message={message} />);
+    const block = screen.getByTestId('user-note');
+    expect(within(block).getByText('You, while Claude was working')).toBeInTheDocument();
+    expect(block).toHaveTextContent('also check the tests');
+    expect(within(block).getByText('spec.pdf')).toBeInTheDocument();
+    // Read-only: no remove button on its chip.
+    expect(within(block).queryByRole('button')).not.toBeInTheDocument();
+    // Where Claude read it: between the reply's text before and after.
+    const text = block.closest('article')!.textContent ?? '';
+    expect(text.indexOf('Looking at it.')).toBeLessThan(text.indexOf('also check the tests'));
+    expect(text.indexOf('also check the tests')).toBeLessThan(text.indexOf('Checking the tests too.'));
+  });
+});

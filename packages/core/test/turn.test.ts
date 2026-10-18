@@ -954,6 +954,31 @@ describe('TurnRunner capability fallback for image attachments', () => {
     expect(loadAttachment).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a reply load a waiting note's unsent attachment of its own chat, and nothing held for another chat or over the cap", async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const held = new Set(['att-held', 'att-held-elsewhere', 'att-held-huge']);
+    const heldAttachment = vi.fn((id: string) => held.has(id));
+    const runner = new TurnRunner(store, engine, { loadAttachment, heldAttachment });
+    store.attachments.create(makeAttachment({ id: 'att-held', chatId: 'chat-1', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-held-elsewhere', chatId: 'chat-2', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-held-huge', chatId: 'chat-1', messageId: null, size: 26 * 1024 * 1024 }));
+    store.attachments.create(makeAttachment({ id: 'att-unsent', chatId: 'chat-1', messageId: null }));
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const request = engine.requests[0]!;
+    expect((await request.loadAttachment!('att-held')).toString()).toBe('bytes');
+    expect(request.attachmentSize!('att-held')).toBe(1234);
+    expect(heldAttachment).toHaveBeenCalledWith('att-held', 'chat-1');
+    await expect(request.loadAttachment!('att-held-elsewhere')).rejects.toThrow('not available in this chat');
+    await expect(request.loadAttachment!('att-held-huge')).rejects.toThrow('not available in this chat');
+    await expect(request.loadAttachment!('att-unsent')).rejects.toThrow('not available in this chat');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+  });
+
   it('turns an image or file part naming another chat\'s attachment (a synced message) into a note, and the turn still runs', async () => {
     const store = new InMemoryStore();
     store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: 'theirs-msg' }));
@@ -2609,5 +2634,140 @@ describe('TurnRunner and context lines', () => {
     const id = result.assistantMessageIds[0]!;
     await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
     expect(store.messages.get(id)!.parts).toContainEqual({ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
+  });
+});
+
+describe('TurnRunner and notes sent mid-reply', () => {
+  const ZERO = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
+  const finish: EngineEvent = { type: 'finish', usage: ZERO, finishReason: 'stop' };
+  const notePart = { type: 'user-note' as const, noteId: 'n1', text: 'also check x', attachments: [] };
+  function chat(): InMemoryStore {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.messages.create({ id: 'q1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'go' }], status: 'complete', error: null, producedBy: null });
+    return store;
+  }
+
+  it('folds a picked note into the reply where it was picked', async () => {
+    const store = chat();
+    const engine = new FakeChatEngine([
+      { type: 'text-delta', text: 'A' },
+      { type: 'note-picked', noteId: 'n1' },
+      { type: 'text-delta', text: 'B' },
+      finish,
+    ]);
+    const taken: [string, string][] = [];
+    const runner = new TurnRunner(store, engine, {
+      takeNote: (messageId, noteId) => {
+        taken.push([messageId, noteId]);
+        return notePart;
+      },
+    });
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: 'q1', userParts: [{ type: 'text', text: 'again' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
+
+    expect(store.messages.get(assistantMessageIds[0]!)!.parts).toEqual([
+      { type: 'text', text: 'A' },
+      notePart,
+      { type: 'text', text: 'B' },
+    ]);
+    expect(taken).toEqual([[assistantMessageIds[0], 'n1']]);
+    expect(events).toContainEqual({ messageId: assistantMessageIds[0], type: 'user-note', part: notePart });
+    expect(events.some((e) => (e.type as string) === 'note-picked')).toBe(false);
+  });
+
+  it('ignores a picked note nobody holds', async () => {
+    const store = chat();
+    const engine = new FakeChatEngine([
+      { type: 'text-delta', text: 'A' },
+      { type: 'note-picked', noteId: 'n1' },
+      { type: 'text-delta', text: 'B' },
+      finish,
+    ]);
+    const runner = new TurnRunner(store, engine, { takeNote: () => null });
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: 'q1', userParts: [{ type: 'text', text: 'again' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
+
+    expect(store.messages.get(assistantMessageIds[0]!)!.parts).toEqual([{ type: 'text', text: 'AB' }]);
+    expect(events.some((e) => e.type === 'user-note')).toBe(false);
+  });
+
+  it("runningInfo reports a running reply's chat and unattended flag, and null once it ends", async () => {
+    const store = chat();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const runner = new TurnRunner(store, new FakeChatEngine([]), {});
+    const { assistantMessageId } = await runner.runSelfStarted({
+      chatId: 'chat-1',
+      parentId: 'q1',
+      profile: makeResolvedProfile(),
+      notice: '',
+      unattended: true,
+      stream: async function* () {
+        await gate;
+        yield finish;
+      },
+    });
+    await vi.waitFor(() => expect(runner.runningInfo(assistantMessageId)).toEqual({ chatId: 'chat-1', unattended: true }));
+    expect(runner.runningInfo('nope')).toBeNull();
+
+    release();
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+    expect(runner.runningInfo(assistantMessageId)).toBeNull();
+  });
+
+  it('runFollowOn makes a user message and a reply under the parent and runs the given stream', async () => {
+    const store = chat();
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+    const ended = vi.fn();
+    const userParts: Part[] = [{ type: 'text', text: 'note one' }];
+
+    const { userMessageId, assistantMessageId } = await runner.runFollowOn({
+      chatId: 'chat-1',
+      parentId: 'q1',
+      userParts,
+      profile: makeResolvedProfile(),
+      stream: async function* () {
+        yield { type: 'text-delta', text: 'Done.' };
+        yield finish;
+      },
+      onEnd: ended,
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(store.messages.get(userMessageId)).toMatchObject({ parentId: 'q1', role: 'user', status: 'complete', parts: userParts });
+    expect(store.messages.get(assistantMessageId)).toMatchObject({ parentId: userMessageId, role: 'assistant', parts: [{ type: 'text', text: 'Done.' }] });
+    expect(engine.requests).toEqual([]);
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
+
+  it("runFollowOn binds the user message's unsent attachments of this chat to it, before the reply reads its history", async () => {
+    const store = chat();
+    store.attachments.create({ id: 'att-1', chatId: 'chat-1', messageId: null, filename: 'shot.png', mime: 'image/png', size: 4, sha256: 's', storagePath: 'x', extractedText: null });
+    let seen: CanonMessage[] = [];
+    const runner = new TurnRunner(store, new FakeChatEngine([]));
+
+    const { userMessageId, assistantMessageId } = await runner.runFollowOn({
+      chatId: 'chat-1',
+      parentId: 'q1',
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profile: makeResolvedProfile(),
+      stream: async function* (req) {
+        seen = req.messages;
+        yield finish;
+      },
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(store.attachments.get('att-1')!.messageId).toBe(userMessageId);
+    // Bound, so the history keeps it (degraded to text for this model) rather than omitting it as another chat's.
+    expect(seen.at(-1)!.parts).toEqual([{ type: 'text', text: expect.stringContaining('"shot.png"') }]);
   });
 });

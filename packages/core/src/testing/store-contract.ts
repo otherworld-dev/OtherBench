@@ -803,6 +803,21 @@ export function runStoreContract(
       expect(store.attachments.get('att-a')).toMatchObject({ id: 'att-a', chatId: chat.id, filename: 'photo.png' });
     });
 
+    it('attachments: the message an attachment was sent with is set once', () => {
+      const { chat } = seedChat(store, 'chat-a');
+      store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
+      store.messages.create(makeMessageInput({ id: 'msg-b', chatId: chat.id }));
+      store.attachments.create(makeAttachment({ id: 'att-a', chatId: chat.id }));
+
+      store.attachments.update('att-a', { messageId: 'msg-a' });
+      // Setting the same message again is not a change.
+      store.attachments.update('att-a', { messageId: 'msg-a' });
+
+      expect(() => store.attachments.update('att-a', { messageId: 'msg-b' })).toThrow(/already sent/);
+      expect(() => store.attachments.update('att-a', { messageId: null })).toThrow(/already sent/);
+      expect(store.attachments.get('att-a')!.messageId).toBe('msg-a');
+    });
+
     describe('attachments: isReferenced / referencedShas', () => {
       it('isReferenced is false for a sha256 no row has', () => {
         expect(store.attachments.isReferenced('no-such-sha')).toBe(false);

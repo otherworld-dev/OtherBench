@@ -56,6 +56,7 @@ import { AppEventBus, markUnreadOnFinish, withChatEvents } from './stream/events
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
+import { NotesService } from './notes/service.js';
 import { workspaceResolver } from './workspace-view.js';
 import { toolImageSaver } from './tool-images.js';
 
@@ -102,6 +103,13 @@ export interface Container {
    * tests can build a Container without one.
    */
   schedules?: ScheduleService;
+  /**
+   * Messages sent while a reply runs (spec 2026-10-18-send-while-replying-design):
+   * which path each takes, the waiting set, and what becomes of them. Always
+   * set by `createContainer`; optional so route tests can build a Container
+   * without one.
+   */
+  notes?: NotesService;
   /**
    * Import from claude.ai (spec 2026-10-09-claude-import-design). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -442,8 +450,14 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     console.error('[otherbench-server] initial MCP server sync failed:', err);
   });
 
+  // Set once the container exists (it starts turns through it); a note picked before then is nobody's.
+  let notes: NotesService | null = null;
   const turnRunner = new TurnRunner(store, engine, {
     toolProvider,
+    // A note the user sent mid-reply that Claude just read is folded into the reply.
+    takeNote: (messageId, noteId) => notes?.take(messageId, noteId) ?? null,
+    // Its images are unsent until it's delivered, but the reply it goes into loads them.
+    heldAttachment: (attachmentId, chatId) => notes?.heldAttachmentIds(chatId).includes(attachmentId) ?? false,
     // The sandbox mounts a folder at its real path (on-disk case), so the prompt names that one.
     canonicalPath: realFolderPath,
     // A sub-agent can run as another profile (spec 2026-10-12-api-subagents-design).
@@ -604,6 +618,22 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // Never let the memory sweep stop the server starting.
     console.warn('[otherbench-server] project memory startup sweep failed:', err);
   }
+  // Notes sent while a reply runs: told whenever a reply ends, after the stream registry and app events have heard it.
+  const notesService = new NotesService({
+    store,
+    turnRunner,
+    engine,
+    streamRegistry,
+    startTurn: (input) => startTurn(container, input),
+    resolveProfile: (id) => resolveProfile({ store, secrets }, id),
+    events,
+    memory,
+  });
+  notes = notesService;
+  container.notes = notesService;
+  turnRunner.on((e) => {
+    if (e.type === 'status' && e.status !== 'streaming') notesService.replyEnded(e.messageId, e.status);
+  });
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
   // what tells the service a chat is busy).
@@ -614,6 +644,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
     resolveWorkspace: (ws) => workspaceResolver(container)(ws),
     isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     emit: (e) => events.emit(e),
   });
   try {

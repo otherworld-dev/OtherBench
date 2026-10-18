@@ -1,9 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
+import type { ReplyNote } from '@otherbench/core/types/notes.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { Composer } from './Composer.js';
@@ -16,6 +18,7 @@ vi.mock('../state/api.js', () => ({
       setHead: vi.fn(),
     },
     chats: { patch: vi.fn(), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
+    notes: { send: vi.fn(), withdraw: vi.fn() },
     claude: { planUsage: vi.fn(async () => ({ usage: null })) },
     attachments: {
       upload: vi.fn(),
@@ -27,10 +30,12 @@ vi.mock('../state/api.js', () => ({
   },
   ApiError: class ApiError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    kind?: string;
+    constructor(status: number, message: string, kind?: string) {
       super(message);
       this.name = 'ApiError';
       this.status = status;
+      if (kind !== undefined) this.kind = kind;
     }
   },
 }));
@@ -44,6 +49,7 @@ const mockedUpload = vi.mocked(api.attachments.upload);
 const mockedAttachmentList = vi.mocked(api.attachments.list);
 const mockedDelete = vi.mocked(api.attachments.delete);
 const mockedChatsPatch = vi.mocked(api.chats.patch);
+const mockedNoteSend = vi.mocked(api.notes.send);
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -123,6 +129,7 @@ function reset(): void {
   mockedUpload.mockReset();
   mockedDelete.mockReset();
   mockedChatsPatch.mockReset();
+  mockedNoteSend.mockReset();
 }
 
 describe('Composer', () => {
@@ -344,15 +351,6 @@ describe('Composer', () => {
     expect(mockedCreate).not.toHaveBeenCalled();
   });
 
-  it('Enter sends nothing while a reply is still running, and keeps what was typed', async () => {
-    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
-    const user = userEvent.setup();
-    render(<Composer chat={makeChat()} />);
-    const box = screen.getByRole('textbox', { name: /message/i });
-    await user.type(box, 'one more thing{Enter}');
-    expect(mockedCreate).not.toHaveBeenCalled();
-    expect(box).toHaveValue('one more thing');
-  });
 
   it("sends nothing while the chat's folder doesn't resolve on this machine (the prompt above asks first)", async () => {
     const user = userEvent.setup();
@@ -1022,6 +1020,22 @@ describe('Composer message history (Up and Down)', () => {
     expect(box()).toHaveValue('again: second');
   });
 
+  it('a note that comes back while a recalled message shows goes after the real draft, not the recalled one', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'a2' })} />);
+    await user.type(box(), 'draft');
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('second');
+    const returned: ReplyNote = {
+      id: 'n1', chatId: 'chat-1', text: 'came back', attachments: [], path: 'wait', replyIds: [], parentId: null, profileIds: ['p1'], clientId: CLIENT_ID, sentAt: 1,
+    };
+    act(() => {
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+
+    await waitFor(() => expect(box()).toHaveValue('draft\n\ncame back'));
+  });
+
   it('does nothing in a chat with no earlier messages', async () => {
     const user = userEvent.setup();
     render(<Composer chat={makeChat({ id: 'chat-2' })} />);
@@ -1172,5 +1186,141 @@ describe('Composer / command menu', () => {
     await user.type(box(), '/');
     expect(await screen.findByText("Couldn't load this chat's own commands.")).toBeInTheDocument();
     expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(2);
+  });
+});
+
+describe('Composer while a reply runs (notes)', () => {
+  const conn = (id: string, kind: Connection['kind']): Connection => ({
+    id, name: id, kind, baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null,
+  });
+  const note = (id: string, over: Partial<ReplyNote> = {}): ReplyNote => ({
+    id, chatId: 'chat-1', text: id, attachments: [], path: 'wait', replyIds: ['a1'], parentId: 'a1', profileIds: ['p1'], clientId: CLIENT_ID, sentAt: 1, ...over,
+  });
+  beforeEach(() => {
+    reset();
+    mockedAttachmentList.mockReset();
+    mockedAttachmentList.mockResolvedValue([]);
+    vi.mocked(api.chats.commands).mockReset();
+    vi.mocked(api.chats.commands).mockResolvedValue({ commands: [...OWN_COMMANDS, { name: 'review', description: 'Review', argumentHint: '', aliases: [] }] });
+    useOtherBenchStore.getState().setConnections([conn('c1', 'mock'), conn('cc', 'claude_code')]);
+    useOtherBenchStore.getState().setProfiles([makeProfile(), makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet', isDefault: false })]);
+  });
+  afterEach(cleanup);
+  const box = () => screen.getByRole('textbox', { name: /message/i });
+
+  it('shows Send and Stop while a reply runs', () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    render(<Composer chat={makeChat()} />);
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    cleanup();
+
+    // Only notes waiting (the reply just ended): still busy, so Send sends a note, but there's nothing to stop.
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
+    useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'notes', chatId: 'chat-1', notes: [note('n1')] });
+    render(<Composer chat={makeChat()} />);
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+  });
+
+  it('Enter mid-reply sends a note and clears the box', async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    mockedAttachmentList.mockResolvedValue([makeAttachment({ id: 'att-1' })]);
+    const sent = note('n1', { text: 'one more thing' });
+    mockedNoteSend.mockResolvedValue(sent);
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'u1' })} parentId="a1" />);
+    await screen.findByText('photo.png');
+    await user.type(box(), 'one more thing{Enter}');
+
+    await waitFor(() => expect(box()).toHaveValue(''));
+    expect(mockedNoteSend).toHaveBeenCalledWith('chat-1', { text: 'one more thing', attachments: [{ attachmentId: 'att-1' }], parentId: 'a1', profileIds: ['p1'], clientId: CLIENT_ID });
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument();
+    expect(useOtherBenchStore.getState().sentNotes['n1']).toEqual(sent);
+  });
+
+  it('a slash command mid-reply is refused with the copy and kept', async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/clear{Enter}');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wait for the reply to finish, or stop it, before sending a command.');
+    expect(box()).toHaveValue('/clear');
+
+    // A Claude Code command from the `/` menu, with its arguments.
+    await user.clear(box());
+    await user.type(box(), '/review the diff{Enter}');
+    expect(box()).toHaveValue('/review the diff');
+    expect(mockedNoteSend).not.toHaveBeenCalled();
+    expect(mockedCreate).not.toHaveBeenCalled();
+
+    // Plain text that starts with a slash is not a command.
+    mockedNoteSend.mockResolvedValue(note('n1'));
+    await user.clear(box());
+    await user.type(box(), '/etc/hosts is wrong{Enter}');
+    await waitFor(() => expect(mockedNoteSend).toHaveBeenCalled());
+  });
+
+  it('falls back to a normal send when the server says the chat is idle', async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    mockedNoteSend.mockRejectedValue(new ApiError(409, 'Conflict', 'idle'));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u2', assistantMessageIds: ['a2'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} parentId="a1" />);
+    await user.type(box(), 'just ended{Enter}');
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', { parentId: 'a1', parts: [{ type: 'text', text: 'just ended' }], profileIds: ['p1'] }));
+    await waitFor(() => expect(box()).toHaveValue(''));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it("a returned note's text and chips come back after the draft", async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.type(box(), 'my draft');
+    const returned = note('n1', { text: 'came back', attachments: [{ attachmentId: 'att-9', mime: 'image/png', filename: 'shot.png' }] });
+    act(() => {
+      useOtherBenchStore.getState().noteSent(returned);
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+
+    await waitFor(() => expect(box()).toHaveValue('my draft\n\ncame back'));
+    expect(screen.getByText('shot.png')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Not sent: the reply ended before it was read. It's back in the box.");
+    expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
+  });
+
+  it('a note returned with its chip while the send is still in flight keeps the chip and the notice', async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    const returned = note('n1', { text: 'came back', attachments: [{ attachmentId: 'att-1', mime: 'image/png', filename: 'photo.png' }] });
+    // The server returns the note (the reply just stopped) before the send's own response arrives.
+    let respond!: (n: ReplyNote) => void;
+    mockedNoteSend.mockImplementation(() => new Promise<ReplyNote>((resolve) => (respond = resolve)));
+    mockedAttachmentList.mockResolvedValue([makeAttachment({ id: 'att-1' })]);
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await screen.findByText('photo.png');
+    await user.type(box(), 'came back{Enter}');
+    await waitFor(() => expect(mockedNoteSend).toHaveBeenCalled());
+
+    act(() => {
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+    await act(async () => respond(returned));
+
+    await waitFor(() => expect(box()).toHaveValue('came back'));
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Not sent: the reply ended before it was read. It's back in the box.");
+    expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+  });
+
+  it('a note taken back comes back to the box without the not-sent copy', async () => {
+    render(<Composer chat={makeChat()} />);
+    act(() => useOtherBenchStore.getState().noteTakenBack(note('n1', { text: 'never mind' })));
+    await waitFor(() => expect(box()).toHaveValue('never mind'));
+    expect(screen.queryByText(/Not sent:/)).not.toBeInTheDocument();
   });
 });

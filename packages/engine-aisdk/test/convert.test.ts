@@ -290,4 +290,54 @@ describe('toModelMessages', () => {
       },
     ]);
   });
+
+  it('splits an assistant message at a user note into assistant, user, assistant', async () => {
+    const messages: CanonMessage[] = [
+      makeMessage('assistant', [
+        { type: 'text', text: 'A' },
+        { type: 'user-note', noteId: 'n1', text: 'stop', attachments: [] },
+        { type: 'text', text: 'B' },
+      ]),
+    ];
+    expect(await toModelMessages(messages, VISION_AND_TOOLS, noAttachments)).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: 'A' }] },
+      { role: 'user', content: [{ type: 'text', text: 'stop' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'B' }] },
+    ]);
+  });
+
+  it('keeps a tool result after the assistant segment that made its call, ahead of the note', async () => {
+    const messages: CanonMessage[] = [
+      makeMessage('assistant', [
+        { type: 'tool-call', id: 'c1', name: 'read_file', args: { path: 'a' } },
+        { type: 'tool-result', id: 'c1', name: 'read_file', result: 'ok', isError: false },
+        { type: 'user-note', noteId: 'n1', text: 'n', attachments: [] },
+        { type: 'text', text: 'B' },
+      ]),
+    ];
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, noAttachments);
+    expect(result.map((r) => r.role)).toEqual(['assistant', 'tool', 'user', 'assistant']);
+    expect(result[2]).toEqual({ role: 'user', content: [{ type: 'text', text: 'n' }] });
+    expect(result[3]).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'B' }] });
+  });
+
+  it("a note's image attachment goes with the user segment", async () => {
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    const messages: CanonMessage[] = [
+      makeMessage('assistant', [
+        { type: 'text', text: 'A' },
+        { type: 'user-note', noteId: 'n1', text: 'look', attachments: [{ attachmentId: 'att-9', mime: 'image/png', filename: 'p.png' }] },
+        { type: 'text', text: 'B' },
+      ]),
+    ];
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, loadAttachment);
+    expect(loadAttachment).toHaveBeenCalledWith('att-9');
+    expect(result[1]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'look' },
+        { type: 'image', image: FAKE_PNG, mediaType: 'image/png' },
+      ],
+    });
+  });
 });

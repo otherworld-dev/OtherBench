@@ -218,3 +218,11 @@ describe('subagent events', () => {
     expect(message.parts[0]).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'Found it.' }] });
   });
 });
+
+describe('user-note', () => {
+  it('reducer appends a user-note part', () => {
+    const part = { type: 'user-note' as const, noteId: 'n1', text: 'also this', attachments: [] };
+    const { message } = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'user-note', part });
+    expect(message.parts).toEqual([part]);
+  });
+});

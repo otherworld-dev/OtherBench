@@ -68,4 +68,16 @@ describe('renderHistory', () => {
     expect(out).not.toContain('FIRST');
     expect(out.length).toBeLessThan(HISTORY_CHAR_LIMIT + 500);
   });
+  it('renders a user note inside a reply as a [user] line where it falls', () => {
+    const out = renderHistory([
+      m('u1', 'user', [{ type: 'text', text: 'go' }]),
+      m('a1', 'assistant', [
+        { type: 'text', text: 'A' },
+        { type: 'user-note', noteId: 'n1', text: 'stop', attachments: [{ attachmentId: 'x', mime: 'image/png', filename: 'x.png' }] },
+        { type: 'text', text: 'B' },
+      ]),
+      m('u2', 'user', [{ type: 'text', text: 'next' }]),
+    ]);
+    expect(out).toContain('[assistant] A\n\n[user] stop\n[attachment]\n\n[assistant] B');
+  });
 });

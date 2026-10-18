@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { LivePool, LiveProcess, PromptQueue, liveKey } from '../src/live.js';
+import { LivePool, LiveProcess, NOTE_PICKED, PromptQueue, lifecycleOf, liveKey } from '../src/live.js';
 
 /** A fake Claude Code output the test pushes messages into. */
 function output() {
@@ -170,5 +170,200 @@ describe('LivePool.makeRoom', () => {
     other.live.sessionId = 's2';
     pool.release(other.live);
     expect(busy.live.isClosed).toBe(false);
+  });
+});
+
+const lifecycle = (uuid: string, state: string) => ({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: 'frame-' + uuid + state, session_id: 's' });
+
+describe('LiveProcess and notes', () => {
+  it("a note started while a turn is attached reaches that turn's feed as NOTE_PICKED", async () => {
+    const { live, out } = process();
+    const feed = live.attach('u1');
+    live.notes.set('n1', 'm1');
+    out.emit(lifecycle('n1', 'started'));
+    out.emit(result(['u1', 'n1']));
+    expect(await take(feed)).toEqual([{ type: NOTE_PICKED, noteId: 'n1' }, result(['u1', 'n1'])]);
+    expect(live.notes.size).toBe(0);
+    expect(live.starting).toEqual([]);
+  });
+
+  it("a note started after the turn's result is held in starting, not given to onIdle as a turn", async () => {
+    const { live, out, idle } = process();
+    const feed = live.attach('u1');
+    live.notes.set('n1', 'm1');
+    out.emit(result(['u1']));
+    await take(feed);
+    out.emit(lifecycle('n1', 'started'));
+    await tick();
+    expect(live.starting).toEqual(['n1']);
+    expect(live.notes.has('n1')).toBe(false);
+    expect(idle.some((m) => (m as { type: string }).type === NOTE_PICKED)).toBe(false);
+  });
+
+  it('forgets a note that completes or is cancelled, and reports it dropped unless the cancel was asked for', async () => {
+    const { live, out } = process();
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
+    live.notes.set('n1', 'm1');
+    live.notes.set('n2', 'm1');
+    live.notes.set('n3', 'm1');
+    live.cancelling.add('n3');
+    out.emit(lifecycle('n1', 'cancelled'));
+    out.emit(lifecycle('n2', 'completed'));
+    out.emit(lifecycle('n3', 'cancelled'));
+    await tick();
+    expect(live.notes.size).toBe(0);
+    // Claude Code dropped n1 and n2 unasked: nobody else would say they never ran. n3 was asked for.
+    expect(dropped).toEqual([['n1'], ['n2']]);
+  });
+
+  it('knows a note while it is queued, starting or read, and not once it is forgotten', async () => {
+    const { live, out } = process();
+    const feed = live.attach('u1');
+    live.notes.set('n1', 'm1');
+    live.notes.set('n2', 'm1');
+    live.notes.set('n3', 'm1');
+    expect(live.knows('n1')).toBe(true);
+    out.emit(lifecycle('n1', 'started'));
+    out.emit(result(['u1', 'n1']));
+    await take(feed);
+    out.emit(lifecycle('n2', 'started'));
+    out.emit(lifecycle('n3', 'cancelled'));
+    await tick();
+    expect(live.starting).toEqual(['n2']);
+    // Read mid-reply (its pick may not have been shown yet), or started for a follow-on: Claude Code has it.
+    expect([live.knows('n1'), live.knows('n2')]).toEqual([true, true]);
+    expect(live.knows('n3')).toBe(false);
+    expect(live.knows('n-other')).toBe(false);
+  });
+
+  it('lifecycleOf reads command_uuid and state, and is null for other messages', () => {
+    expect(lifecycleOf(lifecycle('n1', 'started') as unknown as SDKMessage)).toEqual({ uuid: 'n1', state: 'started' });
+    expect(lifecycleOf(text('x') as unknown as SDKMessage)).toBeNull();
+    expect(lifecycleOf({ type: 'command_lifecycle', state: 'started' } as unknown as SDKMessage)).toBeNull();
+  });
+
+  it('records init capabilities', async () => {
+    const { live, out } = process();
+    out.emit({ type: 'system', subtype: 'init', capabilities: ['msg_lifecycle_v1', 'interrupt_send_now_v1'] });
+    await tick();
+    expect(live.capabilities).toEqual(['msg_lifecycle_v1', 'interrupt_send_now_v1']);
+  });
+
+  it('close reports unstarted and starting notes once through onClosed', async () => {
+    const { live, out } = process();
+    const calls: string[][] = [];
+    live.onClosed = (d) => calls.push(d);
+    live.notes.set('n1', 'm1');
+    live.notes.set('n2', 'm1');
+    out.emit(lifecycle('n2', 'started'));
+    await tick();
+    live.close();
+    live.close();
+    out.end();
+    await tick();
+    expect(calls).toEqual([['n1', 'n2']]);
+  });
+
+  /** A process with notes `ids` that Claude Code started after the reply's turn ended. */
+  async function started(ids: string[]) {
+    const p = process();
+    const feed = p.live.attach('u1');
+    for (const id of ids) p.live.notes.set(id, 'm1');
+    p.out.emit(result(['u1']));
+    await take(feed);
+    for (const id of ids) p.out.emit(lifecycle(id, 'started'));
+    await tick();
+    return p;
+  }
+
+  it("a started note keeps the process in a turn until its follow-on's result", async () => {
+    const { live, out } = await started(['n1']);
+    let free = false;
+    void live.whenFree().then(() => (free = true));
+    expect(live.inTurn).toBe(true);
+    await tick();
+    expect(free).toBe(false);
+    expect(live.takeStarting(text('late') as unknown as SDKMessage)).toEqual(['n1']);
+    const feed = live.attach('n1');
+    out.emit(text('late'));
+    await tick();
+    expect(free).toBe(false);
+    out.emit(result(['n1']));
+    await take(feed);
+    await tick();
+    expect(free).toBe(true);
+    expect(live.inTurn).toBe(false);
+  });
+
+  it('a result naming a started note whose turn showed nothing frees the process, as does its completion, and reports the note dropped', async () => {
+    const { live, out } = await started(['n1', 'n2']);
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
+    let free = false;
+    void live.whenFree().then(() => (free = true));
+    out.emit(result(['n1']));
+    await tick();
+    expect(live.starting).toEqual(['n2']);
+    expect(free).toBe(false);
+    expect(dropped).toEqual([['n1']]);
+    out.emit(lifecycle('n2', 'completed'));
+    // Its completion after its result reports nothing more.
+    out.emit(lifecycle('n1', 'completed'));
+    await tick();
+    expect(live.starting).toEqual([]);
+    expect(free).toBe(true);
+    expect(dropped).toEqual([['n1'], ['n2']]);
+  });
+
+  it("a follow-on's own result reports none of its notes dropped", async () => {
+    const { live, out } = await started(['n1']);
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
+    live.takeStarting(text('late') as unknown as SDKMessage);
+    const feed = live.attach('n1');
+    out.emit(result(['n1']));
+    out.emit(lifecycle('n1', 'completed'));
+    await take(feed);
+    await tick();
+    expect(dropped).toEqual([]);
+  });
+
+  it("takeStarting takes the notes a turn's first frame runs, and none for a background task's turn or another message's", async () => {
+    const { live } = await started(['n1', 'n2']);
+    const frame = (o: object) => ({ ...text('x'), ...o }) as unknown as SDKMessage;
+    expect(live.takeStarting(frame({ origin: { kind: 'task-notification' } }))).toEqual([]);
+    expect(live.takeStarting(frame({ user_message_uuid: 'tn-1' }))).toEqual([]);
+    expect(live.starting).toEqual(['n1', 'n2']);
+    expect(live.takeStarting(frame({ user_message_uuids: ['n2'] }))).toEqual(['n2']);
+    expect(live.starting).toEqual(['n1']);
+    // A frame naming no message is the started notes' turn.
+    expect(live.takeStarting(frame({}))).toEqual(['n1']);
+    expect(live.takeStarting(frame({}))).toEqual([]);
+  });
+
+  it('takeWhenFree waits for a pooled process whose started note has not begun its turn', async () => {
+    const pool = new LivePool(60_000, 3);
+    const { live, out } = await started(['n1']);
+    live.sessionId = 's1';
+    pool.release(live);
+    let taken: LiveProcess | null | undefined;
+    void pool.takeWhenFree('s1', 'key').then((p) => (taken = p));
+    await tick();
+    expect(taken).toBeUndefined();
+    out.emit(result(['n1']));
+    await tick();
+    await tick();
+    expect(taken).toBe(live);
+  });
+
+  it('reports dropped notes when the output ends', async () => {
+    const { live, out } = process();
+    const calls: string[][] = [];
+    live.onClosed = (d) => calls.push(d);
+    live.notes.set('n1', 'm1');
+    out.end();
+    await tick();
+    expect(calls).toEqual([['n1']]);
   });
 });

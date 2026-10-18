@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
+import type { ReplyNote } from '@otherbench/core/types/notes.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 import { INSPECTOR_COLLAPSED_STORAGE_KEY, loadInspectorCollapsed, selectPendingApprovalCount, useOtherBenchStore } from './store.js';
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
@@ -686,5 +688,88 @@ describe('asks and the app-wide pending list', () => {
     s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
     expect(useOtherBenchStore.getState().appPendingApprovals['a1']).toMatchObject({ kind: 'question' });
     expect(selectPendingApprovalCount(useOtherBenchStore.getState())).toBe(1);
+  });
+});
+
+describe('notes (messages sent while a reply runs)', () => {
+  beforeEach(() => useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true));
+
+  const note = (id: string, over: Partial<ReplyNote> = {}): ReplyNote => ({
+    id, chatId: 'c1', text: id, attachments: [], path: 'wait', replyIds: [], parentId: null, profileIds: ['p1'], clientId: CLIENT_ID, sentAt: 1, ...over,
+  });
+
+  it("notes event replaces the chat's waiting notes", () => {
+    const { applyChatEvent } = useOtherBenchStore.getState();
+    applyChatEvent('c1', { type: 'notes', chatId: 'c1', notes: [note('n1'), note('n2')] });
+    applyChatEvent('c1', { type: 'notes', chatId: 'c1', notes: [note('n2')] });
+    expect(useOtherBenchStore.getState().chatNotes['c1']?.map((n) => n.id)).toEqual(['n2']);
+  });
+
+  it('a returned note comes back only to the tab that sent it', () => {
+    const s = useOtherBenchStore.getState();
+    s.noteSent(note('n1'));
+    s.noteSent(note('n2', { clientId: 'other-tab' }));
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: note('n1') });
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'returned', clientId: 'other-tab', note: note('n2', { clientId: 'other-tab' }) });
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['n1']);
+    expect(after.takeReturnedNotes('c1').map((n) => n.id)).toEqual(['n1']);
+    expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
+  });
+
+  it('after a reload, a taken-back note stays gone; a returned one, or one with no outcome, is restored', () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['removed', 'returned', 'unknown']) s.noteSent(note(id));
+    s.setChatNotes('c1', [], [{ noteId: 'removed', outcome: 'removed' }, { noteId: 'returned', outcome: 'returned' }]);
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id).sort()).toEqual(['returned', 'unknown']);
+    expect(after.sentNotes).toEqual({});
+  });
+
+  it("after a reload, a sent note the server no longer has and never delivered comes back; a delivered one doesn't", () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['lost', 'folded', 'turn', 'waiting']) s.noteSent(note(id));
+    s.setChatNotes('c1', [note('waiting')], [{ noteId: 'folded', outcome: 'folded' }, { noteId: 'turn', outcome: 'turn' }]);
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['lost']);
+    expect(Object.keys(after.sentNotes)).toEqual(['waiting']);
+    expect(after.chatNotes['c1']?.map((n) => n.id)).toEqual(['waiting']);
+  });
+
+  it("on a hello, a lost note that a loaded reply shows as read isn't restored, though the server's outcome for it is gone", () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['read', 'streaming', 'lost']) s.noteSent(note(id));
+    s.loadMessages('c1', [stubAssistant('m1', { chatId: 'c1', status: 'complete', parts: [{ type: 'user-note', noteId: 'read', text: 'read', attachments: [] }] })], null);
+    // A reply still streaming that isn't loaded yet: its events wait for it.
+    s.applyHello([{ messageId: 'm2', status: 'streaming', events: [{ messageId: 'm2', type: 'user-note', part: { type: 'user-note', noteId: 'streaming', text: 'streaming', attachments: [] } }] }]);
+
+    s.setChatNotes('c1', [], []);
+
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['lost']);
+    expect(after.sentNotes).toEqual({});
+  });
+
+  it('a note resolved before its send returned is not remembered as sent, so a reload never restores it again', () => {
+    const s = useOtherBenchStore.getState();
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: note('n1') });
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'folded', clientId: CLIENT_ID });
+    s.noteSent(note('n1'));
+    s.noteSent(note('n2'));
+    expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+    s.setChatNotes('c1', [], []);
+    const after = useOtherBenchStore.getState();
+    expect(after.sentNotes).toEqual({});
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['n1']);
+    expect(after.earlyResolved).toEqual({});
+  });
+
+  it("another tab's resolved notes, and this tab's taken-back ones, aren't held for a send", () => {
+    const s = useOtherBenchStore.getState();
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'turn', clientId: 'other-tab' });
+    s.noteSent(note('n2'));
+    s.noteTakenBack(note('n2'));
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'removed', clientId: CLIENT_ID });
+    expect(useOtherBenchStore.getState().earlyResolved).toEqual({});
   });
 });

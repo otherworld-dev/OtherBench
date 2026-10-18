@@ -12,6 +12,7 @@ import { BackgroundHelpers } from '../components/BackgroundHelpers.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
 import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
+import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -129,8 +130,12 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     setShowJump(false);
   }, []);
 
+  // Messages sent while a reply runs, waiting at the end of the thread.
+  const waitingNotes = useOtherBenchStore((s) => (chatId ? s.chatNotes[chatId] : undefined));
+
   // Runs after every change to this chat's rendered content (messages incl.
-  // streamed deltas and parts, plus extras such as pending approval cards).
+  // streamed deltas and parts, plus extras such as pending approval cards
+  // and waiting notes).
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -141,7 +146,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       setShowJump(false);
     }
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [chatId, chatMessages, extras, displayPath]);
+  }, [chatId, chatMessages, extras, displayPath, waitingNotes]);
 
   // The scroller changes size without a scroll event (e.g. the conversation
   // strip opening above it), which would leave a pinned thread's newest
@@ -438,6 +443,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     onActiveChange={setShownVariantId}
                   />
                 )}
+
+                <WaitingNotes chatId={chat.id} />
               </div>
             </div>
             {showJump && (
