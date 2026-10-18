@@ -55,7 +55,23 @@ export function renderHistory(history: CanonMessage[]): string {
     const results = new Map<string, ResultSeen>();
     for (const p of m.parts) if (p.type === 'tool-result') results.set(p.id, { ok: !p.isError, text: resultText(p.result) });
     const who = m.role === 'user' ? '[user]' : m.producedBy ? `[assistant: ${m.producedBy.profileName} · ${m.producedBy.modelId}]` : '[assistant]';
-    return `${who} ${renderParts(m.parts, results)}`;
+    // A user note inside a reply ends the assistant block where it falls: it is the user's, then the reply goes on.
+    const out: string[] = [];
+    let run: Part[] = [];
+    const flush = () => {
+      if (run.length > 0) out.push(`${who} ${renderParts(run, results)}`);
+      run = [];
+    };
+    for (const p of m.parts) {
+      if (p.type !== 'user-note') {
+        run.push(p);
+        continue;
+      }
+      flush();
+      out.push(`[user] ${[p.text, ...p.attachments.map(() => '[attachment]')].filter((l) => l.length > 0).join('\n')}`);
+    }
+    if (run.length > 0 || out.length === 0) flush();
+    return out.join('\n\n');
   });
   let body = blocks.join('\n\n');
   if (body.length > HISTORY_CHAR_LIMIT) body = `[earlier messages omitted]\n${body.slice(body.length - HISTORY_CHAR_LIMIT)}`;

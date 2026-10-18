@@ -6,7 +6,7 @@ import type {
   ToolCallPart,
   ToolResultPart,
 } from 'ai';
-import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { CanonMessage, Part, UserNotePart } from '@otherbench/core/types/messages.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
 import { sniffToolImageMime } from '@otherbench/core/domain/tool-images.js';
 import {
@@ -35,9 +35,10 @@ type Placement = Verdict | 'repeat';
  * full): those are the notes that name the file when its part carries a name.
  */
 type Taken = { bytes: Buffer } | { note: string; cap?: 'too-large' | 'over-budget' };
-type Take = (messageId: string, index: number, attachmentId: string) => Promise<Taken>;
+/** `index` is the part's place in its message; an attachment of a user note is `<part>:<n>`. */
+type Take = (messageId: string, index: number | string, attachmentId: string) => Promise<Taken>;
 
-function placeId(messageId: string, index: number): string {
+function placeId(messageId: string, index: number | string): string {
   return `${messageId}\u0000${index}`;
 }
 
@@ -63,16 +64,23 @@ export function planAttachments(
   for (let m = messages.length - 1; m >= 0; m--) {
     const message = messages[m]!;
     if (message.role === 'system') continue;
+    const consider = (key: string, attachmentId: string) => {
+      if (seen.has(attachmentId)) {
+        placements.set(key, 'repeat');
+        return;
+      }
+      seen.add(attachmentId);
+      picks.push({ key, size: size ? size(attachmentId) : undefined });
+    };
     for (let i = message.parts.length - 1; i >= 0; i--) {
       const part = message.parts[i]!;
       if (part.type === 'file' || (part.type === 'image' && caps.vision)) {
-        const key = placeId(message.id, i);
-        if (seen.has(part.attachmentId)) {
-          placements.set(key, 'repeat');
-          continue;
+        consider(placeId(message.id, i), part.attachmentId);
+      } else if (part.type === 'user-note') {
+        for (let j = part.attachments.length - 1; j >= 0; j--) {
+          const a = part.attachments[j]!;
+          if (!a.mime.startsWith('image/') || caps.vision) consider(placeId(message.id, `${i}:${j}`), a.attachmentId);
         }
-        seen.add(part.attachmentId);
-        picks.push({ key, size: size ? size(part.attachmentId) : undefined });
       }
     }
   }
@@ -229,19 +237,33 @@ export async function toModelMessages(
       continue;
     }
 
-    const { assistantContent, toolResults } = await assistantContentFromParts(
-      message.id,
-      message.parts,
-      caps,
-      take,
-      seenToolCallIds,
-      replay
-    );
-    if (assistantContent.length > 0) {
-      result.push({ role: 'assistant', content: assistantContent });
-    }
-    if (toolResults.length > 0) {
-      result.push({ role: 'tool', content: toolResults });
+    // A user note inside a reply ends the assistant turn there: the words before it
+    // (and the tool results for their calls) come first, the note is a user turn,
+    // and what follows is a new assistant turn.
+    let start = 0;
+    for (let end = 0; end <= message.parts.length; end++) {
+      const note = message.parts[end];
+      if (end < message.parts.length && note?.type !== 'user-note') continue;
+      const { assistantContent, toolResults } = await assistantContentFromParts(
+        message.id,
+        message.parts.slice(start, end),
+        start,
+        caps,
+        take,
+        seenToolCallIds,
+        replay
+      );
+      if (assistantContent.length > 0) {
+        result.push({ role: 'assistant', content: assistantContent });
+      }
+      if (toolResults.length > 0) {
+        result.push({ role: 'tool', content: toolResults });
+      }
+      if (note?.type === 'user-note') {
+        const content = await userNoteContent(message.id, end, note, caps, take);
+        if (content.length > 0) result.push({ role: 'user', content });
+      }
+      start = end + 1;
     }
   }
 
@@ -288,6 +310,7 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'context':
       case 'context-summary':
       case 'subagent':
+      case 'user-note':
         // Not valid content for a user turn; defensively dropped rather
         // than forwarded to the model. `notice` also never legitimately
         // appears on a user message in practice (TurnRunner only ever adds
@@ -299,9 +322,26 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
   return content;
 }
 
+/** A note as a user turn: its words, then its attachments, built like a user message's parts. */
+async function userNoteContent(messageId: string, index: number, note: UserNotePart, caps: ModelCapabilities, take: Take): Promise<UserBlock[]> {
+  const content: UserBlock[] = [];
+  if (note.text.length > 0) content.push({ type: 'text', text: note.text });
+  for (const [j, a] of note.attachments.entries()) {
+    const taker = () => take(messageId, `${index}:${j}`, a.attachmentId);
+    content.push(
+      a.mime.startsWith('image/')
+        ? await convertImagePart({ type: 'image', attachmentId: a.attachmentId, mime: a.mime }, caps, taker)
+        : await convertFilePart({ type: 'file', attachmentId: a.attachmentId, mime: a.mime, filename: a.filename }, taker)
+    );
+  }
+  return content;
+}
+
+/** `offset` is where `parts` starts in the message, so a part keeps the place the plan gave it. */
 async function assistantContentFromParts(
   messageId: string,
   parts: Part[],
+  offset: number,
   caps: ModelCapabilities,
   take: Take,
   seenToolCallIds: Set<string>,
@@ -310,7 +350,8 @@ async function assistantContentFromParts(
   const assistantContent: AssistantBlock[] = [];
   const toolResults: ToolResultPart[] = [];
 
-  for (const [index, part] of parts.entries()) {
+  for (const [i, part] of parts.entries()) {
+    const index = offset + i;
     switch (part.type) {
       case 'text':
         if (part.text.length > 0) assistantContent.push({ type: 'text', text: part.text });
@@ -325,6 +366,9 @@ async function assistantContentFromParts(
         // fallback disclosure describes what OTHERBENCH did, not something the
         // model said, so replaying it as this message's own content in a
         // later turn would misattribute it as assistant output.
+        break;
+      case 'user-note':
+        // Never reaches here: toModelMessages ends the turn at a note and sends it as a user message.
         break;
       case 'subagent':
         // A sub-agent's transcript is OtherBench's record of what it did. The
