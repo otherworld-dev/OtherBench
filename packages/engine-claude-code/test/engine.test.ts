@@ -2643,7 +2643,7 @@ describe("the claude-setup standard's secrets inside Claude Code's own search", 
     for (const call of calls) {
       const settings = call.options.settings as { disableSkillShellExecution?: boolean; permissions?: { deny?: string[] } };
       expect(settings.disableSkillShellExecution).toBe(true);
-      expect(settings.permissions?.deny).toEqual(expect.arrayContaining(['Read(**/.env)', 'Read(**/.env.*)', 'Read(**/.claude/certificates/**)', 'Read(//**/.env)', 'Edit(**/.claude/certificates/**)']));
+      expect(settings.permissions?.deny).toEqual(expect.arrayContaining(['Read(**/.env)', 'Read(**/.env.*)', 'Read(**/.claude/certificates/**)', 'Edit(**/.claude/certificates/**)']));
     }
   });
 });

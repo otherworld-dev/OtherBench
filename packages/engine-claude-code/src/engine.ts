@@ -120,11 +120,12 @@ export function scratchFolderName(chatId: string): string {
  * on the SDK's flag-settings layer, so they hold whatever the project's own
  * settings say. OtherBench's gate refuses a file tool aimed at one, but a Grep
  * or Glob over a whole folder reads what it finds there: Claude Code turns
- * these rules into exclusions inside those tools. Relative patterns cover the
- * chat's folder, `//` ones any folder (an extra folder, the user's skills).
+ * these rules into exclusions inside those tools. Unanchored patterns apply to
+ * every search wherever it starts (the chat's folder, an extra folder, the
+ * user's skills); a `//` one would only cover the current drive on Windows.
  */
 export const SECRET_DENY_RULES: readonly string[] = ['Read', 'Edit'].flatMap((tool) =>
-  ['**/.env', '**/.env.*', '**/.claude/certificates/**', '//**/.env', '//**/.env.*', '//**/.claude/certificates/**'].map((p) => `${tool}(${p})`)
+  ['**/.env', '**/.env.*', '**/.claude/certificates/**'].map((p) => `${tool}(${p})`)
 );
 
 /**
