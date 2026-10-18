@@ -443,6 +443,27 @@ describe('ScheduleService: targets, endings and Run now', () => {
     expect(service.isRunning('a')).toBe(true);
   });
 
+  it('a chat with waiting notes is busy: its due run waits, and Run now is refused as busy', async () => {
+    const waiting = new Set(['chat-1']);
+    service.dispose();
+    service = build({ hasWaitingNotes: (chatId) => waiting.has(chatId) });
+    addSchedule('s1');
+    addSchedule('s2', { nextRunAt: NINE + 24 * HOUR });
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    expect(engine.requests).toHaveLength(0);
+    expect(store.schedules.runs('s1')).toEqual([]);
+    expect(() => service.runNow('s2')).toThrow(expect.objectContaining({ kind: 'busy' }));
+
+    // The notes went out: the run that waited starts.
+    waiting.clear();
+    service.poke();
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'scheduled', status: 'running' });
+  });
+
   it('a schedule deleted while its run is going lets the reply finish, unrecorded', async () => {
     addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
     service.start();

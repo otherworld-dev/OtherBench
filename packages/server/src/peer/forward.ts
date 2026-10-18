@@ -5,10 +5,11 @@ import { encodeHlc } from '@otherbench/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@otherbench/core/domain/sync.js';
 import { appendDelta, applySubagentEvent, isSubagentEvent } from '@otherbench/core/domain/parts.js';
 import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
-import type { Part, ProducedBy, SerializedError } from '@otherbench/core/types/messages.js';
+import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { commandsRoutes } from '../routes/commands.js';
+import { notesRoutes } from '../routes/notes.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
@@ -91,6 +92,19 @@ function cutOff(peerName: string): SerializedError {
   return { kind: 'peer_unreachable', message: `${peerName} stopped responding.`, retryable: false };
 }
 
+function isNoteAttachment(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  const a = v as Record<string, unknown>;
+  return isString(a['attachmentId']) && isString(a['mime']) && isString(a['filename']);
+}
+
+/** A relayed `user-note` part with the right shape, its attachments included. */
+function isUserNotePart(v: unknown): v is UserNotePart {
+  if (typeof v !== 'object' || v === null) return false;
+  const p = v as Record<string, unknown>;
+  return p['type'] === 'user-note' && isString(p['noteId']) && isString(p['text']) && Array.isArray(p['attachments']) && p['attachments'].every(isNoteAttachment);
+}
+
 /** A reply's parts with one more of its relayed events folded in, as the machine writing it stores them. */
 export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
   switch (e['type']) {
@@ -109,6 +123,9 @@ export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
     case 'subagent':
       // A relayed sub-agent card, so a reply kept after its machine went away keeps it.
       return isString(e['callId']) && isSubagentEvent(e['event']) ? applySubagentEvent(parts, e['callId'], e['event']) : parts;
+    case 'user-note':
+      // A note Claude read there mid-reply, kept in place.
+      return isUserNotePart(e['part']) ? [...parts, e['part']] : parts;
     default:
       return parts;
   }
@@ -436,6 +453,14 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
+  // A message sent while a reply runs is held where the reply runs. Its attachments were uploaded here: that machine pulls them first.
+  app.post('/chats/:id/notes', chatRoute('notes', { syncFirst: true }));
+  app.delete('/chats/:id/notes/:noteId', async (c, next) => {
+    const chatId = c.req.param('id');
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return next();
+    return forward(container, c, nodeId, `/chats/${chatId}/notes/${encodeURIComponent(c.req.param('noteId'))}`);
+  });
   app.post('/chats/:id/helpers/:taskId/stop', async (c, next) => {
     const chatId = c.req.param('id');
     const nodeId = remoteNode(chatId);
@@ -548,6 +573,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));
+  app.route('/', notesRoutes(container));
   app.route('/', commandsRoutes(container));
   app.onError((err, c) => {
     const status = (err as { status?: number }).status;

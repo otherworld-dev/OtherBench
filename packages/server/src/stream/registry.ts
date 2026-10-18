@@ -85,6 +85,10 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
           ...(part.postTokens !== undefined ? { postTokens: part.postTokens } : {}),
         });
         break;
+      case 'user-note':
+        // A note Claude read mid-reply, in place, as it came live.
+        events.push({ messageId: message.id, type: 'user-note', part });
+        break;
       case 'context':
       case 'image':
       case 'file':

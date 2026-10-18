@@ -45,6 +45,8 @@ export interface ScheduleServiceDeps {
   resolveWorkspace: (ws: Workspace | null) => WorkspaceStatus;
   /** Whether a reply is being written in the chat (`events.runningTurns()`). */
   isChatBusy: (chatId: string) => boolean;
+  /** Whether the chat has messages sent during a reply still to go out (`NotesService.hasWaiting`): they go before a run. */
+  hasWaitingNotes?: (chatId: string) => boolean;
   emit: (e: AppEvent) => void;
   now?: () => number;
   scheduler?: Scheduler;
@@ -94,6 +96,7 @@ export class ScheduleService {
   private readonly resolveProfile: ScheduleServiceDeps['resolveProfile'];
   private readonly resolveWorkspace: ScheduleServiceDeps['resolveWorkspace'];
   private readonly isChatBusy: ScheduleServiceDeps['isChatBusy'];
+  private readonly hasWaitingNotes: NonNullable<ScheduleServiceDeps['hasWaitingNotes']>;
   private readonly emit: ScheduleServiceDeps['emit'];
   private readonly now: () => number;
   private readonly scheduler: Scheduler;
@@ -115,6 +118,7 @@ export class ScheduleService {
     this.resolveProfile = deps.resolveProfile;
     this.resolveWorkspace = deps.resolveWorkspace;
     this.isChatBusy = deps.isChatBusy;
+    this.hasWaitingNotes = deps.hasWaitingNotes ?? (() => false);
     this.emit = deps.emit;
     this.now = deps.now ?? Date.now;
     this.scheduler = deps.scheduler ?? realScheduler;
@@ -216,13 +220,15 @@ export class ScheduleService {
   }
 
   /**
-   * A reply is being written in the chat, or one of this service's runs is
-   * about to write one there. The second half matters: `turn-started` (what
-   * `isChatBusy` sees) only fires once a run's `startTurn` has resolved, so two
-   * schedules due together on one chat would otherwise both start off the same parent.
+   * A reply is being written in the chat, messages sent during one are
+   * still to go out (spec 2026-10-18-send-while-replying-design: they go
+   * first), or one of this service's runs is about to write one there. The
+   * last matters: `turn-started` (what `isChatBusy` sees) only fires once a
+   * run's `startTurn` has resolved, so two schedules due together on one chat
+   * would otherwise both start off the same parent.
    */
   private chatInUse(chatId: string): boolean {
-    if (this.isChatBusy(chatId)) return true;
+    if (this.isChatBusy(chatId) || this.hasWaitingNotes(chatId)) return true;
     if ([...this.starting.values()].includes(chatId)) return true;
     return [...this.active.values()].some((r) => r.chatId === chatId);
   }

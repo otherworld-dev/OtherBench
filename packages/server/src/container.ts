@@ -644,6 +644,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
     resolveWorkspace: (ws) => workspaceResolver(container)(ws),
     isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     emit: (e) => events.emit(e),
   });
   try {

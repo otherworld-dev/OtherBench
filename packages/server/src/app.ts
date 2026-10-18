@@ -30,6 +30,7 @@ import { mcpSignInRoutes, oauthRedirectUri } from './routes/mcp-sign-in.js';
 import { oauthCallbackRoutes } from './routes/oauth-callback.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
+import { notesRoutes } from './routes/notes.js';
 import { usageRoutes } from './routes/usage.js';
 import { artifactsRoutes } from './routes/artifacts.js';
 import { liveArtifactsRoutes } from './routes/live-artifacts.js';
@@ -137,6 +138,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // handlers forward its calls, and pass everything else on to the routes below.
   if (container.peers && container.remoteRuns) authed.route('/', forwardingRoutes(container, container.remoteRuns));
   authed.route('/', turnsRoutes(container));
+  // Messages sent while a reply runs: after the forwarding handlers, so a chat on a paired machine holds them there.
+  authed.route('/', notesRoutes(container));
   // A chat's slash menu: after the forwarding handlers, so a chat on a paired machine is asked there.
   authed.route('/', commandsRoutes(container));
   // memoryRoutes defines full paths under /projects/:id/memory and

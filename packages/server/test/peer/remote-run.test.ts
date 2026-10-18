@@ -428,6 +428,40 @@ describe('running a chat on the machine it runs on', () => {
     });
   });
 
+  it('forwards POST and DELETE notes for a chat that runs on a peer', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'take your time #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+
+    let noteId: string | null = null;
+    const events = await readStream(stream, async (e) => {
+      if (noteId === null && e.data.type === 'text-delta' && e.data.messageId === replyId) {
+        const sent = await laptop.api('POST', `/api/chats/${chatId}/notes`, { text: 'and the tests', parentId: replyId, profileIds: [profileId], clientId: 'laptop-tab' });
+        expect(sent.status).toBe(202);
+        const { note } = (await sent.json()) as { note: { id: string; path: string } };
+        noteId = note.id;
+        expect(note.path).toBe('wait');
+        // Held on the PC, which runs the chat; the laptop holds nothing.
+        expect(pc.container.notes!.helloState(chatId).notes.map((n) => n.id)).toEqual([note.id]);
+        expect(laptop.container.notes!.hasWaiting(chatId)).toBe(false);
+
+        const withdrawn = await laptop.api('DELETE', `/api/chats/${chatId}/notes/${note.id}`);
+        expect(withdrawn.status).toBe(200);
+        expect(((await withdrawn.json()) as { note: { id: string } }).note.id).toBe(note.id);
+        expect(pc.container.notes!.hasWaiting(chatId)).toBe(false);
+        expect((await laptop.api('DELETE', `/api/chats/${chatId}/notes/${note.id}`)).status).toBe(409);
+      }
+      return noteId !== null && e.data.type === 'notes' && (e.data['notes'] as unknown[]).length === 0;
+    });
+
+    // The PC's hello carries its notes state, and its chat-level note events reach the laptop through the relayed stream.
+    expect(events[0]).toMatchObject({ event: 'hello', data: { notes: [], noteOutcomes: [] } });
+    expect(events.filter((e) => e.data.type === 'notes').map((e) => (e.data['notes'] as { id: string }[]).map((n) => n.id))).toEqual([[noteId], []]);
+    expect(events.find((e) => e.data.type === 'note-resolved')!.data).toMatchObject({ chatId, noteId, outcome: 'removed', clientId: 'laptop-tab' });
+    expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
+  }, 20_000);
+
   it('the commands GET is forwarded for a chat on another machine', async () => {
     const { pc, laptop, chatId, profileId, folder } = await setup();
     const row = { name: 'code-review', description: 'Review the diff', argumentHint: '', aliases: ['review'] };

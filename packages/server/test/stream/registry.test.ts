@@ -387,6 +387,26 @@ describe('StreamRegistry', () => {
     expect(buffer.events).toContainEqual({ messageId: 'assistant-1', type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
   });
 
+  it('rebuilds a user-note part as a user-note event', () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const note: Part = { type: 'user-note', noteId: 'note-1', text: 'also check the tests', attachments: [{ attachmentId: 'att-1', mime: 'image/png', filename: 'shot.png' }] };
+    store.messages.create({
+      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null,
+      parts: [{ type: 'text', text: 'Looking.' }, note, { type: 'text', text: 'Checked them too.' }],
+    });
+    const { engine } = manualEngine();
+    const registry = new StreamRegistry(new TurnRunner(store, engine), store);
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === 'assistant-1')!;
+    expect(buffer.events).toEqual([
+      { messageId: 'assistant-1', type: 'text-delta', text: 'Looking.' },
+      { messageId: 'assistant-1', type: 'user-note', part: note },
+      { messageId: 'assistant-1', type: 'text-delta', text: 'Checked them too.' },
+      { messageId: 'assistant-1', type: 'status', status: 'complete' },
+    ]);
+  });
+
   it('rebuilds a stored subagent part into subagent events that fold back to the same part', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
