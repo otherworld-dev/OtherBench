@@ -321,6 +321,27 @@ describe('NotesService', () => {
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
   });
 
+  it('a failed compare variant returns the waiting notes once the other variant has ended, and never sends them', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [a, b] } = await ctx.running(['p1', 'p2']);
+    const note = (await ctx.notes.send(input({ parentId: a!, profileIds: ['p1', 'p2'], attachments: [IMAGE] })))!;
+
+    ctx.engine.fail(a!);
+    await ctx.ended(a!);
+
+    // The other variant is still streaming: the note stays where the user can see it, held.
+    expect(ctx.resolved()).toEqual([]);
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([note]);
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual(['att-1']);
+    const after = (await ctx.notes.send(input({ text: 'after', parentId: b!, profileIds: ['p2'] })))!;
+    ctx.engine.finish(b!);
+
+    await vi.waitFor(() => expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[note.id, 'returned'], [after.id, 'turn']]));
+    // Only the note sent after the failure, which waited on the variant that finished, goes out.
+    expect(ctx.startTurnSpy).toHaveBeenCalledTimes(1);
+    expect(ctx.startTurnSpy.mock.calls[0]![0]).toMatchObject({ parentId: b, userParts: [{ type: 'text', text: 'after' }] });
+  });
+
   it('live notes come back when their reply is stopped; on a complete reply they wait for the follow-on', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();

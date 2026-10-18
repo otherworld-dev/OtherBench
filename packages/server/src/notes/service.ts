@@ -47,6 +47,8 @@ interface Held {
    * there rather than beside them.
    */
   follows?: string;
+  /** A reply in its chat was stopped or failed while it waited: it comes back once nothing runs, and is never sent. */
+  returning?: boolean;
 }
 
 /**
@@ -187,9 +189,11 @@ export class NotesService {
   /**
    * Reply `messageId` ended. Stopped or failed, every waiting note of the
    * chat comes back: nothing is sent after a reply the user stopped or that
-   * broke. A live note of another reply is first taken back from Claude Code
-   * and stays if Claude already started it (it will fold or follow on). After
-   * a clean finish, live notes wait for Claude Code to run them as a
+   * broke. Wait notes come back once nothing in the chat runs (another
+   * variant of a compare turn may still be streaming), so they stay in view
+   * till then. A live note of another reply is first taken back from Claude
+   * Code and stays if Claude already started it (it will fold or follow on).
+   * After a clean finish, live notes wait for Claude Code to run them as a
    * follow-on (or report them dropped), and wait notes may be due.
    */
   replyEnded(messageId: string, status: MessageStatus): void {
@@ -199,7 +203,8 @@ export class NotesService {
       const notes = this.waitingIn(chatId);
       // The stopped reply's own notes Claude Code cancels itself as it stops (and a closed process reports
       // any it couldn't), so withdrawNote can't tell those from started ones: they come back as they are.
-      this.giveBack(chatId, notes.filter((h) => h.note.path === 'wait' || h.note.replyIds[0] === messageId));
+      this.giveBack(chatId, notes.filter((h) => h.note.path === 'live' && h.note.replyIds[0] === messageId));
+      for (const held of notes.filter((h) => h.note.path === 'wait')) held.returning = true;
       for (const held of notes.filter((h) => h.note.path === 'live' && h.note.replyIds[0] !== messageId)) void this.takeBack(held);
     }
     this.settle(chatId);
@@ -268,11 +273,13 @@ export class NotesService {
 
   /**
    * Sends the chat's wait notes once nothing in it is running: as one turn
-   * when every reply they waited on finished, else back to the box. They hold
-   * while a live note waits for its follow-on, so two replies never run at once.
+   * when every reply they waited on finished, else back to the box (as are
+   * those a stopped or failed reply marked `returning`). They hold while a
+   * live note waits for its follow-on, so two replies never run at once.
    */
   private settle(chatId: string): void {
     if (this.inFlight.has(chatId) || this.streaming(chatId).length > 0) return;
+    this.giveBack(chatId, this.waitingIn(chatId).filter((h) => h.returning));
     const due = this.waitingIn(chatId);
     if (due.length === 0 || due.some((h) => h.note.path === 'live')) return;
     const complete = due.every((h) => h.note.replyIds.every((id) => this.store.messages.get(id)?.status === 'complete'));
