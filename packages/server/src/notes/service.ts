@@ -11,8 +11,12 @@ import type { AppEventBus } from '../stream/events.js';
 import type { StreamRegistry } from '../stream/registry.js';
 import { lineAfter } from '../turn-start.js';
 
-/** How long a resolved note's outcome is kept for a client that reconnects (`helloState`). */
-const OUTCOME_KEEP_MS = 10 * 60_000;
+/**
+ * How many resolved notes' outcomes each chat keeps for a client that
+ * reconnects (`helloState`): a count, not a time, so a tab away for long
+ * still learns what became of its notes.
+ */
+const OUTCOME_KEEP = 200;
 
 export interface NotesServiceDeps {
   store: Store;
@@ -84,8 +88,8 @@ export class NotesService {
    * set, but still listed (and the chat busy) until they are resolved.
    */
   private readonly inFlight = new Map<string, ReplyNote[]>();
-  /** Each chat's recent outcomes, for `helloState`. */
-  private readonly outcomes = new Map<string, { noteId: string; outcome: NoteOutcome; at: number }[]>();
+  /** Each chat's last outcomes, oldest first, for `helloState`. */
+  private readonly outcomes = new Map<string, { noteId: string; outcome: NoteOutcome }[]>();
 
   constructor(deps: NotesServiceDeps) {
     this.store = deps.store;
@@ -240,6 +244,7 @@ export class NotesService {
     if (!this.store.chats.get(chatId)) {
       // The chat is gone: nobody is there to give them back to.
       this.waiting.delete(chatId);
+      this.outcomes.delete(chatId);
       return;
     }
     const ids = new Set(noteIds);
@@ -249,11 +254,7 @@ export class NotesService {
 
   /** What a client connecting to the chat's stream needs: the undelivered notes and what became of recent ones. */
   helloState(chatId: string): { notes: ReplyNote[]; noteOutcomes: { noteId: string; outcome: NoteOutcome }[] } {
-    this.prune();
-    return {
-      notes: this.listed(chatId),
-      noteOutcomes: (this.outcomes.get(chatId) ?? []).map(({ noteId, outcome }) => ({ noteId, outcome })),
-    };
+    return { notes: this.listed(chatId), noteOutcomes: [...(this.outcomes.get(chatId) ?? [])] };
   }
 
   /** The reply a note goes into, or null when it waits (see the class doc). */
@@ -463,9 +464,9 @@ export class NotesService {
 
   /** Records a note's outcome and tells the chat. */
   private finish(note: ReplyNote, outcome: NoteOutcome): void {
-    this.prune();
     const list = this.outcomes.get(note.chatId) ?? [];
-    list.push({ noteId: note.id, outcome, at: this.now() });
+    list.push({ noteId: note.id, outcome });
+    if (list.length > OUTCOME_KEEP) list.splice(0, list.length - OUTCOME_KEEP);
     this.outcomes.set(note.chatId, list);
     this.streamRegistry.broadcastChat(note.chatId, {
       type: 'note-resolved',
@@ -491,16 +492,6 @@ export class NotesService {
       } catch (err) {
         console.error(`[otherbench-server] could not bind attachment ${row.id} to the reply that read its note:`, err);
       }
-    }
-  }
-
-  /** Forgets outcomes older than `OUTCOME_KEEP_MS`. */
-  private prune(): void {
-    const cutoff = this.now() - OUTCOME_KEEP_MS;
-    for (const [chatId, list] of this.outcomes) {
-      const kept = list.filter((o) => o.at > cutoff);
-      if (kept.length === 0) this.outcomes.delete(chatId);
-      else if (kept.length !== list.length) this.outcomes.set(chatId, kept);
     }
   }
 }

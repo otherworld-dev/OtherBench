@@ -535,8 +535,22 @@ describe('NotesService', () => {
     expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [waiting], noteOutcomes: [{ noteId: gone.id, outcome: 'removed' }] });
     expect(ctx.notes.helloState('chat-2')).toEqual({ notes: [], noteOutcomes: [] });
 
-    ctx.advance(10 * 60_000 + 1);
-    expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [waiting], noteOutcomes: [] });
+    // However long a client was away, it still learns what became of them.
+    ctx.advance(24 * 60 * 60_000);
+    expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [waiting], noteOutcomes: [{ noteId: gone.id, outcome: 'removed' }] });
+  });
+
+  it('helloState keeps the last 200 outcomes of each chat', async () => {
+    const ctx = setup();
+    await ctx.running();
+    const ids: string[] = [];
+    for (let i = 0; i < 201; i++) {
+      const note = (await ctx.notes.send(input({ parentId: null, profileIds: ['p2'] })))!;
+      await ctx.notes.withdraw('chat-1', note.id);
+      ids.push(note.id);
+    }
+
+    expect(ctx.notes.helloState('chat-1').noteOutcomes.map((o) => o.noteId)).toEqual(ids.slice(1));
   });
 
   it('wait notes hold while a live note waits for its follow-on, then go after it, under its reply', async () => {
