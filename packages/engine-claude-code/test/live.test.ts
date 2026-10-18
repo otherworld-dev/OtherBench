@@ -200,14 +200,41 @@ describe('LiveProcess and notes', () => {
     expect(idle.some((m) => (m as { type: string }).type === NOTE_PICKED)).toBe(false);
   });
 
-  it('forgets a note that completes or is cancelled', async () => {
+  it('forgets a note that completes or is cancelled, and reports it dropped unless the cancel was asked for', async () => {
     const { live, out } = process();
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
     live.notes.set('n1', 'm1');
     live.notes.set('n2', 'm1');
+    live.notes.set('n3', 'm1');
+    live.cancelling.add('n3');
     out.emit(lifecycle('n1', 'cancelled'));
     out.emit(lifecycle('n2', 'completed'));
+    out.emit(lifecycle('n3', 'cancelled'));
     await tick();
     expect(live.notes.size).toBe(0);
+    // Claude Code dropped n1 and n2 unasked: nobody else would say they never ran. n3 was asked for.
+    expect(dropped).toEqual([['n1'], ['n2']]);
+  });
+
+  it('knows a note while it is queued, starting or read, and not once it is forgotten', async () => {
+    const { live, out } = process();
+    const feed = live.attach('u1');
+    live.notes.set('n1', 'm1');
+    live.notes.set('n2', 'm1');
+    live.notes.set('n3', 'm1');
+    expect(live.knows('n1')).toBe(true);
+    out.emit(lifecycle('n1', 'started'));
+    out.emit(result(['u1', 'n1']));
+    await take(feed);
+    out.emit(lifecycle('n2', 'started'));
+    out.emit(lifecycle('n3', 'cancelled'));
+    await tick();
+    expect(live.starting).toEqual(['n2']);
+    // Read mid-reply (its pick may not have been shown yet), or started for a follow-on: Claude Code has it.
+    expect([live.knows('n1'), live.knows('n2')]).toEqual([true, true]);
+    expect(live.knows('n3')).toBe(false);
+    expect(live.knows('n-other')).toBe(false);
   });
 
   it('lifecycleOf reads command_uuid and state, and is null for other messages', () => {

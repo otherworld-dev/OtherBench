@@ -203,11 +203,23 @@ export class LiveProcess {
   readonly notes = new Map<string, string>();
   /** Notes Claude Code started while no turn was attached: a follow-on turn is beginning for them. */
   readonly starting: string[] = [];
+  /** Notes Claude Code started in this process (read mid-reply, or run as a follow-on). */
+  readonly read = new Set<string>();
+  /**
+   * Notes the engine is asking Claude Code to cancel: their `cancelled` frame
+   * is accounted for by whoever asked, so it isn't reported dropped.
+   */
+  readonly cancelling = new Set<string>();
   /** What this Claude Code says it can do (the init message's capabilities). */
   capabilities: string[] = [];
   /** Called once when the process closes or its output ends, with the notes that never got read. */
   onClosed: (dropped: string[]) => void = () => {};
-  /** Called with started notes whose turn ended before it showed anything (an early error): no follow-on ran them. */
+  /**
+   * Called with notes nobody will show: started ones whose turn ended before
+   * it showed anything (an early error), and queued ones Claude Code
+   * cancelled or completed without being asked. The engine also calls it for
+   * notes picked in a turn nobody reads.
+   */
   onDropped: (dropped: string[]) => void = () => {};
   private reportedClosed = false;
   private attached: { uuid: string; feed: TurnFeed } | null = null;
@@ -237,6 +249,7 @@ export class LiveProcess {
         if (life && this.notes.has(life.uuid)) {
           if (life.state === 'started') {
             this.notes.delete(life.uuid);
+            this.read.add(life.uuid);
             if (turn) {
               turn.feed.push({ type: NOTE_PICKED, noteId: life.uuid } as unknown as SDKMessage);
               continue;
@@ -244,6 +257,8 @@ export class LiveProcess {
             this.starting.push(life.uuid);
           } else if (life.state === 'cancelled' || life.state === 'completed') {
             this.notes.delete(life.uuid);
+            // Dropped unasked (one we asked to cancel is accounted for by the asker): nothing else would say it never ran.
+            if (!this.cancelling.has(life.uuid)) this.onDropped([life.uuid]);
           }
         } else if (life && (life.state === 'cancelled' || life.state === 'completed')) {
           // A started note whose turn never began here (it ended at once): nothing waits for it now.
@@ -299,6 +314,11 @@ export class LiveProcess {
     this.starting.splice(0, this.starting.length, ...this.starting.filter((id) => !ids.includes(id)));
     this.wakeIfFree();
     this.onDropped(gone);
+  }
+
+  /** Whether Claude Code in this process still has note `noteId`: queued, starting, or read. */
+  knows(noteId: string): boolean {
+    return this.notes.has(noteId) || this.starting.includes(noteId) || this.read.has(noteId);
   }
 
   /**

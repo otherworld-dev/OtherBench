@@ -323,10 +323,29 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   /** Takes back a note Claude Code hasn't started. False when no process holds it, it can't cancel one, or it had already started. */
   async withdrawNote(noteId: string): Promise<boolean> {
     const live = [...this.processes].find((p) => !p.isClosed && p.notes.has(noteId));
-    if (!live?.query.cancelAsyncMessage) return false;
-    const cancelled = await live.query.cancelAsyncMessage(noteId);
-    if (cancelled) live.notes.delete(noteId);
-    return cancelled;
+    return live ? this.cancelNote(live, noteId) : false;
+  }
+
+  /** Whether an open process still has note `noteId` (queued, starting or read): false means nothing here will ever report it. */
+  knowsNote(noteId: string): boolean {
+    return [...this.processes].some((p) => !p.isClosed && p.knows(noteId));
+  }
+
+  /**
+   * Asks Claude Code to drop queued note `noteId`; forgotten once it
+   * confirms. Its `cancelled` frame meanwhile isn't reported dropped: the
+   * caller accounts for it.
+   */
+  private async cancelNote(live: LiveProcess, noteId: string): Promise<boolean> {
+    if (!live.query.cancelAsyncMessage) return false;
+    live.cancelling.add(noteId);
+    try {
+      const cancelled = await live.query.cancelAsyncMessage(noteId);
+      if (cancelled) live.notes.delete(noteId);
+      return cancelled;
+    } finally {
+      live.cancelling.delete(noteId);
+    }
   }
 
   /**
@@ -372,16 +391,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * the pump still routes its `started` frame.
    */
   private cancelNotes(live: LiveProcess, messageId: string): void {
-    const query = live.query;
-    if (!query.cancelAsyncMessage) return;
     for (const [id, owner] of live.notes) {
-      if (owner !== messageId) continue;
-      void query.cancelAsyncMessage(id).then(
-        (cancelled) => {
-          if (cancelled) live.notes.delete(id);
-        },
-        () => undefined
-      );
+      if (owner === messageId) void this.cancelNote(live, id).catch(() => undefined);
     }
   }
 
@@ -454,9 +465,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
     const iterator = feed[Symbol.asyncIterator]();
     let taken = false;
-    const drain = async (): Promise<void> => {
-      for (let next = await iterator.next(); !next.done; next = await iterator.next());
-    };
+    // Nobody shows this turn: it's read to its end, and a note picked in it reported dropped.
+    const drain = (): Promise<boolean> => this.readUnshown(live, iterator);
     const last = live.last;
     if (!last || !this.backgroundHandler) {
       void drain();
@@ -574,7 +584,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const timer = setTimeout(() => live.close(), INTERRUPT_GRACE_MS);
     timer.unref?.();
     try {
-      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next());
+      await this.readUnshown(live, feed, pending);
     } catch {
       live.close();
     } finally {
@@ -930,6 +940,21 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
+   * Reads the rest of a turn nobody shows (a declined self-start, a stopped
+   * reply's): a note picked in it is reported dropped, since no reply will
+   * fold it. True when the turn's result came.
+   */
+  private async readUnshown(live: LiveProcess, feed: AsyncIterator<SDKMessage>, pending: Promise<IteratorResult<SDKMessage>> | null = null): Promise<boolean> {
+    let ended = false;
+    for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next()) {
+      const picked = pickedNote(next.value);
+      if (picked !== null) this.reportDropped(live, [picked]);
+      else if ((next.value as { type?: unknown }).type === 'result') ended = true;
+    }
+    return ended;
+  }
+
+  /**
    * After a stop: reads the interrupted turn to its result (the process is
    * already pooled). One whose turn hasn't ended within INTERRUPT_GRACE_MS is
    * closed.
@@ -939,9 +964,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     timer.unref?.();
     let ended = false;
     try {
-      for (let next = await (pending ?? feed.next()); !next.done; next = await feed.next()) {
-        if ((next.value as { type?: unknown }).type === 'result') ended = true;
-      }
+      ended = await this.readUnshown(live, feed, pending);
     } catch {
       ended = false;
     } finally {

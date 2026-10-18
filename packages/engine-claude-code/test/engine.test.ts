@@ -78,7 +78,8 @@ function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: nu
  * cancel calls in order (an interrupt with its arguments, if any). `end`
  * ends its output, as a process that dies.
  */
-function noteQuery(o: { cancelled?: boolean } = {}) {
+/** `cancelFrames`: a cancel also emits Claude Code's `cancelled` lifecycle frame, read before the cancel resolves. */
+function noteQuery(o: { cancelled?: boolean; cancelFrames?: boolean } = {}) {
   const pushed: SDKUserMessage[] = [];
   const log: string[] = [];
   const cancels: string[] = [];
@@ -109,6 +110,10 @@ function noteQuery(o: { cancelled?: boolean } = {}) {
       cancelAsyncMessage: async (uuid: string) => {
         cancels.push(uuid);
         log.push(`cancel ${uuid}`);
+        if (o.cancelFrames) {
+          emit({ type: 'command_lifecycle', command_uuid: uuid, state: 'cancelled' });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
         return o.cancelled ?? true;
       },
       supportedModels: async () => [],
@@ -2897,7 +2902,7 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
   });
 
   /** A first reply on `f`, then a turn Claude Code starts by itself (text "Reviewing"), run as reply m-self; resolves once that reply is running. */
-  async function selfStartedReply(e: ClaudeCodeChatEngine, f: Fake) {
+  async function selfStartedReply(e: ClaudeCodeChatEngine, f: Fake, over: Partial<EngineRequest> = {}) {
     const seen: EngineBackgroundEvent[] = [];
     e.onBackground((ev) => seen.push(ev));
     const first = await running(e, f);
@@ -2907,9 +2912,9 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
     const start = seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!;
     const events: EngineEvent[] = [];
-    const done = (async () => { for await (const ev of start.run(req({ messageId: 'm-self' }))) events.push(ev); })();
+    const done = (async () => { for await (const ev of start.run(req({ messageId: 'm-self', ...over }))) events.push(ev); })();
     await vi.waitFor(() => expect(events.some((ev) => ev.type === 'text-delta')).toBe(true));
-    return { events, done };
+    return { events, done, seen };
   }
   const selfFailure = () => ({ ...resultNaming([], 'error_during_execution'), origin: { kind: 'task-notification' } });
 
@@ -3152,6 +3157,101 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     await done;
     e.dispose();
     expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+  });
+
+  const droppedIn = (seen: EngineBackgroundEvent[]): string[][] => seen.flatMap((ev) => (ev.type === 'notes-dropped' ? [ev.noteIds] : []));
+
+  it('a queued note Claude Code drops unasked is reported dropped; one taken back or cancelled by Stop is not', async () => {
+    const f = noteQuery({ cancelFrames: true });
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const controller = new AbortController();
+    const r = await running(e, f, req({ signal: controller.signal }));
+    for (const id of ['n1', 'n2', 'n3']) expect(await e.sendToReply('m1', note(id))).toBe(true);
+    f.emit(lifecycle('n1', 'cancelled'));
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    // Claude Code's `cancelled` frame for a cancel we asked for comes before the cancel resolves.
+    expect(await e.withdrawNote('n2')).toBe(true);
+    controller.abort();
+    await r.done;
+    await vi.waitFor(() => expect(f.cancels).toEqual(['n2', 'n3']));
+    f.emit(resultNaming([r.uuid], 'error_during_execution'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it('a declined self-start reports a note picked in its turn dropped', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    // A helper's report starts a turn of Claude Code's own, and Claude reads the note in it.
+    f.emit(delta('Reviewing'));
+    await vi.waitFor(() => expect(seen.some((ev) => ev.type === 'self-start')).toBe(true));
+    f.emit(lifecycle('n1', 'started'));
+    seen.flatMap((ev) => (ev.type === 'self-start' ? [ev.start] : []))[0]!.decline();
+    f.emit(selfFailure());
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it('a note picked in the rest of a stopped turn is reported dropped', async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const controller = new AbortController();
+    const r = await running(e, f, req({ signal: controller.signal }));
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    controller.abort();
+    await r.done;
+    // Claude Code had started it as Stop came: the stopped reply never shows it.
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming([r.uuid, 'n1'], 'error_during_execution'));
+    await vi.waitFor(() => expect(droppedIn(seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(seen)).toEqual([['n1']]);
+  });
+
+  it("a note picked in the rest of a stopped self-started turn is reported dropped", async () => {
+    const f = noteQuery({ cancelled: false });
+    const e = engine(f.query);
+    const controller = new AbortController();
+    const r = await selfStartedReply(e, f, { signal: controller.signal });
+    expect(await e.sendToReply('m-self', note('n1'))).toBe(true);
+    controller.abort();
+    await r.done;
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(selfFailure());
+    await vi.waitFor(() => expect(droppedIn(r.seen)).toEqual([['n1']]));
+    e.dispose();
+    expect(droppedIn(r.seen)).toEqual([['n1']]);
+  });
+
+  it('knowsNote is true while an open process has the note queued, started or read, and false otherwise', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const r = await running(e, f);
+    expect(await e.sendToReply('m1', note('n1'))).toBe(true);
+    expect(await e.sendToReply('m1', note('n2'))).toBe(true);
+    expect(e.knowsNote('n1')).toBe(true);
+    f.emit(lifecycle('n1', 'started'));
+    await vi.waitFor(() => expect(r.events).toContainEqual({ type: 'note-picked', noteId: 'n1' }));
+    expect(e.knowsNote('n1')).toBe(true);
+    expect(await e.withdrawNote('n2')).toBe(true);
+    expect(e.knowsNote('n2')).toBe(false);
+    expect(e.knowsNote('n-other')).toBe(false);
+    f.emit(resultNaming([r.uuid, 'n1']));
+    await r.done;
+    e.dispose();
+    expect(e.knowsNote('n1')).toBe(false);
   });
 
   it('a process closed with nothing queued reports nothing', async () => {
