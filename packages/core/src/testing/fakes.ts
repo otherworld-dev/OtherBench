@@ -117,6 +117,11 @@ export class FakeChatEngine implements ChatEngine {
   /** Result `testConnection` returns; override per-test as needed. */
   connectionTestResult: ConnectionTestResult = { ok: true, message: 'ok', latencyMs: 0 };
 
+  /** Set per test to stand in for the engine's `sendToReply`; unset, the fake doesn't take notes. */
+  sendToReply?: ChatEngine['sendToReply'];
+  /** Set per test to stand in for the engine's `withdrawNote`. */
+  withdrawNote?: ChatEngine['withdrawNote'];
+
   constructor(private readonly script: EngineScript) {}
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {

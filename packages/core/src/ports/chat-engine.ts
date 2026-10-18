@@ -1,4 +1,4 @@
-import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, NoteAttachment, SerializedError } from '../types/messages.js';
 import type { CommandRow } from '../domain/context-lines.js';
 import type { SubagentEvent } from '../domain/parts.js';
 import type { BackgroundHelper } from '../types/background.js';
@@ -122,7 +122,9 @@ export type EngineEvent =
    * tool), told the way an API sub-agent is: `callId` is the tool call that
    * started it. Folded into the reply's parts as a `subagent` part.
    */
-  | { type: 'subagent'; callId: string; event: SubagentEvent };
+  | { type: 'subagent'; callId: string; event: SubagentEvent }
+  /** Claude started reading a note the user sent mid-reply; the runner folds it into the reply at this point. */
+  | { type: 'note-picked'; noteId: string };
 
 export interface DiscoveredModel {
   modelId: string;
@@ -153,6 +155,8 @@ export interface SelfStart {
   notice: string;
   /** Carried over from the reply before it: a scheduled run's helpers carry on unattended. */
   unattended: boolean;
+  /** Set when Claude Code is running notes the user sent mid-reply as their own turn (a follow-on); `notice` is '' then. */
+  noteIds?: string[];
   /** Runs the turn for the reply `req` describes, gated like a reply the user asked for. Iterate once. */
   run(req: EngineRequest): AsyncIterable<EngineEvent>;
   /** Nobody will run it: the engine reads the turn to its end and discards it. */
@@ -165,7 +169,9 @@ export type EngineBackgroundEvent =
   /** The chat's background tasks now (the whole set, replacing the last). */
   | { type: 'helpers'; chatId: string; helpers: BackgroundHelper[] }
   /** A change to a helper's card in an earlier reply `messageId`: it finished, or went back to work. */
-  | { type: 'helper-event'; chatId: string; messageId: string; callId: string; event: SubagentEvent };
+  | { type: 'helper-event'; chatId: string; messageId: string; callId: string; event: SubagentEvent }
+  /** Notes the user sent mid-reply that Claude never read: the reply ended, so they are the user's to resend. */
+  | { type: 'notes-dropped'; chatId: string; noteIds: string[] };
 
 /** A background task that is running but can't be stopped from here; its message says why, for the person who asked. */
 export class HelperStopError extends Error {
@@ -176,6 +182,10 @@ export interface ChatEngine {
   stream(req: EngineRequest): AsyncIterable<EngineEvent>;
   /** Where the engine reports work its agent does between replies (one handler; a later call replaces it). */
   onBackground?(handler: (event: EngineBackgroundEvent) => void): void;
+  /** Pushes a note into the running reply `messageId`. False when that reply isn't running here or can't take one. */
+  sendToReply?(messageId: string, note: { id: string; text: string; attachments: NoteAttachment[] }): Promise<boolean>;
+  /** Takes back a note Claude hasn't started reading. True when it was removed. */
+  withdrawNote?(noteId: string): Promise<boolean>;
   /** Stops one of a chat's background tasks; false when no such task is running. Throws HelperStopError when it can't be stopped. */
   stopHelper?(chatId: string, taskId: string): Promise<boolean>;
   /** A chat's settings changed (any chat's, with no id): what applies to work running now (Auto) is applied at once. */
