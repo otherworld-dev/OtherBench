@@ -219,7 +219,7 @@ export interface OtherBenchState {
   // --- messages sent while a reply runs (spec 2026-10-18-send-while-replying-design) ---
   /** Each chat's notes still waiting for its replies to end, as its stream last said. */
   chatNotes: Record<string, ReplyNote[]>;
-  /** The notes this tab sent that haven't been resolved yet, by id. */
+  /** The notes this tab sent that haven't been resolved yet, by id. Kept in sessionStorage, so a reload of the tab keeps them. */
   sentNotes: Record<string, ReplyNote>;
   /** Notes handed back to this tab's composer (a stopped or lost reply, or one taken back), not yet taken. */
   returnedNotes: ReturnedNote[];
@@ -327,6 +327,31 @@ function saveInspectorCollapsed(collapsed: boolean): void {
     window.localStorage.setItem(INSPECTOR_COLLAPSED_STORAGE_KEY, String(collapsed));
   } catch {
     // storage blocked or full -- the choice still applies for this session.
+  }
+}
+
+/** sessionStorage key: the notes this tab sent that aren't resolved yet. Per tab, so a reload keeps them. */
+export const SENT_NOTES_STORAGE_KEY = 'otherbench.sentNotes';
+
+function loadSentNotes(): Record<string, ReplyNote> {
+  try {
+    const parsed: unknown = JSON.parse(window.sessionStorage.getItem(SENT_NOTES_STORAGE_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const notes: Record<string, ReplyNote> = {};
+    for (const [id, n] of Object.entries(parsed as Record<string, Partial<ReplyNote> | null>)) {
+      if (n && n.id === id && typeof n.chatId === 'string' && typeof n.text === 'string' && Array.isArray(n.attachments)) notes[id] = n as ReplyNote;
+    }
+    return notes;
+  } catch {
+    return {};
+  }
+}
+
+function saveSentNotes(notes: Record<string, ReplyNote>): void {
+  try {
+    window.sessionStorage.setItem(SENT_NOTES_STORAGE_KEY, JSON.stringify(notes));
+  } catch {
+    // storage blocked or full -- they're still held for this load.
   }
 }
 
@@ -647,7 +672,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   setChatBackground: (chatId, helpers, approvals) =>
     set((state) => ({ chatHelpers: { ...state.chatHelpers, [chatId]: helpers }, backgroundApprovals: { ...state.backgroundApprovals, [chatId]: approvals } })),
   chatNotes: {},
-  sentNotes: {},
+  sentNotes: loadSentNotes(),
   returnedNotes: [],
   earlyResolved: {},
   noteSent: (note) =>
@@ -805,8 +830,10 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
 export const selectPendingApprovalCount = (s: OtherBenchState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
-// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
+// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device;
+// the notes this tab sent, in this tab.
 useOtherBenchStore.subscribe((state, previous) => {
   if (state.paneState !== previous.paneState) savePaneState(state.paneState);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
+  if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
 });

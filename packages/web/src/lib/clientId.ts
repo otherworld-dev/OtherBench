@@ -15,5 +15,29 @@ export function makeClientId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** sessionStorage key: this tab's client id. */
+export const CLIENT_ID_STORAGE_KEY = 'otherbench.clientId';
+
+/**
+ * This tab's id, kept in sessionStorage so a reload of the tab keeps it (a
+ * note sent before the reload still finds its way back); a new tab gets its
+ * own. A fresh one each load when storage is blocked.
+ */
+function tabClientId(): string {
+  try {
+    const stored = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (stored) return stored;
+  } catch {
+    // storage blocked -- this load's own id.
+  }
+  const id = makeClientId();
+  try {
+    window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+  } catch {
+    // storage blocked or full -- the id lasts this load.
+  }
+  return id;
+}
+
 /** One random id per browser tab: notes carry it so only the sending tab gets a returned note back. */
-export const CLIENT_ID: string = makeClientId();
+export const CLIENT_ID: string = tabClientId();
