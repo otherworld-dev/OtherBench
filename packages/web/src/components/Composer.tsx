@@ -223,7 +223,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (returnedCount === 0) return;
     const taken = useOtherBenchStore.getState().takeReturnedNotes(chat.id);
     if (taken.length === 0) return;
-    setText((draft) => [draft, ...taken.map((n) => n.text)].filter((t) => t.trim().length > 0).join('\n\n'));
+    // While a recalled message shows, the draft is the one kept aside, not that message.
+    const kept = browsing?.draft;
+    setText((draft) => [kept ?? draft, ...taken.map((n) => n.text)].filter((t) => t.trim().length > 0).join('\n\n'));
     setBrowsing(null);
     for (const n of taken) for (const a of n.attachments) returnedAttachmentIds.current.add(a.attachmentId);
     setAttachments((prev) => [

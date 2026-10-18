@@ -1020,6 +1020,22 @@ describe('Composer message history (Up and Down)', () => {
     expect(box()).toHaveValue('again: second');
   });
 
+  it('a note that comes back while a recalled message shows goes after the real draft, not the recalled one', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'a2' })} />);
+    await user.type(box(), 'draft');
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('second');
+    const returned: ReplyNote = {
+      id: 'n1', chatId: 'chat-1', text: 'came back', attachments: [], path: 'wait', replyIds: [], parentId: null, profileIds: ['p1'], clientId: CLIENT_ID, sentAt: 1,
+    };
+    act(() => {
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+
+    await waitFor(() => expect(box()).toHaveValue('draft\n\ncame back'));
+  });
+
   it('does nothing in a chat with no earlier messages', async () => {
     const user = userEvent.setup();
     render(<Composer chat={makeChat({ id: 'chat-2' })} />);
