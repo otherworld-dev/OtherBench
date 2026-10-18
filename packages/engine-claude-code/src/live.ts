@@ -96,6 +96,17 @@ function resultFor(msg: SDKMessage, uuid: string): boolean {
   return named.length === 0 || named.includes(uuid);
 }
 
+/** The synthetic message the pump puts in a reply's feed when Claude Code starts reading a note mid-turn. */
+export const NOTE_PICKED = 'otherbench_note_picked';
+export type NotePickedMessage = { type: typeof NOTE_PICKED; noteId: string };
+
+/** A `command_lifecycle` frame's uuid and state, or null for anything else (the SDK doesn't type these). */
+export function lifecycleOf(message: SDKMessage): { uuid: string; state: string } | null {
+  const m = message as unknown as { type?: unknown; command_uuid?: unknown; state?: unknown };
+  if (m.type !== 'command_lifecycle' || typeof m.command_uuid !== 'string' || typeof m.state !== 'string') return null;
+  return { uuid: m.command_uuid, state: m.state };
+}
+
 /** What one reply binds a live process's hooks to while it runs. */
 export interface TurnBinding {
   gate: Gate;
@@ -180,6 +191,15 @@ export class LiveProcess {
    * Code starts by itself follows.
    */
   last: { chatId: string; messageId: string; profileId: string; policy: ToolPolicy; ctx: ToolContext; autoMode: boolean; unattended: boolean } | null = null;
+  /** Notes pushed into this process -> the reply message each was sent to; only those Claude Code hasn't started. */
+  readonly notes = new Map<string, string>();
+  /** Notes Claude Code started while no turn was attached: a follow-on turn is beginning for them. */
+  readonly starting: string[] = [];
+  /** What this Claude Code says it can do (the init message's capabilities). */
+  capabilities: string[] = [];
+  /** Called once when the process closes or its output ends, with the notes that never got read. */
+  onClosed: (dropped: string[]) => void = () => {};
+  private reportedClosed = false;
   private attached: { uuid: string; feed: TurnFeed } | null = null;
   private freeWaiters: (() => void)[] = [];
   private outputEnded = false;
@@ -203,6 +223,19 @@ export class LiveProcess {
         this.background?.handle(next.value);
         this.noteMode(next.value);
         const turn = this.attached;
+        const life = lifecycleOf(next.value);
+        if (life && this.notes.has(life.uuid)) {
+          if (life.state === 'started') {
+            this.notes.delete(life.uuid);
+            if (turn) {
+              turn.feed.push({ type: NOTE_PICKED, noteId: life.uuid } as unknown as SDKMessage);
+              continue;
+            }
+            this.starting.push(life.uuid);
+          } else if (life.state === 'cancelled' || life.state === 'completed') {
+            this.notes.delete(life.uuid);
+          }
+        }
         if (turn && (next.value as { type?: unknown }).type === 'result' && !resultFor(next.value, turn.uuid)) {
           // Another turn's result (one Claude Code ran by itself) never ends this reply.
           this.onIdle(next.value);
@@ -218,6 +251,7 @@ export class LiveProcess {
     } finally {
       this.outputEnded = true;
       this.detach();
+      this.reportClosed();
     }
   }
 
@@ -225,6 +259,18 @@ export class LiveProcess {
   private noteMode(message: SDKMessage): void {
     const m = message as unknown as { type?: unknown; subtype?: unknown; permissionMode?: unknown };
     if (m.type === 'system' && (m.subtype === 'init' || m.subtype === 'status') && typeof m.permissionMode === 'string') this.permissionMode = m.permissionMode;
+    const caps = (message as unknown as { capabilities?: unknown }).capabilities;
+    if (m.type === 'system' && m.subtype === 'init' && Array.isArray(caps)) this.capabilities = caps.filter((c): c is string => typeof c === 'string');
+  }
+
+  /** Tells `onClosed` which notes were never read, once. */
+  private reportClosed(): void {
+    if (this.reportedClosed) return;
+    this.reportedClosed = true;
+    const dropped = [...this.notes.keys(), ...this.starting];
+    this.notes.clear();
+    this.starting.length = 0;
+    this.onClosed(dropped);
   }
 
   /**
@@ -290,6 +336,7 @@ export class LiveProcess {
     this.background?.closeAll();
     this.input.end();
     this.abortController.abort();
+    this.reportClosed();
   }
 }
 
