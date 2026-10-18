@@ -736,6 +736,20 @@ describe('notes (messages sent while a reply runs)', () => {
     expect(after.chatNotes['c1']?.map((n) => n.id)).toEqual(['waiting']);
   });
 
+  it("on a hello, a lost note that a loaded reply shows as read isn't restored, though the server's outcome for it is gone", () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['read', 'streaming', 'lost']) s.noteSent(note(id));
+    s.loadMessages('c1', [stubAssistant('m1', { chatId: 'c1', status: 'complete', parts: [{ type: 'user-note', noteId: 'read', text: 'read', attachments: [] }] })], null);
+    // A reply still streaming that isn't loaded yet: its events wait for it.
+    s.applyHello([{ messageId: 'm2', status: 'streaming', events: [{ messageId: 'm2', type: 'user-note', part: { type: 'user-note', noteId: 'streaming', text: 'streaming', attachments: [] } }] }]);
+
+    s.setChatNotes('c1', [], []);
+
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['lost']);
+    expect(after.sentNotes).toEqual({});
+  });
+
   it('a note resolved before its send returned is not remembered as sent, so a reload never restores it again', () => {
     const s = useOtherBenchStore.getState();
     s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: note('n1') });

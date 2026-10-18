@@ -355,6 +355,22 @@ function saveSentNotes(notes: Record<string, ReplyNote>): void {
   }
 }
 
+/**
+ * Note ids the chat's loaded replies show as `user-note` parts, and those in
+ * reply events waiting for their message: Claude read those notes.
+ */
+function readNoteIds(state: Pick<OtherBenchState, 'messages' | 'pendingEvents'>, chatId: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of Object.values(state.messages)) {
+    if (m.chatId !== chatId) continue;
+    for (const p of m.parts) if (p.type === 'user-note') ids.add(p.noteId);
+  }
+  for (const events of Object.values(state.pendingEvents)) {
+    for (const e of events) if (e.type === 'user-note') ids.add(e.part.noteId);
+  }
+  return ids;
+}
+
 function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
 }
@@ -702,7 +718,10 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         delete sentNotes[note.id];
         if (!delivered.has(note.id)) lost.push(note);
       }
-      return { chatNotes: { ...state.chatNotes, [chatId]: notes }, sentNotes, returnedNotes: [...state.returnedNotes, ...lost] };
+      // A reply that shows the note was read is word enough, with no outcome kept for it.
+      const read = lost.length > 0 ? readNoteIds(state, chatId) : new Set<string>();
+      const back = lost.filter((n) => !read.has(n.id));
+      return { chatNotes: { ...state.chatNotes, [chatId]: notes }, sentNotes, returnedNotes: [...state.returnedNotes, ...back] };
     }),
   applyChatEvent: (chatId, event) => {
     if (event.type === 'helpers') {
