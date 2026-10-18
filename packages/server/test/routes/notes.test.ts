@@ -213,6 +213,23 @@ describe('POST /api/chats/:id/notes', () => {
     expect(container.notes!.helloState('chat-1').notes).toHaveLength(1);
   });
 
+  it('two notes sent at once with the same attachment: only one holds it', async () => {
+    await running();
+    // Resolving the profile reads its key: both requests are past their attachment checks before either is sent.
+    container.store.connections.update('conn-1', { secretRef: 'key-1' });
+    container.secrets.get = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return 'sk-test';
+    };
+
+    const results = await Promise.all([postNote({ attachments: [{ attachmentId: 'att-1' }] }), postNote({ attachments: [{ attachmentId: 'att-1' }] })]);
+
+    expect(results.map((r) => r.status).sort()).toEqual([202, 400]);
+    const refused = results.find((r) => r.status === 400)!;
+    expect(((await refused.json()) as { error: string }).error).toContain('"att-1"');
+    expect(container.notes!.heldAttachmentIds('chat-1')).toEqual(['att-1']);
+  });
+
   it('400 for bad fields', async () => {
     const { replyId } = await running();
     const bad: Record<string, unknown>[] = [
@@ -287,6 +304,30 @@ describe('POST /api/chats/:id/turns while notes wait', () => {
     push(replyId, FINISH);
     await expect.poll(() => container.store.messages.children(replyId).map((m) => m.parts)).toEqual([[{ type: 'text', text: 'and the tests' }]]);
     await expect.poll(() => container.notes!.hasWaiting('chat-1')).toBe(false);
+  });
+
+  it('regenerate and retry are refused while notes wait', async () => {
+    const store = container.store;
+    const producedBy = { profileId: 'profile-1', profileName: 'P', connectionId: 'conn-1', modelId: 'model-x' };
+    store.messages.create({ id: 'u0', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a0', chatId: 'chat-1', parentId: 'u0', role: 'assistant', parts: [{ type: 'text', text: 'Hello.' }], status: 'complete', error: null, producedBy });
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: 'a0', role: 'user', parts: [{ type: 'text', text: 'more' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [], status: 'error', error: { kind: 'unknown', message: 'boom', retryable: true }, producedBy });
+    const res = await request('POST', '/api/chats/chat-1/turns', { parentId: 'a0', parts: [{ type: 'text', text: 'do the work' }], profileIds: ['profile-1'] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    expect((await postNote({ parentId: replyId })).status).toBe(202);
+    const refused = { kind: 'notes-waiting', error: 'Messages you sent are still waiting for this reply.' };
+
+    const regenerate = await request('POST', '/api/chats/chat-1/regenerate', { messageId: 'a0' });
+    expect(regenerate.status).toBe(409);
+    expect(await regenerate.json()).toEqual(refused);
+
+    const retry = await request('POST', '/api/messages/a1/retry');
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toEqual(refused);
+
+    expect(store.messages.children('u0').map((m) => m.id)).toEqual(['a0']);
+    expect(store.messages.get('a1')!.status).toBe('error');
   });
 
   it('a reply running with no notes waiting does not refuse a turn', async () => {

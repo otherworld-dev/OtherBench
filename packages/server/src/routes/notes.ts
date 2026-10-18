@@ -22,7 +22,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** The message a note follows: a message of this chat, or null for none. */
-function parseParentId(container: Container, chatId: string, value: unknown): string | null {
+function parseNoteParentId(container: Container, chatId: string, value: unknown): string | null {
   if (value === null) return null;
   const id = requireNonEmptyString(value, 'parentId');
   if (container.store.messages.get(id)?.chatId !== chatId) {
@@ -73,7 +73,7 @@ export function notesRoutes(container: Container): Hono {
     const text = body.text;
     const clientId = requireNonEmptyString(body.clientId, 'clientId');
     const profileIds = parseProfileIds(body.profileIds);
-    const parentId = parseParentId(container, chatId, body.parentId);
+    const parentId = parseNoteParentId(container, chatId, body.parentId);
     const attachments = parseAttachments(container, chatId, body.attachments);
     if (text.trim().length === 0 && attachments.length === 0) {
       throw new HTTPException(400, { message: '"text" must not be empty unless the message has attachments.' });
@@ -84,6 +84,9 @@ export function notesRoutes(container: Container): Hono {
     if (!notes?.isBusy(chatId)) return c.json({ kind: 'idle' }, 409);
     if (contextCommandOf([{ type: 'text', text }], profiles)) return c.json({ kind: 'command', error: COMMAND_MID_REPLY }, 409);
 
+    // Checked again after the awaits above, with nothing awaited between here and the note being held:
+    // another note sent meanwhile may have taken one of these attachments, or it may have been sent.
+    parseAttachments(container, chatId, body.attachments);
     const note = await notes.send({ chatId, text, attachments, parentId, profileIds, clientId });
     // The chat went quiet meanwhile: the client sends it as a normal turn.
     if (!note) return c.json({ kind: 'idle' }, 409);

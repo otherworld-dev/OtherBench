@@ -183,15 +183,22 @@ export function workspaceRefusal(container: Container, c: Context, chatId: strin
   return c.json({ error: workspaceUnresolvedMessage(status), kind: 'workspace_unresolved', workspaceStatus: status }, 409);
 }
 
+/**
+ * A 409 while messages sent during the chat's reply are still to go out:
+ * they go first, as the next turn, so a turn, regenerate or retry now would
+ * jump them.
+ */
+function notesWaiting(container: Container, c: Context, chatId: string): Response | null {
+  return container.notes?.hasWaiting(chatId) ? c.json({ kind: 'notes-waiting', error: NOTES_WAITING }, 409) : null;
+}
+
 export function turnsRoutes(container: Container): Hono {
   const app = new Hono();
 
   app.post('/chats/:id/turns', async (c) => {
     const chatId = c.req.param('id');
-    const refusal = workspaceRefusal(container, c, chatId);
+    const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
-    // Messages sent while the reply ran go out first, as the next turn: one sent now would jump them.
-    if (container.notes?.hasWaiting(chatId)) return c.json({ kind: 'notes-waiting', error: NOTES_WAITING }, 409);
 
     const body = (await c.req.json().catch(() => ({}))) as TurnBody;
     const parentId = parseParentId(body.parentId);
@@ -280,7 +287,7 @@ export function turnsRoutes(container: Container): Hono {
     if (message.error?.kind === 'peer_unreachable') {
       throw new HTTPException(409, { message: `Message "${messageId}" was cut off on another machine; regenerate it instead.` });
     }
-    const refusal = workspaceRefusal(container, c, message.chatId);
+    const refusal = workspaceRefusal(container, c, message.chatId) ?? notesWaiting(container, c, message.chatId);
     if (refusal) return refusal;
 
     const profile = await resolveProfile(container, message.producedBy.profileId);
@@ -306,7 +313,7 @@ export function turnsRoutes(container: Container): Hono {
   // streams in the background like POST .../turns.
   app.post('/chats/:id/regenerate', async (c) => {
     const chatId = c.req.param('id');
-    const refusal = workspaceRefusal(container, c, chatId);
+    const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
 
     const body = (await c.req.json().catch(() => ({}))) as RegenerateBody;
