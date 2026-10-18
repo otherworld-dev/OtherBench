@@ -273,6 +273,19 @@ describe('ChatList groups', () => {
     await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c-new']));
   });
 
+  it('a new chat opens as a tab, from + New chat or a project\'s +', async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })] });
+    mockedCreate.mockResolvedValueOnce(makeChat({ id: 'c-new' })).mockResolvedValueOnce(makeChat({ id: 'c-proj', projectId: 'p-a' }));
+    render(<ChatList />);
+
+    await user.click(screen.getByRole('button', { name: '+ New chat' }));
+    await waitFor(() => expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c-new']));
+    await user.click(screen.getByRole('button', { name: 'New chat in Alpha' }));
+    await waitFor(() => expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c-new', 'c-proj']));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c-proj');
+  });
+
   it('searching filters every group, hides groups without a match, and shows collapsed groups expanded', async () => {
     const user = userEvent.setup();
     useOtherBenchStore.setState({

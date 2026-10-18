@@ -9,12 +9,12 @@ import { parseOpenArgs } from './openArgs.js';
  * `--send <file>...` (a new chat with those images attached), whether they
  * came with this launch (`launch_args`, handed over once) or with a second
  * launch the single-instance plugin forwarded (`open-args`). The new chat
- * uses the default profile, like **+ New chat**, and opens.
+ * uses the default profile, like **+ New chat**, and opens as a tab.
  */
 export async function handleOpenArgs(argv: string[]): Promise<void> {
   const { openFolder, send } = parseOpenArgs(argv);
   if (openFolder === null && send.length === 0) return;
-  const { profiles, upsertChat, setActiveChatId } = useOtherBenchStore.getState();
+  const { profiles, upsertChat, openTab } = useOtherBenchStore.getState();
   const profile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null);
   if (!profile) {
     console.error('[otherbench-web] no profile to open a chat with; set one up in Settings first.');
@@ -23,7 +23,7 @@ export async function handleOpenArgs(argv: string[]): Promise<void> {
   if (openFolder !== null) {
     const chat = await api.chats.create({ profileId: profile.id, workspaceRoot: openFolder });
     upsertChat(chat);
-    setActiveChatId(chat.id);
+    openTab(chat.id);
   }
   if (send.length > 0) {
     const chat = await api.chats.create({ profileId: profile.id });
@@ -36,7 +36,7 @@ export async function handleOpenArgs(argv: string[]): Promise<void> {
       }
     }
     // Opened after the files are attached, so the composer loads them with the chat.
-    setActiveChatId(chat.id);
+    openTab(chat.id);
   }
 }
 
