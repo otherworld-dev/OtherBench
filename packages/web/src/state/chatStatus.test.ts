@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatStatus, groupStatus, shownChatIds } from './chatStatus.js';
+import { chatStatus, groupStatus, groupStatusSummary, shownChatIds } from './chatStatus.js';
 import { DEFAULT_PANE_STATE, type PaneState } from './panes.js';
 
 const state = (over: Partial<PaneState> = {}): PaneState => ({ ...DEFAULT_PANE_STATE, ...over });
@@ -27,6 +27,22 @@ describe('chatStatus', () => {
     expect(chatStatus(chat, none, none)).toBe('ready');
     expect(chatStatus({ id: 'c', unread: false }, none, none)).toBeNull();
   });
+
+  it('is working in the background only with no reply running and nothing new to read', () => {
+    const background = new Set(['c']);
+    expect(chatStatus({ id: 'c', unread: false }, none, none, background)).toBe('background');
+    expect(chatStatus({ id: 'c', unread: true }, none, none, background)).toBe('ready');
+    expect(chatStatus({ id: 'c', unread: false }, none, new Set(['c']), background)).toBe('working');
+    expect(chatStatus({ id: 'c', unread: false }, new Set(['c']), none, background)).toBe('waiting');
+  });
+});
+
+describe('groupStatusSummary', () => {
+  it('counts each status, most urgent first, and is empty with none', () => {
+    expect(groupStatusSummary(['ready', null, 'background', 'ready', 'waiting'])).toBe('1 waiting for you · 2 replies ready · 1 working in the background');
+    expect(groupStatusSummary(['working'])).toBe('1 replying');
+    expect(groupStatusSummary([null])).toBe('');
+  });
 });
 
 describe('groupStatus', () => {
@@ -34,6 +50,8 @@ describe('groupStatus', () => {
     expect(groupStatus([null, 'ready', 'working'])).toBe('working');
     expect(groupStatus(['ready', 'waiting', 'working'])).toBe('waiting');
     expect(groupStatus([null, 'ready'])).toBe('ready');
+    expect(groupStatus(['background', 'ready'])).toBe('ready');
+    expect(groupStatus([null, 'background'])).toBe('background');
     expect(groupStatus([null])).toBeNull();
     expect(groupStatus([])).toBeNull();
   });

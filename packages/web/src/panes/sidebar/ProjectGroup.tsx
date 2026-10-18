@@ -54,6 +54,8 @@ export interface ProjectGroupProps {
   onRenameCancel?: () => void;
   /** The most urgent status among the group's chats, shown on the heading whether it's open or collapsed. */
   status?: ChatStatus | null;
+  /** The group's statuses counted ("2 replies ready · 1 replying"): the heading dot's hover text and what a screen reader hears. */
+  statusSummary?: string;
   /** Projects only: the name opens the project's page, and the arrow alone collapses the group. */
   onOpen?: () => void;
   /** The project's page is the focused tab. */
@@ -73,7 +75,7 @@ function carriesProject(e: DragEvent): boolean {
 /** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
-  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, onOpen, active = false } = props;
+  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, statusSummary, onOpen, active = false } = props;
   const { menuLabel = 'Project actions', reorder } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
@@ -183,14 +185,15 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           >
             {!onOpen && <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>}
             <span className="truncate">{name}</span>{' '}
-            <span className="ml-auto flex items-center gap-1.5 pl-1">
-              {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden />}
-              <span className="font-normal tabular-nums" data-testid={`group-count-${groupKey}`}>
+            {/* The count first and the dot well clear of it, so the two don't read as "27 unread". */}
+            <span className="ml-auto flex items-center gap-2.5 pl-1">
+              <span className="font-normal tabular-nums" title={`${count} ${count === 1 ? 'chat' : 'chats'}`} data-testid={`group-count-${groupKey}`}>
                 {count}
               </span>
+              {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden {...(statusSummary ? { title: statusSummary } : {})} />}
             </span>
             <span className="sr-only">{count === 1 ? ' chat' : ' chats'}</span>
-            {status && <span className="sr-only">, {STATUS_LABELS[status]}</span>}
+            {status && <span className="sr-only">, {statusSummary || STATUS_LABELS[status]}</span>}
           </button>
           </h3>
           </>

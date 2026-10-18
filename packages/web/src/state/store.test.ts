@@ -526,6 +526,18 @@ describe('chats controlling the computer (computer use)', () => {
     expect(Object.keys(s().computerSessions)).toEqual(['c2']);
   });
 
+  it('keeps the chats with background tasks from the hello and from background-tasks events', () => {
+    const s = () => useOtherBenchStore.getState();
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [], backgroundChats: [{ chatId: 'c1', count: 2 }] });
+    expect(s().appBackgroundChats).toEqual({ c1: 2 });
+    s().applyAppEvent({ type: 'background-tasks', chatId: 'c2', count: 1 });
+    s().applyAppEvent({ type: 'background-tasks', chatId: 'c1', count: 0 });
+    expect(s().appBackgroundChats).toEqual({ c2: 1 });
+    // An older server's hello has none: nothing is left marked.
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
+    expect(s().appBackgroundChats).toEqual({});
+  });
+
   it('a hello replaces the set, and one with no computerSessions (an older server) clears it', () => {
     const s = () => useOtherBenchStore.getState();
     s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: true, lastAction: 'press ctrl+s' });

@@ -325,6 +325,8 @@ export interface PeerView extends PublicPeer {
   syncError: string | null;
   /** Its own chats with a reply running there now, while it's reachable (#790); absent means none. */
   activeChats?: string[];
+  /** Its own chats with background tasks running there now, while it's reachable; absent means none (or an older machine). */
+  backgroundChats?: string[];
 }
 
 export interface PeersOverview {

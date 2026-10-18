@@ -53,6 +53,13 @@ describe('ProjectGroup', () => {
     expect(screen.queryByTestId('group-status-p-a')).toBeNull();
   });
 
+  it("gives the heading's dot the group's counts on hover and to a screen reader, and the count its own hover text", () => {
+    renderGroup({ status: 'ready', statusSummary: '2 replies ready · 1 working in the background' });
+    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('title', '2 replies ready · 1 working in the background');
+    expect(screen.getByRole('button', { name: /^Alpha.*2 replies ready · 1 working in the background/ })).toBeInTheDocument();
+    expect(screen.getByTestId('group-count-p-a')).toHaveAttribute('title', expect.stringMatching(/^\d+ chats?$/));
+  });
+
   it('hides its list when collapsed', () => {
     renderGroup({ collapsed: true });
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'false');
