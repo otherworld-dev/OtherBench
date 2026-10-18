@@ -24,6 +24,7 @@ import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError }
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
+import { claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
@@ -551,7 +552,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // The reply's tool context: ids, folder (none for a clean chat, whose
     // scratch folder is not a workspace), extra folders, the plan gate and the
     // unattended flag.
-    const gateCtx: ToolContext = toolContextFor(req);
+    const base = toolContextFor(req);
+    // The user's own skills and plugins, read-only, so a skill can read its own files (skill-folders.ts).
+    const skillFolders = req.workspaceRoot ? claudeSkillFolders(this.deps.baseEnv ?? process.env, req.workspaceRoot) : [];
+    const gateCtx: ToolContext = skillFolders.length > 0 ? { ...base, folders: [...(base.folders ?? []), ...skillFolders] } : base;
     const approvals = this.deps.approvals;
     const askUser = approvals.askUser ? (ctx: ToolContext, input: AskInput) => approvals.askUser!(ctx, input) : undefined;
     // Artifacts (Deck #896) and recall (spec 2026-10-09-recall-design): a

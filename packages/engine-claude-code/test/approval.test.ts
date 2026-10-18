@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,46 @@ describe('normaliseAgentArgs', () => {
   });
   it('leaves tools without a path alone', () => {
     expect(normaliseAgentArgs('Bash', { command: 'npm test' }, ws)).toEqual({ args: { command: 'npm test' } });
+  });
+});
+
+describe("the claude-setup standard's secret files", () => {
+  it.each([
+    ['Read', { file_path: '.env' }],
+    ['Read', { file_path: '.env.local' }],
+    ['Edit', { file_path: 'app/.env', old_string: 'a', new_string: 'b' }],
+    ['Write', { file_path: '.claude/certificates/release.jks', content: 'x' }],
+    ['Read', { file_path: '.Claude/Certificates/key.pem' }],
+    ['Grep', { pattern: 'KEY', path: '.claude/certificates' }],
+    ['Grep', { pattern: 'KEY', path: '.', glob: '.env*' }],
+    ['Grep', { pattern: 'KEY', glob: '**/certificates/**' }],
+    ['Glob', { pattern: '*', path: '.claude/certificates' }],
+  ])('keeps %s %j from Claude Code', (tool, input) => {
+    expect(normaliseAgentArgs(tool, input, ws)).toHaveProperty('secret');
+  });
+  it('sees an absolute path to the secret', () => {
+    expect(normaliseAgentArgs('Read', { file_path: join(ws, '.env') }, ws)).toEqual({ secret: join(ws, '.env') });
+  });
+  it.runIf(process.platform !== 'win32')('sees through a link to the secret', () => {
+    writeFileSync(join(ws, '.env'), 'X=1');
+    symlinkSync(join(ws, '.env'), join(ws, 'harmless.txt'));
+    expect(normaliseAgentArgs('Read', { file_path: 'harmless.txt' }, ws)).toEqual({ secret: 'harmless.txt' });
+  });
+  it('lets ordinary files and the data folders through', () => {
+    for (const p of ['.envrc', 'src/env.ts', '.claude/private/plan.md', 'certificates/readme.md']) {
+      expect(normaliseAgentArgs('Read', { file_path: join(ws, p) }, ws)).toHaveProperty('args');
+    }
+  });
+  it('refuses with no card', async () => {
+    const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx() });
+    const decision = await gate('Read', { file_path: join(ws, '.env') });
+    expect(decision).toEqual({ allow: false, reason: `"Read" was blocked: ${join(ws, '.env')} is a secret file that OtherBench keeps from Claude Code.` });
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
+  it('says to use the full path for a ~ path', async () => {
+    const gate = createGate({ approvals: { requestApproval: vi.fn() }, policy, ctx: ctx() });
+    expect(await gate('Read', { file_path: '~/.claude/skills/x/SKILL.md' })).toEqual({ allow: false, reason: `"Read" was blocked: OtherBench doesn't accept ~ paths. Use the full path (~/.claude/skills/x/SKILL.md).` });
   });
 });
 

@@ -1,7 +1,7 @@
 import { isAbsolute, relative, sep } from 'node:path';
 import type { HelperRegistry } from './helpers.js';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
-import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@otherbench/core/domain/agent-tools.js';
+import { AGENT_PATH_ARG_KEYS, classifyAgentTool, isSecretAgentPath } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
@@ -110,7 +110,7 @@ export function normaliseAgentArgs(
   input: Record<string, unknown>,
   workspaceRoot: string,
   folders: readonly ResolvedFolder[] = [],
-): { args: Record<string, unknown> } | { outside: string } | { unusable: string } | { readOnly: string } {
+): { args: Record<string, unknown> } | { outside: string } | { home: string } | { unusable: string } | { readOnly: string } | { secret: string } {
   const { category } = classifyAgentTool(toolName);
   if (category !== 'file-read' && category !== 'file-write') return { args: { ...input } };
   const contain = (raw: string): ContainedIn | null => {
@@ -121,13 +121,21 @@ export function normaliseAgentArgs(
       return null;
     }
   };
+  // The claude-setup standard's secrets (core isSecretAgentPath), judged on the
+  // path as given and as it resolves inside its folder, so a link to one counts.
+  const secret = (raw: string, contained: ContainedIn): boolean =>
+    (!isAbsolute(raw) && isSecretAgentPath(raw)) || isSecretAgentPath(relative(contained.root, contained.path));
+  // Grep reads what its glob picks out: a glob naming a secret is refused (fail closed, by name alone).
+  if (toolName === 'Grep' && typeof input['glob'] === 'string' && /\.env|certificates/i.test(input['glob'])) return { secret: input['glob'] };
   let rel: string | undefined;
   for (const key of AGENT_PATH_ARG_KEYS) {
     if (!(key in input)) continue;
     const v = input[key];
     if (typeof v !== 'string' || v.trim().length === 0) return { unusable: key };
+    if (v.trim().startsWith('~')) return { home: v };
     const contained = contain(v.trim());
     if (contained === null) return { outside: v };
+    if (secret(v.trim(), contained)) return { secret: v };
     if (category === 'file-write' && !contained.writable) return { readOnly: v };
     if (rel === undefined) {
       if (contained.root === workspaceRoot) {
@@ -202,6 +210,12 @@ export function createGate(deps: {
       const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
+      }
+      if ('home' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: OtherBench doesn't accept ~ paths. Use the full path (${normalised.home}).` };
+      }
+      if ('secret' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: ${normalised.secret} is a secret file that OtherBench keeps from Claude Code.` };
       }
       if ('readOnly' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.readOnly} is in a read-only folder.` };

@@ -1326,7 +1326,7 @@ There's no spend cap; usage rows are written as normal.
   denied without a card. The agent shell tools (Bash, BashOutput, KillShell,
   PowerShell, Monitor) are not path-contained; their grants are pinned to the
   exact command like `run_command`.
-- Agent file paths are trimmed, `~` paths are refused, on Windows `/c/...`
+- Agent file paths are trimmed, `~` paths are refused (the refusal says to use the full path), on Windows `/c/...`
   paths are refused (Claude Code reads them as `C:\...`, `containPath` would
   not), and Glob/Grep patterns with absolute, `~` or `..` prefixes are
   contained.
@@ -1334,7 +1334,25 @@ There's no spend cap; usage rows are written as normal.
   `.claude` directory, `.mcp.json`, and `CLAUDE.md`/`CLAUDE.local.md` in any
   directory (`isProtectedAgentPath`). No grant covers them and a chat/always
   answer stores none, because a hook, skill or MCP command written there would
-  run on a later turn with no Bash card.
+  run on a later turn with no Bash card. The claude-setup standard's data
+  folders are the exception and follow the usual rules (Auto, grants):
+  anything in `.claude/private/` and `.claude/history/`, which Claude Code
+  never loads, and plain `.md` notes directly in `.claude/memory/`. Memory is
+  loaded into every new session, so a bad note there steers later turns as
+  `CLAUDE.md` would; it is let through deliberately, because auto memory
+  writes there all the time, and Auto's classifier still checks each write.
+- Claude Code's file tools may not touch the claude-setup standard's secrets
+  at all: anything under `.claude/certificates/`, and `.env`/`.env.*` in any
+  folder (`isSecretAgentPath`), judged on the path given and on where it
+  resolves, so a link to one counts. A Grep whose glob names `.env` or
+  `certificates` is refused too. OtherBench refuses these itself rather than
+  relying on the project's own deny rules after its hook has said allow. The
+  shell can still `cat` them unless the profile's shell runs in the sandbox.
+- Every Claude Code reply with a folder gets the user's `skills/` and
+  `plugins/cache/` (under `CLAUDE_CONFIG_DIR`, else `~/.claude`) as read-only
+  extra folders (`skill-folders.ts`), so a skill can read its own files by
+  the absolute path Claude Code gives it. Never the config folder itself,
+  which holds the login.
 - Skill and slash-command inline shell (`` !`cmd` ``) is disabled for OtherBench
   turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
   the Skill tool itself gets no card.

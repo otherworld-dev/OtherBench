@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { HelperStopError } from '@otherbench/core/ports/chat-engine.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2584,5 +2584,31 @@ describe('ClaudeCodeChatEngine slash commands', () => {
     const events = await collect(engine(query).stream(followUp({ messages: [user('q1'), answered(), { ...user('/context'), id: 'u2' }] })));
     expect(events.filter((e) => e.type === 'text-delta')).toEqual([{ type: 'text-delta', text: table }]);
     expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+});
+
+describe("the user's skills, read-only in every Claude Code reply", () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  it("lets a skill read its own files, and refuses a write there and a read of the config folder's login", async () => {
+    const config = mkdtempSync(join(tmpdir(), 'otherbench-cfg-'));
+    mkdirSync(join(config, 'skills', 'claude-setup'), { recursive: true });
+    const standard = join(config, 'skills', 'claude-setup', 'standard.md');
+    const out: unknown[] = [];
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      for (const [tool, input] of [['Read', { file_path: standard }], ['Write', { file_path: standard, content: 'x' }], ['Read', { file_path: join(config, '.credentials.json') }]] as const) {
+        out.push(await pre({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: tool } as never, tool, sig()));
+      }
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', CLAUDE_CONFIG_DIR: config } });
+    try {
+      await collect(e.stream(req()));
+    } finally {
+      rmSync(config, { recursive: true, force: true });
+    }
+    const decisions = out.map((o) => (o as { hookSpecificOutput: { permissionDecision: string } }).hookSpecificOutput.permissionDecision);
+    expect(decisions).toEqual(['allow', 'deny', 'deny']);
   });
 });
