@@ -647,6 +647,11 @@ export class TurnRunner {
       error: null,
       producedBy: null,
     });
+    // Its attachments are bound to it as run() binds a turn's (the notes' attachments were held unsent until now).
+    for (const id of attachmentIdsIn(input.userParts)) {
+      const attachment = this.store.attachments.get(id);
+      if (attachment?.chatId === input.chatId && attachment.messageId === null) this.store.attachments.update(id, { messageId: userMessage.id });
+    }
     const message = this.store.messages.create({
       id: this.generateId(),
       chatId: input.chatId,

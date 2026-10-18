@@ -38,10 +38,9 @@ export interface SendNoteInput {
   clientId: string;
 }
 
-/** A waiting note, and the attachments this service bound for it (to unbind if it comes back). */
+/** A waiting note. The holder stays the same when the note changes path. */
 interface Held {
   note: ReplyNote;
-  bound: string[];
 }
 
 /**
@@ -53,6 +52,10 @@ interface Held {
  * holds the waiting set, in send order, and resolves each note exactly once:
  * `folded` into a reply, sent as a `turn`, `returned` to the box, or `removed`
  * by the user. Every change goes to the chat's stream subscribers.
+ *
+ * A note's attachments stay unsent (unbound) until it is delivered, since a
+ * binding is set once: while it waits they are held (`heldAttachmentIds`), and
+ * the message that delivers it binds them.
  */
 export class NotesService {
   private readonly store: Store;
@@ -67,10 +70,13 @@ export class NotesService {
   private readonly generateId: () => string;
   /** Each chat's waiting notes, in send order. */
   private readonly waiting = new Map<string, Held[]>();
+  /**
+   * Each chat's notes being made into a turn or follow-on: out of the waiting
+   * set, but still listed (and the chat busy) until they are resolved.
+   */
+  private readonly inFlight = new Map<string, ReplyNote[]>();
   /** Each chat's recent outcomes, for `helloState`. */
   private readonly outcomes = new Map<string, { noteId: string; outcome: NoteOutcome; at: number }[]>();
-  /** Chats whose notes are being made into a turn: busy until that turn's reply exists. */
-  private readonly starting = new Set<string>();
 
   constructor(deps: NotesServiceDeps) {
     this.store = deps.store;
@@ -92,7 +98,12 @@ export class NotesService {
 
   /** The chat has notes not yet delivered (waiting, or being made into a turn). */
   hasWaiting(chatId: string): boolean {
-    return (this.waiting.get(chatId)?.length ?? 0) > 0 || this.starting.has(chatId);
+    return this.listed(chatId).length > 0;
+  }
+
+  /** The attachments of the chat's undelivered notes: not the composer's to offer or delete. */
+  heldAttachmentIds(chatId: string): string[] {
+    return this.listed(chatId).flatMap((n) => n.attachments.map((a) => a.attachmentId));
   }
 
   /** Takes a note for a busy chat; null when the chat isn't busy (the client sends a normal turn instead). */
@@ -113,8 +124,7 @@ export class NotesService {
       clientId: input.clientId,
       sentAt: this.now(),
     };
-    // Bound before the engine sees it (it loads only bound attachments), and so the composer doesn't offer them again.
-    const held: Held = { note, bound: this.bind(chatId, note.attachments, note.replyIds[0]) };
+    const held: Held = { note };
     // Waiting before it's pushed, so a pick that comes at once finds it.
     this.waiting.set(chatId, [...this.waitingIn(chatId), held]);
     if (target) {
@@ -152,7 +162,7 @@ export class NotesService {
       if (!withdrawn) return null;
     }
     if (!this.remove(held)) return null;
-    this.finish(held, 'removed');
+    this.finish(held.note, 'removed');
     this.broadcastNotes(chatId);
     this.settle(chatId);
     return held.note;
@@ -161,28 +171,37 @@ export class NotesService {
   /**
    * TurnRunner's `takeNote`: Claude read note `noteId` in reply `messageId`.
    * Any running reply of the note's chat may take a live note (Claude Code can
-   * read it in a reply it started by itself, which took the process).
+   * read it in a reply it started by itself, which took the process). Its
+   * attachments are bound to that reply, which now carries them.
    */
   take(messageId: string, noteId: string): UserNotePart | null {
     const chatId = this.turnRunner.runningInfo(messageId)?.chatId ?? this.store.messages.get(messageId)?.chatId;
     if (chatId === undefined) return null;
     const held = this.find(chatId, noteId);
     if (!held || held.note.path !== 'live' || !this.remove(held)) return null;
-    this.finish(held, 'folded');
+    this.bind(chatId, held.note.attachments, messageId);
+    this.finish(held.note, 'folded');
     this.broadcastNotes(chatId);
     return notePart(held.note);
   }
 
   /**
-   * Reply `messageId` ended. Its live notes come back if it was stopped or
-   * failed; after a clean finish they wait for Claude Code to run them as a
-   * follow-on (or report them dropped). Then wait notes may be due.
+   * Reply `messageId` ended. Stopped or failed, every waiting note of the
+   * chat comes back: nothing is sent after a reply the user stopped or that
+   * broke. A live note of another reply is first taken back from Claude Code
+   * and stays if Claude already started it (it will fold or follow on). After
+   * a clean finish, live notes wait for Claude Code to run them as a
+   * follow-on (or report them dropped), and wait notes may be due.
    */
   replyEnded(messageId: string, status: MessageStatus): void {
     const chatId = this.store.messages.get(messageId)?.chatId ?? [...this.waiting].find(([, list]) => list.some((h) => h.note.replyIds.includes(messageId)))?.[0];
     if (chatId === undefined) return;
     if (status === 'cancelled' || status === 'error') {
-      this.giveBack(chatId, this.waitingIn(chatId).filter((h) => h.note.path === 'live' && h.note.replyIds[0] === messageId));
+      const notes = this.waitingIn(chatId);
+      // The stopped reply's own notes Claude Code cancels itself as it stops (and a closed process reports
+      // any it couldn't), so withdrawNote can't tell those from started ones: they come back as they are.
+      this.giveBack(chatId, notes.filter((h) => h.note.path === 'wait' || h.note.replyIds[0] === messageId));
+      for (const held of notes.filter((h) => h.note.path === 'live' && h.note.replyIds[0] !== messageId)) void this.takeBack(held);
     }
     this.settle(chatId);
   }
@@ -201,21 +220,15 @@ export class NotesService {
       start.decline();
       return;
     }
-    for (const held of due) this.remove(held);
-    this.starting.add(chatId);
-    this.broadcastNotes(chatId);
+    const notes = this.startDelivering(chatId, due);
     let started = false;
     try {
-      started = await this.runFollowOn(start, due.map((h) => h.note));
+      started = await this.runFollowOn(start, notes);
     } catch (err) {
       console.error(`[otherbench-server] could not run the notes Claude Code carried on with in chat ${chatId}:`, err);
-    } finally {
-      this.starting.delete(chatId);
     }
     if (!started) start.decline();
-    for (const held of due) this.finish(held, started ? 'turn' : 'returned');
-    this.broadcastNotes(chatId);
-    this.settle(chatId);
+    this.endDelivering(chatId, notes, started ? 'turn' : 'returned');
   }
 
   /** The engine says these notes were never read (their process closed, or their turn ended at once). Those still waiting come back. */
@@ -230,11 +243,11 @@ export class NotesService {
     this.settle(chatId);
   }
 
-  /** What a client connecting to the chat's stream needs: the waiting notes and what became of recent ones. */
+  /** What a client connecting to the chat's stream needs: the undelivered notes and what became of recent ones. */
   helloState(chatId: string): { notes: ReplyNote[]; noteOutcomes: { noteId: string; outcome: NoteOutcome }[] } {
     this.prune();
     return {
-      notes: this.waitingIn(chatId).map((h) => h.note),
+      notes: this.listed(chatId),
       noteOutcomes: (this.outcomes.get(chatId) ?? []).map(({ noteId, outcome }) => ({ noteId, outcome })),
     };
   }
@@ -251,6 +264,8 @@ export class NotesService {
     if (asked && contextLineOf(asked) !== null) return null;
     // A note never overtakes one already waiting for the reply to end.
     if (this.waitingIn(input.chatId).some((h) => h.note.path === 'wait')) return null;
+    // A held image is unbound, and a reply only loads bound ones: it goes with the next turn instead.
+    if (input.attachments.some((a) => a.mime.startsWith('image/'))) return null;
     return reply;
   }
 
@@ -260,7 +275,7 @@ export class NotesService {
    * while a live note waits for its follow-on, so two replies never run at once.
    */
   private settle(chatId: string): void {
-    if (this.starting.has(chatId) || this.streaming(chatId).length > 0) return;
+    if (this.inFlight.has(chatId) || this.streaming(chatId).length > 0) return;
     const due = this.waitingIn(chatId);
     if (due.length === 0 || due.some((h) => h.note.path === 'live')) return;
     const complete = due.every((h) => h.note.replyIds.every((id) => this.store.messages.get(id)?.status === 'complete'));
@@ -268,31 +283,26 @@ export class NotesService {
       this.giveBack(chatId, due);
       return;
     }
-    void this.sendAsTurn(chatId, [...due]);
+    void this.sendAsTurn(chatId, due);
   }
 
   private async sendAsTurn(chatId: string, due: Held[]): Promise<void> {
-    for (const held of due) this.remove(held);
-    this.starting.add(chatId);
-    this.broadcastNotes(chatId);
+    const notes = this.startDelivering(chatId, due);
     // The first note's parent and profiles: what the composer showed when the user started sending.
-    const first = due[0]!.note;
+    const first = notes[0]!;
     let sent = false;
     try {
       const parent = first.parentId === null ? null : this.store.messages.get(first.parentId);
       if (first.parentId !== null && parent?.chatId !== chatId) throw new Error(`the message they follow (${first.parentId}) is gone`);
       if (first.profileIds.length === 0) throw new Error('no profile was picked');
       const profiles = await Promise.all(first.profileIds.map((id) => this.resolveProfile(id)));
-      await this.startTurn({ chatId, parentId: first.parentId, userParts: notesToParts(due.map((h) => h.note)), profiles });
+      // TurnRunner.run binds the notes' attachments to the new user message.
+      await this.startTurn({ chatId, parentId: first.parentId, userParts: notesToParts(notes), profiles });
       sent = true;
     } catch (err) {
       console.error(`[otherbench-server] could not send the notes waiting in chat ${chatId}; they go back to the message box:`, err);
-    } finally {
-      this.starting.delete(chatId);
     }
-    for (const held of due) this.finish(held, sent ? 'turn' : 'returned');
-    this.broadcastNotes(chatId);
-    this.settle(chatId);
+    this.endDelivering(chatId, notes, sent ? 'turn' : 'returned');
   }
 
   /** Runs a follow-on the way `startSelfStartedTurn` runs a self-start, with its guards. True once its reply exists. */
@@ -312,6 +322,7 @@ export class NotesService {
     this.memory?.noteTurnStarted(chat.id);
     // A reply that ended without running Claude Code's turn declines it, so the turn is read and dropped.
     let ran = false;
+    // It binds the notes' attachments to the new user message.
     const { userMessageId, assistantMessageId } = await this.turnRunner.runFollowOn({
       chatId: chat.id,
       parentId: after.id,
@@ -336,6 +347,36 @@ export class NotesService {
     return true;
   }
 
+  /** Moves notes from waiting to in flight. They stay listed, so the set clients see doesn't change. */
+  private startDelivering(chatId: string, due: Held[]): ReplyNote[] {
+    const notes = due.filter((h) => this.remove(h)).map((h) => h.note);
+    this.inFlight.set(chatId, [...(this.inFlight.get(chatId) ?? []), ...notes]);
+    return notes;
+  }
+
+  /** In-flight notes are resolved: each one's outcome, then the set without them. */
+  private endDelivering(chatId: string, notes: ReplyNote[], outcome: NoteOutcome): void {
+    const rest = (this.inFlight.get(chatId) ?? []).filter((n) => !notes.includes(n));
+    if (rest.length > 0) this.inFlight.set(chatId, rest);
+    else this.inFlight.delete(chatId);
+    for (const note of notes) this.finish(note, outcome);
+    this.broadcastNotes(chatId);
+    this.settle(chatId);
+  }
+
+  /** Asks Claude Code for a live note back; returned if it was, kept (to fold or follow on) if Claude already started it. */
+  private async takeBack(held: Held): Promise<void> {
+    let withdrawn = false;
+    try {
+      withdrawn = (await this.engine.withdrawNote?.(held.note.id)) ?? false;
+    } catch (err) {
+      console.error(`[otherbench-server] could not take back note ${held.note.id}:`, err);
+    }
+    if (!withdrawn) return;
+    this.giveBack(held.note.chatId, [held]);
+    this.settle(held.note.chatId);
+  }
+
   /** The chat's replies streaming here now. */
   private streaming(chatId: string): CanonMessage[] {
     return this.store.messages.listByStatus('streaming').filter((m) => m.chatId === chatId && m.role === 'assistant' && this.turnRunner.runningInfo(m.id) !== null);
@@ -343,6 +384,11 @@ export class NotesService {
 
   private waitingIn(chatId: string): Held[] {
     return this.waiting.get(chatId) ?? [];
+  }
+
+  /** The chat's undelivered notes: in flight, then waiting. */
+  private listed(chatId: string): ReplyNote[] {
+    return [...(this.inFlight.get(chatId) ?? []), ...this.waitingIn(chatId).map((h) => h.note)];
   }
 
   private find(chatId: string, noteId: string): Held | undefined {
@@ -358,23 +404,22 @@ export class NotesService {
     const list = this.waiting.get(held.note.chatId);
     const at = list?.indexOf(held) ?? -1;
     if (!list || at === -1) return false;
-    list.splice(at, 1);
-    if (list.length === 0) this.waiting.delete(held.note.chatId);
+    const rest = list.filter((h) => h !== held);
+    if (rest.length > 0) this.waiting.set(held.note.chatId, rest);
+    else this.waiting.delete(held.note.chatId);
     return true;
   }
 
   /** Returns these waiting notes to the box. */
   private giveBack(chatId: string, notes: Held[]): void {
-    const back = [...notes].filter((h) => this.remove(h));
+    const back = notes.filter((h) => this.remove(h));
     if (back.length === 0) return;
-    for (const held of back) this.finish(held, 'returned');
+    for (const held of back) this.finish(held.note, 'returned');
     this.broadcastNotes(chatId);
   }
 
-  /** Records a note's outcome and tells the chat. A note that didn't go anywhere has its attachments unbound, so they can be sent or deleted again. */
-  private finish(held: Held, outcome: NoteOutcome): void {
-    const { note } = held;
-    if (outcome === 'returned' || outcome === 'removed') this.unbind(held);
+  /** Records a note's outcome and tells the chat. */
+  private finish(note: ReplyNote, outcome: NoteOutcome): void {
     this.prune();
     const list = this.outcomes.get(note.chatId) ?? [];
     list.push({ noteId: note.id, outcome, at: this.now() });
@@ -390,31 +435,20 @@ export class NotesService {
   }
 
   private broadcastNotes(chatId: string): void {
-    this.streamRegistry.broadcastChat(chatId, { type: 'notes', chatId, notes: this.waiting.get(chatId)?.map((h) => h.note) ?? [] });
+    this.streamRegistry.broadcastChat(chatId, { type: 'notes', chatId, notes: this.listed(chatId) });
   }
 
-  /** Binds the note's unsent attachments of this chat to `messageId`; returns the ids it bound. */
-  private bind(chatId: string, attachments: NoteAttachment[], messageId: string | undefined): string[] {
-    if (messageId === undefined) return [];
-    const bound: string[] = [];
+  /** Binds the note's still-unsent attachments of this chat to the message that delivered it. */
+  private bind(chatId: string, attachments: NoteAttachment[], messageId: string): void {
     for (const a of attachments) {
       const row = this.store.attachments.get(a.attachmentId);
       if (!row || row.chatId !== chatId || row.messageId !== null) continue;
-      this.store.attachments.update(row.id, { messageId });
-      bound.push(row.id);
-    }
-    return bound;
-  }
-
-  private unbind(held: Held): void {
-    for (const id of held.bound) {
       try {
-        if (this.store.attachments.get(id)) this.store.attachments.update(id, { messageId: null });
+        this.store.attachments.update(row.id, { messageId });
       } catch (err) {
-        console.error(`[otherbench-server] could not unbind attachment ${id} of a note that came back:`, err);
+        console.error(`[otherbench-server] could not bind attachment ${row.id} to the reply that read its note:`, err);
       }
     }
-    held.bound = [];
   }
 
   /** Forgets outcomes older than `OUTCOME_KEEP_MS`. */

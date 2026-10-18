@@ -349,7 +349,9 @@ export function attachmentsRoutes(container: Container): Hono {
   app.get('/chats/:id/attachments', (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
-    return c.json(container.store.attachments.list(chatId).map(toPublicAttachment));
+    // An attachment on a message waiting to be sent isn't the composer's to offer again.
+    const held = new Set(container.notes?.heldAttachmentIds(chatId) ?? []);
+    return c.json(container.store.attachments.list(chatId).filter((a) => !held.has(a.id)).map(toPublicAttachment));
   });
 
   app.get('/attachments/:id', (c) => c.json(toPublicAttachment(getShownAttachmentOrThrow(container, c.req.param('id')))));
@@ -378,6 +380,10 @@ export function attachmentsRoutes(container: Container): Hono {
       throw new HTTPException(409, {
         message: `Attachment "${attachment.id}" has already been sent as part of a message and cannot be deleted.`,
       });
+    }
+    // Unsent, but on a message waiting to be sent: it goes with that message (or back to the box with it).
+    if (container.notes?.heldAttachmentIds(attachment.chatId).includes(attachment.id)) {
+      throw new HTTPException(409, { message: 'This attachment is on a message waiting to be sent.' });
     }
 
     container.store.attachments.delete(attachment.id);

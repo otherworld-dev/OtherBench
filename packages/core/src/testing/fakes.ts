@@ -925,6 +925,11 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
     return this.repo.list().filter((a) => a.chatId === chatId);
   }
   update(id: string, patch: Partial<Omit<Attachment, 'id'>>): Attachment {
+    // As in store-sqlite: the message an attachment was sent with is set once.
+    const current = this.repo.get(id);
+    if (current && patch.messageId !== undefined && patch.messageId !== current.messageId && current.messageId !== null) {
+      throw new Error(`Attachment "${id}" was already sent with message "${current.messageId}".`);
+    }
     return this.repo.update(id, patch);
   }
   delete(id: string): void {

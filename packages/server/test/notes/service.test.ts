@@ -12,6 +12,7 @@ import { startTurn } from '../../src/turn-start.js';
 
 const FINISH: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
 const IMAGE: NoteAttachment = { attachmentId: 'att-1', mime: 'image/png', filename: 'shot.png' };
+const PDF: NoteAttachment = { attachmentId: 'att-2', mime: 'application/pdf', filename: 'spec.pdf' };
 
 /** A fake engine whose replies run until the test ends them, and can say a note was picked up mid-reply. */
 class HeldEngine extends FakeChatEngine {
@@ -82,6 +83,7 @@ function setup() {
     store.chats.create({ id, title: 'Chat', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
   }
   store.attachments.create({ id: 'att-1', chatId: 'chat-1', messageId: null, filename: 'shot.png', mime: 'image/png', size: 10, sha256: 'abc', storagePath: 'x', extractedText: null });
+  store.attachments.create({ id: 'att-2', chatId: 'chat-1', messageId: null, filename: 'spec.pdf', mime: 'application/pdf', size: 10, sha256: 'def', storagePath: 'y', extractedText: null });
   const engine = new HeldEngine();
   const sendToReply = vi.fn<NonNullable<FakeChatEngine['sendToReply']>>(async () => true);
   const withdrawNote = vi.fn<NonNullable<FakeChatEngine['withdrawNote']>>(async () => true);
@@ -143,12 +145,13 @@ describe('NotesService', () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
 
-    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] })))!;
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [PDF] })))!;
 
     expect(note).toMatchObject({ chatId: 'chat-1', path: 'live', replyIds: [r], text: 'also check the footer', parentId: r, profileIds: ['p1'], clientId: 'tab-1', sentAt: 1_000 });
-    expect(ctx.sendToReply).toHaveBeenCalledWith(r, { id: note.id, text: 'also check the footer', attachments: [IMAGE] });
-    // Bound to the reply, so the engine may load it and the composer doesn't offer it again.
-    expect(ctx.store.attachments.get('att-1')!.messageId).toBe(r);
+    expect(ctx.sendToReply).toHaveBeenCalledWith(r, { id: note.id, text: 'also check the footer', attachments: [PDF] });
+    // Held, not bound: a binding is set once, and the note may yet come back.
+    expect(ctx.store.attachments.get('att-2')!.messageId).toBeNull();
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual(['att-2']);
     expect(ctx.heard).toContainEqual({ type: 'notes', chatId: 'chat-1', notes: [note] });
     expect(ctx.notes.isBusy('chat-1')).toBe(true);
   });
@@ -169,6 +172,10 @@ describe('NotesService', () => {
     ['the reply is a scheduled run', async (ctx) => {
       const { assistantMessageIds } = await ctx.running(['p1'], { unattended: true });
       return { send: input({ parentId: assistantMessageIds[0]! }), replyIds: assistantMessageIds };
+    }],
+    ['the note carries an image (a held image is unbound, and a reply only loads bound ones)', async (ctx) => {
+      const { assistantMessageIds } = await ctx.running();
+      return { send: input({ parentId: assistantMessageIds[0]!, attachments: [IMAGE] }), replyIds: assistantMessageIds };
     }],
     ['the reply is a /compact', async (ctx) => {
       const { assistantMessageIds } = await ctx.running(['p1'], { userParts: [{ type: 'context', kind: 'compact' }] });
@@ -191,7 +198,7 @@ describe('NotesService', () => {
     ctx.sendToReply.mockResolvedValue(false);
     const { assistantMessageIds: [r] } = await ctx.running();
 
-    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] })))!;
+    const note = (await ctx.notes.send(input({ parentId: r! })))!;
 
     expect(note).toMatchObject({ path: 'wait', replyIds: [r] });
     expect(ctx.heard).toContainEqual({ type: 'notes', chatId: 'chat-1', notes: [note] });
@@ -210,7 +217,7 @@ describe('NotesService', () => {
   it('a picked note is taken once and reported folded', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
-    const note = (await ctx.notes.send(input({ parentId: r! })))!;
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [PDF] })))!;
 
     ctx.engine.push(r!, { type: 'note-picked', noteId: note.id }, { type: 'text-delta', text: 'Checking the footer too.' });
     await vi.waitFor(() => expect(ctx.resolved()).toEqual([{ type: 'note-resolved', chatId: 'chat-1', noteId: note.id, outcome: 'folded', clientId: 'tab-1' }]));
@@ -221,9 +228,12 @@ describe('NotesService', () => {
     ctx.engine.finish(r!);
     await ctx.ended(r!);
     expect(ctx.store.messages.get(r!)!.parts).toEqual([
-      { type: 'user-note', noteId: note.id, text: 'also check the footer', attachments: [] },
+      { type: 'user-note', noteId: note.id, text: 'also check the footer', attachments: [PDF] },
       { type: 'text', text: 'Checking the footer too.' },
     ]);
+    // Delivered: bound to the reply that carries it, and no longer held.
+    expect(ctx.store.attachments.get('att-2')!.messageId).toBe(r);
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
     // Resolved once: nothing later moves it.
     ctx.notes.dropped('chat-1', [note.id]);
     expect(ctx.resolved()).toHaveLength(1);
@@ -253,7 +263,7 @@ describe('NotesService', () => {
     const first = (await ctx.notes.send(input({ text: 'first', parentId: a!, profileIds: ['p1', 'p2'], attachments: [IMAGE] })))!;
     const second = (await ctx.notes.send(input({ text: 'second', parentId: b!, profileIds: ['p2'], clientId: 'tab-2' })))!;
     expect([first.path, second.path]).toEqual(['wait', 'wait']);
-    expect(ctx.store.attachments.get('att-1')!.messageId).toBe(a);
+    expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
 
     ctx.engine.finish(a!);
     await ctx.ended(a!);
@@ -274,6 +284,7 @@ describe('NotesService', () => {
     ]);
     const turn = (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
     expect(ctx.store.chats.get('chat-1')!.headMessageId).toBe(turn.userMessageId);
+    expect(ctx.store.attachments.get('att-1')!.messageId).toBe(turn.userMessageId);
     expect(ctx.notes.isBusy('chat-1')).toBe(true);
   });
 
@@ -288,6 +299,7 @@ describe('NotesService', () => {
     await vi.waitFor(() => expect(ctx.resolved()).toEqual([{ type: 'note-resolved', chatId: 'chat-1', noteId: note.id, outcome: 'returned', clientId: 'tab-1', note }]));
     expect(ctx.startTurnSpy).not.toHaveBeenCalled();
     expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
   });
 
@@ -318,7 +330,7 @@ describe('NotesService', () => {
   it('a follow-on makes one user message from its notes and moves the head to it', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
-    const first = (await ctx.notes.send(input({ text: 'first', parentId: r! })))!;
+    const first = (await ctx.notes.send(input({ text: 'first', parentId: r!, attachments: [PDF] })))!;
     const second = (await ctx.notes.send(input({ text: 'second', parentId: r! })))!;
     ctx.engine.finish(r!);
     await ctx.ended(r!);
@@ -327,7 +339,8 @@ describe('NotesService', () => {
     await ctx.notes.followOn(start);
 
     const [user] = ctx.store.messages.children(r!);
-    expect(user).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'first\n\nsecond' }] });
+    expect(user).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'first\n\nsecond' }, { type: 'file', attachmentId: 'att-2' }] });
+    expect(ctx.store.attachments.get('att-2')!.messageId).toBe(user!.id);
     const [reply] = ctx.store.messages.children(user!.id);
     await ctx.ended(reply!.id);
     expect(ctx.store.messages.get(reply!.id)).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'Footer checked.' }] });
@@ -367,7 +380,8 @@ describe('NotesService', () => {
   it.each(declineCases)('a follow-on declined because %s returns its notes', async (_, arrange) => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
-    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] })))!;
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [PDF] })))!;
+    expect(note.path).toBe('live');
     ctx.engine.finish(r!);
     await ctx.ended(r!);
     arrange(ctx, r!);
@@ -377,7 +391,8 @@ describe('NotesService', () => {
 
     expect(start.declined()).toBe(true);
     expect(ctx.resolved()).toEqual([{ type: 'note-resolved', chatId: 'chat-1', noteId: note.id, outcome: 'returned', clientId: 'tab-1', note }]);
-    expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    expect(ctx.store.attachments.get('att-2')!.messageId).toBeNull();
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
   });
 
@@ -399,14 +414,16 @@ describe('NotesService', () => {
   it('dropped notes come back with their attachments unbound', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();
-    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] })))!;
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [PDF] })))!;
+    expect(note.path).toBe('live');
     ctx.engine.finish(r!);
     await ctx.ended(r!);
 
     ctx.notes.dropped('chat-1', [note.id, 'note-unknown']);
 
     expect(ctx.resolved()).toEqual([{ type: 'note-resolved', chatId: 'chat-1', noteId: note.id, outcome: 'returned', clientId: 'tab-1', note }]);
-    expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    expect(ctx.store.attachments.get('att-2')!.messageId).toBeNull();
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
     // Reported again, or for a chat that's gone: nothing happens.
     ctx.notes.dropped('chat-1', [note.id]);
@@ -420,9 +437,11 @@ describe('NotesService', () => {
     const live = (await ctx.notes.send(input({ text: 'live', parentId: r! })))!;
     const waiting = (await ctx.notes.send(input({ parentId: r!, profileIds: ['p2'], attachments: [IMAGE] })))!;
     expect([live.path, waiting.path]).toEqual(['live', 'wait']);
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual(['att-1']);
 
     expect(await ctx.notes.withdraw('chat-1', waiting.id)).toEqual(waiting);
     expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
     expect(await ctx.notes.withdraw('chat-1', waiting.id)).toBeNull();
 
     // Claude already started reading it.
@@ -473,7 +492,7 @@ describe('NotesService', () => {
     const { assistantMessageIds: [r] } = await ctx.running();
     let release!: (taken: boolean) => void;
     ctx.sendToReply.mockImplementationOnce(() => new Promise<boolean>((resolve) => (release = resolve)));
-    const sending = ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] }));
+    const sending = ctx.notes.send(input({ parentId: r! }));
 
     ctx.turnRunner.cancel(r!);
     await ctx.ended(r!);
@@ -481,6 +500,135 @@ describe('NotesService', () => {
     const note = (await sending)!;
 
     expect(ctx.resolved()).toEqual([expect.objectContaining({ noteId: note.id, outcome: 'returned' })]);
+    expect(ctx.notes.isBusy('chat-1')).toBe(false);
+  });
+
+  it('a stopped follow-on returns the wait notes held behind it, and no turn runs', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const live = (await ctx.notes.send(input({ text: 'live', parentId: r! })))!;
+    const behind = (await ctx.notes.send(input({ text: 'behind', parentId: r!, profileIds: ['p2'] })))!;
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+
+    await ctx.notes.followOn(selfStart({ afterMessageId: r!, noteIds: [live.id], run: (req) => ctx.engine.stream(req) }));
+    const [user] = ctx.store.messages.children(r!);
+    const [f] = ctx.store.messages.children(user!.id);
+    ctx.turnRunner.cancel(f!.id);
+    await ctx.ended(f!.id);
+
+    expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[live.id, 'turn'], [behind.id, 'returned']]);
+    expect(ctx.startTurnSpy).not.toHaveBeenCalled();
+    expect(ctx.notes.isBusy('chat-1')).toBe(false);
+  });
+
+  it('a stopped notes turn returns a note sent while it was starting; the notes going out stay listed until resolved', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const first = (await ctx.notes.send(input({ text: 'first', parentId: r!, profileIds: ['p2'] })))!;
+    let release!: (p: ResolvedProfile) => void;
+    ctx.resolveProfile.mockImplementationOnce(() => new Promise<ResolvedProfile>((resolve) => (release = resolve)));
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    await vi.waitFor(() => expect(ctx.resolveProfile).toHaveBeenCalledTimes(1));
+
+    // Going out, but not yet resolved: still listed, held, and not the user's to take back.
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([first]);
+    expect(await ctx.notes.withdraw('chat-1', first.id)).toBeNull();
+    const during = (await ctx.notes.send(input({ text: 'during', parentId: r!, profileIds: ['p2'] })))!;
+    expect(during).toMatchObject({ path: 'wait', replyIds: [] });
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([first, during]);
+    release(profile('p2'));
+    await vi.waitFor(() => expect(ctx.resolved()).toHaveLength(1));
+    // Resolved first, then the set without it, so no client ever sees it neither waiting nor resolved.
+    const at = ctx.heard.findIndex((e) => e.type === 'note-resolved');
+    expect(ctx.heard.slice(0, at).filter((e) => e.type === 'notes').every((e) => e.type === 'notes' && e.notes.some((n) => n.id === first.id))).toBe(true);
+    expect(ctx.heard[at + 1]).toEqual({ type: 'notes', chatId: 'chat-1', notes: [during] });
+
+    const turn = (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
+    ctx.turnRunner.cancel(turn.assistantMessageIds[0]!);
+    await ctx.ended(turn.assistantMessageIds[0]!);
+
+    expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[first.id, 'turn'], [during.id, 'returned']]);
+    expect(ctx.startTurnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('notes being made into a follow-on stay listed until resolved', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const live = (await ctx.notes.send(input({ parentId: r!, attachments: [PDF] })))!;
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    let release!: (p: ResolvedProfile) => void;
+    ctx.resolveProfile.mockImplementationOnce(() => new Promise<ResolvedProfile>((resolve) => (release = resolve)));
+
+    const following = ctx.notes.followOn(selfStart({ afterMessageId: r!, noteIds: [live.id] }));
+    await vi.waitFor(() => expect(ctx.resolveProfile).toHaveBeenCalledTimes(1));
+
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([live]);
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual(['att-2']);
+    expect(ctx.notes.hasWaiting('chat-1')).toBe(true);
+    release(profile('p1'));
+    await following;
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([]);
+    expect(ctx.resolved().map((e) => e.outcome)).toEqual(['turn']);
+  });
+
+  it("on Stop of another reply, a live note Claude already started stays waiting; one it hadn't comes back", async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const started = (await ctx.notes.send(input({ text: 'started', parentId: r! })))!;
+    const queued = (await ctx.notes.send(input({ text: 'queued', parentId: r! })))!;
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    ctx.withdrawNote.mockImplementation(async (noteId) => noteId === queued.id);
+    // Claude Code carried on by itself in the same process, and the user stopped that.
+    const { assistantMessageId: s } = await ctx.turnRunner.runSelfStarted({ chatId: 'chat-1', parentId: r!, profile: profile('p1'), notice: '', unattended: false, stream: (req) => ctx.engine.stream(req) });
+    ctx.turnRunner.cancel(s);
+    await ctx.ended(s);
+
+    await vi.waitFor(() => expect(ctx.resolved()).toEqual([expect.objectContaining({ noteId: queued.id, outcome: 'returned' })]));
+    expect(ctx.withdrawNote).toHaveBeenCalledWith(started.id);
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([started]);
+  });
+
+  const failures: [string, Partial<Parameters<NotesService['send']>[0]>, (ctx: Ctx) => void][] = [
+    ['the turn fails to start', { profileIds: ['p2'] }, (ctx) => ctx.startTurnSpy.mockRejectedValueOnce(new Error('boom'))],
+    ['the message they follow is gone', { parentId: 'gone', profileIds: ['p2'] }, () => undefined],
+    ['no profile was picked', { profileIds: [] }, () => undefined],
+  ];
+
+  it.each(failures)('wait notes come back when %s', async (_, over, arrange) => {
+    const ctx = setup();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE], ...over })))!;
+    expect(note.path).toBe('wait');
+    arrange(ctx);
+
+    ctx.engine.finish(r!);
+
+    await vi.waitFor(() => expect(ctx.resolved()).toEqual([{ type: 'note-resolved', chatId: 'chat-1', noteId: note.id, outcome: 'returned', clientId: 'tab-1', note }]));
+    expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [], noteOutcomes: [{ noteId: note.id, outcome: 'returned' }] });
+    expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    expect(ctx.notes.isBusy('chat-1')).toBe(false);
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it('dropped for a chat deleted while its notes waited does nothing but forget them', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const note = (await ctx.notes.send(input({ parentId: r! })))!;
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    const before = ctx.heard.length;
+    ctx.store.chats.delete('chat-1');
+
+    ctx.notes.dropped('chat-1', [note.id]);
+
+    expect(ctx.heard).toHaveLength(before);
+    expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [], noteOutcomes: [] });
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
   });
 });

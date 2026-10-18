@@ -2722,4 +2722,27 @@ describe('TurnRunner and notes sent mid-reply', () => {
     expect(engine.requests).toEqual([]);
     await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
   });
+
+  it("runFollowOn binds the user message's unsent attachments of this chat to it, before the reply reads its history", async () => {
+    const store = chat();
+    store.attachments.create({ id: 'att-1', chatId: 'chat-1', messageId: null, filename: 'shot.png', mime: 'image/png', size: 4, sha256: 's', storagePath: 'x', extractedText: null });
+    let seen: CanonMessage[] = [];
+    const runner = new TurnRunner(store, new FakeChatEngine([]));
+
+    const { userMessageId, assistantMessageId } = await runner.runFollowOn({
+      chatId: 'chat-1',
+      parentId: 'q1',
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profile: makeResolvedProfile(),
+      stream: async function* (req) {
+        seen = req.messages;
+        yield finish;
+      },
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+
+    expect(store.attachments.get('att-1')!.messageId).toBe(userMessageId);
+    // Bound, so the history keeps it (degraded to text for this model) rather than omitting it as another chat's.
+    expect(seen.at(-1)!.parts).toEqual([{ type: 'text', text: expect.stringContaining('"shot.png"') }]);
+  });
 });

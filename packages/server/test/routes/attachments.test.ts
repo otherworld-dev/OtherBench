@@ -225,6 +225,16 @@ describe('GET /api/chats/:id/attachments', () => {
     expect(body).toHaveLength(2);
     expect(body.map((a: { filename: string }) => a.filename).sort()).toEqual(['a.txt', 'b.txt']);
   });
+
+  it("leaves out an attachment held by a message waiting to be sent, so the composer doesn't offer it again", async () => {
+    const held = await (await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'A', 'text/plain') })).json();
+    await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('b.txt', 'B', 'text/plain') });
+    container.notes = { heldAttachmentIds: (chatId: string) => (chatId === 'chat-1' ? [held.id] : []) } as never;
+
+    const body = await (await app().request('/api/chats/chat-1/attachments')).json();
+
+    expect(body.map((a: { filename: string }) => a.filename)).toEqual(['b.txt']);
+  });
 });
 
 describe('GET /api/attachments/:id', () => {
@@ -396,6 +406,17 @@ describe('storagePath is never serialised to a client', () => {
  * chats) still shares the same sha256 -- decision #1's whole point.
  */
 describe('DELETE /api/attachments/:id', () => {
+  it('409s for an attachment held by a message waiting to be sent, leaving it in place', async () => {
+    const held = await (await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'A', 'text/plain') })).json();
+    container.notes = { heldAttachmentIds: () => [held.id] } as never;
+
+    const res = await app().request(`/api/attachments/${held.id}`, { method: 'DELETE' });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'This attachment is on a message waiting to be sent.' });
+    expect(container.store.attachments.get(held.id)).not.toBeNull();
+  });
+
   it('removes an unsent attachment\'s row AND its blob file on disk', async () => {
     const created = await (
       await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'delete me', 'text/plain') })
