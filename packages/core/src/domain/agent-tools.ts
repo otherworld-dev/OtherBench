@@ -64,23 +64,27 @@ export function isProtectedAgentPath(relPath: string): boolean {
   const segments = pathSegments(relPath);
   const last = segments[segments.length - 1];
   if (segments.some((s) => /~\d/.test(s)) || last === '.mcp.json' || last === 'claude.md' || last === 'claude.local.md') return true;
-  return segments.some((s, i) => s === '.claude' && !isClaudeDataPath(segments, i));
+  // A raw path key isn't resolved, so a `..` anywhere (Windows also reads `...` and `.. ` that way) means no data exemption.
+  const climbs = relPath.split(/[\\/]+/).some((s) => /^\.{2,}[. ]*$/.test(s));
+  return segments.some((s, i) => s === '.claude' && (climbs || !isClaudeDataPath(segments, i)));
 }
 
 /**
  * The folders of the claude-setup standard that Claude Code never reads as
- * configuration: `.claude/private/` (plans, specs) and `.claude/history/`
- * (transcripts copied by the user's own scripts), anything inside them; and
+ * configuration: `.claude/private/` (plans, specs), anything inside it; and
  * plain `.md` notes directly in `.claude/memory/` (auto memory). A write
  * there follows the usual rules (Auto, grants) instead of always asking.
+ * `.claude/history/` is NOT one: the standard's /pull copies it back into
+ * Claude Code's session store, so a forged transcript there would be resumed.
  * `at` is the index of the `.claude` segment; a further `.claude` deeper in
  * the path is checked on its own, so `.claude/private/.claude/settings.json`
- * stays protected.
+ * stays protected (and isProtectedAgentPath refuses the exemption to any
+ * path that climbs with `..`).
  */
 function isClaudeDataPath(segments: readonly string[], at: number): boolean {
   const folder = segments[at + 1];
   const rest = segments.length - (at + 2);
-  if (folder === 'private' || folder === 'history') return rest >= 1;
+  if (folder === 'private') return rest >= 1;
   return folder === 'memory' && rest === 1 && (segments[at + 2] ?? '').endsWith('.md');
 }
 
@@ -89,17 +93,25 @@ function isClaudeDataPath(segments: readonly string[], at: number): boolean {
  * the claude-setup standard: anything under `.claude/certificates/`, and a
  * `.env` or `.env.*` file in any folder. OtherBench refuses these itself, so
  * it doesn't depend on Claude Code applying the project's own deny rules
- * after OtherBench's hook has answered. Pass the path relative to the folder
- * that contains it, as for isProtectedAgentPath: a Windows 8.3 short-name
- * segment counts too (fail closed: it could be either), and a folder root that
- * is itself a short name (`C:\Users\RUNNER~1\...`) must not count.
+ * after OtherBench's hook has answered. By name alone, on a relative or an
+ * absolute path; a Windows 8.3 short name could hide either, which is
+ * hasShortNameSegment's to catch.
  */
 export function isSecretAgentPath(path: string): boolean {
   const segments = pathSegments(path);
   const last = segments[segments.length - 1] ?? '';
   if (last === '.env' || last.startsWith('.env.')) return true;
-  if (segments.some((s) => /~\d/.test(s))) return true;
   return segments.some((s, i) => s === '.claude' && segments[i + 1] === 'certificates');
+}
+
+/**
+ * True when a segment has the shape of a Windows 8.3 short name (`CERTIF~1`,
+ * `ENV~1.LOC`), which Windows opens as a long name that can't be known without
+ * the filesystem. Pass the path relative to its folder, so a folder root that
+ * is itself a short name (`C:\Users\RUNNER~1\...`) doesn't count.
+ */
+export function hasShortNameSegment(path: string): boolean {
+  return pathSegments(path).some((s) => /^[^.]{1,6}~\d+(\.[^.]{1,3})?$/.test(s));
 }
 
 /** A path's segments compared the way Windows opens them: an NTFS stream suffix cut, trailing dots and spaces dropped, lower case. */

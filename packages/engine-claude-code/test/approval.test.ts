@@ -59,6 +59,21 @@ describe("the claude-setup standard's secret files", () => {
     symlinkSync(join(ws, '.env'), join(ws, 'harmless.txt'));
     expect(normaliseAgentArgs('Read', { file_path: 'harmless.txt' }, ws)).toEqual({ secret: 'harmless.txt' });
   });
+  it('sees through a junction into the certificates folder', () => {
+    mkdirSync(join(ws, '.claude', 'certificates'), { recursive: true });
+    writeFileSync(join(ws, '.claude', 'certificates', 'k.pem'), 'x');
+    symlinkSync(join(ws, '.claude', 'certificates'), join(ws, 'certs-link'), 'junction');
+    expect(normaliseAgentArgs('Read', { file_path: 'certs-link/k.pem' }, ws)).toEqual({ secret: 'certs-link/k.pem' });
+  });
+  it('judges a write through a junctioned private folder by where it lands', () => {
+    mkdirSync(join(ws, '.claude', 'skills'), { recursive: true });
+    symlinkSync(join(ws, '.claude', 'skills'), join(ws, '.claude', 'private'), 'junction');
+    expect(normaliseAgentArgs('Write', { file_path: '.claude/private/evil/SKILL.md', content: 'x' }, ws)).toMatchObject({ args: { path: '.claude/skills/evil/SKILL.md' } });
+  });
+  it('refuses a Windows short name with its own reason', () => {
+    expect(normaliseAgentArgs('Read', { file_path: '.claude/CERTIF~1/k.pem' }, ws)).toEqual({ shortName: '.claude/CERTIF~1/k.pem' });
+    expect(normaliseAgentArgs('Read', { file_path: 'notes~1.txt.bak' }, ws)).toHaveProperty('args');
+  });
   it('lets ordinary files and the data folders through', () => {
     for (const p of ['.envrc', 'src/env.ts', '.claude/private/plan.md', 'certificates/readme.md']) {
       expect(normaliseAgentArgs('Read', { file_path: join(ws, p) }, ws)).toHaveProperty('args');

@@ -9,7 +9,7 @@ import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
-import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
+import { ClaudeCodeChatEngine, SECRET_DENY_RULES, type QueryFn } from '../src/engine.js';
 import { agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { liveKey } from '../src/live.js';
 import { buildRelay } from '../src/relay.js';
@@ -87,7 +87,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
     expect(o.disallowedTools).toEqual(expect.arrayContaining(['EnterPlanMode', 'ExitPlanMode']));
     expect(o.disallowedTools).not.toContain('AskUserQuestion');
-    expect(o.settings).toEqual({ disableSkillShellExecution: true });
+    expect(o.settings).toEqual({ disableSkillShellExecution: true, permissions: { deny: [...SECRET_DENY_RULES] } });
     expect(o.strictMcpConfig).toBeUndefined();
     expect(o.thinking).toBeUndefined();
     expect(o.maxThinkingTokens).toBeUndefined();
@@ -961,6 +961,28 @@ describe('ClaudeCodeChatEngine live processes', () => {
     };
     const sandboxProfile = (shellRuns: 'sandbox' | 'host', hosts: string[] = []) =>
       profile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, sandboxHosts: hosts, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+
+    it("never gives the sandboxed shell the user's skills folders, which are for Claude Code's file tools alone", async () => {
+      const config = mkdtempSync(join(tmpdir(), 'otherbench-cfg-'));
+      mkdirSync(join(config, 'skills'), { recursive: true });
+      let seen: unknown = 'not run';
+      const spec = sandboxSpec({ execute: async (_args, ctx) => { seen = ctx.folders; return { sandbox: true }; } });
+      let tools: OtherBenchServerTool[] = [];
+      const mcpServer = vi.fn((name: string, defs: OtherBenchServerTool[]) => { tools = defs; return { type: 'sdk', name, instance: {} } as never; });
+      const { query } = liveQuery(async function* () {
+        yield init('sess-1');
+        await tools.find((t) => t.name === 'run_command')!.call({ command: 'ls' });
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', CLAUDE_CONFIG_DIR: config }, mcpServer, relayTools: () => [spec] });
+      try {
+        await collect(e.stream(req({ profile: sandboxProfile('sandbox') })));
+      } finally {
+        e.dispose();
+        rmSync(config, { recursive: true, force: true });
+      }
+      expect(seen).toBeUndefined();
+    });
 
     it("runs a relayed command with the current reply's allowlist, without restarting the process", async () => {
       const ran: string[][] = [];
@@ -2610,5 +2632,18 @@ describe("the user's skills, read-only in every Claude Code reply", () => {
     }
     const decisions = out.map((o) => (o as { hookSpecificOutput: { permissionDecision: string } }).hookSpecificOutput.permissionDecision);
     expect(decisions).toEqual(['allow', 'deny', 'deny']);
+  });
+});
+
+describe("the claude-setup standard's secrets inside Claude Code's own search", () => {
+  it('gives every process deny rules for them, so Grep and Glob over a folder leave them out', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    await collect(engine(query).stream(req()));
+    await collect(engine(query).stream(req({ workspaceRoot: null })));
+    for (const call of calls) {
+      const settings = call.options.settings as { disableSkillShellExecution?: boolean; permissions?: { deny?: string[] } };
+      expect(settings.disableSkillShellExecution).toBe(true);
+      expect(settings.permissions?.deny).toEqual(expect.arrayContaining(['Read(**/.env)', 'Read(**/.env.*)', 'Read(**/.claude/certificates/**)', 'Read(//**/.env)', 'Edit(**/.claude/certificates/**)']));
+    }
   });
 });

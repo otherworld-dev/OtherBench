@@ -30,6 +30,9 @@ describe('claudeSkillFolders', () => {
     mkdirSync(join(config, 'skills'), { recursive: true });
     expect(claudeSkillFolders({ CLAUDE_CONFIG_DIR: config }, ws, home)).toEqual([{ root: join(config, 'skills'), access: 'read' }]);
   });
+  it('ignores a relative CLAUDE_CONFIG_DIR', () => {
+    expect(claudeSkillFolders({ CLAUDE_CONFIG_DIR: 'cfg' }, ws, home).map((f) => f.root)).toEqual([join(home, '.claude', 'skills'), join(home, '.claude', 'plugins', 'cache')]);
+  });
   it('leaves out folders that are missing or inside the workspace', () => {
     expect(claudeSkillFolders({}, ws, join(home, 'nobody'))).toEqual([]);
     expect(claudeSkillFolders({}, home, home)).toEqual([]);

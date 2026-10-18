@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath, isSecretAgentPath } from '../src/domain/agent-tools.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools, agentPolicyDenial, classifyAgentTool, hasShortNameSegment, isProtectedAgentPath, isSecretAgentPath } from '../src/domain/agent-tools.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
@@ -65,10 +65,10 @@ describe('isProtectedAgentPath', () => {
     expect(isProtectedAgentPath(p)).toBe(false);
   });
 
-  // The claude-setup standard's data folders: Claude Code never loads private/ or history/,
+  // The claude-setup standard's data folders: Claude Code never loads private/,
   // and memory/ holds plain notes. Everything else under .claude stays protected.
   it.each([
-    '.claude/private/plan.md', '.claude/private/specs/2026-10-18-x-design.md', '.claude/history/abc.jsonl', '.claude/history/abc/tool-results/1.txt',
+    '.claude/private/plan.md', '.claude/private/specs/2026-10-18-x-design.md',
     '.claude/memory/MEMORY.md', '.claude/memory/user_role.md', '.Claude/Private/x.md', 'sub/.claude/private/x.md',
     '.claude/private./x.md',
   ])('treats %s as data', (p) => {
@@ -79,6 +79,11 @@ describe('isProtectedAgentPath', () => {
     '.claude/private/.claude/settings.json', '.claude/history/x/.claude/hooks/h.sh', '.claude/private/CLAUDE.md', '.claude/memory/CLAUDE.md',
     '.claude/private/.mcp.json', '.claude/memory/CLAUDE~1.MD', 'CLAUDE~1/private/x.md', '.claude/PRIVAT~1/x.md', '.claude/certificates/key.pem',
     '.claude/specs/x.md', '.claude/rules/r.md', '.claude/setup-version',
+    // history/ is copied back into Claude Code's session store by /pull, so a transcript there is resumed.
+    '.claude/history/abc.jsonl', '.claude/history/abc/tool-results/1.txt',
+    // A raw path key isn't resolved: a `..` after the data folder fails closed.
+    '.claude/private/../settings.json', '.claude/private/x/../../hooks/h.sh', '.claude/memory/../x.md', '.claude\\private\\..\\settings.json',
+    '.claude/private/.../x.md', '.claude/private/.. /settings.json',
   ])('still protects %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(true);
   });
@@ -112,5 +117,14 @@ describe('R7 additions', () => {
   it('agentMcp:false hides the MCP resource tools', () => {
     expect(agentDisallowedTools(policy({ agentMcp: false }))).toEqual(expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']));
     expect(agentDisallowedTools(policy())).not.toContain('ListMcpResourcesTool');
+  });
+});
+
+describe('hasShortNameSegment', () => {
+  it.each(['CERTIF~1/k.pem', '.claude/CERTIF~1/k', 'ENV~1', 'ENVLOC~1.LOC', 'CLAUDE~12/x'])('sees a short name in %s', (p) => {
+    expect(hasShortNameSegment(p)).toBe(true);
+  });
+  it.each(['notes~1.txt.bak', 'my-long-name~1.txt', 'a~b', '.env~1', 'src/x.ts'])('sees none in %s', (p) => {
+    expect(hasShortNameSegment(p)).toBe(false);
   });
 });

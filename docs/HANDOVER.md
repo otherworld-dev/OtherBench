@@ -1336,23 +1336,34 @@ There's no spend cap; usage rows are written as normal.
   answer stores none, because a hook, skill or MCP command written there would
   run on a later turn with no Bash card. The claude-setup standard's data
   folders are the exception and follow the usual rules (Auto, grants):
-  anything in `.claude/private/` and `.claude/history/`, which Claude Code
-  never loads, and plain `.md` notes directly in `.claude/memory/`. Memory is
-  loaded into every new session, so a bad note there steers later turns as
-  `CLAUDE.md` would; it is let through deliberately, because auto memory
-  writes there all the time, and Auto's classifier still checks each write.
+  anything in `.claude/private/`, which Claude Code never loads, and plain
+  `.md` notes directly in `.claude/memory/`. Memory is loaded into every new
+  session, so a bad note there steers later turns as `CLAUDE.md` would; it is
+  let through deliberately, because auto memory writes there all the time,
+  and Auto's classifier still checks each write. `.claude/history/` stays
+  protected: the standard's `/pull` copies it into Claude Code's session
+  store, so a forged transcript there would be resumed. A path that climbs
+  with `..` gets no exemption.
 - Claude Code's file tools may not touch the claude-setup standard's secrets
   at all: anything under `.claude/certificates/`, and `.env`/`.env.*` in any
-  folder (`isSecretAgentPath`), judged on the path given and on where it
-  resolves, so a link to one counts. A Grep whose glob names `.env` or
-  `certificates` is refused too. OtherBench refuses these itself rather than
-  relying on the project's own deny rules after its hook has said allow. The
-  shell can still `cat` them unless the profile's shell runs in the sandbox.
-- Every Claude Code reply with a folder gets the user's `skills/` and
-  `plugins/cache/` (under `CLAUDE_CONFIG_DIR`, else `~/.claude`) as read-only
-  extra folders (`skill-folders.ts`), so a skill can read its own files by
-  the absolute path Claude Code gives it. Never the config folder itself,
-  which holds the login.
+  folder (`isSecretAgentPath`), judged on the path given, where it resolves
+  and its place in its folder, so a link to one counts. A Windows short name
+  (`CERTIF~1`) is refused too, with its own reason. A Grep or Glob over a
+  whole folder is filtered by Claude Code itself: every process gets deny
+  rules for these paths on the SDK's flag-settings layer
+  (`SECRET_DENY_RULES`), which Claude Code turns into exclusions inside
+  those tools, whatever the project's own settings say. That last part comes
+  from reading the bundled CLI, not a live probe (the auto-mode classifier
+  blocked the probe). The shell can still `cat` them unless the profile's
+  shell runs in the sandbox.
+- Every Claude Code reply with a folder lets Claude Code's file tools read
+  the user's `skills/` and `plugins/cache/` (under an absolute
+  `CLAUDE_CONFIG_DIR`, else `~/.claude`) as read-only folders
+  (`skill-folders.ts`), so a skill can read its own files by the absolute
+  path Claude Code gives it. They're given to the gate alone, never to the
+  reply's tool context, so the sandboxed shell and relayed tools don't get
+  them. Never the config folder itself, which holds the login. A skill
+  installed as a link to somewhere else is refused as outside.
 - Skill and slash-command inline shell (`` !`cmd` ``) is disabled for OtherBench
   turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
   the Skill tool itself gets no card.

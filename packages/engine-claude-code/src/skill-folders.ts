@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { containPath } from '@otherbench/core/domain/paths.js';
 import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 
@@ -15,7 +15,9 @@ import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
  * folder would win there and stop writes to it.
  */
 export function claudeSkillFolders(env: NodeJS.ProcessEnv, workspaceRoot: string, home: string = homedir()): ResolvedFolder[] {
-  const configDir = env['CLAUDE_CONFIG_DIR']?.trim() || join(home, '.claude');
+  // A relative CLAUDE_CONFIG_DIR would resolve against the server's working folder, not Claude Code's: ignored.
+  const set = env['CLAUDE_CONFIG_DIR']?.trim();
+  const configDir = set && isAbsolute(set) ? set : join(home, '.claude');
   return [join(configDir, 'skills'), join(configDir, 'plugins', 'cache')]
     .filter((root) => existsSync(root) && !inside(workspaceRoot, root))
     .map((root) => ({ root, access: 'read' as const }));
