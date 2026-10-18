@@ -32,6 +32,17 @@ export class RoutingChatEngine implements ChatEngine {
     this.claudeCode.onBackground?.(handler);
   }
 
+  /** Notes go into a running Claude Code reply; no other engine takes one, so the first that does is asked. */
+  async sendToReply(messageId: string, note: Parameters<NonNullable<ChatEngine['sendToReply']>>[1]): Promise<boolean> {
+    if (this.claudeCode.sendToReply && (await this.claudeCode.sendToReply(messageId, note))) return true;
+    return this.aisdk.sendToReply ? this.aisdk.sendToReply(messageId, note) : false;
+  }
+
+  async withdrawNote(noteId: string): Promise<boolean> {
+    if (this.claudeCode.withdrawNote && (await this.claudeCode.withdrawNote(noteId))) return true;
+    return this.aisdk.withdrawNote ? this.aisdk.withdrawNote(noteId) : false;
+  }
+
   async stopHelper(chatId: string, taskId: string): Promise<boolean> {
     if (this.claudeCode.stopHelper && (await this.claudeCode.stopHelper(chatId, taskId))) return true;
     return this.aisdk.stopHelper ? this.aisdk.stopHelper(chatId, taskId) : false;

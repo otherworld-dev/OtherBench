@@ -44,8 +44,9 @@ function countOf(container: Container, chatId: string): number {
  * What the engine reports its agent doing between replies (spec
  * 2026-10-17-claude-background-helpers-design): a chat's background tasks go
  * on that chat's stream, a helper's card in an earlier reply is brought up to
- * date (stored, and subscribers told to reload), and a turn the agent started
- * by itself is run as a reply.
+ * date (stored, and subscribers told to reload), a turn the agent started
+ * by itself is run as a reply (one running the user's notes as a follow-on),
+ * and notes it never read go back to the user.
  */
 export function handleBackground(container: Container, event: EngineBackgroundEvent): void {
   switch (event.type) {
@@ -70,6 +71,18 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
     }
     case 'self-start': {
       const { start } = event;
+      // Notes the user sent mid-reply, which Claude Code ran after the reply ended.
+      if (start.noteIds) {
+        if (!container.notes) {
+          start.decline();
+          return;
+        }
+        void container.notes.followOn(start).catch((err: unknown) => {
+          console.error(`[otherbench-server] could not run the notes Claude Code carried on with in chat ${start.chatId}:`, err);
+          start.decline();
+        });
+        return;
+      }
       const deps = { ...container, resolveProfile: (id: string) => resolveProfile({ store: container.store, secrets: container.secrets }, id) };
       void startSelfStartedTurn(deps, start).catch((err: unknown) => {
         console.error(`[otherbench-server] could not run a reply Claude Code started by itself in chat ${start.chatId}:`, err);
@@ -77,5 +90,8 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
       });
       return;
     }
+    case 'notes-dropped':
+      container.notes?.dropped(event.chatId, event.noteIds);
+      return;
   }
 }

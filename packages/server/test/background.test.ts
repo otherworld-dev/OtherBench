@@ -112,4 +112,27 @@ describe('handleBackground', () => {
     handleBackground(c, { type: 'helpers', chatId: 'chat-2', helpers: [] });
     expect(heard).toEqual([{ type: 'background-tasks', chatId: 'chat-1', count: 1 }]);
   });
+
+  it('hands a follow-on to the notes service, and notes Claude Code never read', () => {
+    const c = container();
+    const notes = { followOn: vi.fn(async () => undefined), dropped: vi.fn() };
+    (c as { notes?: unknown }).notes = notes;
+    const start = { chatId: 'chat-1', afterMessageId: 'a1', profileId: 'p', notice: '', unattended: false, noteIds: ['n1'], run: vi.fn(), decline: vi.fn() };
+
+    handleBackground(c, { type: 'self-start', start });
+    handleBackground(c, { type: 'notes-dropped', chatId: 'chat-1', noteIds: ['n2'] });
+
+    expect(notes.followOn).toHaveBeenCalledWith(start);
+    expect(notes.dropped).toHaveBeenCalledWith('chat-1', ['n2']);
+    expect(start.decline).not.toHaveBeenCalled();
+  });
+
+  it('declines a follow-on with no notes service to run it', () => {
+    const c = container();
+    const start = { chatId: 'chat-1', afterMessageId: 'a1', profileId: 'p', notice: '', unattended: false, noteIds: ['n1'], run: vi.fn(), decline: vi.fn() };
+
+    handleBackground(c, { type: 'self-start', start });
+
+    expect(start.decline).toHaveBeenCalled();
+  });
 });

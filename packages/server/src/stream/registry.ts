@@ -320,6 +320,11 @@ export class StreamRegistry {
     return { helpers: this.helpers.get(chatId) ?? [], backgroundApprovals: [...(this.backgroundApprovals.get(chatId)?.values() ?? [])] };
   }
 
+  /** Tells the chat's subscribers something about the chat itself (its waiting notes, say). */
+  broadcastChat(chatId: string, event: ChatLevelEvent): void {
+    this.broadcast(chatId, event);
+  }
+
   private broadcast(chatId: string, event: ChatStreamEvent): void {
     for (const cb of this.chatSubscribers.get(chatId) ?? []) {
       try {

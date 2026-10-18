@@ -97,7 +97,7 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
 }
 
 /** Whether the thread to `headId` has a context line (/clear, /compact) after message `afterId` on it. */
-function lineAfter(container: Pick<TurnStartDeps, 'store'>, headId: string | null, afterId: string): boolean {
+export function lineAfter(container: Pick<TurnStartDeps, 'store'>, headId: string | null, afterId: string): boolean {
   if (!headId) return false;
   const path = container.store.messages.pathToRoot(headId);
   const at = path.findIndex((m) => m.id === afterId);
