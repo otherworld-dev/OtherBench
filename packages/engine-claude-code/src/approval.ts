@@ -1,7 +1,7 @@
 import { isAbsolute, relative, sep } from 'node:path';
 import type { HelperRegistry } from './helpers.js';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
-import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@otherbench/core/domain/agent-tools.js';
+import { AGENT_PATH_ARG_KEYS, classifyAgentTool, hasShortNameSegment, isSecretAgentPath } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
@@ -110,7 +110,7 @@ export function normaliseAgentArgs(
   input: Record<string, unknown>,
   workspaceRoot: string,
   folders: readonly ResolvedFolder[] = [],
-): { args: Record<string, unknown> } | { outside: string } | { unusable: string } | { readOnly: string } {
+): { args: Record<string, unknown> } | { outside: string } | { home: string } | { unusable: string } | { readOnly: string } | { secret: string } | { shortName: string } {
   const { category } = classifyAgentTool(toolName);
   if (category !== 'file-read' && category !== 'file-write') return { args: { ...input } };
   const contain = (raw: string): ContainedIn | null => {
@@ -121,13 +121,24 @@ export function normaliseAgentArgs(
       return null;
     }
   };
+  // The claude-setup standard's secrets (core isSecretAgentPath), judged on the
+  // path as given, as it resolves, and relative to its resolved folder, so a
+  // link to one counts and so does one in a folder that is itself under `.claude`.
+  const secret = (raw: string, contained: ContainedIn): boolean =>
+    isSecretAgentPath(raw) || isSecretAgentPath(contained.path) || isSecretAgentPath(relative(containPath(contained.root, '.'), contained.path));
+  // A backstop only: what a Grep over a folder reads is filtered by Claude Code
+  // itself, through the deny rules OtherBench gives every process (SECRET_DENY_RULES).
+  if (toolName === 'Grep' && typeof input['glob'] === 'string' && /\.env|certificates/i.test(input['glob'])) return { secret: input['glob'] };
   let rel: string | undefined;
   for (const key of AGENT_PATH_ARG_KEYS) {
     if (!(key in input)) continue;
     const v = input[key];
     if (typeof v !== 'string' || v.trim().length === 0) return { unusable: key };
+    if (v.trim().startsWith('~')) return { home: v };
     const contained = contain(v.trim());
     if (contained === null) return { outside: v };
+    if (secret(v.trim(), contained)) return { secret: v };
+    if (hasShortNameSegment(relative(containPath(contained.root, '.'), contained.path))) return { shortName: v };
     if (category === 'file-write' && !contained.writable) return { readOnly: v };
     if (rel === undefined) {
       if (contained.root === workspaceRoot) {
@@ -161,6 +172,12 @@ export function createGate(deps: {
   onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
   /** The reply's helpers: a call one of them made says so on its approval card. */
   helpers?: HelperRegistry;
+  /**
+   * Read-only folders for Claude Code's file tools alone (the user's skills,
+   * engine-claude-code/src/skill-folders.ts): not in `ctx`, so no relayed tool
+   * (the sandboxed shell above all) is given them.
+   */
+  readFolders?: readonly ResolvedFolder[];
 }): Gate {
   /** AskUserQuestion: the question card, answered through `updatedInput` (spec 2026-10-12-thread-cards-design section 6). */
   const askQuestion = async (input: Record<string, unknown>, signal: AbortSignal): Promise<GateDecision> => {
@@ -199,9 +216,18 @@ export function createGate(deps: {
       // Claude Code's internal ones (TodoWrite, AskUserQuestion) may go on.
       const category = classifyAgentTool(toolName).category;
       if (!workspaceRoot && !own && category !== 'web' && category !== 'internal') return { allow: false, reason: NO_FOLDER_REASON };
-      const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
+      const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, [...(deps.ctx.folders ?? []), ...(deps.readFolders ?? [])]);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
+      }
+      if ('home' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: OtherBench doesn't accept ~ paths. Use the full path (${normalised.home}).` };
+      }
+      if ('shortName' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: ${normalised.shortName} uses a Windows short name. Use the long name.` };
+      }
+      if ('secret' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: ${normalised.secret} is a secret file that OtherBench keeps from Claude Code.` };
       }
       if ('readOnly' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.readOnly} is in a read-only folder.` };

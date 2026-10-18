@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKMessage, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, McpServerConfig, Options, PostCompactHookInput, SDKMessage, SDKUserMessage, Settings, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
@@ -16,6 +16,7 @@ import { HelperStopError, type ChatEngine, type ConnectionTestResult, type Disco
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
 import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchToolName, type OtherBenchServerTool } from './otherbench-server.js';
@@ -24,6 +25,7 @@ import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError }
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
+import { claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
@@ -112,6 +114,27 @@ const OWNER_WAIT_MS = 500;
 export function scratchFolderName(chatId: string): string {
   return chatId.replace(/[^A-Za-z0-9_-]/g, '_');
 }
+
+/**
+ * Deny rules for the claude-setup standard's secrets (core isSecretAgentPath),
+ * on the SDK's flag-settings layer, so they hold whatever the project's own
+ * settings say. OtherBench's gate refuses a file tool aimed at one, but a Grep
+ * or Glob over a whole folder reads what it finds there: Claude Code turns
+ * these rules into exclusions inside those tools. Unanchored patterns apply to
+ * every search wherever it starts (the chat's folder, an extra folder, the
+ * user's skills); a `//` one would only cover the current drive on Windows.
+ */
+export const SECRET_DENY_RULES: readonly string[] = ['Read', 'Edit'].flatMap((tool) =>
+  ['**/.env', '**/.env.*', '**/.claude/certificates/**'].map((p) => `${tool}(${p})`)
+);
+
+/**
+ * The flag-settings layer every turn's process gets (above user/project/local):
+ * skills and slash commands may not run their inline !`cmd` shell, which would
+ * run inside the 'internal' Skill tool and get no card (R14); and the secrets'
+ * deny rules.
+ */
+const processSettings = (): Settings => ({ disableSkillShellExecution: true, permissions: { deny: [...SECRET_DENY_RULES] } });
 
 /** A notice waiting for a safe moment to be yielded (see ClaudeCodeChatEngine.stream). */
 type PendingNotice = { text: string | null };
@@ -583,6 +606,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
+        readFolders: this.skillFolders(req.workspaceRoot),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
         onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
@@ -790,6 +814,15 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
   }
 
+  /**
+   * The user's own skills and plugins, read-only, for the gate alone (skill-folders.ts):
+   * a skill may read its own files with Claude Code's file tools. Not part of the
+   * reply's tool context, so the sandboxed shell and relayed tools never get them.
+   */
+  private skillFolders(workspaceRoot: string | null): ResolvedFolder[] {
+    return workspaceRoot ? claudeSkillFolders(this.deps.baseEnv ?? process.env, workspaceRoot) : [];
+  }
+
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
   private scratchFolder(chatId: string): string {
     this.privateScratch ??= this.deps.scratchRoot ?? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-'));
@@ -814,7 +847,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         includePartialMessages: true,
         settingSources: [],
         strictMcpConfig: true,
-        settings: { disableSkillShellExecution: true },
+        settings: processSettings(),
         // Web search and fetch, plus the checklist and questions (spec 2026-10-12-thread-cards-design section 6).
         tools: [...(profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch']), ...CLEAN_CHAT_AGENT_TOOLS],
         disallowedTools: agentDisallowedTools(profile.toolPolicy),
@@ -830,10 +863,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       permissionMode: autoMode ? 'auto' : 'default',
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
-      // Flag-settings layer (above user/project/local): skills and slash
-      // commands may not run their inline !`cmd` shell. That shell would run
-      // inside the 'internal' Skill tool, which gets no card (R14).
-      settings: { disableSkillShellExecution: true },
+      // Flag-settings layer: no skill inline shell (R14), and the secrets' deny rules.
+      settings: processSettings(),
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       // MCP off: load no MCP config but the servers passed here (only OtherBench's
@@ -912,7 +943,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A reply may have begun while this waited: its gate decides.
       if (live?.binding) return live.binding.gate(toolName, toolInput, signal, opts);
       if (!helper) return { allow: false, reason: 'No OtherBench reply is waiting on this tool call.' };
-      return createGate({ approvals: this.deps.approvals, ...helper })(toolName, toolInput, signal, opts);
+      return createGate({ approvals: this.deps.approvals, readFolders: this.skillFolders(helper.ctx.workspaceRoot), ...helper })(toolName, toolInput, signal, opts);
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) => {
       if (live?.binding) return live.binding.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
