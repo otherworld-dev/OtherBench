@@ -223,7 +223,13 @@ export interface OtherBenchState {
   sentNotes: Record<string, ReplyNote>;
   /** Notes handed back to this tab's composer (a stopped or lost reply, or one taken back), not yet taken. */
   returnedNotes: ReturnedNote[];
-  /** This tab sent a note: remember it until it resolves. */
+  /**
+   * This tab's notes the stream said were resolved before their send returned
+   * (the server can resolve one before it answers). Each is consumed by its
+   * `noteSent`, which every send reaches, so the set stays small.
+   */
+  earlyResolved: Record<string, true>;
+  /** This tab sent a note: remember it until it resolves (unless it already has). */
   noteSent(note: ReplyNote): void;
   /** A waiting note was taken back from this tab: forget it as sent, and hand it to the composer. */
   noteTakenBack(note: ReplyNote): void;
@@ -643,7 +649,13 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   chatNotes: {},
   sentNotes: {},
   returnedNotes: [],
-  noteSent: (note) => set((state) => ({ sentNotes: { ...state.sentNotes, [note.id]: note } })),
+  earlyResolved: {},
+  noteSent: (note) =>
+    set((state) => {
+      if (!state.earlyResolved[note.id]) return { sentNotes: { ...state.sentNotes, [note.id]: note } };
+      const { [note.id]: _consumed, ...earlyResolved } = state.earlyResolved;
+      return { earlyResolved };
+    }),
   noteTakenBack: (note) =>
     set((state) => {
       const { [note.id]: _taken, ...sentNotes } = state.sentNotes;
@@ -684,7 +696,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       set((state) => {
         const { [event.noteId]: _resolved, ...sentNotes } = state.sentNotes;
         const back = event.outcome === 'returned' && event.clientId === CLIENT_ID && event.note;
-        return { sentNotes, ...(back ? { returnedNotes: [...state.returnedNotes, event.note as ReplyNote] } : {}) };
+        // This tab's note, resolved before its send returned: `noteSent` mustn't then remember it.
+        // (Never `removed`: taking a note back needs its id, so its send has returned.)
+        const early = event.clientId === CLIENT_ID && event.outcome !== 'removed' && !(event.noteId in state.sentNotes);
+        return {
+          sentNotes,
+          ...(back ? { returnedNotes: [...state.returnedNotes, event.note as ReplyNote] } : {}),
+          ...(early ? { earlyResolved: { ...state.earlyResolved, [event.noteId]: true as const } } : {}),
+        };
       });
       return;
     }

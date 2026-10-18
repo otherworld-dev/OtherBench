@@ -735,4 +735,27 @@ describe('notes (messages sent while a reply runs)', () => {
     expect(Object.keys(after.sentNotes)).toEqual(['waiting']);
     expect(after.chatNotes['c1']?.map((n) => n.id)).toEqual(['waiting']);
   });
+
+  it('a note resolved before its send returned is not remembered as sent, so a reload never restores it again', () => {
+    const s = useOtherBenchStore.getState();
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: note('n1') });
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'folded', clientId: CLIENT_ID });
+    s.noteSent(note('n1'));
+    s.noteSent(note('n2'));
+    expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+    s.setChatNotes('c1', [], []);
+    const after = useOtherBenchStore.getState();
+    expect(after.sentNotes).toEqual({});
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['n1']);
+    expect(after.earlyResolved).toEqual({});
+  });
+
+  it("another tab's resolved notes, and this tab's taken-back ones, aren't held for a send", () => {
+    const s = useOtherBenchStore.getState();
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'turn', clientId: 'other-tab' });
+    s.noteSent(note('n2'));
+    s.noteTakenBack(note('n2'));
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'removed', clientId: CLIENT_ID });
+    expect(useOtherBenchStore.getState().earlyResolved).toEqual({});
+  });
 });

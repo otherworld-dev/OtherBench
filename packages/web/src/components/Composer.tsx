@@ -217,12 +217,15 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
 
   // A note that comes back (a stopped or lost reply, or one taken back) goes after the draft, its attachments as chips again.
   const returnedCount = useOtherBenchStore((s) => s.returnedNotes.filter((n) => n.chatId === chat.id).length);
+  // Attachments a returned note brought back: a send still in flight with the same chips mustn't clear them when it ends.
+  const returnedAttachmentIds = useRef(new Set<string>());
   useEffect(() => {
     if (returnedCount === 0) return;
     const taken = useOtherBenchStore.getState().takeReturnedNotes(chat.id);
     if (taken.length === 0) return;
     setText((draft) => [draft, ...taken.map((n) => n.text)].filter((t) => t.trim().length > 0).join('\n\n'));
     setBrowsing(null);
+    for (const n of taken) for (const a of n.attachments) returnedAttachmentIds.current.add(a.attachmentId);
     setAttachments((prev) => [
       ...prev,
       ...taken.flatMap((n) => n.attachments).filter((a) => !prev.some((p) => p.id === a.attachmentId)).map((a) => ({ id: a.attachmentId, filename: a.filename, mime: a.mime })),
@@ -409,12 +412,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // over the (possibly different) attachments actually being sent now.
     setRemoveError(null);
     setSendError(null);
+    // Before the send, so a note that comes back while it's in flight keeps its notice.
+    setNoteReturned(false);
+    returnedAttachmentIds.current.clear();
     try {
       // The chat went quiet between the click and the server: a normal message after all.
       if (!busy || !(await sendNote(trimmed))) await sendTurn(trimmed);
-      setNoteReturned(false);
-      // Only what was sent: a note that came back meanwhile went after it, and stays.
-      const sentIds = new Set(attachments.map((a) => a.id));
+      // Only what was sent: a note that came back meanwhile went after it, and stays, chips included.
+      const sentIds = new Set(attachments.map((a) => a.id).filter((id) => !returnedAttachmentIds.current.has(id)));
       setText((now) => (now.startsWith(text) ? now.slice(text.length).trimStart() : now));
       setBrowsing(null);
       setAttachments((now) => now.filter((a) => !sentIds.has(a.id)));

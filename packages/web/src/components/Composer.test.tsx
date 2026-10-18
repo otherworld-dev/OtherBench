@@ -1277,6 +1277,30 @@ describe('Composer while a reply runs (notes)', () => {
     expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
   });
 
+  it('a note returned with its chip while the send is still in flight keeps the chip and the notice', async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    const returned = note('n1', { text: 'came back', attachments: [{ attachmentId: 'att-1', mime: 'image/png', filename: 'photo.png' }] });
+    // The server returns the note (the reply just stopped) before the send's own response arrives.
+    let respond!: (n: ReplyNote) => void;
+    mockedNoteSend.mockImplementation(() => new Promise<ReplyNote>((resolve) => (respond = resolve)));
+    mockedAttachmentList.mockResolvedValue([makeAttachment({ id: 'att-1' })]);
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await screen.findByText('photo.png');
+    await user.type(box(), 'came back{Enter}');
+    await waitFor(() => expect(mockedNoteSend).toHaveBeenCalled());
+
+    act(() => {
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+    await act(async () => respond(returned));
+
+    await waitFor(() => expect(box()).toHaveValue('came back'));
+    expect(screen.getByText('photo.png')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Not sent: the reply ended before it was read. It's back in the box.");
+    expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+  });
+
   it('a note taken back comes back to the box without the not-sent copy', async () => {
     render(<Composer chat={makeChat()} />);
     act(() => useOtherBenchStore.getState().noteTakenBack(note('n1', { text: 'never mind' })));
