@@ -27,6 +27,46 @@ afterEach(() => {
   vi.mocked(api.chats.stopHelper).mockReset();
 });
 
+describe('BackgroundHelpers kept small', () => {
+  const longCommand: BackgroundHelper = {
+    taskId: 'k3',
+    callId: null,
+    kind: 'local_bash',
+    label: "cd /e/wt/amount-colours/budget && python - <<'EOF'\ndef rd(p): return open(p).read()\nEOF\ngit diff lib | wc -l",
+    startedAt: 69_000,
+    lastActivity: null,
+  };
+
+  it('shows each task on one line, cut short, with its full text behind Show more', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    useOtherBenchStore.getState().setChatBackground('c1', [longCommand], []);
+    render(<BackgroundHelpers chatId="c1" onResolveApproval={vi.fn()} />);
+    const row = screen.getByTestId('background-helper');
+    const name = screen.getByTestId('background-helper-name');
+    expect(name).toHaveClass('truncate');
+    expect(name).toHaveTextContent("cd /e/wt/amount-colours/budget && python - <<'EOF' def rd(p)");
+    expect(screen.queryByTestId('background-helper-detail')).toBeNull();
+
+    const toggle = screen.getByRole('button', { name: /show more/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('background-helper-detail').textContent).toBe(longCommand.label);
+    expect(row).toHaveTextContent('Stop');
+
+    await user.click(screen.getByRole('button', { name: /show less/i }));
+    expect(screen.queryByTestId('background-helper-detail')).toBeNull();
+  });
+
+  it('puts the last activity in the expanded detail too', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    useOtherBenchStore.getState().setChatBackground('c1', [implementer], []);
+    render(<BackgroundHelpers chatId="c1" onResolveApproval={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /show more/i }));
+    expect(screen.getByTestId('background-helper-detail')).toHaveTextContent('Fixing the sha check');
+  });
+});
+
 describe('BackgroundHelpers', () => {
   it('lists the helpers running in the background with their time and last activity', () => {
     useOtherBenchStore.getState().setChatBackground('c1', [implementer, devServer], []);

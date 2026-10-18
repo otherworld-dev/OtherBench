@@ -52,7 +52,10 @@ export function BackgroundHelpers({ chatId, onResolveApproval }: { chatId: strin
 function HelperRow({ chatId, helper, now, approvals, onResolveApproval }: { chatId: string; helper: BackgroundHelper; now: number; approvals: ReturnType<typeof useOtherBenchStore.getState>['backgroundApprovals'][string]; onResolveApproval: (requestId: string, choice: ApprovalChoice) => Promise<void> }): JSX.Element {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const kind = KIND_LABEL[helper.kind];
+  // A background command's label is the whole command, often many lines: one line here, all of it behind Show more.
+  const oneLine = helper.label.replace(/\s+/g, ' ').trim();
 
   async function stop(): Promise<void> {
     setStopping(true);
@@ -67,20 +70,40 @@ function HelperRow({ chatId, helper, now, approvals, onResolveApproval }: { chat
 
   return (
     <div data-testid="background-helper" className="space-y-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--accent)]" aria-hidden="true" />
-        <span className="font-medium text-[var(--text)]">{helper.label}</span>
-        {kind && <span className="text-[var(--text-muted)]">{kind}</span>}
-        <span className="font-mono text-[var(--text-faint)]">{formatDuration(now - helper.startedAt)}</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--accent)]" aria-hidden="true" />
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? `Show less of ${oneLine}` : `Show more of ${oneLine}`}
+          className="shrink-0 text-[var(--text-faint)] hover:text-[var(--text)]"
+        >
+          {open ? '▾' : '▸'}
+        </button>
+        <span data-testid="background-helper-name" title={helper.label} className="min-w-0 max-w-[50%] truncate font-medium text-[var(--text)]">
+          {oneLine}
+        </span>
+        {kind && <span className="shrink-0 text-[var(--text-muted)]">{kind}</span>}
+        <span className="shrink-0 font-mono text-[var(--text-faint)]">{formatDuration(now - helper.startedAt)}</span>
         {approvals.length > 0 ? (
-          <span className="text-[var(--warn)]">needs your approval</span>
+          <span className="shrink-0 text-[var(--warn)]">needs your approval</span>
         ) : (
           helper.lastActivity && <span className="min-w-0 flex-1 truncate font-mono text-[var(--text-faint)]">{helper.lastActivity}</span>
         )}
-        <button type="button" onClick={() => void stop()} disabled={stopping} aria-label={`Stop ${helper.label}`} className="btn ml-auto px-2 py-0.5">
+        <button type="button" onClick={() => void stop()} disabled={stopping} aria-label={`Stop ${oneLine}`} className="btn ml-auto shrink-0 px-2 py-0.5">
           {stopping ? 'Stopping…' : 'Stop'}
         </button>
       </div>
+      {open && (
+        <div
+          data-testid="background-helper-detail"
+          className="ml-6 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg)] px-2 py-1 font-mono text-[var(--text-muted)]"
+        >
+          {helper.label}
+          {helper.lastActivity && <div className="mt-1 text-[var(--text-faint)]">{helper.lastActivity}</div>}
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-[var(--danger)]">
           {error}
