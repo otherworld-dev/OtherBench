@@ -269,18 +269,37 @@ describe('LiveProcess and notes', () => {
     expect(live.inTurn).toBe(false);
   });
 
-  it('a result naming a started note whose turn showed nothing frees the process, as does its completion', async () => {
+  it('a result naming a started note whose turn showed nothing frees the process, as does its completion, and reports the note dropped', async () => {
     const { live, out } = await started(['n1', 'n2']);
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
     let free = false;
     void live.whenFree().then(() => (free = true));
     out.emit(result(['n1']));
     await tick();
     expect(live.starting).toEqual(['n2']);
     expect(free).toBe(false);
+    expect(dropped).toEqual([['n1']]);
     out.emit(lifecycle('n2', 'completed'));
+    // Its completion after its result reports nothing more.
+    out.emit(lifecycle('n1', 'completed'));
     await tick();
     expect(live.starting).toEqual([]);
     expect(free).toBe(true);
+    expect(dropped).toEqual([['n1'], ['n2']]);
+  });
+
+  it("a follow-on's own result reports none of its notes dropped", async () => {
+    const { live, out } = await started(['n1']);
+    const dropped: string[][] = [];
+    live.onDropped = (d) => dropped.push(d);
+    live.takeStarting(text('late') as unknown as SDKMessage);
+    const feed = live.attach('n1');
+    out.emit(result(['n1']));
+    out.emit(lifecycle('n1', 'completed'));
+    await take(feed);
+    await tick();
+    expect(dropped).toEqual([]);
   });
 
   it("takeStarting takes the notes a turn's first frame runs, and none for a background task's turn or another message's", async () => {

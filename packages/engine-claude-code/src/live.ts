@@ -207,6 +207,8 @@ export class LiveProcess {
   capabilities: string[] = [];
   /** Called once when the process closes or its output ends, with the notes that never got read. */
   onClosed: (dropped: string[]) => void = () => {};
+  /** Called with started notes whose turn ended before it showed anything (an early error): no follow-on ran them. */
+  onDropped: (dropped: string[]) => void = () => {};
   private reportedClosed = false;
   private attached: { uuid: string; feed: TurnFeed } | null = null;
   private freeWaiters: (() => void)[] = [];
@@ -287,12 +289,16 @@ export class LiveProcess {
     this.onClosed(dropped);
   }
 
-  /** Takes `ids` out of `starting`: their turns are over (or never came). */
+  /**
+   * Takes `ids` out of `starting`: Claude Code ended their turns before
+   * showing anything, so no follow-on ran them and `onDropped` is told.
+   */
   private forgetStarting(ids: string[]): void {
-    if (!ids.some((id) => this.starting.includes(id))) return;
-    const left = this.starting.filter((id) => !ids.includes(id));
-    this.starting.splice(0, this.starting.length, ...left);
+    const gone = this.starting.filter((id) => ids.includes(id));
+    if (gone.length === 0) return;
+    this.starting.splice(0, this.starting.length, ...this.starting.filter((id) => !ids.includes(id)));
     this.wakeIfFree();
+    this.onDropped(gone);
   }
 
   /**

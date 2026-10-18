@@ -425,7 +425,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     this.selfStart(live, message, notes.length > 0 ? notes : undefined);
   }
 
-  /** Tells the server which notes a process that closed never read, for its chat. Never throws: the process calls it unguarded. */
+  /** Tells the server which notes a process never ran (it closed, or their turn ended at once), for its chat. Never throws: the process calls it unguarded. */
   private reportDropped(live: LiveProcess, dropped: string[]): void {
     try {
       const chatId = live.background?.chatId ?? live.last?.chatId;
@@ -791,6 +791,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.background.current = req.messageId;
     live.onIdle = (message) => this.handleIdle(live, message);
     live.onClosed = (dropped) => this.reportDropped(live, dropped);
+    live.onDropped = (dropped) => this.reportDropped(live, dropped);
     // This reply's turn, up to its own result: attached before the message
     // goes, so nothing of it is missed and nothing else reaches it.
     const uuid = randomUUID();

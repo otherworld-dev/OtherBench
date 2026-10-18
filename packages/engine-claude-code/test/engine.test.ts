@@ -3075,10 +3075,10 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     const outcome = await Promise.race([done.then(() => 'ended'), new Promise((resolve) => setTimeout(() => resolve('still running'), 200))]);
     expect(outcome).toBe('ended');
     expect(shape(events)).toEqual(['text Reviewing', 'finish']);
-    // Claude Code answered n1: it isn't reported as dropped.
+    // n1 got no turn: it was reported dropped once, at its result, and not again on close.
     f.end();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([{ type: 'notes-dropped', chatId: 'chat', noteIds: ['n1'] }]);
     e.dispose();
   });
 
@@ -3120,6 +3120,38 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     await nextDone;
     expect(shape(nextEvents)).toEqual(['text Mine', 'finish']);
     e.dispose();
+  });
+
+  it("a started note whose turn produced nothing but a result is reported dropped, once", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const first = await running(e, f);
+    await e.sendToReply('m1', note('n1'));
+    f.emit(resultNaming([first.uuid]));
+    await first.done;
+    f.emit(lifecycle('n1', 'started'));
+    f.emit(resultNaming(['n1'], 'error_during_execution'));
+    await vi.waitFor(() => expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1));
+    expect(seen.find((ev) => ev.type === 'notes-dropped')).toEqual({ type: 'notes-dropped', chatId: 'chat', noteIds: ['n1'] });
+    f.emit(lifecycle('n1', 'completed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toHaveLength(1);
+    expect(seen.some((ev) => ev.type === 'self-start')).toBe(false);
+  });
+
+  it("a follow-on's notes are not reported dropped when it ends", async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    const { starts, seen } = await lateNotes(e, f, ['n1']);
+    const done = (async () => { for await (const _ of starts[0]!.run(req({ messageId: 'm-late' }))); })();
+    f.emit(resultNaming(['n1']));
+    f.emit(lifecycle('n1', 'completed'));
+    await done;
+    e.dispose();
+    expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
   });
 
   it('a process closed with nothing queued reports nothing', async () => {
