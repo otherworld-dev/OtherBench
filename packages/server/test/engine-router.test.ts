@@ -36,10 +36,15 @@ describe('RoutingChatEngine', () => {
     expect(sent).toEqual(['r1:n1']);
     expect(await router.withdrawNote('n1')).toBe(true);
     expect(await router.withdrawNote('n2')).toBe(false);
+    // An engine that takes notes but can't say which it has is taken to have them.
+    expect(router.knowsNote('n2')).toBe(true);
+    cc.knowsNote = (noteId) => noteId === 'n1';
+    expect([router.knowsNote('n1'), router.knowsNote('n2')]).toEqual([true, false]);
 
     const none = new RoutingChatEngine(new FakeChatEngine([]), new FakeChatEngine([]));
     expect(await none.sendToReply('r1', { id: 'n1', text: 'hi', attachments: [] })).toBe(false);
     expect(await none.withdrawNote('n1')).toBe(false);
+    expect(none.knowsNote('n1')).toBe(false);
   });
   it('lists endpoint models through the Ollama path with /v1 appended', async () => {
     const aisdk = new FakeChatEngine([]);

@@ -186,6 +186,12 @@ export interface ChatEngine {
   sendToReply?(messageId: string, note: { id: string; text: string; attachments: NoteAttachment[] }): Promise<boolean>;
   /** Takes back a note Claude hasn't started reading. True when it was removed. */
   withdrawNote?(noteId: string): Promise<boolean>;
+  /**
+   * Whether the engine still has a note it took (queued, started or read).
+   * False means nothing will ever fold it, run it or report it dropped, so
+   * the note is the user's again.
+   */
+  knowsNote?(noteId: string): boolean;
   /** Stops one of a chat's background tasks; false when no such task is running. Throws HelperStopError when it can't be stopped. */
   stopHelper?(chatId: string, taskId: string): Promise<boolean>;
   /** A chat's settings changed (any chat's, with no id): what applies to work running now (Auto) is applied at once. */

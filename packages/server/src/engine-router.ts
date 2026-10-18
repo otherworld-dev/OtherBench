@@ -43,6 +43,11 @@ export class RoutingChatEngine implements ChatEngine {
     return this.aisdk.withdrawNote ? this.aisdk.withdrawNote(noteId) : false;
   }
 
+  /** An engine that takes notes but can't say which it has is taken to have them. */
+  knowsNote(noteId: string): boolean {
+    return [this.claudeCode, this.aisdk].some((e) => (e.knowsNote ? e.knowsNote(noteId) : e.withdrawNote !== undefined));
+  }
+
   async stopHelper(chatId: string, taskId: string): Promise<boolean> {
     if (this.claudeCode.stopHelper && (await this.claudeCode.stopHelper(chatId, taskId))) return true;
     return this.aisdk.stopHelper ? this.aisdk.stopHelper(chatId, taskId) : false;

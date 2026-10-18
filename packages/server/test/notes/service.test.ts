@@ -472,6 +472,38 @@ describe('NotesService', () => {
     expect(ctx.notes.hasWaiting('chat-1')).toBe(false);
   });
 
+  it('a live note no Claude Code knows any more can be taken back; one it is reading cannot', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const reading = (await ctx.notes.send(input({ text: 'reading', parentId: r! })))!;
+    const lost = (await ctx.notes.send(input({ text: 'lost', parentId: r!, attachments: [PDF] })))!;
+    ctx.withdrawNote.mockResolvedValue(false);
+    ctx.engine.knowsNote = (noteId) => noteId === reading.id;
+
+    expect(await ctx.notes.withdraw('chat-1', reading.id)).toBeNull();
+    // Nothing would ever fold it, run it or report it: it's the user's again rather than stuck.
+    expect(await ctx.notes.withdraw('chat-1', lost.id)).toEqual(lost);
+    expect(ctx.resolved().map((e) => [e.noteId, e.outcome])).toEqual([[lost.id, 'removed']]);
+    expect(ctx.notes.heldAttachmentIds('chat-1')).toEqual([]);
+    expect(ctx.notes.helloState('chat-1').notes).toEqual([reading]);
+  });
+
+  it('on Stop of another reply, a live note no Claude Code knows any more comes back', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const lost = (await ctx.notes.send(input({ parentId: r! })))!;
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    ctx.withdrawNote.mockResolvedValue(false);
+    ctx.engine.knowsNote = () => false;
+    const { assistantMessageId: s } = await ctx.turnRunner.runSelfStarted({ chatId: 'chat-1', parentId: r!, profile: profile('p1'), notice: '', unattended: false, stream: (req) => ctx.engine.stream(req) });
+    ctx.turnRunner.cancel(s);
+    await ctx.ended(s);
+
+    await vi.waitFor(() => expect(ctx.resolved()).toEqual([expect.objectContaining({ noteId: lost.id, outcome: 'returned' })]));
+    expect(ctx.notes.isBusy('chat-1')).toBe(false);
+  });
+
   it('helloState lists waiting notes and recent outcomes', async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();

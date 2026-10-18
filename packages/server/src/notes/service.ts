@@ -153,15 +153,7 @@ export class NotesService {
   async withdraw(chatId: string, noteId: string): Promise<ReplyNote | null> {
     const held = this.find(chatId, noteId);
     if (!held) return null;
-    if (held.note.path === 'live') {
-      let withdrawn = false;
-      try {
-        withdrawn = (await this.engine.withdrawNote?.(noteId)) ?? false;
-      } catch (err) {
-        console.error(`[otherbench-server] could not take back note ${noteId}:`, err);
-      }
-      if (!withdrawn) return null;
-    }
+    if (held.note.path === 'live' && !(await this.askBack(noteId))) return null;
     if (!this.remove(held)) return null;
     this.finish(held.note, 'removed');
     this.broadcastNotes(chatId);
@@ -365,15 +357,23 @@ export class NotesService {
 
   /** Asks Claude Code for a live note back; returned if it was, kept (to fold or follow on) if Claude already started it. */
   private async takeBack(held: Held): Promise<void> {
-    let withdrawn = false;
-    try {
-      withdrawn = (await this.engine.withdrawNote?.(held.note.id)) ?? false;
-    } catch (err) {
-      console.error(`[otherbench-server] could not take back note ${held.note.id}:`, err);
-    }
-    if (!withdrawn) return;
+    if (!(await this.askBack(held.note.id))) return;
     this.giveBack(held.note.chatId, [held]);
     this.settle(held.note.chatId);
+  }
+
+  /**
+   * Asks the engine for live note `noteId` back. True when it was withdrawn,
+   * or when no Claude Code has it any more (nothing would ever resolve it);
+   * false when Claude has started reading it.
+   */
+  private async askBack(noteId: string): Promise<boolean> {
+    try {
+      if (await this.engine.withdrawNote?.(noteId)) return true;
+    } catch (err) {
+      console.error(`[otherbench-server] could not take back note ${noteId}:`, err);
+    }
+    return this.engine.knowsNote?.(noteId) === false;
   }
 
   /** The chat's replies streaming here now. */

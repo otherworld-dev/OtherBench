@@ -121,6 +121,8 @@ export class FakeChatEngine implements ChatEngine {
   sendToReply?: ChatEngine['sendToReply'];
   /** Set per test to stand in for the engine's `withdrawNote`. */
   withdrawNote?: ChatEngine['withdrawNote'];
+  /** Set per test to stand in for the engine's `knowsNote`. */
+  knowsNote?: ChatEngine['knowsNote'];
 
   constructor(private readonly script: EngineScript) {}
 
