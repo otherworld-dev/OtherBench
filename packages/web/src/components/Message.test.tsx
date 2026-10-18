@@ -752,4 +752,62 @@ describe('Message sub-agent cards', () => {
     expect(screen.getByText('Rate limited.')).toBeInTheDocument();
     expect(screen.getByText(/Used 1 tool: subagent/)).toBeInTheDocument();
   });
+
+  describe('activity fold', () => {
+    const bash = (id: string): Part[] => [
+      { type: 'tool-call', id, name: 'Bash', args: { command: 'git log' } },
+      { type: 'tool-result', id, name: 'Bash', result: 'ok', isError: false },
+    ];
+    const helper = (callId: string, label: string, over: Partial<Extract<Part, { type: 'subagent' }>> = {}): Part => card({ callId, label, ...over }) as Part;
+
+    it('folds tool groups and helper cards in a row into one closed block with a summary', async () => {
+      const parts: Part[] = [
+        { type: 'text', text: 'Task 1 is committed.' },
+        ...bash('b1'), helper('h1', 'Review Task 1'), ...bash('b2'), helper('h2', 'Implement Tasks 2-4'),
+        { type: 'text', text: 'Tasks 2 to 4 are committed.' },
+      ];
+      render(<Message message={base({ parts })} />);
+      const folds = screen.getAllByTestId('activity-fold');
+      expect(folds).toHaveLength(1);
+      expect(folds[0]).not.toHaveAttribute('open');
+      expect(folds[0]!.querySelector('summary')).toHaveTextContent('Used 2 tools (Bash ×2) and 2 helpers: Review Task 1, Implement Tasks 2-4');
+      expect(within(folds[0]!).getAllByTestId('subagent-card')).toHaveLength(2);
+      expect(screen.getByText('Task 1 is committed.')).toBeVisible();
+      expect(screen.getByText('Tasks 2 to 4 are committed.')).toBeVisible();
+
+      await userEvent.setup().click(folds[0]!.querySelector('summary')!);
+      expect(within(folds[0]!).getAllByText('Used 1 tool: Bash')[0]).toBeVisible();
+      expect(within(folds[0]!).getByText('◇ Review Task 1')).toBeVisible();
+    });
+
+    it('leaves a lone tool group or helper card unfolded', () => {
+      render(<Message message={base({ parts: [...bash('b1'), { type: 'text', text: 'between' }, helper('h1', 'Review')] })} />);
+      expect(screen.queryByTestId('activity-fold')).not.toBeInTheDocument();
+      expect(screen.getByText('Used 1 tool: Bash')).toBeInTheDocument();
+      expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    });
+
+    it('says in its summary when a helper is working, waits on approval, or failed', () => {
+      const request: ApprovalRequest = { id: 'r1', chatId: 'c1', messageId: 'm1', toolName: 'read_file', risk: 'read', source: 'fs', args: { path: 'a' }, summary: 'read_file(a)', subagent: { callId: 'h1', label: 'A', parentProfileId: 'p' } };
+      const { rerender } = render(
+        <Message
+          message={base({ status: 'streaming', parts: [helper('h1', 'A', { status: 'running', usage: undefined }), helper('h2', 'B', { status: 'running', usage: undefined })] })}
+          pendingApprovals={[request]}
+          onResolveApproval={vi.fn()}
+        />
+      );
+      expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent('Used 2 helpers: A, B · 1 needs your approval · 1 working');
+      rerender(<Message message={base({ parts: [helper('h1', 'A', { status: 'error' }), helper('h2', 'B')] })} />);
+      expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent(/^⚠ Used 2 helpers: A, B$/);
+    });
+
+    it('stays open while another block streams into it', async () => {
+      const first: Part[] = [...bash('b1'), helper('h1', 'A')];
+      const { rerender } = render(<Message message={base({ status: 'streaming', parts: first })} />);
+      await userEvent.setup().click(screen.getByTestId('activity-fold').querySelector('summary')!);
+      rerender(<Message message={base({ status: 'streaming', parts: [...first, ...bash('b2')] })} />);
+      expect(screen.getByTestId('activity-fold')).toHaveAttribute('open');
+      expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent('Used 2 tools (Bash ×2) and 1 helper: A');
+    });
+  });
 });

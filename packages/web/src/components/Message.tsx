@@ -1,7 +1,7 @@
-import { useState, type JSX } from 'react';
+import { useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
-import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
@@ -14,7 +14,7 @@ import { AuthedImage } from './AuthedImage.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
-import { SubagentCard } from './SubagentCard.js';
+import { SubagentCard, subagentDisplayStatus } from './SubagentCard.js';
 import { TodoChecklist } from './TodoChecklist.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { browserCallLabel, browserPageOf, displayLines, oneLine } from '../viewer/browser.js';
@@ -380,6 +380,48 @@ function ToolGroup({ run, scope }: { run: ToolPart[]; scope: ToolImageScope }): 
   );
 }
 
+type SubagentPart = Extract<Part, { type: 'subagent' }>;
+
+/** A tool group or a sub-agent card, as `renderParts` lays them out: what an activity fold sums up. */
+type Activity = { kind: 'tools'; run: ToolPart[] } | { kind: 'subagent'; part: SubagentPart; status: SubagentStatus; waiting: boolean };
+
+/**
+ * "Used 3 tools (Bash ×3) and 2 helpers: Review Task 1, Implement Task 2 · 1 working" -- the tools
+ * of every group in the fold counted together, then the helpers by label in order.
+ */
+function activitySummary(items: Activity[]): string {
+  const run = items.flatMap((a) => (a.kind === 'tools' ? a.run : []));
+  const helpers = items.flatMap((a) => (a.kind === 'subagent' ? [a] : []));
+  const bits: string[] = [];
+  if (run.length > 0) {
+    const calls = run.filter((p) => p.type === 'tool-call');
+    const counted = calls.length > 0 ? calls : run;
+    const counts = new Map<string, number>();
+    for (const p of counted) counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
+    const breakdown = [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ');
+    bits.push(`${counted.length} ${counted.length === 1 ? 'tool' : 'tools'} (${breakdown})`);
+  }
+  if (helpers.length > 0) bits.push(`${helpers.length} ${helpers.length === 1 ? 'helper' : 'helpers'}: ${helpers.map((h) => h.part.label).join(', ')}`);
+  const failed = run.some((p) => p.type === 'tool-result' && p.isError) || helpers.some((h) => h.status === 'error');
+  const waiting = helpers.filter((h) => h.waiting).length;
+  const working = helpers.filter((h) => !h.waiting && (h.status === 'running' || h.status === 'queued' || h.status === 'background')).length;
+  const state = [waiting > 0 ? `${waiting} needs your approval` : '', working > 0 ? `${working} working` : ''].filter(Boolean);
+  return `${failed ? '⚠ ' : ''}Used ${bits.join(' and ')}${state.length > 0 ? ` · ${state.join(' · ')}` : ''}`;
+}
+
+/** Two or more tool groups and sub-agent cards in a row, folded into one closed block so they don't space the reply out. */
+function ActivityFold({ items, children }: { items: Activity[]; children: ReactNode }): JSX.Element {
+  const summary = activitySummary(items);
+  return (
+    <details data-testid="activity-fold" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+      <summary title={summary} className="cursor-pointer font-medium text-[var(--text-muted)] select-none">
+        <span className="inline-block max-w-[calc(100%-1.5rem)] truncate align-bottom">{summary}</span>
+      </summary>
+      <div className="mt-1">{children}</div>
+    </details>
+  );
+}
+
 type ToolCallPart = Extract<Part, { type: 'tool-call' }>;
 type ToolResultPart = Extract<Part, { type: 'tool-result' }>;
 
@@ -428,10 +470,11 @@ interface RenderContext {
  * An artifact call that made a version (Deck #896) is a card instead, outside the fold; one still running,
  * failed or only viewing folds with the rest, so its error stays visible.
  * A sub-agent is a card where its part sits, with its own parts rendered inside.
+ * Two or more tool groups and sub-agent cards in a row fold together into one `ActivityFold`.
  */
 function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   const { scope } = ctx;
-  const out: JSX.Element[] = [];
+  const out: { el: JSX.Element; activity?: Activity }[] = [];
   let run: ToolPart[] = [];
   let runStart = 0;
   // Keyed by the run's FIRST part so the key (and the user's open/closed
@@ -439,10 +482,14 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   // Cards made while a run of tools is open wait for it, so parallel calls stay in one group.
   let cards: JSX.Element[] = [];
   const flush = (): void => {
-    if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} scope={scope} />);
+    if (run.length > 0) out.push({ el: <ToolGroup key={`tools-${runStart}`} run={run} scope={scope} />, activity: { kind: 'tools', run } });
     run = [];
-    out.push(...cards);
+    out.push(...cards.map((el) => ({ el })));
     cards = [];
+  };
+  const addCard = (el: JSX.Element): void => {
+    if (run.length > 0) cards.push(el);
+    else out.push({ el });
   };
   const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
   // Todo calls are shown as the checklist, never as tools. Question and plan
@@ -458,28 +505,28 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
     if ((p.type === 'tool-call' || p.type === 'tool-result') && subagentCards.has(p.id)) return;
     if (p.type === 'subagent') {
       flush();
-      out.push(
-        <SubagentCard
-          key={`subagent-${p.callId}`}
-          part={p}
-          replyStreaming={ctx.replyStreaming}
-          awaitingApproval={ctx.pendingApprovals.some((r) => r.subagent?.callId === p.callId)}
-        >
-          {renderParts(p.parts ?? [], ctx)}
-        </SubagentCard>
-      );
+      const status = subagentDisplayStatus(p.status, ctx.replyStreaming);
+      const awaitingApproval = ctx.pendingApprovals.some((r) => r.subagent?.callId === p.callId);
+      out.push({
+        el: (
+          <SubagentCard key={`subagent-${p.callId}`} part={p} replyStreaming={ctx.replyStreaming} awaitingApproval={awaitingApproval}>
+            {renderParts(p.parts ?? [], ctx)}
+          </SubagentCard>
+        ),
+        activity: { kind: 'subagent', part: p, status, waiting: awaitingApproval && status === 'running' },
+      });
       return;
     }
     if (p.type === 'tool-call' || p.type === 'tool-result') {
       if (isTodoTool(p.name)) return;
       if (recorded.has(p.id)) {
         const result = p.type === 'tool-call' ? results.get(p.id) : undefined;
-        if (p.type === 'tool-call' && result) (run.length > 0 ? cards : out).push(<ThreadRecord key={i} call={p} result={result} />);
+        if (p.type === 'tool-call' && result) addCard(<ThreadRecord key={i} call={p} result={result} />);
         return;
       }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
-        if (p.type === 'tool-result') (run.length > 0 ? cards : out).push(<ArtifactCard key={i} result={p.result} />);
+        if (p.type === 'tool-result') addCard(<ArtifactCard key={i} result={p.result} />);
         return;
       }
       if (run.length === 0) runStart = i;
@@ -488,10 +535,28 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
     }
     flush();
     const el = renderPart(p, i, scope);
-    if (el) out.push(el);
+    if (el) out.push({ el });
   });
   flush();
-  return out;
+  // Keyed by the fold's first block, so it stays open while more blocks stream into it.
+  const folded: JSX.Element[] = [];
+  for (let i = 0; i < out.length; ) {
+    let j = i;
+    while (j < out.length && out[j]!.activity) j++;
+    if (j - i >= 2) {
+      const blocks = out.slice(i, j);
+      folded.push(
+        <ActivityFold key={`activity-${String(blocks[0]!.el.key)}`} items={blocks.map((b) => b.activity!)}>
+          {blocks.map((b) => b.el)}
+        </ActivityFold>
+      );
+      i = j;
+    } else {
+      folded.push(out[i]!.el);
+      i++;
+    }
+  }
+  return folded;
 }
 
 /** Position within a set of sibling messages that aren't a compare turn: regenerated replies or edited prompts. */

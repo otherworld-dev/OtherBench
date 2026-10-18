@@ -83,6 +83,10 @@ test('two sub-agents run at once, one waits on its own card, and their cards sur
   await expect(answer).toContainText('THE TREASURE IS BURIED UNDER THE OAK TREE');
   await expect(answer).toContainText('Here is a mock reply from OtherBench');
 
+  // The two helper cards sit side by side, so they share one closed fold.
+  const fold = page.getByTestId('activity-fold');
+  await expect(fold.locator('summary').first()).toContainText('2 helpers');
+  await fold.locator('summary').first().click();
   await first.locator('summary').first().click();
   await expect(first.getByText(/Used 1 tool: read_file/)).toBeVisible();
 
