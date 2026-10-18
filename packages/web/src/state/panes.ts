@@ -159,10 +159,11 @@ export function openTab(state: PaneState, chatId: string): PaneState {
 }
 
 /**
- * Removes the tab. Any pane showing a chat keeps showing it. A viewer tab
- * (Deck #826) has nowhere else to live, so its pane goes back to the file's
- * chat, or empty when another pane already shows that chat. A project page
- * goes with its tab: its pane is emptied.
+ * Removes the tab and takes it out of any pane showing it, so the pane
+ * doesn't sit on a chat with no tab left to close it by. A viewer tab (Deck
+ * #826) hands its pane back to the file's chat when no other pane shows that
+ * chat. Otherwise the pane takes the next tab not already showing, or empties.
+ * A project page goes with its tab: its pane is emptied.
  */
 export function closeTab(state: PaneState, chatId: string): PaneState {
   // A project page goes even without a tab (an old saved layout), or its pane would be stuck on it.
@@ -171,9 +172,9 @@ export function closeTab(state: PaneState, chatId: string): PaneState {
   const tabs = state.tabs.filter((id) => id !== chatId);
   if (!state.panes.includes(chatId)) return { ...state, tabs };
   const view = parseViewTab(chatId);
-  if (!view) return { ...state, tabs };
-  const instead = state.panes.includes(view.chatId) ? null : view.chatId;
-  return { ...state, tabs, panes: state.panes.map((id) => (id === chatId ? instead : id)) };
+  const panes = state.panes.map((id) => (id === chatId ? null : id));
+  const waiting = view && !panes.includes(view.chatId) ? [view.chatId] : tabs.filter((id) => !panes.includes(id));
+  return { ...state, tabs, panes: panes.map((id, i) => (state.panes[i] === chatId ? (waiting.shift() ?? null) : id)) };
 }
 
 /** A deleted chat leaves the tabs and every pane, with its viewer tabs. */
