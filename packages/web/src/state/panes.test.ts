@@ -29,11 +29,20 @@ describe('pane state (#824)', () => {
     expect(showChat(two, null)).toMatchObject({ panes: [null, 'b'] });
   });
 
-  it('opening a tab adds it once and shows it; closing a tab leaves the panes alone', () => {
+  it('opening a tab adds it once and shows it; closing it takes it out of its pane too', () => {
     const opened = openTab(openTab(state(), 'a'), 'a');
     expect(opened).toMatchObject({ tabs: ['a'], panes: ['a'] });
-    expect(closeTab(opened, 'a')).toMatchObject({ tabs: [], panes: ['a'] });
+    expect(closeTab(opened, 'a')).toMatchObject({ tabs: [], panes: [null] });
     expect(closeTab(opened, 'zzz')).toBe(opened);
+  });
+
+  it('a closed tab hands its pane to the next tab not already showing, or leaves it empty', () => {
+    const grid = state({ layout: 'grid-4', tabs: ['a', 'b', 'c', 'd'], panes: ['c', 'b', 'a', 'd'], focusedPane: 0 });
+    expect(closeTab(grid, 'b')).toMatchObject({ tabs: ['a', 'c', 'd'], panes: ['c', null, 'a', 'd'] });
+    const waiting = state({ layout: 'columns-2', tabs: ['a', 'b', 'c'], panes: ['a', 'b'], focusedPane: 1 });
+    expect(closeTab(waiting, 'b')).toMatchObject({ tabs: ['a', 'c'], panes: ['a', 'c'], focusedPane: 1 });
+    // A tab that isn't showing anywhere just leaves the tab strip.
+    expect(closeTab(waiting, 'c')).toMatchObject({ tabs: ['a', 'b'], panes: ['a', 'b'] });
   });
 
   it('opening a tab keeps the chat the focused pane was showing as a tab too, so it is not replaced and lost', () => {

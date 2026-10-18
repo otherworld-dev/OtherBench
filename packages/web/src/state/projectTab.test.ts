@@ -31,11 +31,11 @@ describe('project tab ids', () => {
 });
 
 describe('project tabs in the pane state', () => {
-  it('closing a project tab empties the pane showing it, unlike a chat tab', () => {
+  it('closing a project tab empties the pane showing it, like a chat tab', () => {
     const tab = projectTabId('p1');
     const state = { ...DEFAULT_PANE_STATE, layout: 'columns-2' as const, tabs: ['c1', tab], panes: ['c1', tab], focusedPane: 1 };
     expect(closeTab(state, tab)).toMatchObject({ tabs: ['c1'], panes: ['c1', null] });
-    expect(closeTab(state, 'c1')).toMatchObject({ tabs: [tab], panes: ['c1', tab] });
+    expect(closeTab(state, 'c1')).toMatchObject({ tabs: [tab], panes: [null, tab] });
   });
 
   it('closing a project page that has no tab still empties its pane', () => {

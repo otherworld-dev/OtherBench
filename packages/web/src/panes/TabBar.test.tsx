@@ -53,13 +53,17 @@ describe('TabBar (#824)', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe('a');
   });
 
-  it('closing a tab leaves the chat where it is showing', async () => {
+  it('closing a tab takes its chat out of the pane, showing the next tab instead', async () => {
     useOtherBenchStore.getState().openTab('a');
+    useOtherBenchStore.getState().openTab('b');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);
+    await user.click(screen.getByRole('button', { name: 'Close tab Chat b' }));
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['a']);
+    expect(useOtherBenchStore.getState().activeChatId).toBe('a');
     await user.click(screen.getByRole('button', { name: 'Close tab Chat a' }));
     expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
-    expect(useOtherBenchStore.getState().activeChatId).toBe('a');
+    expect(useOtherBenchStore.getState().activeChatId).toBeNull();
   });
 
   it('switching layout keeps the tab bar, numbers tabs by pane, and fills new panes with tabs', async () => {
