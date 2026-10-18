@@ -456,6 +456,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     toolProvider,
     // A note the user sent mid-reply that Claude just read is folded into the reply.
     takeNote: (messageId, noteId) => notes?.take(messageId, noteId) ?? null,
+    // Its images are unsent until it's delivered, but the reply it goes into loads them.
+    heldAttachment: (attachmentId, chatId) => notes?.heldAttachmentIds(chatId).includes(attachmentId) ?? false,
     // The sandbox mounts a folder at its real path (on-disk case), so the prompt names that one.
     canonicalPath: realFolderPath,
     // A sub-agent can run as another profile (spec 2026-10-12-api-subagents-design).

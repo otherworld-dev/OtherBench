@@ -954,6 +954,31 @@ describe('TurnRunner capability fallback for image attachments', () => {
     expect(loadAttachment).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a reply load a waiting note's unsent attachment of its own chat, and nothing held for another chat or over the cap", async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const held = new Set(['att-held', 'att-held-elsewhere', 'att-held-huge']);
+    const heldAttachment = vi.fn((id: string) => held.has(id));
+    const runner = new TurnRunner(store, engine, { loadAttachment, heldAttachment });
+    store.attachments.create(makeAttachment({ id: 'att-held', chatId: 'chat-1', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-held-elsewhere', chatId: 'chat-2', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-held-huge', chatId: 'chat-1', messageId: null, size: 26 * 1024 * 1024 }));
+    store.attachments.create(makeAttachment({ id: 'att-unsent', chatId: 'chat-1', messageId: null }));
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const request = engine.requests[0]!;
+    expect((await request.loadAttachment!('att-held')).toString()).toBe('bytes');
+    expect(request.attachmentSize!('att-held')).toBe(1234);
+    expect(heldAttachment).toHaveBeenCalledWith('att-held', 'chat-1');
+    await expect(request.loadAttachment!('att-held-elsewhere')).rejects.toThrow('not available in this chat');
+    await expect(request.loadAttachment!('att-held-huge')).rejects.toThrow('not available in this chat');
+    await expect(request.loadAttachment!('att-unsent')).rejects.toThrow('not available in this chat');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+  });
+
   it('turns an image or file part naming another chat\'s attachment (a synced message) into a note, and the turn still runs', async () => {
     const store = new InMemoryStore();
     store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: 'theirs-msg' }));

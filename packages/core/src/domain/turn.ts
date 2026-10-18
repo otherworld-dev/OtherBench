@@ -147,6 +147,13 @@ export interface TurnResult {
 export interface TurnRunnerOptions {
   /** Hands over the note Claude just picked up in reply `messageId` as a part, or null when nobody holds it (then it is ignored). */
   takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
+  /**
+   * Whether attachment `attachmentId` is on a note waiting in chat `chatId`.
+   * Such an attachment is unsent (it is bound only once the note is
+   * delivered), yet the reply the note goes into must load its images: a
+   * reply's loader accepts it too, still only from that chat and within the cap.
+   */
+  heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** Overridable clock, so the 500ms checkpoint throttle is testable without real delays. */
   now?: () => number;
   /** Overridable id generator; defaults to `randomUUID`. */
@@ -305,6 +312,7 @@ export class TurnRunner {
   /** Running variants' chat and unattended flag, kept and cleared with `controllers`. */
   private readonly running = new Map<string, { chatId: string; unattended: boolean }>();
   private readonly takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
+  private readonly heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
   private readonly globalBlocks = new Map<string, { block: string | null; at: number; userStamp: string }>();
 
@@ -318,6 +326,7 @@ export class TurnRunner {
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
     this.takeNote = options.takeNote;
+    this.heldAttachment = options.heldAttachment;
     this.resolveProfile = options.resolveProfile;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
@@ -795,7 +804,7 @@ export class TurnRunner {
           }
         : undefined;
       const toolImageSize: ToolImageSizer | undefined = loadStored ? (ref) => toolImageRow(ref)?.size ?? null : undefined;
-      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentInChat(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
+      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentLoadable(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -1083,10 +1092,18 @@ export class TurnRunner {
     return attachmentBound(row, row.messageId === null ? null : (this.store.messages.get(row.messageId)?.chatId ?? null));
   }
 
-  /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */
+  /** Whether a reply in chat `chatId` may load attachment `id`: one it may replay, or one on a note waiting in that chat (in the chat, within the cap). */
+  private attachmentLoadable(id: string, chatId: string): boolean {
+    if (this.attachmentInChat(id, chatId)) return true;
+    if (!this.heldAttachment?.(id, chatId)) return false;
+    const row = this.store.attachments.get(id);
+    return row !== null && row.chatId === chatId && row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES;
+  }
+
+  /** `load` for one chat: it refuses an attachment `attachmentLoadable` would not let through, and bytes over the cap, so no engine can read across chats by id. */
   private chatScopedLoader(load: (id: string) => Promise<Buffer>, chatId: string): (id: string) => Promise<Buffer> {
     return async (id) => {
-      if (!this.attachmentInChat(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
+      if (!this.attachmentLoadable(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
       const bytes = await load(id);
       if (bytes.length > MAX_HISTORY_ATTACHMENT_BYTES) throw new Error(`Attachment "${id}" is over the size limit.`);
       return bytes;

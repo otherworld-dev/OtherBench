@@ -54,7 +54,8 @@ interface Held {
  * by the user. Every change goes to the chat's stream subscribers.
  *
  * A note's attachments stay unsent (unbound) until it is delivered, since a
- * binding is set once: while it waits they are held (`heldAttachmentIds`), and
+ * binding is set once: while it waits they are held (`heldAttachmentIds`; the
+ * reply it goes into may load them through TurnRunner's `heldAttachment`), and
  * the message that delivers it binds them.
  */
 export class NotesService {
@@ -264,8 +265,6 @@ export class NotesService {
     if (asked && contextLineOf(asked) !== null) return null;
     // A note never overtakes one already waiting for the reply to end.
     if (this.waitingIn(input.chatId).some((h) => h.note.path === 'wait')) return null;
-    // A held image is unbound, and a reply only loads bound ones: it goes with the next turn instead.
-    if (input.attachments.some((a) => a.mime.startsWith('image/'))) return null;
     return reply;
   }
 

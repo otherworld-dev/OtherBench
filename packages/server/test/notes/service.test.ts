@@ -90,7 +90,12 @@ function setup() {
   engine.sendToReply = sendToReply;
   engine.withdrawNote = withdrawNote;
   let service: NotesService | null = null;
-  const turnRunner = new TurnRunner(store, engine, { takeNote: (messageId, noteId) => service?.take(messageId, noteId) ?? null });
+  // As the container wires it: notes are folded by the service, and a reply may load a waiting note's attachments.
+  const turnRunner = new TurnRunner(store, engine, {
+    takeNote: (messageId, noteId) => service?.take(messageId, noteId) ?? null,
+    heldAttachment: (attachmentId, chatId) => service?.heldAttachmentIds(chatId).includes(attachmentId) ?? false,
+    loadAttachment: async (id) => Buffer.from(`bytes of ${id}`),
+  });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   const events = new AppEventBus();
   const appEvents: AppEvent[] = [];
@@ -156,6 +161,23 @@ describe('NotesService', () => {
     expect(ctx.notes.isBusy('chat-1')).toBe(true);
   });
 
+  it('an image note goes into the running reply, which can load the image while the note waits', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+
+    const note = (await ctx.notes.send(input({ parentId: r!, attachments: [IMAGE] })))!;
+
+    expect(note.path).toBe('live');
+    expect(ctx.sendToReply).toHaveBeenCalledWith(r, { id: note.id, text: 'also check the footer', attachments: [IMAGE] });
+    const request = ctx.engine.requests.find((q) => q.messageId === r)!;
+    expect((await request.loadAttachment!('att-1')).toString()).toBe('bytes of att-1');
+    expect(ctx.store.attachments.get('att-1')!.messageId).toBeNull();
+    // Once it comes back, the reply can't read it any more.
+    ctx.turnRunner.cancel(r!);
+    await ctx.ended(r!);
+    await expect(request.loadAttachment!('att-1')).rejects.toThrow('not available in this chat');
+  });
+
   const waitCases: [string, (ctx: Ctx) => Promise<{ send: Parameters<NotesService['send']>[0]; replyIds: string[] }>][] = [
     ['the composer is on another message', async (ctx) => {
       const { userMessageId, assistantMessageIds } = await ctx.running();
@@ -172,10 +194,6 @@ describe('NotesService', () => {
     ['the reply is a scheduled run', async (ctx) => {
       const { assistantMessageIds } = await ctx.running(['p1'], { unattended: true });
       return { send: input({ parentId: assistantMessageIds[0]! }), replyIds: assistantMessageIds };
-    }],
-    ['the note carries an image (a held image is unbound, and a reply only loads bound ones)', async (ctx) => {
-      const { assistantMessageIds } = await ctx.running();
-      return { send: input({ parentId: assistantMessageIds[0]!, attachments: [IMAGE] }), replyIds: assistantMessageIds };
     }],
     ['the reply is a /compact', async (ctx) => {
       const { assistantMessageIds } = await ctx.running(['p1'], { userParts: [{ type: 'context', kind: 'compact' }] });
