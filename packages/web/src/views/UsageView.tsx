@@ -239,10 +239,20 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
                           <td className="py-1.5">
                             <div className="font-medium">{p.profileName}</div>
                             <div className="text-xs text-[var(--text-muted)]">{p.modelId}</div>
+                            {p.backgroundCount > 0 && (
+                              <div className="text-xs text-[var(--text-faint)]">
+                                {p.backgroundCount} title or memory {p.backgroundCount === 1 ? 'call' : 'calls'}
+                              </div>
+                            )}
                           </td>
                           <td className="py-1.5 text-right">{formatCost(p.measuredCost)}</td>
                           <td className="py-1.5 pl-3 text-right text-xs text-[var(--text-muted)]">
-                            {(p.tokensIn + p.tokensOut + p.tokensReasoning).toLocaleString()} tok
+                            <div>{(p.tokensIn + p.tokensOut + p.tokensReasoning).toLocaleString()} tok</div>
+                            {(p.tokensCached > 0 || p.tokensCacheWrite > 0) && (
+                              <div className="text-[var(--text-faint)]">
+                                {p.tokensCached.toLocaleString()} read from cache, {p.tokensCacheWrite.toLocaleString()} written
+                              </div>
+                            )}
                           </td>
                           {(p.cancelledCount > 0 || p.unmeasuredErrorCount > 0) && (
                             <td className="py-1.5 pl-3 text-right text-xs text-[var(--text-faint)]">

@@ -10,6 +10,8 @@ export interface ProfileRollup {
   tokensIn: number;
   tokensOut: number;
   tokensCached: number;
+  /** Input tokens written to the provider's prompt cache (part of tokensIn, like tokensCached). */
+  tokensCacheWrite: number;
   tokensReasoning: number;
   /** Usage rows tied to a 'complete' message (or an 'error' message that still raced a `finish` event -- see this module's doc). */
   completeCount: number;
@@ -105,7 +107,7 @@ export function buildUsageRollup(
   function profileRollup(id: string, name: string, modelId: string, currency: string): ProfileRollup {
     let entry = profiles.get(id);
     if (!entry) {
-      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 };
+      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensCacheWrite: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 };
       profiles.set(id, entry);
     }
     return entry;
@@ -127,6 +129,7 @@ export function buildUsageRollup(
     pr.tokensIn += row.tokensIn;
     pr.tokensOut += row.tokensOut;
     pr.tokensCached += row.tokensCached;
+    pr.tokensCacheWrite += row.tokensCacheWrite ?? 0;
     pr.tokensReasoning += row.tokensReasoning;
     cr.measuredCost += cost;
     totalMeasuredCost += cost;
