@@ -387,6 +387,13 @@ function fallbackTitle(userText: string): string {
   return truncated.length > 0 ? truncated : DEFAULT_TITLE;
 }
 
+/** How much of each side of the first exchange the title call reads: the start says what a chat is about, and the rest would only be paid for. */
+const TITLE_INPUT_MAX_CHARS = 2_000;
+
+function titleInput(text: string): string {
+  return text.length > TITLE_INPUT_MAX_CHARS ? `${text.slice(0, TITLE_INPUT_MAX_CHARS)}...` : text;
+}
+
 function buildTitlePrompt(userText: string, assistantText: string): CanonMessage {
   return {
     id: `title-prompt:${randomUUID()}`,
@@ -398,7 +405,7 @@ function buildTitlePrompt(userText: string, assistantText: string): CanonMessage
         type: 'text',
         text:
           `Reply with ONLY a short title (at most ${TITLE_MAX_LENGTH} characters, no quotes, no trailing ` +
-          `punctuation) summarizing this exchange:\n\nUser: ${userText}\nAssistant: ${assistantText}`,
+          `punctuation) summarizing this exchange:\n\nUser: ${titleInput(userText)}\nAssistant: ${titleInput(assistantText)}`,
       },
     ],
     status: 'complete',
