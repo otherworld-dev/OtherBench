@@ -108,6 +108,34 @@ describe('read_file', () => {
     expect(typeof result.note).toBe('string');
   });
 
+  it('returns at most 2,000 lines when no end line is asked for, and says where to read on', async () => {
+    writeFileSync(join(ws, 'long.txt'), Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join('\n'));
+    const result = (await readFileTool.execute({ path: 'long.txt' }, ctx())) as Record<string, unknown>;
+    expect((result.content as string).split('\n')).toHaveLength(2000);
+    expect(result).toMatchObject({ startLine: 1, endLine: 2000, linesInSample: 5000, truncated: true });
+    expect(result.note).toContain('startLine 2001');
+  });
+
+  it('reads a later range of a long file whole', async () => {
+    writeFileSync(join(ws, 'long.txt'), Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join('\n'));
+    const result = (await readFileTool.execute({ path: 'long.txt', startLine: 2001, endLine: 2100 }, ctx())) as Record<string, unknown>;
+    expect((result.content as string).split('\n')).toHaveLength(100);
+    expect(result).toMatchObject({ startLine: 2001, endLine: 2100, truncated: false });
+  });
+
+  it('cuts what it returns at 100,000 characters, at a line end where it can', async () => {
+    writeFileSync(join(ws, 'wide.txt'), Array.from({ length: 1500 }, () => 'x'.repeat(99)).join('\n'));
+    const result = (await readFileTool.execute({ path: 'wide.txt', startLine: 1, endLine: 1500 }, ctx())) as Record<string, unknown>;
+    expect((result.content as string).length).toBeLessThanOrEqual(100_000);
+    expect(result).toMatchObject({ endLine: 1000, truncated: true });
+    expect(result.note).toContain('startLine 1001');
+
+    writeFileSync(join(ws, 'one-line.min.js'), 'y'.repeat(150_000));
+    const minified = (await readFileTool.execute({ path: 'one-line.min.js' }, ctx())) as Record<string, unknown>;
+    expect((minified.content as string).length).toBe(100_000);
+    expect(minified).toMatchObject({ endLine: 1, truncated: true });
+  });
+
   it('returns a not_found tool error for a missing file rather than throwing', async () => {
     const result = (await readFileTool.execute({ path: 'nope.txt' }, ctx())) as Record<string, unknown>;
     expect(result.error).toBe(true);
@@ -128,6 +156,14 @@ describe('read_file', () => {
 });
 
 describe('list_dir', () => {
+  it('lists at most 1,000 entries and says how many there are', async () => {
+    for (let i = 0; i < 1200; i++) writeFileSync(join(ws, `f${String(i).padStart(4, '0')}.txt`), '');
+    const result = (await listDirTool.execute({}, ctx())) as { entries: unknown[]; truncated?: boolean; total?: number; note?: string };
+    expect(result.entries).toHaveLength(1000);
+    expect(result).toMatchObject({ truncated: true, total: 1200 });
+    expect(result.note).toContain('search_files');
+  });
+
   it('lists immediate entries sorted by name, with type', async () => {
     mkdirSync(join(ws, 'sub'));
     writeFileSync(join(ws, 'b.txt'), 'x');
@@ -147,6 +183,13 @@ describe('list_dir', () => {
 });
 
 describe('search_files', () => {
+  it('returns at most 1,000 matches whatever maxResults asks for', async () => {
+    for (let i = 0; i < 1200; i++) writeFileSync(join(ws, `f${i}.txt`), '');
+    const result = (await searchFilesTool.execute({ glob: '*.txt', maxResults: 5000 }, ctx())) as { matches: unknown[]; truncated: boolean };
+    expect(result.matches).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+  });
+
   it('matches filenames by glob', async () => {
     mkdirSync(join(ws, 'src'));
     writeFileSync(join(ws, 'src', 'a.ts'), 'export const a = 1;');
