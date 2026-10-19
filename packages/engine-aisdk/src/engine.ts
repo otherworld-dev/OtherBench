@@ -218,10 +218,16 @@ export class AiSdkChatEngine implements ChatEngine {
       // which hold the calls this reply itself made (computer-toolset.ts).
       const toolsetOn = toolset !== null && req.tools.some(isComputerSpec);
       const safe = (list: ModelMessage[]): ModelMessage[] => (toolsetOn ? toolsetSafeMessages(list, COMPUTER_TOOL) : list);
+      const caching = req.profile.connection.kind === 'anthropic';
 
       const result = streamText({
         model,
-        messages: safe(messages),
+        messages: safe(caching ? withCachedSystem(messages) : messages),
+        // Anthropic caches nothing unless asked. Top-level caching puts the
+        // breakpoint on the newest block of every request, so each tool step
+        // reads what the step before it wrote, and the next turn reads this
+        // turn's (prompt-caching guide: automatic caching for the growing tail).
+        ...(caching ? { providerOptions: { anthropic: { cacheControl: CACHE_CONTROL } } } : {}),
         ...(toolsetOn ? { prepareStep: ({ messages: stepMessages }: { messages: ModelMessage[] }) => ({ messages: safe(stepMessages) }) } : {}),
         tools: Object.keys(tools).length > 0 ? tools : undefined,
         stopWhen: stepCountIs(MAX_TOOL_STEPS),
@@ -504,6 +510,21 @@ async function loadAttachmentUnavailable(id: string): Promise<Buffer> {
   );
 }
 
+/** Anthropic's 5-minute prompt cache, the price `estimateCost` charges for its writes (CACHE_WRITE_PRICE_FACTOR). */
+const CACHE_CONTROL = Object.freeze({ type: 'ephemeral' as const });
+
+/**
+ * The history with a cache breakpoint on its last system message. The tools
+ * and the system prompt come first in an Anthropic request and are the same
+ * for every turn of a chat, so they get a read point of their own that holds
+ * whatever happens further down the conversation.
+ */
+function withCachedSystem(messages: ModelMessage[]): ModelMessage[] {
+  const last = messages.findLastIndex((m) => m.role === 'system');
+  if (last < 0) return messages;
+  return messages.map((m, i) => (i === last ? { ...m, providerOptions: { ...m.providerOptions, anthropic: { ...m.providerOptions?.['anthropic'], cacheControl: CACHE_CONTROL } } } : m));
+}
+
 function resolveLanguageModel(handle: Extract<ProviderHandle, { kind: 'aisdk' }>, modelId: string): LanguageModel {
   // `AiSdkProvider` (registry.ts) is a union of the four real provider
   // factories, each typed to accept only ITS OWN model-id string-literal
@@ -678,6 +699,7 @@ function mapUsage(usage: LanguageModelUsage): Usage {
     tokensIn: usage.inputTokens ?? 0,
     tokensOut: usage.outputTokens ?? 0,
     tokensCached: usage.inputTokenDetails.cacheReadTokens ?? 0,
+    tokensCacheWrite: usage.inputTokenDetails.cacheWriteTokens ?? 0,
     tokensReasoning: usage.outputTokenDetails.reasoningTokens ?? 0,
   };
 }

@@ -89,7 +89,7 @@ describe('SdkEventMapper on synthetic messages', () => {
   it('maps success usage, counting cache reads and writes as input', () => {
     const m = new SdkEventMapper();
     const out = m.map({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: 'ok', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } } as unknown as SDKMessage);
-    expect(out).toEqual([{ type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 130, tokensOut: 5, tokensCached: 100, tokensReasoning: 0 } }]);
+    expect(out).toEqual([{ type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 130, tokensOut: 5, tokensCached: 100, tokensCacheWrite: 20, tokensReasoning: 0 } }]);
   });
 });
 

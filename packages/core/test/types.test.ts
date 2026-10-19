@@ -21,6 +21,15 @@ describe('estimateCost', () => {
     expect(cost).toBeCloseTo(1.9, 6);
   });
 
+  it('bills cache writes at 1.25x the input rate, out of the input tokens', () => {
+    const cost = estimateCost(
+      { tokensIn: 1_000_000, tokensOut: 0, tokensCached: 500_000, tokensCacheWrite: 400_000, tokensReasoning: 0 },
+      { priceInPer1m: 10, priceOutPer1m: 30, priceCachedPer1m: 1, currency: 'USD' }
+    );
+    // 100k uncached @ $10/M = $1.00, 500k read @ $1/M = $0.50, 400k written @ $12.50/M = $5.00
+    expect(cost).toBeCloseTo(6.5, 6);
+  });
+
   it('bills reasoning tokens at the output rate', () => {
     const cost = estimateCost(
       { tokensIn: 0, tokensOut: 1_000_000, tokensCached: 0, tokensReasoning: 1_000_000 },
