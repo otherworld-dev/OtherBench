@@ -254,6 +254,7 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   // Claude Code's own tools: a sub-agent never runs as Claude Code, so it has none to allow.
   agentWeb: () => false,
   agentMcp: () => false,
+  agentUserSettings: () => false,
   // Never, whatever either profile has: a sub-agent makes no artifacts (so no live pages) and starts no sub-agents.
   artifacts: () => false,
   subagents: () => false,

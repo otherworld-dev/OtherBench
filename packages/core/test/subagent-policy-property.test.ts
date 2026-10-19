@@ -60,6 +60,7 @@ function randomPolicy(next: () => number): ToolPolicy {
     approvalMode: next() < 0.7 ? 'ask_on_mutate' : 'always_ask',
     ...optional('agentWeb'),
     ...optional('agentMcp'),
+    ...optional('agentUserSettings'),
     ...optional('artifacts'),
     ...optional('recall'),
     ...optional('subagents'),
@@ -199,6 +200,8 @@ const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: Required<ToolPoli
   approvalMode: (sub, other) => sub.approvalMode === 'always_ask' || other.approvalMode === 'ask_on_mutate',
   agentWeb: (sub, other) => !sub.agentWeb || other.agentWeb !== false,
   agentMcp: (sub, other) => !sub.agentMcp || other.agentMcp !== false,
+  // Never: a sub-agent doesn't run as Claude Code.
+  agentUserSettings: (sub) => sub.agentUserSettings === false,
   artifacts: (sub) => sub.artifacts === false,
   recall: (sub, other) => !sub.recall || other.recall !== false,
   subagents: (sub) => sub.subagents === false,

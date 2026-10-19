@@ -138,7 +138,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
       { type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensCacheWrite: 0, tokensReasoning: 0 } },
     ]);
     const o = calls[0]!.options;
-    expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
+    expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
     expect(o.disallowedTools).toEqual(expect.arrayContaining(['EnterPlanMode', 'ExitPlanMode']));
     expect(o.disallowedTools).not.toContain('AskUserQuestion');
     expect(o.settings).toEqual({ disableSkillShellExecution: true, permissions: { deny: [...SECRET_DENY_RULES] } });
@@ -374,14 +374,21 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
     expect(calls[0]!.options.systemPrompt).toBeUndefined();
   });
 
-  it('keeps the full Claude Code setup for a chat with a folder', async () => {
+  it("keeps the folder's Claude Code setup for a chat with a folder, without the user's own", async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     await collect(clean(query).stream(req({ profile: profile({ systemPrompt: 'Be brief.' }) })));
     const o = calls[0]!.options;
     expect(o.cwd).toBe(ws);
-    expect(o.settingSources).toEqual(['user', 'project', 'local']);
+    expect(o.settingSources).toEqual(['project', 'local']);
     expect(o.tools).toBeUndefined();
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: 'Be brief.' });
+  });
+
+  it("loads the user's own Claude Code settings too when the profile turns them on", async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const on = profile({ toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', agentUserSettings: true } });
+    await collect(clean(query).stream(req({ profile: on })));
+    expect(calls[0]!.options.settingSources).toEqual(['user', 'project', 'local']);
   });
 
   it('continues the clean session on the next message, and starts afresh in the folder once the chat has one', async () => {

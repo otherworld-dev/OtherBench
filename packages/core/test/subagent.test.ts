@@ -176,7 +176,7 @@ describe('subagentPolicy and the sandbox', () => {
   });
 
   it('writes out every ToolPolicy field, with a rule for each', () => {
-    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    const fields = ['agentMcp', 'agentUserSettings', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
     expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
     for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
       const got = narrowed(parent, chosen);
@@ -195,13 +195,13 @@ describe('subagentPolicy and the sandbox', () => {
     expect(narrowed({ ...withShell('sandbox'), sandboxHosts: 'pypi.org' as never }, withShell('sandbox')).sandboxHosts).toEqual([]);
     expect(narrowed({ ...policy(), shell: 'yes' as never }, policy()).shell).toBe(false);
     // Claude Code's tools, artifacts, sub-agents and computer use are off whatever both profiles say.
-    const open = policy({ agentWeb: true, agentMcp: true, artifacts: true, subagents: true, recall: true, computer: true });
-    expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: true, computer: false });
+    const open = policy({ agentWeb: true, agentMcp: true, agentUserSettings: true, artifacts: true, subagents: true, recall: true, computer: true });
+    expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, agentUserSettings: false, artifacts: false, subagents: false, recall: true, computer: false });
     // A locked-down parent gets nothing from a wide-open profile.
     const locked = policy({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
     expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'], browser: true })).toEqual({
       fs: 'off', shell: false, shellRuns: 'sandbox', sandboxHosts: [], mcpServerIds: [], approvalMode: 'always_ask',
-      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [], computer: false,
+      agentWeb: false, agentMcp: false, agentUserSettings: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [], computer: false,
     });
   });
 

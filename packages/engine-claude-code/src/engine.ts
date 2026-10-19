@@ -1022,7 +1022,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
       permissionMode: autoMode ? 'auto' : 'default',
       includePartialMessages: true,
-      settingSources: ['user', 'project', 'local'],
+      // The folder's own settings; the user's (their CLAUDE.md, skills, plugins, hooks and MCP servers)
+      // only when the profile asks, since they cost about 17K tokens a session (test/fixtures/README.md).
+      settingSources: profile.toolPolicy.agentUserSettings === true ? ['user', 'project', 'local'] : ['project', 'local'],
       // Flag-settings layer: no skill inline shell (R14), and the secrets' deny rules.
       settings: processSettings(),
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
