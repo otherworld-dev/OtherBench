@@ -59,6 +59,29 @@ describe('buildUsageRollup', () => {
     expect(rollup.buckets).toEqual([{ date: '2026-08-10', cost: 4 }]);
   });
 
+  it("counts a title or memory call's row as measured spend under its own profile, with backgroundCount", () => {
+    const rollup = buildUsageRollup(
+      [
+        usage({ id: 'own', messageId: 'm1' }),
+        usage({ id: 'title', messageId: 'm1', purpose: 'title', costEstimate: 0.5 }),
+        usage({ id: 'memory', messageId: 'm1', profileId: 'profile-mem', modelId: 'model-cheap', purpose: 'memory', costEstimate: 0.25, tokensIn: 30 }),
+      ],
+      [assistantMessage({ id: 'm1' })],
+      {},
+      { 'profile-mem': 'Memory model' }
+    );
+    const a = rollup.profiles.find((p) => p.profileId === 'profile-a')!;
+    const mem = rollup.profiles.find((p) => p.profileId === 'profile-mem')!;
+    expect(a).toMatchObject({ completeCount: 1, backgroundCount: 1, measuredCost: 3.5 });
+    expect(mem).toMatchObject({ profileName: 'Memory model', modelId: 'model-cheap', completeCount: 0, backgroundCount: 1, measuredCost: 0.25, tokensIn: 30 });
+    expect(rollup.totalMeasuredCost).toBe(3.75);
+  });
+
+  it('a background row never makes a failed reply measured', () => {
+    const rollup = buildUsageRollup([usage({ id: 'title', messageId: 'm1', purpose: 'title' })], [assistantMessage({ id: 'm1', status: 'error' })]);
+    expect(rollup.totalUnmeasuredErrorCount).toBe(1);
+  });
+
   it('counts a sub-agent that finished under a cancelled reply as measured, not cancelled', () => {
     const rollup = buildUsageRollup(
       [usage({ id: 'own', messageId: 'm1', costEstimate: 0, tokensIn: 0 }), usage({ id: 'sub', messageId: 'm1', subagentCallId: 'call-1', costEstimate: 2 })],

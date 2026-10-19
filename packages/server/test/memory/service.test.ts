@@ -248,6 +248,13 @@ describe('an update', () => {
     expect(promptOf(req)).toContain('User: We use SQLite\n\nAssistant: Noted');
   });
 
+  it('records what the update used, against the newest reply it read', async () => {
+    const { replyId } = exchange('chat', 'We use SQLite', 'Noted');
+    respond = () => [{ type: 'text-delta', text: note() }, { type: 'finish', usage: { tokensIn: 900, tokensOut: 60, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }];
+    await service.updateNow('chat');
+    expect(store.usage.list('chat')).toEqual([expect.objectContaining({ purpose: 'memory', messageId: replyId, profileId: 'p-project', tokensIn: 900, tokensOut: 60 })]);
+  });
+
   it('keeps ## Pinned exactly as it was, even when the model rewrites it', async () => {
     store.projectMemory.save('proj', note({ pinned: '- Never break v1 clients' }), 'user', null);
     exchange('chat', 'Drop v1?', 'No.');

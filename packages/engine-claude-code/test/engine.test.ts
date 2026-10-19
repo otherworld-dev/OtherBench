@@ -135,7 +135,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(events).toEqual([
       { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 'sess-1', backend: 'claude', cwd: ws, tools: ['Read', 'Bash'], mcpServers: [{ name: 'nextcloud', status: 'connected' }] } },
       { type: 'text-delta', text: 'hello' },
-      { type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 } },
+      { type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensCacheWrite: 0, tokensReasoning: 0 } },
     ]);
     const o = calls[0]!.options;
     expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });

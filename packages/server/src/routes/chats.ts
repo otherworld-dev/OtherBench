@@ -16,6 +16,7 @@ import { scratchFolderName } from '@otherbench/engine-claude-code/engine.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
+import { recordBackgroundUsage } from '../background-usage.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
@@ -307,8 +308,8 @@ export function chatsRoutes(container: Container): Hono {
     // reload too (#819). One row per message; a later one would win.
     const usage: Record<string, RecordedUsage> = {};
     for (const u of container.store.usage.list(chat.id)) {
-      // A sub-agent's row hangs off the same reply; the compare tabs show the reply's own cost.
-      if (u.subagentCallId) continue;
+      // A sub-agent's or a background call's row hangs off the same reply; the compare tabs show the reply's own cost.
+      if (u.subagentCallId || u.purpose) continue;
       usage[u.messageId] = {
         tokensIn: u.tokensIn,
         tokensOut: u.tokensOut,
@@ -446,6 +447,7 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     // stream can stay open after it (Claude Code's ends only when its process
     // exits), and that tail must not let the watchdog throw a finished title away.
     let finished = false;
+    const startedAt = Date.now();
     try {
       for await (const event of container.engine.stream({
         profile,
@@ -461,6 +463,7 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
         else if (event.type === 'error') throw new Error(event.error.message);
         else if (event.type === 'finish') {
           finished = true;
+          recordBackgroundUsage(container.store, { chatId, messageId: assistantMessage.id, profile, usage: event.usage, latencyMs: Date.now() - startedAt, purpose: 'title' });
           break;
         }
       }

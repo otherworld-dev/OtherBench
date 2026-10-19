@@ -29,14 +29,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-7).map((m) => m.name)).toEqual(['021-chat-unread', '022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent']);
+    expect(MIGRATIONS.slice(-8).map((m) => m.name)).toEqual(['021-chat-unread', '022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(27);
+      expect(SCHEMA_VERSION).toBe(28);
     } finally {
       db.close();
     }
@@ -196,6 +196,19 @@ describe('runMigrations', () => {
       const columns = db.prepare('PRAGMA table_info(usage)').all() as { name: string; notnull: number }[];
       expect(columns.find((c) => c.name === 'subagent_call_id')).toMatchObject({ notnull: 0 });
       expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('usage-purpose adds usage.tokens_cache_write (0 for existing rows) and a nullable usage.purpose', () => {
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => !m.name.endsWith('usage-purpose')));
+      runMigrations(db);
+      const columns = db.prepare('PRAGMA table_info(usage)').all() as { name: string; notnull: number; dflt_value: string | null }[];
+      expect(columns.find((c) => c.name === 'tokens_cache_write')).toMatchObject({ notnull: 1, dflt_value: '0' });
+      expect(columns.find((c) => c.name === 'purpose')).toMatchObject({ notnull: 0 });
     } finally {
       db.close();
     }

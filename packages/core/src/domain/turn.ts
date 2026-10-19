@@ -7,8 +7,8 @@ import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk }
 import type { CanonMessage, MessageStatus, Part, SerializedError, UserNotePart } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
-import type { PricingSnapshot, Usage } from '../types/usage.js';
-import { estimateCost } from '../types/usage.js';
+import type { Usage } from '../types/usage.js';
+import { recordUsage } from './usage-record.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
@@ -1419,7 +1419,7 @@ export class TurnRunner {
     return { messages: next, unread };
   }
 
-  /** Re-reads the model row at finish time (not the possibly-stale `ResolvedProfile.model` captured when the request began) so pricing reflects whatever is current right now. */
+  /** Prices the row at finish time (see recordUsage) so pricing reflects whatever is current right now. */
   private writeUsage(
     chatId: string,
     messageId: string,
@@ -1428,31 +1428,6 @@ export class TurnRunner {
     latencyMs: number,
     subagentCallId?: string
   ): void {
-    const currentModel = profile.model ? this.store.models.get(profile.model.id) : null;
-    const pricingSnapshot: PricingSnapshot = currentModel
-      ? {
-          priceInPer1m: currentModel.priceInPer1m,
-          priceOutPer1m: currentModel.priceOutPer1m,
-          priceCachedPer1m: currentModel.priceCachedPer1m,
-          currency: currentModel.currency,
-        }
-      : { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
-
-    this.store.usage.create({
-      id: this.generateId(),
-      chatId,
-      messageId,
-      profileId: profile.id,
-      connectionId: profile.connectionId,
-      modelId: profile.modelId,
-      tokensIn: usage.tokensIn,
-      tokensOut: usage.tokensOut,
-      tokensCached: usage.tokensCached,
-      tokensReasoning: usage.tokensReasoning,
-      costEstimate: estimateCost(usage, pricingSnapshot),
-      pricingSnapshot,
-      latencyMs,
-      ...(subagentCallId ? { subagentCallId } : {}),
-    });
+    recordUsage(this.store, { id: this.generateId(), chatId, messageId, profile, usage, latencyMs, ...(subagentCallId ? { subagentCallId } : {}) });
   }
 }

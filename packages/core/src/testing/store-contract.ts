@@ -883,6 +883,16 @@ export function runStoreContract(
       expect(store.usage.get('usage-a')).toMatchObject({ id: 'usage-a', chatId: chat.id, tokensIn: 42 });
     });
 
+    it("usage: a background call's purpose and the cache writes round-trip", () => {
+      const { chat, profileId, connectionId, modelId } = seedChat(store, 'chat-a');
+      const message = store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
+      const base = { chatId: chat.id, messageId: message.id, profileId, connectionId, modelId };
+      store.usage.create(makeUsageRecord({ ...base, id: 'usage-memory', purpose: 'memory', tokensCacheWrite: 7 }));
+      store.usage.create(makeUsageRecord({ ...base, id: 'usage-own' }));
+      expect(store.usage.get('usage-memory')).toMatchObject({ purpose: 'memory', tokensCacheWrite: 7 });
+      expect(store.usage.get('usage-own')).not.toHaveProperty('purpose');
+    });
+
     it('mcpServers: create/get round-trip', () => {
       store.mcpServers.create(makeMcpServer({ id: 'mcp-a', name: 'My MCP Server' }));
       expect(store.mcpServers.get('mcp-a')).toMatchObject({ id: 'mcp-a', name: 'My MCP Server' });

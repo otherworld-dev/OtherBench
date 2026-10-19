@@ -22,6 +22,8 @@ const mapping: CrudMapping<UsageRecord> = {
     'pricing_snapshot',
     'latency_ms',
     'subagent_call_id',
+    'tokens_cache_write',
+    'purpose',
   ],
   toRow: (u) => [
     u.id,
@@ -38,6 +40,8 @@ const mapping: CrudMapping<UsageRecord> = {
     toJson(u.pricingSnapshot),
     u.latencyMs,
     u.subagentCallId ?? null,
+    u.tokensCacheWrite ?? 0,
+    u.purpose ?? null,
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -54,6 +58,9 @@ const mapping: CrudMapping<UsageRecord> = {
     pricingSnapshot: fromJson<PricingSnapshot>(row.pricing_snapshot as string),
     latencyMs: row.latency_ms as number,
     ...(typeof row.subagent_call_id === 'string' ? { subagentCallId: row.subagent_call_id } : {}),
+    // Absent when nothing was written, as on a row from before caching (and InMemoryStore's).
+    ...(typeof row.tokens_cache_write === 'number' && row.tokens_cache_write > 0 ? { tokensCacheWrite: row.tokens_cache_write } : {}),
+    ...(row.purpose === 'title' || row.purpose === 'memory' ? { purpose: row.purpose } : {}),
   }),
 };
 

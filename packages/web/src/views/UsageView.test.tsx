@@ -64,7 +64,7 @@ describe('UsageView', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 12.5,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'gpt-x', currency: 'USD', measuredCost: 12.5, tokensIn: 1000, tokensOut: 500, tokensCached: 0, tokensReasoning: 0, completeCount: 3, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'gpt-x', currency: 'USD', measuredCost: 12.5, tokensIn: 1000, tokensOut: 500, tokensCached: 0, tokensReasoning: 0, completeCount: 3, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
         chats: [{ chatId: 'c1', chatTitle: 'Ocean facts', measuredCost: 12.5, cancelledCount: 0, unmeasuredErrorCount: 0 }],
         buckets: [{ date: '2026-08-10', cost: 12.5 }],
       })

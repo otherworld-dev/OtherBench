@@ -19,6 +19,8 @@ export interface ProfileRollup {
   unmeasuredErrorCount: number;
   /** Sub-agents that ran as this profile and finished (spec 2026-10-12-api-subagents-design). Their tokens and cost are in the totals above. */
   subagentCount: number;
+  /** Calls OtherBench made by itself as this profile (a chat's title, a memory update). Their tokens and cost are in the totals above. */
+  backgroundCount: number;
 }
 
 export interface ChatRollup {
@@ -86,7 +88,9 @@ function dateKey(createdAt: number): string {
 export function buildUsageRollup(
   usageRows: UsageRecord[],
   assistantMessages: CanonMessage[],
-  chatTitles: Record<string, string> = {}
+  chatTitles: Record<string, string> = {},
+  /** Names for profiles a background row ran as, which the reply it hangs off may not name. */
+  profileNames: Record<string, string> = {}
 ): UsageRollup {
   const messagesById = new Map(assistantMessages.map((m) => [m.id, m]));
   const measuredMessageIds = new Set<string>();
@@ -101,7 +105,7 @@ export function buildUsageRollup(
   function profileRollup(id: string, name: string, modelId: string, currency: string): ProfileRollup {
     let entry = profiles.get(id);
     if (!entry) {
-      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 };
+      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 };
       profiles.set(id, entry);
     }
     return entry;
@@ -147,6 +151,15 @@ export function buildUsageRollup(
       const cr = chatRollup(message.chatId);
       addMeasured(pr, cr, row, message);
       pr.subagentCount += 1;
+      continue;
+    }
+    // A title or memory call's row: like a sub-agent's, always measured under
+    // its own profile, and it never marks the reply as measured.
+    if (row.purpose) {
+      const name = profileNames[row.profileId] ?? (message.producedBy?.profileId === row.profileId ? message.producedBy.profileName : 'Unknown profile');
+      const pr = profileRollup(row.profileId, name, row.modelId, row.pricingSnapshot.currency);
+      addMeasured(pr, chatRollup(message.chatId), row, message);
+      pr.backgroundCount += 1;
       continue;
     }
     measuredMessageIds.add(message.id);

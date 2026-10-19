@@ -232,7 +232,8 @@ export class ProjectMemoryService {
     const profile = await this.pickProfile(start.project);
     if (!profile) return this.fail(projectId, chatId, NO_MEMORY_MODEL_MESSAGE);
 
-    const answer = await this.ask(profile, chatId, memoryUpdatePrompt(start.project.name, currentBody, renderMemoryTranscript(pending)));
+    const about = pending.findLast((m) => m.role === 'assistant')!;
+    const answer = await this.ask(profile, chatId, about.id, memoryUpdatePrompt(start.project.name, currentBody, renderMemoryTranscript(pending)));
     if (!answer.ok) return this.fail(projectId, chatId, `Memory update failed: ${answer.error}`);
     const checked = finaliseSummary(currentBody, answer.text);
     if (!checked.ok) return this.fail(projectId, chatId, `The memory model (${profile.name}) wrote a note that was rejected: ${checked.reason}`);
@@ -270,8 +271,8 @@ export class ProjectMemoryService {
     return pickMemoryProfile(this.store, this.resolveProfile, [chosen, project.defaultProfileId, appDefaultProfileId(this.store)], chosen);
   }
 
-  private ask(profile: ResolvedProfile, chatId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-    return askMemoryModel({ engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running }, profile, chatId, prompt);
+  private ask(profile: ResolvedProfile, chatId: string, aboutMessageId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    return askMemoryModel({ engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running, store: this.store }, profile, chatId, aboutMessageId, prompt);
   }
 
   private fail(projectId: string, chatId: string, message: string): MemoryUpdateOutcome {
