@@ -705,6 +705,27 @@ describe('TurnRunner names the tools a turn can use', () => {
     expect(noteOf(2)).not.toContain('Artifacts on this branch');
   });
 
+  it('keeps the note an earlier message was sent with on it in later requests, so the history stays the same and the prompt cache holds', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+    const textOfMessage = (m: CanonMessage): string => m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+
+    const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'tracker', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Tracker', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
+    await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
+
+    const sentFirst = engine.requests[0]!.messages.at(-1)!;
+    const again = engine.requests[1]!.messages.find((m) => m.id === sentFirst.id)!;
+    // The first message as it went the first time: the list as it was then.
+    expect(again).toEqual(sentFirst);
+    expect(textOfMessage(again)).toContain('This chat has no artifacts on this branch yet.');
+    expect(textOfMessage(engine.requests[1]!.messages.at(-1)!)).toContain('- tracker: "Tracker" (html, v1)');
+  });
+
   it('adds the live-artifact guidance only for a profile with MCP servers', async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
@@ -1802,18 +1823,41 @@ describe('project memory in the system prompt', () => {
     expect(engine.requests[0]!.profile.systemPrompt).toContain('- Use SQLite');
   });
 
-  it('reads the note fresh for every turn', async () => {
-    const { store, engine, runner } = setup();
+  it("holds an active chat's note steady when the summariser rewrites it, and reads it again once the chat has been quiet", async () => {
+    const QUIET = 5 * 60_000;
+    const { store, engine } = setup();
+    let t = 1_000_000;
+    const runner = new TurnRunner(store, engine, { now: () => t });
     store.projectMemory.save('proj', NOTE, 'user', null);
     const first = await turn(runner, null);
     const firstId = first.assistantMessageIds[0]!;
     await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
 
-    store.projectMemory.save('proj', NOTE.replace('- Ship v2', '- Ship v3'), 'summariser', 'chat-1');
+    // Another chat in the project went quiet, and the summariser rewrote the note.
+    store.projectMemory.save('proj', NOTE.replace('- Ship v2', '- Ship v3'), 'summariser', 'chat-2');
+    t += 60_000;
+    const second = await turn(runner, null, firstId);
+    const secondId = second.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(secondId)!.status).toBe('complete'));
+    expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
+
+    t += QUIET;
+    await turn(runner, null, secondId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
+    expect(engine.requests[2]!.profile.systemPrompt).toContain('- Ship v3');
+  });
+
+  it("applies the user's own save of the note at once, even while the chat is active", async () => {
+    const { store, engine } = setup();
+    const runner = new TurnRunner(store, engine, { now: () => 1_000_000 });
+    store.projectMemory.save('proj', NOTE, 'summariser', 'chat-2');
+    const first = await turn(runner, null);
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    store.projectMemory.save('proj', NOTE.replace('- Ship v2', '- Ship v3'), 'user', null);
     await turn(runner, null, firstId);
     await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
-
-    expect(engine.requests[0]!.profile.systemPrompt).toContain('- Ship v2');
     expect(engine.requests[1]!.profile.systemPrompt).toContain('- Ship v3');
   });
 });
@@ -2030,6 +2074,20 @@ describe('global memory in the system prompt', () => {
     await turn(runner, {}, secondId);
     await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
     expect(engine.requests[2]!.profile.systemPrompt).toContain('American English');
+  });
+
+  it('holds the block steady when the summariser rewrites a note the user saved last', async () => {
+    const { store, engine } = setup('proj', 'one');
+    const runner = new TurnRunner(store, engine, { now: () => 1_000_000 });
+    store.globalMemory.saveNote(NOTE, 'user', null, 1);
+    const first = await turn(runner, {});
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    store.globalMemory.saveNote(NOTE.replace('British English', 'American English'), 'summariser', 'other-chat', 2);
+    await turn(runner, {}, firstId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
   });
 
   it("keeps a block per kind of turn, so a compare between a profile with recall and one without rebuilds neither", async () => {

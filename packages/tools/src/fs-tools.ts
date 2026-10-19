@@ -598,12 +598,39 @@ function optionalPositiveInt(args: unknown, key: string): number | undefined {
 // ---------------------------------------------------------------------------
 
 const MAX_READ_BYTES = 1024 * 1024; // 1MB read cap
+/**
+ * What one read_file call returns at most: a tool result is sent again with
+ * every later turn of the chat, so a whole large file read once would be paid
+ * for on every turn after it. The model reads on with startLine.
+ */
+const READ_MAX_LINES = 2000;
+const READ_MAX_CHARS = 100_000;
+
+/**
+ * Lines `from`..`to` (1-indexed, inclusive) joined, stopping before the line
+ * that would take them over READ_MAX_CHARS; a first line longer than that is
+ * cut. `last` is the last line included.
+ */
+function takeLines(lines: string[], from: number, to: number): { content: string; last: number; lineCut: boolean } {
+  let content = '';
+  let last = from - 1;
+  for (let i = from - 1; i < to; i++) {
+    const line = lines[i]!;
+    if (i === from - 1 && line.length > READ_MAX_CHARS) return { content: line.slice(0, READ_MAX_CHARS), last: i + 1, lineCut: true };
+    const next = i === from - 1 ? line : `\n${line}`;
+    if (content.length + next.length > READ_MAX_CHARS) break;
+    content += next;
+    last = i + 1;
+  }
+  return { content, last, lineCut: false };
+}
 
 export const readFileTool: ToolSpec = {
   name: 'read_file',
   description:
     'Reads a UTF-8 text file inside the workspace, optionally restricted to a 1-indexed inclusive line range. ' +
-    'Refuses binary files. Content is capped at 1MB; larger files are truncated with a notice.',
+    `Refuses binary files. Returns at most ${READ_MAX_LINES} lines or ${READ_MAX_CHARS.toLocaleString('en-US')} characters per call; ` +
+    'the result says where it stopped, so read on with startLine.',
   parameters: {
     type: 'object',
     properties: {
@@ -634,26 +661,31 @@ export const readFileTool: ToolSpec = {
         const readSize = Math.min(stat.size, MAX_READ_BYTES + 1);
         const buf = Buffer.alloc(readSize);
         const { bytesRead } = await handle.read(buf, 0, readSize, 0);
-        const truncated = stat.size > MAX_READ_BYTES;
-        const text = buf.subarray(0, truncated ? MAX_READ_BYTES : bytesRead).toString('utf8');
+        const overCap = stat.size > MAX_READ_BYTES;
+        const text = buf.subarray(0, overCap ? MAX_READ_BYTES : bytesRead).toString('utf8');
 
         const lines = text.split('\n');
         const from = startLine ?? 1;
-        const to = endLine ?? lines.length;
         const clampedFrom = Math.max(1, Math.min(from, lines.length));
+        // With no end line asked for, one call's worth from the start line.
+        const to = endLine ?? clampedFrom + READ_MAX_LINES - 1;
         const clampedTo = Math.max(clampedFrom, Math.min(to, lines.length));
-        const selected = lines.slice(clampedFrom - 1, clampedTo).join('\n');
+        const { content, last, lineCut } = takeLines(lines, clampedFrom, clampedTo);
+        const more = last < lines.length && (last < clampedTo || endLine === undefined);
 
+        const notes = [
+          ...(overCap ? ['File exceeds the 1MB read cap; content (and line count) reflect only the first 1MB.'] : []),
+          ...(lineCut ? [`Line ${last} is longer than ${READ_MAX_CHARS.toLocaleString('en-US')} characters; only its start is shown.`] : []),
+          ...(more ? [`Showing lines ${clampedFrom}-${last} of ${lines.length}. Call read_file again with startLine ${last + 1} to read on.`] : []),
+        ];
         return {
           path: shown(ctx, at.root, resolved, resolved),
-          content: selected,
+          content,
           startLine: clampedFrom,
-          endLine: clampedTo,
+          endLine: last,
           linesInSample: lines.length,
-          truncated,
-          ...(truncated
-            ? { note: `File exceeds the 1MB read cap; content (and line count) reflect only the first 1MB.` }
-            : {}),
+          truncated: overCap || lineCut || more,
+          ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
         };
       } finally {
         await handle.close();
@@ -666,9 +698,12 @@ export const readFileTool: ToolSpec = {
 // list_dir
 // ---------------------------------------------------------------------------
 
+/** The most entries one list_dir call returns (see READ_MAX_CHARS for why results are bounded). */
+const LIST_MAX_ENTRIES = 1000;
+
 export const listDirTool: ToolSpec = {
   name: 'list_dir',
-  description: 'Lists the immediate contents (files and directories) of a directory inside the workspace.',
+  description: `Lists the immediate contents (files and directories) of a directory inside the workspace, at most ${LIST_MAX_ENTRIES} entries.`,
   parameters: {
     type: 'object',
     properties: {
@@ -688,7 +723,15 @@ export const listDirTool: ToolSpec = {
           type: d.isDirectory() ? ('dir' as const) : d.isSymbolicLink() ? ('symlink' as const) : ('file' as const),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
-      return { path: shown(ctx, at.root, resolved, '.'), entries };
+      const listed = { path: shown(ctx, at.root, resolved, '.') };
+      if (entries.length <= LIST_MAX_ENTRIES) return { ...listed, entries };
+      return {
+        ...listed,
+        entries: entries.slice(0, LIST_MAX_ENTRIES),
+        truncated: true,
+        total: entries.length,
+        note: `Showing the first ${LIST_MAX_ENTRIES} of ${entries.length} entries, by name. Use search_files with a glob to find the rest.`,
+      };
     });
   },
 };
@@ -699,6 +742,8 @@ export const listDirTool: ToolSpec = {
 
 const MAX_SCAN_ENTRIES = 5000;
 const DEFAULT_MAX_RESULTS = 200;
+/** The most matches a search returns, whatever maxResults asks for. */
+const MAX_RESULTS_LIMIT = 1000;
 const SKIP_DIR_NAMES = new Set(['.git', 'node_modules']);
 
 /**
@@ -764,7 +809,7 @@ export const searchFilesTool: ToolSpec = {
       path: { type: 'string', description: 'Directory to search under, relative to the workspace root, or absolute inside one of the other folders this chat can use (default: workspace root).' },
       glob: { type: 'string', description: 'Filename glob pattern, e.g. "src/**/*.ts".' },
       query: { type: 'string', description: 'Plain-text substring to search for inside file contents.' },
-      maxResults: { type: 'integer', minimum: 1, description: `Maximum matches to return (default ${DEFAULT_MAX_RESULTS}).` },
+      maxResults: { type: 'integer', minimum: 1, maximum: MAX_RESULTS_LIMIT, description: `Maximum matches to return (default ${DEFAULT_MAX_RESULTS}, at most ${MAX_RESULTS_LIMIT}).` },
     },
   },
   risk: 'read',
@@ -774,7 +819,7 @@ export const searchFilesTool: ToolSpec = {
       const path = optionalString(args, 'path') ?? '.';
       const glob = optionalString(args, 'glob');
       const query = optionalString(args, 'query');
-      const maxResults = optionalPositiveInt(args, 'maxResults') ?? DEFAULT_MAX_RESULTS;
+      const maxResults = Math.min(optionalPositiveInt(args, 'maxResults') ?? DEFAULT_MAX_RESULTS, MAX_RESULTS_LIMIT);
       if (!glob && !query) throw new ArgsError('Provide at least one of "glob" or "query".');
 
       const at = locate(ctx, path);

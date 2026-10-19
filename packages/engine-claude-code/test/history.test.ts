@@ -68,6 +68,21 @@ describe('renderHistory', () => {
     expect(out).not.toContain('FIRST');
     expect(out.length).toBeLessThan(HISTORY_CHAR_LIMIT + 500);
   });
+  it('seeds a fresh session with about 15K tokens of the newest history, starting at a whole message', () => {
+    const turns: CanonMessage[] = [];
+    for (let i = 0; i < 100; i++) {
+      turns.push(m(`u${i}`, 'user', [{ type: 'text', text: `question ${i} ${'q'.repeat(500)}` }]));
+      turns.push(m(`a${i}`, 'assistant', [{ type: 'text', text: `answer ${i} ${'a'.repeat(1000)}` }]));
+    }
+    turns.push(m('new', 'user', [{ type: 'text', text: 'next' }]));
+    const out = renderHistory(turns);
+    expect(out.length).toBeLessThanOrEqual(61_000);
+    expect(out).toContain('answer 99 ');
+    // The cut falls between messages: the first one kept is whole.
+    const body = out.split('[earlier messages omitted]\n')[1]!;
+    expect(body).toMatch(/^\[(user|assistant)\] (question|answer) \d+ /);
+  });
+
   it('renders a user note inside a reply as a [user] line where it falls', () => {
     const out = renderHistory([
       m('u1', 'user', [{ type: 'text', text: 'go' }]),

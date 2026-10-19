@@ -782,7 +782,7 @@ export class ClaudeImportService {
       // A call still queued when OtherBench shuts down never starts.
       this.disposed
         ? { ok: false as const, error: 'OtherBench was shut down during the import.' }
-        : askMemoryModel({ engine: this.deps.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running }, model, IMPORT_CHAT_ID, prompt)
+        : askMemoryModel({ engine: this.deps.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running }, model, IMPORT_CHAT_ID, null, prompt)
     );
   }
 

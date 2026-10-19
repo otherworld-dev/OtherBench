@@ -112,6 +112,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
   const [agentMcp, setAgentMcp] = useState(profile?.toolPolicy.agentMcp ?? true);
+  const [agentUserSettings, setAgentUserSettings] = useState(profile?.toolPolicy.agentUserSettings ?? false);
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
   const [useGlobalMemory, setUseGlobalMemory] = useState(profile?.useGlobalMemory !== false);
 
@@ -196,7 +197,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, computer, ...blocked, ...sandboxFields }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, agentUserSettings, artifacts, recall, browser, computer, ...blocked, ...sandboxFields }
         : {
             fs,
             shell,
@@ -495,6 +496,20 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
                   onChange={(e) => setAgentMcp(e.target.checked)}
                 />
                 MCP servers from your Claude Code config (folder chats only)
+              </label>
+              <label className="flex flex-col gap-0.5 self-end pb-1 text-xs text-[var(--text)]">
+                <span className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    aria-label="Your own Claude Code settings (folder chats only)"
+                    checked={agentUserSettings}
+                    onChange={(e) => setAgentUserSettings(e.target.checked)}
+                  />
+                  Your own Claude Code settings (folder chats only)
+                </span>
+                <span className="text-[var(--text-muted)]">
+                  Your CLAUDE.md, skills, plugins, hooks and MCP servers from ~/.claude. Off, a chat gets only its folder&apos;s own settings, which saves tokens on every session.
+                </span>
               </label>
             </>
           )}

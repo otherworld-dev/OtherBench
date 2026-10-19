@@ -195,6 +195,26 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
     expect(listed.filter((t) => t.name === 'run_command' || t.name === 'browser').map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox'], ['browser', 'browser']]);
   });
 
+  it("cuts an MCP tool's text at 100,000 characters in all, with a note saying so", async () => {
+    const store = new InMemoryStore();
+    const client = {
+      id: 's1',
+      status: 'ok',
+      lastError: null,
+      tools: [{ name: 'dump', description: '', inputSchema: {} }],
+      callTool: async () => ({ content: [{ type: 'text', text: 'a'.repeat(60_000) }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }, { type: 'text', text: 'b'.repeat(60_000) }], isError: false }),
+    } as unknown as McpClient;
+    const mcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = { listFor: () => [{ id: 's1', name: 'big', client }], refresh: async () => {}, shutdown: async () => {} };
+    const [spec] = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp).relayTools(policy({ mcpServerIds: ['s1'] }));
+
+    const out = (await spec!.execute({}, ctx())) as { type: string; text?: string }[];
+    const texts = out.filter((c) => c.type === 'text').map((c) => c.text ?? '');
+    expect(texts[0]).toHaveLength(60_000);
+    expect(texts[1]).toHaveLength(40_000);
+    expect(out.some((c) => c.type === 'image')).toBe(true);
+    expect(texts.at(-1)).toContain('cut at 100,000 characters');
+  });
+
   it('runs each call on the server\'s current connection, so a spec kept across a reconnect still works', async () => {
     // Turning a server off and on again swaps its McpClient, while a Claude
     // Code process keeps the specs it started with for as long as it lives.

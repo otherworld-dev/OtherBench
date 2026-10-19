@@ -690,17 +690,19 @@ describe('ProfilesPanel', () => {
     expect(screen.getByLabelText('Bash')).toBeInTheDocument();
     expect(screen.getByLabelText('Web tools')).toBeInTheDocument();
     expect(screen.getByLabelText('MCP servers from your Claude Code config (folder chats only)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Your own Claude Code settings (folder chats only)')).not.toBeChecked();
     // OtherBench's own MCP servers are relayed into Claude Code chats, so the checklist is there too.
     expect(await screen.findByTestId('mcp-server-allowlist')).toBeInTheDocument();
     expect(screen.getByText('MCP servers (from OtherBench)')).toBeInTheDocument();
 
     await user.click(screen.getByLabelText('Web tools'));
+    await user.click(screen.getByLabelText('Your own Claude Code settings (folder chats only)'));
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() =>
       expect(mockedPatch).toHaveBeenCalledWith(
         'profile-1',
-        expect.objectContaining({ toolPolicy: expect.objectContaining({ agentWeb: false, agentMcp: true }) })
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ agentWeb: false, agentMcp: true, agentUserSettings: true }) })
       )
     );
   });

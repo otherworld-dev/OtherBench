@@ -46,7 +46,8 @@ export function usageRoutes(container: Container): Hono {
       assistantMessages.push(...collectMessageTree(container.store, chat.id).filter((m) => m.role === 'assistant'));
     }
 
-    return c.json(buildUsageRollup(usageRows, assistantMessages, chatTitles));
+    const profileNames = Object.fromEntries(container.store.profiles.list().map((p) => [p.id, p.name]));
+    return c.json(buildUsageRollup(usageRows, assistantMessages, chatTitles, profileNames));
   });
 
   return app;

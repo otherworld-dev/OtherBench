@@ -2,8 +2,21 @@ export interface Usage {
   tokensIn: number;
   tokensOut: number;
   tokensCached: number;
+  /**
+   * Input tokens written to the provider's prompt cache (Anthropic's
+   * `cache_creation_input_tokens`), part of `tokensIn` like `tokensCached`.
+   * Absent where the engine never reports it.
+   */
+  tokensCacheWrite?: number;
   tokensReasoning: number;
 }
+
+/**
+ * What a cache write costs against the input price: Anthropic's 5-minute
+ * cache, the only one OtherBench asks for. Providers that cache by themselves
+ * report no writes, so this never applies to them.
+ */
+export const CACHE_WRITE_PRICE_FACTOR = 1.25;
 
 export interface PricingSnapshot {
   priceInPer1m: number | null;
@@ -42,9 +55,11 @@ export interface PlanUsage {
 
 export function estimateCost(u: Usage, p: PricingSnapshot): number | null {
   if (p.priceInPer1m == null && p.priceOutPer1m == null) return null;
-  const uncachedIn = Math.max(0, u.tokensIn - u.tokensCached);
+  const written = u.tokensCacheWrite ?? 0;
+  const uncachedIn = Math.max(0, u.tokensIn - u.tokensCached - written);
   const inCost = (uncachedIn / 1_000_000) * (p.priceInPer1m ?? 0);
   const cachedCost = (u.tokensCached / 1_000_000) * (p.priceCachedPer1m ?? p.priceInPer1m ?? 0);
+  const writeCost = (written / 1_000_000) * (p.priceInPer1m ?? 0) * CACHE_WRITE_PRICE_FACTOR;
   const outCost = ((u.tokensOut + u.tokensReasoning) / 1_000_000) * (p.priceOutPer1m ?? 0);
-  return inCost + cachedCost + outCost;
+  return inCost + cachedCost + writeCost + outCost;
 }

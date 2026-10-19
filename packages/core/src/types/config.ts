@@ -96,6 +96,13 @@ export interface ToolPolicy {
   agentWeb?: boolean;
   /** Claude Code profiles only: MCP tools from the user's Claude config allowed. Absent = allowed. */
   agentMcp?: boolean;
+  /**
+   * Claude Code profiles only: a folder chat also loads the user's own Claude
+   * Code settings (~/.claude: their CLAUDE.md, skills, plugins, hooks and MCP
+   * servers), about 17K tokens a session for a well-used setup. Absent = off:
+   * the folder's own project and local settings only.
+   */
+  agentUserSettings?: boolean;
   /** Artifacts (Deck #896): the `artifact` tool, for both engines. Absent = on. */
   artifacts?: boolean;
   /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */

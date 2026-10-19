@@ -200,9 +200,10 @@ export class GlobalMemoryService {
     if (!profile) return this.fail(chatId, NO_GLOBAL_MEMORY_MODEL_MESSAGE);
 
     const answer = await askMemoryModel(
-      { engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running },
+      { engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running, store: this.store },
       profile,
       chatId,
+      pending.findLast((m) => m.role === 'assistant')!.id,
       globalMemoryUpdatePrompt(currentBody, renderMemoryTranscript(pending))
     );
     if (!answer.ok) return this.fail(chatId, `Global memory update failed: ${answer.error}`);

@@ -262,10 +262,11 @@ export class SdkEventMapper {
     }
     const u = (m['usage'] ?? {}) as Record<string, unknown>;
     const cached = num(u['cache_read_input_tokens']);
+    const written = num(u['cache_creation_input_tokens']);
     return [{
       type: 'finish',
       finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason'] as string) : 'stop',
-      usage: { tokensIn: num(u['input_tokens']) + cached + num(u['cache_creation_input_tokens']), tokensOut: num(u['output_tokens']), tokensCached: cached, tokensReasoning: 0 },
+      usage: { tokensIn: num(u['input_tokens']) + cached + written, tokensOut: num(u['output_tokens']), tokensCached: cached, tokensCacheWrite: written, tokensReasoning: 0 },
     }];
   }
 

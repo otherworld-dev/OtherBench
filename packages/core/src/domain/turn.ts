@@ -7,8 +7,8 @@ import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk }
 import type { CanonMessage, MessageStatus, Part, SerializedError, UserNotePart } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
-import type { PricingSnapshot, Usage } from '../types/usage.js';
-import { estimateCost } from '../types/usage.js';
+import type { Usage } from '../types/usage.js';
+import { recordUsage } from './usage-record.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
@@ -214,6 +214,24 @@ const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
 /** How long a chat must be quiet before its global memory block is rebuilt (see `globalMemoryBlock`). */
 const GLOBAL_BLOCK_STEADY_MS = MEMORY_QUIET_MS;
 
+/** What a held memory block was built from that the user changes by hand: when any of it differs, the block is rebuilt at once. */
+type UserSaves = Record<string, string>;
+type HeldBlock = { block: string | null; at: number; saves: UserSaves };
+
+/**
+ * When the user last saved a note, as a held block knows it. A summariser's
+ * save since leaves the time as it was, so only the user's own saves rebuild
+ * a block that is being held.
+ */
+function lastUserSave(by: string | null | undefined, at: number | null | undefined, previous: string | undefined): string {
+  return by === 'user' ? String(at) : (previous ?? '0');
+}
+
+function sameSaves(a: UserSaves, b: UserSaves): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+}
+
 /** What a chat's unresolved folder means for a turn, in words for the error shown on the reply. */
 export function workspaceUnresolvedMessage(status: Extract<WorkspaceStatus, { status: 'unresolved' }>): string {
   switch (status.reason) {
@@ -314,7 +332,14 @@ export class TurnRunner {
   private readonly takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
   private readonly heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
-  private readonly globalBlocks = new Map<string, { block: string | null; at: number; userStamp: string }>();
+  private readonly globalBlocks = new Map<string, HeldBlock>();
+  /** Each chat's project memory block, held steady like the global one (see `projectMemoryBlock`). */
+  private readonly projectBlocks = new Map<string, HeldBlock>();
+  /**
+   * The notes each user message was sent with, by message and profile (see
+   * `withNotes`), so a later request carries the message exactly as it went.
+   */
+  private readonly sentNotes = new Map<string, { notes: string[]; at: number }>();
 
   constructor(
     private readonly store: Store,
@@ -770,10 +795,11 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const translated = this.withPlanNote(
-        this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId),
-        plan !== undefined,
-        userMessageId
+      const translated = this.withNotes(
+        translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths),
+        [...this.artifactsListNotes(tools, chatId, userMessageId), ...(plan !== undefined ? [PLAN_MODE_NOTE] : [])],
+        userMessageId,
+        profile
       );
       // The attachments the history names are checked LAST, after every rewrite
       // above (so nothing can change a reference once it has passed): an
@@ -1154,14 +1180,14 @@ export class TurnRunner {
    */
   private globalMemoryBlock(chat: Chat | null, canRecall: boolean): string | null {
     const memory = this.store.globalMemory.get();
-    const userStamp = `${memory.aboutUpdatedAt}:${memory.noteUpdatedBy === 'user' ? memory.noteUpdatedAt : 0}`;
     // Whether the turn offers recall changes the index's last line, so each
     // kind of turn keeps its own block: a compare between a profile with
     // recall and one without mustn't keep rebuilding both.
     const key = `${chat?.id ?? ''}:${canRecall}`;
     const now = this.now();
     const kept = this.globalBlocks.get(key);
-    if (kept && kept.userStamp === userStamp && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {
+    const saves: UserSaves = { about: String(memory.aboutUpdatedAt), note: lastUserSave(memory.noteUpdatedBy, memory.noteUpdatedAt, kept?.saves['note']) };
+    if (kept && sameSaves(kept.saves, saves) && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {
       kept.at = now;
       return kept.block;
     }
@@ -1180,7 +1206,7 @@ export class TurnRunner {
     );
     const blocks = [aboutUserPrompt(memory.about), globalMemoryPrompt(memory.note), index].filter((b): b is string => b !== null);
     const block = blocks.length === 0 ? null : blocks.join('\n\n');
-    this.globalBlocks.set(key, { block, at: now, userStamp });
+    this.globalBlocks.set(key, { block, at: now, saves });
     return block;
   }
 
@@ -1224,14 +1250,40 @@ export class TurnRunner {
    * contributing.
    */
   private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
-    // A sub-project's chats read the parent's note first, then their own; only their own is written (memory service).
-    const blocks = this.projectChain(chat).flatMap((p) => {
-      const memory = this.store.projectMemory.get(p.id);
-      return memory && hasMemoryContent(memory.body) ? [projectMemoryPrompt(p.name, memory.body)] : [];
-    });
-    if (blocks.length === 0) return profile;
-    const block = blocks.join('\n\n');
+    const block = this.projectMemoryBlock(chat);
+    if (!block) return profile;
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
+   * The chat's project memory block, held steady while the chat is active,
+   * for the reason the global block is (`globalMemoryBlock`): the summariser
+   * rewrites a project's note a few minutes after any of its chats goes
+   * quiet, and that must not change the system prompt of another chat in the
+   * project that is still going. The user's own saves, and a renamed or
+   * moved project, apply at once.
+   */
+  private projectMemoryBlock(chat: Chat | null): string | null {
+    const chain = this.projectChain(chat);
+    if (!chat || chain.length === 0) return null;
+    const notes = chain.map((p) => ({ project: p, memory: this.store.projectMemory.get(p.id) }));
+    const now = this.now();
+    const kept = this.projectBlocks.get(chat.id);
+    const saves: UserSaves = Object.fromEntries(
+      notes.flatMap(({ project, memory }) => [
+        [`${project.id}:name`, project.name],
+        [`${project.id}:note`, lastUserSave(memory?.updatedBy, memory?.updatedAt, kept?.saves[`${project.id}:note`])],
+      ])
+    );
+    if (kept && sameSaves(kept.saves, saves) && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {
+      kept.at = now;
+      return kept.block;
+    }
+    // A sub-project's chats read the parent's note first, then their own; only their own is written (memory service).
+    const blocks = notes.flatMap(({ project, memory }) => (memory && hasMemoryContent(memory.body) ? [projectMemoryPrompt(project.name, memory.body)] : []));
+    const block = blocks.length === 0 ? null : blocks.join('\n\n');
+    this.projectBlocks.set(chat.id, { block, at: now, saves });
+    return block;
   }
 
   /**
@@ -1289,21 +1341,40 @@ export class TurnRunner {
   }
 
   /**
-   * This branch's artifacts by id, title, kind and version, as a note at the
-   * end of the user's message in this request only (the stored message is
-   * untouched). Kept out of the system prompt so that prompt stays the same
-   * as artifacts change. Contents stay out: the tool's `view` reads one.
+   * This branch's artifacts by id, title, kind and version, as a note for the
+   * end of the user's message (`withNotes`). Kept out of the system prompt so
+   * that prompt stays the same as artifacts change. Contents stay out: the
+   * tool's `view` reads one.
    */
-  private withArtifactsList(messages: CanonMessage[], tools: readonly ToolSpec[], chatId: string, userMessageId: string): CanonMessage[] {
-    if (!tools.some((t) => t.source === 'artifact')) return messages;
-    const note = artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
-    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: note }] } : m));
+  private artifactsListNotes(tools: readonly ToolSpec[], chatId: string, userMessageId: string): string[] {
+    if (!tools.some((t) => t.source === 'artifact')) return [];
+    return [artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)))];
   }
 
-  /** While Plan mode is on, a note at the end of the user's message in this request only (the stored message is untouched). */
-  private withPlanNote(messages: CanonMessage[], planning: boolean, userMessageId: string): CanonMessage[] {
-    if (!planning) return messages;
-    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: PLAN_MODE_NOTE }] } : m));
+  /**
+   * `notes` (the artifacts list, the Plan mode note) at the end of the user's
+   * message, in the request only: the stored message is untouched. Each
+   * earlier user message on the branch gets back the notes it was sent with,
+   * so the history a request carries is the same from turn to turn and the
+   * provider's prompt cache keeps matching it; dropping them would change
+   * every turn's previous message. Held for as long as the global memory
+   * block is (a chat quiet that long has a cold cache anyway). Not for Claude
+   * Code, which keeps its own session and reads only the new message.
+   */
+  private withNotes(messages: CanonMessage[], notes: string[], userMessageId: string, profile: ResolvedProfile): CanonMessage[] {
+    const now = this.now();
+    for (const [key, kept] of this.sentNotes) if (now - kept.at >= GLOBAL_BLOCK_STEADY_MS) this.sentNotes.delete(key);
+    const keyOf = (messageId: string): string => `${messageId}\u0000${profile.id}`;
+    this.sentNotes.set(keyOf(userMessageId), { notes, at: now });
+    const replay = profile.connection.kind !== 'claude_code';
+    const append = (m: CanonMessage, texts: string[]): CanonMessage => (texts.length === 0 ? m : { ...m, parts: [...m.parts, ...texts.map((text) => ({ type: 'text' as const, text }))] });
+    return messages.map((m) => {
+      if (m.id === userMessageId) return append(m, notes);
+      const kept = replay && m.role === 'user' ? this.sentNotes.get(keyOf(m.id)) : undefined;
+      if (!kept) return m;
+      kept.at = now;
+      return append(m, kept.notes);
+    });
   }
 
   /**
@@ -1419,7 +1490,7 @@ export class TurnRunner {
     return { messages: next, unread };
   }
 
-  /** Re-reads the model row at finish time (not the possibly-stale `ResolvedProfile.model` captured when the request began) so pricing reflects whatever is current right now. */
+  /** Prices the row at finish time (see recordUsage) so pricing reflects whatever is current right now. */
   private writeUsage(
     chatId: string,
     messageId: string,
@@ -1428,31 +1499,6 @@ export class TurnRunner {
     latencyMs: number,
     subagentCallId?: string
   ): void {
-    const currentModel = profile.model ? this.store.models.get(profile.model.id) : null;
-    const pricingSnapshot: PricingSnapshot = currentModel
-      ? {
-          priceInPer1m: currentModel.priceInPer1m,
-          priceOutPer1m: currentModel.priceOutPer1m,
-          priceCachedPer1m: currentModel.priceCachedPer1m,
-          currency: currentModel.currency,
-        }
-      : { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
-
-    this.store.usage.create({
-      id: this.generateId(),
-      chatId,
-      messageId,
-      profileId: profile.id,
-      connectionId: profile.connectionId,
-      modelId: profile.modelId,
-      tokensIn: usage.tokensIn,
-      tokensOut: usage.tokensOut,
-      tokensCached: usage.tokensCached,
-      tokensReasoning: usage.tokensReasoning,
-      costEstimate: estimateCost(usage, pricingSnapshot),
-      pricingSnapshot,
-      latencyMs,
-      ...(subagentCallId ? { subagentCallId } : {}),
-    });
+    recordUsage(this.store, { id: this.generateId(), chatId, messageId, profile, usage, latencyMs, ...(subagentCallId ? { subagentCallId } : {}) });
   }
 }

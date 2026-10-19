@@ -368,6 +368,39 @@ function summarizeMcpContent(content: unknown): string {
   return 'The MCP tool call reported an error.';
 }
 
+/**
+ * The most text an MCP tool's result carries, across its text items. A tool
+ * result is sent again with every later turn of the chat, and a server can
+ * answer with anything (a whole page, a database dump).
+ */
+export const MCP_RESULT_MAX_CHARS = 100_000;
+
+/**
+ * An MCP result with its text items cut to MCP_RESULT_MAX_CHARS in all, in
+ * order, and a note added when anything was cut. Images and other items pass
+ * as they are: the image screening budgets them on its own.
+ */
+function capMcpText(content: unknown): unknown {
+  if (!Array.isArray(content)) return content;
+  let room = MCP_RESULT_MAX_CHARS;
+  let total = 0;
+  const out: unknown[] = [];
+  for (const item of content) {
+    const text = item && typeof item === 'object' && (item as { type?: unknown }).type === 'text' ? (item as { text?: unknown }).text : undefined;
+    if (typeof text !== 'string') {
+      out.push(item);
+      continue;
+    }
+    total += text.length;
+    if (room <= 0) continue;
+    out.push(text.length <= room ? item : { ...(item as object), text: text.slice(0, room) });
+    room -= Math.min(room, text.length);
+  }
+  if (total <= MCP_RESULT_MAX_CHARS) return content;
+  out.push({ type: 'text', text: `[OtherBench: this result's text was cut at ${MCP_RESULT_MAX_CHARS.toLocaleString('en-US')} characters of ${total.toLocaleString('en-US')}. Ask the tool for less, if it can narrow its answer.]` });
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -640,7 +673,7 @@ export class OtherBenchToolProvider implements ToolProvider {
               try {
                 const result = await live.callTool(tool.name, args);
                 if (result.isError) return toolError('mcp_tool_error', summarizeMcpContent(result.content));
-                return result.content;
+                return capMcpText(result.content);
               } catch (err) {
                 return toolError('mcp_call_failed', err instanceof Error ? err.message : String(err));
               }

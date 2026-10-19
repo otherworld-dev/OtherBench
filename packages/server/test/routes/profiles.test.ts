@@ -325,12 +325,19 @@ describe('toolPolicy agent fields', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...basicProfileBody,
-        toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', agentWeb: false, agentMcp: true },
+        toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', agentWeb: false, agentMcp: true, agentUserSettings: true },
       }),
     });
     expect(created.status).toBe(201);
     const body = (await created.json()) as { id: string; toolPolicy: unknown };
-    expect(body.toolPolicy).toMatchObject({ agentWeb: false, agentMcp: true });
+    expect(body.toolPolicy).toMatchObject({ agentWeb: false, agentMcp: true, agentUserSettings: true });
+
+    const badUser = await app().request(`/api/profiles/${body.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolPolicy: { agentUserSettings: 'yes' } }),
+    });
+    expect(badUser.status).toBe(400);
 
     const bad = await app().request(`/api/profiles/${body.id}`, {
       method: 'PATCH',

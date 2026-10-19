@@ -777,6 +777,40 @@ describe('auto-title', () => {
     expect(container.store.chats.get(chatId)?.title).toBe('Capital of France');
   });
 
+  it("records what the title call used, against the reply it titled, without replacing the reply's own usage", async () => {
+    const chatId = (await createChat())['id'] as string;
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'What is the capital of France?');
+    const mainMessageId = assistantMessageIds[0] as string;
+    push(mainMessageId, { type: 'text-delta', text: 'Paris.' });
+    push(mainMessageId, FINISH);
+    await flush();
+    const titleReq = requests.find((r) => r.messageId !== mainMessageId)!;
+    push(titleReq.messageId, { type: 'text-delta', text: 'Capital of France' });
+    push(titleReq.messageId, { type: 'finish', usage: { tokensIn: 40, tokensOut: 4, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+
+    const row = container.store.usage.list(chatId).find((u) => u.purpose === 'title');
+    expect(row).toMatchObject({ messageId: mainMessageId, profileId: 'profile-1', tokensIn: 40, tokensOut: 4 });
+    const body = (await json(await app().request(`/api/chats/${chatId}/messages`))) as { usage: Record<string, { tokensIn: number }> };
+    expect(body.usage[mainMessageId]?.tokensIn).toBe(1);
+  });
+
+  it('sends the title call only the start of a long exchange', async () => {
+    const chatId = (await createChat())['id'] as string;
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], `Q${'q'.repeat(50_000)}`);
+    const mainMessageId = assistantMessageIds[0] as string;
+    push(mainMessageId, { type: 'text-delta', text: `A${'a'.repeat(50_000)}` });
+    push(mainMessageId, FINISH);
+    await flush();
+
+    const titleReq = requests.find((r) => r.messageId !== mainMessageId)!;
+    const part = titleReq.messages[0]!.parts[0]!;
+    const prompt = part.type === 'text' ? part.text : '';
+    expect(prompt).toContain('User: Qqq');
+    expect(prompt).toContain('Assistant: Aaa');
+    expect(prompt.length).toBeLessThan(5_000);
+  });
+
   it('truncates a generated title to 48 characters', async () => {
     const created = await createChat();
     const chatId = created['id'] as string;

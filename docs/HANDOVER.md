@@ -1369,6 +1369,18 @@ There's no spend cap; usage rows are written as normal.
   the Skill tool itself gets no card.
 - With `agentMcp: false` the turn loads no MCP servers (`strictMcpConfig`);
   the gate also denies MCP calls.
+- A folder chat loads the folder's own `project` and `local` Claude Code
+  settings, not the user's (`~/.claude`: their CLAUDE.md, skills, plugins,
+  hooks, user MCP servers, default model and effort), unless the profile turns
+  on `agentUserSettings` ("Your own Claude Code settings"). Measured live, a
+  well-used user setup added about 17K tokens to every new session
+  (probe-token-cost, test/fixtures/README.md). Plugins a project's own
+  settings enable still load; their files stay readable as above.
+- Relayed MCP tools are left to Claude Code's tool search (no
+  `anthropic/alwaysLoad`), so a big server costs a line per tool until the
+  model looks one up; clean chats get `ToolSearch` for this. OtherBench's own
+  artifact, recall and plan tools and the relayed browser, computer and
+  sandboxed shell are always loaded.
 - Unknown Claude Code tools can only be approved once (no chat/always grants).
 - The child env has `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` removed for the
   Claude backend, and `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`/

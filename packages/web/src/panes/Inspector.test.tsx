@@ -202,7 +202,7 @@ describe('Inspector session spend', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 4.5,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 100, tokensOut: 50, tokensCached: 0, tokensReasoning: 0, completeCount: 2, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 100, tokensOut: 50, tokensCached: 0, tokensReasoning: 0, completeCount: 2, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
       })
     );
 
@@ -219,7 +219,7 @@ describe('Inspector session spend', () => {
         totalMeasuredCost: 2,
         totalCancelledCount: 1,
         totalUnmeasuredErrorCount: 1,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 2, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 1, unmeasuredErrorCount: 1, subagentCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 2, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 1, unmeasuredErrorCount: 1, subagentCount: 0, backgroundCount: 0 }],
       })
     );
 
@@ -256,7 +256,7 @@ describe('Inspector session spend', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 3,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 3, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 3, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
       })
     );
     useOtherBenchStore.getState().applyTurnEvent({ messageId: 'm1', type: 'status', status: 'complete' });
@@ -1012,7 +1012,7 @@ describe('Inspector condensed sections', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 4.5,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
       })
     );
     render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })} profile={makeProfile({ name: 'Sonnet' })} collapsed={false} onToggleCollapsed={vi.fn()} />);

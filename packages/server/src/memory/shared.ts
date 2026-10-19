@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChatEngine, EngineEvent } from '@otherbench/core/ports/chat-engine.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import { recordBackgroundUsage } from '../background-usage.js';
 import type { Scheduler } from './scheduler.js';
 
 // What project memory and global memory's summarisers share: the one update
@@ -53,15 +54,26 @@ export interface AskDeps {
   timeoutMs: number;
   /** Stops for the calls in flight, so the owner's dispose() can abort them. */
   running: Set<() => void>;
+  /** Where what each call used is recorded (recordBackgroundUsage); without it nothing is. */
+  store?: Pick<Store, 'models' | 'usage'>;
 }
 
 /**
  * One tool-less utility call, abandoned after `timeoutMs`. The whole
  * instruction is one user message: Claude Code's utility path reads only
  * that. Every wait on the stream races the timeout, so an engine that
- * ignores the abort can't hold the queue.
+ * ignores the abort can't hold the queue. What the call used is recorded
+ * against `aboutMessageId`, the newest reply it reads (null: a call about no
+ * stored reply, such as an import's, records nothing).
  */
-export async function askMemoryModel(deps: AskDeps, profile: ResolvedProfile, chatId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+export async function askMemoryModel(
+  deps: AskDeps,
+  profile: ResolvedProfile,
+  chatId: string,
+  aboutMessageId: string | null,
+  prompt: string
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const startedAt = deps.now();
   const controller = new AbortController();
   let timedOut = false;
   let stopped = false;
@@ -113,6 +125,8 @@ export async function askMemoryModel(deps: AskDeps, profile: ResolvedProfile, ch
       if (event.type === 'text-delta') text += event.text;
       else if (event.type === 'error') return timedOut ? timeoutFailure : { ok: false, error: event.error.message };
       else if (event.type === 'finish') {
+        // Billed whatever becomes of the note, so recorded first.
+        if (deps.store && aboutMessageId !== null) recordBackgroundUsage(deps.store, { chatId, messageId: aboutMessageId, profile, usage: event.usage, latencyMs: deps.now() - startedAt, purpose: 'memory' });
         // A cut-off note must never be saved: it can parse as a valid, shorter note.
         if (TRUNCATING_FINISH_REASONS.has(event.finishReason)) {
           return { ok: false, error: `The model's answer was cut off (finish reason "${event.finishReason}").` };

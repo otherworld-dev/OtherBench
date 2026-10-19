@@ -31,6 +31,13 @@ export interface OtherBenchServerTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * Sent with every request rather than left to Claude Code's tool search.
+   * OtherBench's own tools are (the system prompt tells the model to use
+   * them); a relayed MCP tool isn't, so a server with dozens of tools costs
+   * a line each until the model looks one up.
+   */
+  alwaysLoad: boolean;
   call(args: unknown): Promise<CallToolResult>;
 }
 
@@ -71,6 +78,7 @@ export function otherBenchArtifactTool(current: Current): OtherBenchServerTool {
     name: ARTIFACT_TOOL,
     description: ARTIFACT_TOOL_DESCRIPTION,
     inputSchema: jsonSchemaOf(SHAPE),
+    alwaysLoad: true,
     call: (args) => answer(current, args, 'Artifacts are turned off for this profile, or no OtherBench reply is running.'),
   };
 }
@@ -89,6 +97,7 @@ export function otherBenchRecallTool(current: Current): OtherBenchServerTool {
     name: RECALL_TOOL,
     description: RECALL_TOOL_DESCRIPTION,
     inputSchema: jsonSchemaOf(RECALL_SHAPE),
+    alwaysLoad: true,
     call: (args) => answer(current, args, 'Searching past chats is turned off for this profile, or no OtherBench reply is running.'),
   };
 }
@@ -109,6 +118,7 @@ export function otherBenchPlanTool(current: Current): OtherBenchServerTool {
     name: PLAN_TOOL,
     description: PLAN_TOOL_DESCRIPTION,
     inputSchema: PLAN_TOOL_PARAMETERS,
+    alwaysLoad: true,
     call: (args) => answerText(current, args, 'Plan mode is off for this reply, or no OtherBench reply is running.'),
   };
 }
@@ -120,15 +130,15 @@ function errorResult(text: string): CallToolResult {
 /**
  * OtherBench's MCP server for one Claude Code process, named by `otherBenchServerName`:
  * an in-process MCP server answering `tools/list` and `tools/call` itself.
- * Every tool is always loaded (never deferred behind tool search, which a
- * clean chat doesn't have). A call to an unknown tool, or one that throws,
+ * A tool marked `alwaysLoad` is never deferred behind tool search; the rest
+ * are, as Claude Code defers any MCP server's tools. A call to an unknown tool, or one that throws,
  * comes back as an error result rather than failing the request.
  */
 export function otherBenchMcpServer(name: string, tools: OtherBenchServerTool[]): McpSdkServerConfigWithInstance {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const instance = new McpServer({ name, version: '1.0.0' }, { capabilities: { tools: {} } });
   instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, _meta: { 'anthropic/alwaysLoad': true } })),
+    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...(t.alwaysLoad ? { _meta: { 'anthropic/alwaysLoad': true } } : {}) })),
   }));
   instance.server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const tool = byName.get(request.params.name);

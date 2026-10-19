@@ -142,6 +142,44 @@ describe('AiSdkChatEngine.stream', () => {
     });
   });
 
+  it('reports cache reads and writes from the provider usage', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel([
+        { type: 'stream-start', warnings: [] },
+        { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1000, noCache: 100, cacheRead: 600, cacheWrite: 300 }, outputTokens: { total: 5 } } },
+      ]),
+    });
+    const events = await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest()));
+    expect(events.at(-1)).toMatchObject({ type: 'finish', usage: { tokensIn: 1000, tokensCached: 600, tokensCacheWrite: 300 } });
+  });
+
+  describe('prompt caching', () => {
+    const finishOnly = () => stepsForModel([{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]);
+    const withSystem = (): CanonMessage[] => [
+      { ...userMessage('You are terse.'), role: 'system' },
+      userMessage('hello'),
+    ];
+
+    it('asks Anthropic to cache the system prompt and the growing conversation', async () => {
+      const model = new MockLanguageModelV3({ doStream: finishOnly() });
+      await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ messages: withSystem() })));
+      const call = model.doStreamCalls[0]!;
+      // Top-level automatic caching: the breakpoint follows the newest block, step after step.
+      expect(call.providerOptions?.['anthropic']).toMatchObject({ cacheControl: { type: 'ephemeral' } });
+      // And a fixed one on the system prompt, which (with the tools before it) is the same every turn.
+      const system = call.prompt.find((m) => m.role === 'system');
+      expect(system?.providerOptions?.['anthropic']).toMatchObject({ cacheControl: { type: 'ephemeral' } });
+    });
+
+    it('leaves other providers alone', async () => {
+      const model = new MockLanguageModelV3({ doStream: finishOnly() });
+      await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ messages: withSystem(), profile: makeResolvedProfile({ connection: makeConnection({ kind: 'openai' }) }) })));
+      const call = model.doStreamCalls[0]!;
+      expect(call.providerOptions?.['anthropic']).toBeUndefined();
+      expect(call.prompt.find((m) => m.role === 'system')?.providerOptions?.['anthropic']).toBeUndefined();
+    });
+  });
+
   it('maps reasoning-delta chunks through to reasoning-delta EngineEvents', async () => {
     const model = new MockLanguageModelV3({
       doStream: async () => ({

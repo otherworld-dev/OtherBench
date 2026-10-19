@@ -1,7 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
+import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchToolName, type OtherBenchServerTool } from '../src/otherbench-server.js';
+import { relayServerTool } from '../src/relay.js';
 
 /** A real MCP client connected to OtherBench's server over an in-memory link, as Claude Code talks to it. */
 async function connect(tools: OtherBenchServerTool[]): Promise<Client> {
@@ -66,6 +68,18 @@ describe("OtherBench's MCP server, on raw handlers", () => {
     expect(artifact.inputSchema.type).toBe('object');
     expect((artifact.inputSchema.properties as Record<string, { enum?: string[] }>)['command']!.enum).toContain('view');
     for (const t of tools) expect(t._meta).toEqual({ 'anthropic/alwaysLoad': true });
+  });
+
+  it("leaves a relayed MCP tool to tool search, so a big server costs nothing until it's used, and keeps the browser loaded", async () => {
+    const relayed = (name: string, source: ToolSpec['source']): ToolSpec => ({ name, description: `${name} tool`, parameters: { type: 'object', properties: {} }, risk: 'read', source, execute: async () => null });
+    const client = await connect([
+      otherBenchArtifactTool(() => undefined),
+      relayServerTool('nextcloud__deck_list', relayed('mcp__nextcloud__deck_list', 'mcp'), () => undefined),
+      relayServerTool('browser', relayed('browser', 'browser'), () => undefined),
+    ]);
+    const { tools } = await client.listTools();
+    const meta = Object.fromEntries(tools.map((t) => [t.name, t._meta ?? null]));
+    expect(meta).toEqual({ artifact: { 'anthropic/alwaysLoad': true }, nextcloud__deck_list: null, browser: { 'anthropic/alwaysLoad': true } });
   });
 
   it('runs a call on the named tool and returns its result', async () => {
