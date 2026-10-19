@@ -5,10 +5,10 @@ mod computer;
 mod download;
 mod hotkey;
 mod legacy;
+mod links;
 mod notify;
 mod rpc;
 mod sidecar;
-mod site;
 mod terminal;
 mod tray;
 
@@ -111,12 +111,6 @@ async fn save_download(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) 
     download::save(&dir, &name, bytes).map(|p| p.display().to_string())
 }
 
-/// Opens a website from a chat in its own window, with no access to OtherBench (site.rs).
-#[tauri::command]
-fn open_site(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    site::open(&app, &url)
-}
-
 /// Opens a terminal window in a chat's workspace folder (terminal.rs).
 #[tauri::command]
 fn open_terminal(folder: String) -> Result<(), String> {
@@ -207,7 +201,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site, computer_stop, save_download, open_terminal])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_terminal])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
@@ -220,6 +214,8 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // Built here, not by Tauri, so they get the link rules (links.rs).
+            links::app_windows(app.handle())?;
             tray::build(app.handle())?;
             // The window is created hidden (tauri.conf.json) so a sign-in
             // launch never flashes it on screen.
@@ -283,9 +279,7 @@ mod tests {
     /// Tauri lets any page it counts as local call an app command unless the
     /// app declares an ACL manifest. With one, a command needs its
     /// `allow-<command>` permission. The main and quick windows get every
-    /// command but `computer_stop`; the indicator bar gets only that one; a
-    /// website window (site.rs) gets none, even one showing a page Tauri
-    /// counts as local (the dev server's).
+    /// command but `computer_stop`; the indicator bar gets only that one.
     #[test]
     fn every_app_command_needs_a_permission_only_the_right_windows_have() {
         let build = include_str!("../build.rs");
@@ -306,6 +300,16 @@ mod tests {
                 assert!(!indicator_granted.contains(&permission), "{permission} must not be granted to the indicator");
             }
         }
+    }
+
+    #[test]
+    fn the_app_windows_open_web_links_and_reveal_files_but_never_open_them() {
+        let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(caps["windows"], serde_json::json!(["main", "quick"]));
+        assert!(caps.get("remote").is_none());
+        let permissions = caps["permissions"].to_string();
+        assert!(permissions.contains("opener:allow-open-url"), "web links need the opener: {permissions}");
+        assert!(!permissions.contains("open-path"), "Show in folder must never open a file: {permissions}");
     }
 
     #[test]

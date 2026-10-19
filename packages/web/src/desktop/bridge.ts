@@ -152,17 +152,7 @@ export const autostart = {
   },
 };
 
-/** Opens a website from a chat: its own isolated window in the desktop app, a new tab with no link back to OtherBench in a browser. */
-export async function openSite(url: string): Promise<void> {
-  if (!isDesktop()) {
-    window.open(url, '_blank', 'noopener,noreferrer');
-    return;
-  }
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('open_site', { url });
-}
-
-/** Opens a website in the default browser (desktop), or a new tab in a browser. */
+/** Opens a website in the default browser (desktop), or a new tab with no link back to OtherBench in a browser. */
 export async function openInBrowser(url: string): Promise<void> {
   if (!isDesktop()) {
     window.open(url, '_blank', 'noopener,noreferrer');

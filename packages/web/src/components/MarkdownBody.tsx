@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type ComponentPropsWithoutRef, type JSX } fr
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+import { openInBrowser } from '../desktop/bridge.js';
 import { isRelativePath, joinPath, looksLikePath } from '../viewer/paths.js';
 import { ViewerImage } from '../viewer/ViewerImage.js';
 import { useViewer } from '../viewer/ViewerContext.js';
@@ -64,24 +65,26 @@ function urlTransform(url: string): string {
 type FromMarkdown<T extends keyof JSX.IntrinsicElements> = ComponentPropsWithoutRef<T> & { node?: unknown };
 
 /**
- * Inside a chat, websites open in their own window (Ctrl-click: the browser)
- * and paths in the viewer, a viewed file's relative ones from its own folder;
- * other schemes (mailto:) and in-page anchors are left alone.
+ * Websites open in the default browser, never inside OtherBench, chat or not
+ * (the desktop shell's links.rs does the same for anything that asks it for a
+ * new window). Inside a chat paths open in the viewer, a viewed file's
+ * relative ones from its own folder; other schemes (mailto:) and in-page
+ * anchors are left alone.
  */
 function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'> & { files: MarkdownFiles | undefined }): JSX.Element {
   const viewer = useViewer();
-  if (!viewer || !href) return <a href={href} {...rest}>{children}</a>;
+  const web = href !== undefined && /^https?:\/\//i.test(href);
+  if (!href || (!viewer && !web)) return <a href={href} {...rest}>{children}</a>;
   return (
     <a
       href={href}
       {...rest}
       onClick={(e) => {
         if (href.startsWith('#')) return;
-        const web = /^https?:\/\//i.test(href);
         if (!web && /^[a-z][a-z0-9+.-]*:/i.test(href) && !/^file:/i.test(href)) return;
         e.preventDefault();
-        if (web) viewer.openLink(href, { external: e.ctrlKey || e.metaKey });
-        else viewer.openPath(files && isRelativePath(href) ? joinPath(files.base, hrefToPath(href)) : hrefToPath(href));
+        if (web) void openInBrowser(href);
+        else viewer?.openPath(files && isRelativePath(href) ? joinPath(files.base, hrefToPath(href)) : hrefToPath(href));
       }}
     >
       {children}

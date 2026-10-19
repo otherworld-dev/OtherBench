@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => false), revealPath: vi.fn(async () => true) }));
+vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => false), revealPath: vi.fn(async () => true), openInBrowser: vi.fn(async () => {}) }));
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
   api: { view: { open: vi.fn(), text: vi.fn() } },
@@ -10,7 +10,7 @@ vi.mock('../state/api.js', async (importOriginal) => ({
 
 vi.mock('./BrowserView.js', () => ({ BrowserView: ({ chatId }: { chatId: string }) => <p>browser of {chatId}</p> }));
 
-import { isDesktop, revealPath } from '../desktop/bridge.js';
+import { isDesktop, openInBrowser, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened } from '../state/api.js';
 import { ItemView, languageOf } from './ItemView.js';
 import { ViewerContext } from './ViewerContext.js';
@@ -110,7 +110,7 @@ describe('ItemView, Markdown files', () => {
       return opened({ path, kind: 'image', name: 'arch.png', url: '/view/i/arch.png' });
     });
     vi.mocked(api.view.text).mockResolvedValue({ path: 'C:\\ws\\docs\\README.md', content: '![Architecture](img/arch.png) ![Gone](img/gone.png)\n\n[Next](./sub/next.md) [Up](../top.md) [Site](https://example.com)', truncated: false, size: 1 });
-    const actions = { openPath: vi.fn(), openArtifact: vi.fn(), openLink: vi.fn() };
+    const actions = { openPath: vi.fn(), openArtifact: vi.fn() };
     render(
       <ViewerContext.Provider value={actions}>
         <ItemView chatId="c1" item={item('docs/README.md')} />
@@ -125,7 +125,7 @@ describe('ItemView, Markdown files', () => {
     await user.click(screen.getByRole('link', { name: 'Up' }));
     expect(actions.openPath).toHaveBeenLastCalledWith('C:\\ws\\top.md');
     await user.click(screen.getByRole('link', { name: 'Site' }));
-    expect(actions.openLink).toHaveBeenCalledWith('https://example.com', { external: false });
+    expect(openInBrowser).toHaveBeenCalledWith('https://example.com');
   });
 
   it("shows the chat's browser for the browser item", () => {

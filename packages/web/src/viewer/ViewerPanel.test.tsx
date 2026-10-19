@@ -3,14 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 
-vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => false), revealPath: vi.fn(), openSite: vi.fn(async () => {}) }));
+vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => false), revealPath: vi.fn(), openInBrowser: vi.fn(async () => {}) }));
 vi.mock('./ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
   api: { view: { roots: vi.fn(), dir: vi.fn() }, artifacts: { list: vi.fn(async () => ({ artifacts: [] })) } },
 }));
 
-import { openSite } from '../desktop/bridge.js';
+import { openInBrowser } from '../desktop/bridge.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { viewTabId } from './items.js';
@@ -76,7 +76,7 @@ describe('ViewerPanel', () => {
     await user.type(address, 'docs/c.md{Enter}');
     expect(screen.getByTestId('item-view')).toHaveTextContent('docs/c.md');
     await user.type(address, 'https://example.com{Enter}');
-    expect(openSite).toHaveBeenCalledWith('https://example.com');
+    expect(openInBrowser).toHaveBeenCalledWith('https://example.com');
 
     await user.click(screen.getByRole('button', { name: 'Open as tab' }));
     expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c1', viewTabId('c1', { kind: 'file', path: 'docs/c.md' })]);

@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "OtherBench",
         "width": 1280,
         "height": 820,
@@ -23,6 +24,7 @@
       },
       {
         "label": "quick",
+        "create": false,
         "title": "OtherBench quick chat",
         "url": "index.html?view=quick",
         "width": 560,
