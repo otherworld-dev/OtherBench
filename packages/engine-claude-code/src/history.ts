@@ -1,8 +1,12 @@
 import { isAskTool, isPlanTool } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 
-/** Most recent characters of seeded history kept for a fresh session. */
-export const HISTORY_CHAR_LIMIT = 200_000;
+/**
+ * Most recent characters of seeded history kept for a fresh session, about
+ * 15K tokens. The seed stays in the session it starts, so it is read again
+ * with every later turn there, not only once.
+ */
+export const HISTORY_CHAR_LIMIT = 60_000;
 
 function pathOrCommand(args: unknown): string {
   if (typeof args !== 'object' || args === null) return '';
@@ -42,11 +46,29 @@ function renderParts(parts: Part[], results: Map<string, ResultSeen>): string {
   return lines.join('\n');
 }
 
+/** The newest of `blocks` that fit in HISTORY_CHAR_LIMIT, whole; the end of the newest alone when it doesn't fit by itself. */
+function newestThatFit(blocks: string[]): string {
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!;
+    const add = block.length + (kept.length > 0 ? 2 : 0);
+    if (size + add > HISTORY_CHAR_LIMIT) {
+      if (kept.length === 0) kept.push(block.slice(block.length - HISTORY_CHAR_LIMIT));
+      break;
+    }
+    kept.unshift(block);
+    size += add;
+  }
+  return kept.join('\n\n');
+}
+
 /**
  * OtherBench's history for a branch, as context for a fresh Claude Code session
  * (spec §2 rule 2): every message before the new user message, text verbatim,
  * tool calls as one-liners, reasoning and system prompts dropped. Keeps the
- * most recent HISTORY_CHAR_LIMIT characters.
+ * newest whole messages that fit in HISTORY_CHAR_LIMIT characters (the end of
+ * the newest one alone, when even that is longer).
  */
 export function renderHistory(history: CanonMessage[]): string {
   const prior = history.filter((m) => m.role !== 'system').slice(0, -1);
@@ -74,6 +96,6 @@ export function renderHistory(history: CanonMessage[]): string {
     return out.join('\n\n');
   });
   let body = blocks.join('\n\n');
-  if (body.length > HISTORY_CHAR_LIMIT) body = `[earlier messages omitted]\n${body.slice(body.length - HISTORY_CHAR_LIMIT)}`;
+  if (body.length > HISTORY_CHAR_LIMIT) body = `[earlier messages omitted]\n${newestThatFit(blocks)}`;
   return `<otherbench-history>\nThe conversation so far in OtherBench, before you joined it:\n\n${body}\n</otherbench-history>`;
 }
