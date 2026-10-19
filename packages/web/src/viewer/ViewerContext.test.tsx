@@ -2,11 +2,11 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../desktop/bridge.js', () => ({ openSite: vi.fn(async () => {}), openInBrowser: vi.fn(async () => {}), isDesktop: () => false }));
+vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}), isDesktop: () => false }));
 
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { Message } from '../components/Message.js';
-import { openInBrowser, openSite } from '../desktop/bridge.js';
+import { openInBrowser } from '../desktop/bridge.js';
 import { useViewerStore, viewerFor } from './state.js';
 import { ViewerContext, viewerActionsFor } from './ViewerContext.js';
 
@@ -67,7 +67,7 @@ describe('opening things from a chat', () => {
     expect(screen.queryByRole('button', { name: /nope/ })).toBeNull();
   });
 
-  it("opens links as websites (Ctrl-click in the browser) and paths in that chat's own panel", async () => {
+  it("opens websites in the default browser and paths in that chat's own panel", async () => {
     const user = userEvent.setup();
     render(
       <>
@@ -80,10 +80,6 @@ describe('opening things from a chat', () => {
       </>
     );
     await user.click(screen.getByRole('link', { name: 'the site' }));
-    expect(openSite).toHaveBeenCalledWith('https://example.com');
-    await user.keyboard('{Control>}');
-    await user.click(screen.getByRole('link', { name: 'the site' }));
-    await user.keyboard('{/Control}');
     expect(openInBrowser).toHaveBeenCalledWith('https://example.com');
 
     await user.click(screen.getByRole('link', { name: 'notes' }));

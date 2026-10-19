@@ -1,6 +1,6 @@
 import { useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
-import { openSite } from '../desktop/bridge.js';
+import { openInBrowser } from '../desktop/bridge.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { FileTree } from './FileTree.js';
 import { ItemView } from './ItemView.js';
@@ -28,7 +28,7 @@ export function ViewerPanel({ chat, browserUsed = false }: { chat: Chat; browser
   function go(): void {
     const value = address.trim();
     if (value === '') return;
-    if (/^https?:\/\//i.test(value)) void openSite(value);
+    if (/^https?:\/\//i.test(value)) void openInBrowser(value);
     else openItem(chat.id, { kind: 'file', path: value });
     setAddress('');
   }
