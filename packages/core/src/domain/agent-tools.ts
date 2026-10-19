@@ -31,8 +31,12 @@ const AGENT_MESSAGE = ['SendMessage'];
 // arrives is `other` and gets a card.
 const ALWAYS_DISALLOWED = ['EnterPlanMode', 'ExitPlanMode'];
 
-/** The internal tools a clean chat (no folder) is given besides web search and fetch. */
-export const CLEAN_CHAT_AGENT_TOOLS: readonly string[] = ['TodoWrite', 'AskUserQuestion'];
+/**
+ * The internal tools a clean chat (no folder) is given besides web search and
+ * fetch. ToolSearch is what lets Claude Code hold relayed MCP tools back until
+ * the model looks one up, instead of sending every schema with every request.
+ */
+export const CLEAN_CHAT_AGENT_TOOLS: readonly string[] = ['TodoWrite', 'AskUserQuestion', 'ToolSearch'];
 
 /** Argument keys Claude Code tools use for a filesystem path. */
 export const AGENT_PATH_ARG_KEYS: readonly string[] = ['file_path', 'notebook_path', 'path'];

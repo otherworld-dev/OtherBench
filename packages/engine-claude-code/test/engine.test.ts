@@ -360,7 +360,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
     expect(o.cwd).toBe(folder);
     expect(o.settingSources).toEqual([]);
     expect(o.strictMcpConfig).toBe(true);
-    expect(o.tools).toEqual(['WebSearch', 'WebFetch', 'TodoWrite', 'AskUserQuestion']);
+    expect(o.tools).toEqual(['WebSearch', 'WebFetch', 'TodoWrite', 'AskUserQuestion', 'ToolSearch']);
     expect(o.systemPrompt).toBe('Be brief.');
     expect(events).toContainEqual(expect.objectContaining({ type: 'engine-meta', meta: expect.objectContaining({ cwd: folder }) }));
     expect(events.at(-1)).toMatchObject({ type: 'finish' });
@@ -370,7 +370,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     const toolPolicy = { fs: 'readwrite' as const, shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const, agentWeb: false };
     await collect(clean(query).stream(req({ workspaceRoot: null, chatId: 'c1', profile: profile({ toolPolicy }) })));
-    expect(calls[0]!.options.tools).toEqual(['TodoWrite', 'AskUserQuestion']);
+    expect(calls[0]!.options.tools).toEqual(['TodoWrite', 'AskUserQuestion', 'ToolSearch']);
     expect(calls[0]!.options.systemPrompt).toBeUndefined();
   });
 

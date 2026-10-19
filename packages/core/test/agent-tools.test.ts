@@ -39,7 +39,7 @@ describe('agentDisallowedTools', () => {
   it("always removes Claude Code's own plan mode tools, and no longer AskUserQuestion", () => {
     expect(agentDisallowedTools(policy())).toEqual(['EnterPlanMode', 'ExitPlanMode']);
   });
-  it('lists the internal tools a clean chat gets', () => expect(CLEAN_CHAT_AGENT_TOOLS).toEqual(['TodoWrite', 'AskUserQuestion']));
+  it('lists the internal tools a clean chat gets', () => expect(CLEAN_CHAT_AGENT_TOOLS).toEqual(['TodoWrite', 'AskUserQuestion', 'ToolSearch']));
   it('removes tools the policy forbids', () => {
     const list = agentDisallowedTools(policy({ fs: 'off', shell: false, agentWeb: false }));
     for (const t of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'Bash', 'BashOutput', 'KillShell', 'WebFetch', 'WebSearch']) {

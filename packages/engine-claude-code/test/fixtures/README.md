@@ -79,3 +79,15 @@ Haiku, the user's settings (`settingSources: ['user','project','local']`), `disa
 - Setup as OtherBench runs a turn: `settings` carries `SECRET_DENY_RULES` on the flag-settings layer, `settingSources: []`, and the PreToolUse hook answers allow for Grep and Glob. Throwaway folders with fake canaries: the chat's folder (`.env`, `sub/.env.local`, `.claude/certificates/k.pem`, `normal.txt`) and a second folder outside it (`.env`, `ok.txt`). Grep `CANARY_` (content) and Glob `**/*` over each folder.
 - With the rules: both ordinary files found; none of the four secrets in any Grep result, and no `.env`, `.env.local` or `k.pem` in any Glob listing, in the chat's folder and in the folder outside it alike. The unanchored rules apply wherever a search starts.
 - Control, no rules: all four secrets in the Grep results and all three names in the Glob listings. So the hook's allow doesn't override the flag-settings deny rules inside these tools.
+
+## Token cost of a turn, and relayed tools left to tool search (probe-token-cost.mjs, probe-deferred-relay.mjs, SDK 0.3.287, 2026-10-19)
+
+- probe-token-cost, sonnet, "Reply with exactly: OK", one turn, input tokens of the request (all of it a cache write on a fresh session):
+  - workspace chat as OtherBench starts one (preset prompt, `settingSources: ['user','project','local']`, this repo, the author's own user setup): 54,985, 85 tools in init;
+  - the same with `settingSources: ['project','local']`: 38,165, 34 tools. The user layer (global CLAUDE.md, plugins and their skills, SessionStart hooks, user MCP servers) was about 17K;
+  - clean chat: 4,001;
+  - clean chat + 40 relayed tools (a paragraph and four fields each) with `anthropic/alwaysLoad`: 14,479. About 260 tokens a tool, on every request;
+  - the same 40 left to tool search, with ToolSearch in `tools`: 4,058.
+- probe-deferred-relay, clean chat, 40 relayed tools left to tool search through OtherBench's own server and relay code, "What is the newest open support ticket?", the answer in `tickets_list_open`:
+  - realistic tool names: sonnet and haiku each ran ToolSearch, then `tickets_list_open`, and answered (twice each for haiku). The whole reply's input was about the same as with every tool loaded (sonnet 13,520 deferred vs 13,864 loaded; haiku about 11,580 vs 11,077): the search costs one more short request, and each request is smaller. The saving is on every request that doesn't use the tools.
+  - names that say nothing (`collection_<n>`, only the description naming the tickets): sonnet still found it at once; haiku searched seven times and called 24 tools before the right one (106,004 tokens, against 11,021 with every tool loaded). A server whose tool names don't say what they do is the case where tool search costs more.
