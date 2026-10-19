@@ -998,11 +998,15 @@ cross-site form can't. The served type is from a fixed list with `nosniff`;
 everything but PDF gets the sandbox CSP (opaque origin, network https/wss
 only), and HTML iframes are `sandbox="allow-scripts allow-forms"`. PDF is the
 exception (Chromium won't show one sandboxed): it can't script the page, but
-it isn't sandboxed either. Websites open in a `site-<n>` window that no
-capability matches. Every app command needs an `allow-<command>` permission
-(`build.rs` declares the app manifest), granted only to the main and quick
-windows, so a site window can call none, even one showing a page Tauri counts
-as local (the dev server's). Show in folder reveals and never opens. A
+it isn't sandboxed either. Websites open in the default browser, never in
+OtherBench: links and the viewer's address box call `openInBrowser`, and
+every shell window is built through `links.rs` (main and quick are
+`create: false` in tauri.conf.json for this), so a window never navigates
+itself to a website (a dropped link) and a request for a new window ("Open
+link in new window", Shift- or middle-click, `window.open`) is always denied,
+a website going to the default browser instead. Every app command needs
+an `allow-<command>` permission (`build.rs` declares the app manifest),
+granted only to the main and quick windows. Show in folder reveals and never opens. A
 viewed Markdown file's relative links and images resolve from its own
 folder; each image gets its own `/view/` link (`ViewerImage`), so it goes
 through the same containment. A path Windows would read as another file is

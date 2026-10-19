@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the main and quick-chat windows. Each app command needs its allow-<command> permission (build.rs declares the app manifest), granted only here. Opener: web links and Show in folder only, never opening a file. Website windows (site-<n>) match nothing here, so they can call no command at all.",
+  "description": "Permissions for the main and quick-chat windows. Each app command needs its allow-<command> permission (build.rs declares the app manifest), granted only here. Opener: web links (the default browser) and Show in folder only, never opening a file.",
   "windows": ["main", "quick"],
   "permissions": [
     "core:default",
@@ -18,7 +18,6 @@
     "allow-hide-quick",
     "allow-open-chat",
     "allow-show-notification",
-    "allow-open-site",
     "allow-save-download",
     "allow-open-terminal"
   ]

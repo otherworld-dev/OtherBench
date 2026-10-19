@@ -15,7 +15,7 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use super::facts::{Facts, Identity};
@@ -136,7 +136,7 @@ impl Desktop for WinDesktop {
             .unwrap_or(400.0);
         let url = format!("index.html?view=indicator&title={}", percent_encode(title));
         let built = self.bounded(move |app, abandoned| {
-            let window = WebviewWindowBuilder::new(app, INDICATOR, WebviewUrl::App(url.into()))
+            let window = crate::links::window(app, INDICATOR, WebviewUrl::App(url.into()))
                 .title("OtherBench is controlling this computer")
                 .decorations(false)
                 .always_on_top(true)
