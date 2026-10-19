@@ -77,6 +77,14 @@ describe('buildUsageRollup', () => {
     expect(rollup.totalMeasuredCost).toBe(3.75);
   });
 
+  it('sums the cache writes per profile', () => {
+    const rollup = buildUsageRollup(
+      [usage({ id: 'a', messageId: 'm1', tokensCacheWrite: 300 }), usage({ id: 'b', messageId: 'm2' }), usage({ id: 'c', messageId: 'm3', tokensCacheWrite: 50 })],
+      [assistantMessage({ id: 'm1' }), assistantMessage({ id: 'm2' }), assistantMessage({ id: 'm3' })]
+    );
+    expect(rollup.profiles[0]!.tokensCacheWrite).toBe(350);
+  });
+
   it('a background row never makes a failed reply measured', () => {
     const rollup = buildUsageRollup([usage({ id: 'title', messageId: 'm1', purpose: 'title' })], [assistantMessage({ id: 'm1', status: 'error' })]);
     expect(rollup.totalUnmeasuredErrorCount).toBe(1);

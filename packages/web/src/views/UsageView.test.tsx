@@ -64,7 +64,7 @@ describe('UsageView', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 12.5,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'gpt-x', currency: 'USD', measuredCost: 12.5, tokensIn: 1000, tokensOut: 500, tokensCached: 0, tokensReasoning: 0, completeCount: 3, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'gpt-x', currency: 'USD', measuredCost: 12.5, tokensIn: 1000, tokensOut: 500, tokensCached: 0, tokensCacheWrite: 0, tokensReasoning: 0, completeCount: 3, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 0 }],
         chats: [{ chatId: 'c1', chatTitle: 'Ocean facts', measuredCost: 12.5, cancelledCount: 0, unmeasuredErrorCount: 0 }],
         buckets: [{ date: '2026-08-10', cost: 12.5 }],
       })
@@ -77,6 +77,23 @@ describe('UsageView', () => {
     expect(screen.getByText('Alpha')).toBeInTheDocument();
     expect(screen.getByText('Ocean facts')).toBeInTheDocument();
     expect(screen.getByText('2026-08-10')).toBeInTheDocument();
+  });
+
+  it("shows a profile's cache reads and writes and its title and memory calls", async () => {
+    reset();
+    mockedUsageGet.mockResolvedValue(
+      makeRollup({
+        totalMeasuredCost: 1,
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'sonnet', currency: 'USD', measuredCost: 1, tokensIn: 50_000, tokensOut: 500, tokensCached: 40_000, tokensCacheWrite: 9_000, tokensReasoning: 0, completeCount: 3, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0, backgroundCount: 2 }],
+      })
+    );
+    mockedModelsList.mockResolvedValue([]);
+
+    render(<UsageView onClose={vi.fn()} />);
+
+    await screen.findByTestId('usage-total');
+    expect(screen.getByText('40,000 read from cache, 9,000 written')).toBeInTheDocument();
+    expect(screen.getByText('2 title or memory calls')).toBeInTheDocument();
   });
 
   it('surfaces cancelled/unmeasured calls as a callout, not folded into the total', async () => {

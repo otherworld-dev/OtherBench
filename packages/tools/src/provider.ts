@@ -647,7 +647,8 @@ export class OtherBenchToolProvider implements ToolProvider {
   /** Each MCP tool's spec with its origin, so a live call can reach the server under the tool's own name. */
   private mcpEntries(serverIds: string[]): McpEntry[] {
     const entries: McpEntry[] = [];
-    for (const { id, name, client } of this.mcp.listFor(serverIds)) {
+    // A server that is reconnecting keeps its tools on offer (a call to one says it isn't connected), so the set stays the same.
+    for (const { id, name, client } of this.mcp.listFor(serverIds, { reconnecting: true })) {
       for (const tool of client.tools) {
         const namespacedName = `mcp__${sanitizeNameSegment(name)}__${sanitizeNameSegment(tool.name)}`;
         entries.push({
