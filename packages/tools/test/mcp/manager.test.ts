@@ -88,6 +88,26 @@ describe('McpServerManager', () => {
     expect(manager.listFor(['srv-1'])).toHaveLength(0);
   });
 
+  it('keeps offering a reconnecting server\'s last tools when asked to, but never one waiting for sign-in', async () => {
+    const store = new InMemoryStore();
+    store.mcpServers.create(makeRow());
+    const manager = makeManager(store);
+    await manager.sync();
+    await waitFor(() => manager.health()[0]?.status === 'ok');
+    const client = manager.listFor(['srv-1'])[0]!.client;
+
+    for (const status of ['error', 'connecting'] as const) {
+      client.status = status;
+      // A call needs the connection itself.
+      expect(manager.listFor(['srv-1'])).toHaveLength(0);
+      // What a turn is offered stays as it was, so its prompt stays the same while the server comes back.
+      expect(manager.listFor(['srv-1'], { reconnecting: true }).map((s) => s.client.tools.length)).toEqual([2]);
+    }
+    client.status = 'needs_auth';
+    expect(manager.listFor(['srv-1'], { reconnecting: true })).toHaveLength(0);
+    client.status = 'ok';
+  });
+
   it('refresh() forces a reconnect for one server without touching others', async () => {
     const store = new InMemoryStore();
     store.mcpServers.create(makeRow({ id: 'srv-1', name: 'A' }));

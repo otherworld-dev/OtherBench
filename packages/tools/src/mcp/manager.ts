@@ -45,6 +45,11 @@ function persistedStatus(status: McpClient['status']): McpServer['status'] {
   return status;
 }
 
+/** A server that listed tools once and is reconnecting; not one waiting for a sign-in, which only the user can end. */
+function offeredWhileReconnecting(client: McpClient): boolean {
+  return (client.status === 'error' || client.status === 'connecting') && client.tools.length > 0;
+}
+
 /**
  * Owns one live `McpClient` per ENABLED `mcp_server` row, and keeps that
  * row's `status`/`toolsCache` columns in step with the client's own
@@ -279,14 +284,22 @@ export class McpServerManager {
     return before !== clientId || secret !== undefined;
   }
 
-  /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools. */
-  listFor(serverIds: string[]): { id: string; name: string; client: McpClient }[] {
+  /**
+   * Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools.
+   *
+   * With `reconnecting`, a server that dropped and is coming back (`error`,
+   * `connecting`) is listed too, with the tools it last listed: what a turn is
+   * offered then stays the same while the connection blips, so a chat's
+   * prompt cache holds and a Claude Code chat keeps its process (the relayed
+   * tools are part of its key). A call made meanwhile still needs `ok`.
+   */
+  listFor(serverIds: string[], opts: { reconnecting?: boolean } = {}): { id: string; name: string; client: McpClient }[] {
     const rows = new Map(this.store.mcpServers.list().map((r) => [r.id, r]));
     const out: { id: string; name: string; client: McpClient }[] = [];
     for (const id of serverIds) {
       const client = this.clients.get(id);
       const row = rows.get(id);
-      if (!client || !row || client.status !== 'ok') continue;
+      if (!client || !row || !(client.status === 'ok' || (opts.reconnecting === true && offeredWhileReconnecting(client)))) continue;
       out.push({ id, name: row.name, client });
     }
     return out;

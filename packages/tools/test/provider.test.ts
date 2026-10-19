@@ -195,6 +195,21 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
     expect(listed.filter((t) => t.name === 'run_command' || t.name === 'browser').map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox'], ['browser', 'browser']]);
   });
 
+  it("keeps a reconnecting server's tools in the list, and a call to one says it isn't connected", async () => {
+    const store = new InMemoryStore();
+    const client = { id: 's1', status: 'error', lastError: 'gone', tools: [{ name: 'deck_list', description: '', inputSchema: {} }], callTool: async () => ({ content: [], isError: false }) } as unknown as McpClient;
+    const mcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = {
+      listFor: (ids, opts) => (ids.includes('s1') && (opts?.reconnecting === true || client.status === 'ok') ? [{ id: 's1', name: 'nextcloud', client }] : []),
+      refresh: async () => {},
+      shutdown: async () => {},
+    };
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
+    const relayed = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
+    expect(relayed.map((t) => t.name)).toEqual(['mcp__nextcloud__deck_list']);
+    expect(await relayed[0]!.execute({}, ctx())).toMatchObject({ error: true, code: 'mcp_call_failed', message: 'MCP server "nextcloud" isn\'t connected.' });
+    expect((await provider.listTools(policy({ mcpServerIds: ['s1'] }))).map((t) => t.name)).toContain('mcp__nextcloud__deck_list');
+  });
+
   it("cuts an MCP tool's text at 100,000 characters in all, with a note saying so", async () => {
     const store = new InMemoryStore();
     const client = {
