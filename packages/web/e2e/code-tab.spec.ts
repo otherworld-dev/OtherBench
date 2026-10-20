@@ -47,7 +47,7 @@ test.beforeEach(() => {
 test.afterEach(() => {
   if (!repo) return;
   try {
-    rmSync(repo, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
   } catch {
     /* best-effort cleanup */
   }
