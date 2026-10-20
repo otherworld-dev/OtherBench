@@ -142,6 +142,13 @@ export interface OtherBenchState {
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
   /**
+   * The app event stream's latest `turn-finished`, a fresh object each time,
+   * so a subscriber sees every one, two in a row in one chat included. The
+   * Code tab refreshes its issues (and git) after a turn in one of the app's
+   * chats (`code/useCodeRefresh.ts`, spec 2026-10-20-code-tab-design).
+   */
+  lastTurnFinished: { chatId: string; messageId: string } | null;
+  /**
    * Per chat, bumped when a turn starts or finishes there that this window
    * didn't start and hasn't loaded (sent from another window, or from the
    * other machine): an open chat reloads its messages (useChatSync).
@@ -664,6 +671,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   computerSessions: {},
   appBackgroundChats: {},
   syncRevision: 0,
+  lastTurnFinished: null,
   chatReloads: {},
   machines: null,
   setMachines: (machines) =>
@@ -727,6 +735,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
           const stale = !known || known.status === 'streaming';
           return {
             appRunningTurns: running,
+            lastTurnFinished: { chatId: event.chatId, messageId: event.messageId },
             ...(kept.length === entries.length ? {} : { appPendingApprovals: Object.fromEntries(kept) }),
             ...(stale ? { chatReloads: bump(state.chatReloads, event.chatId) } : {}),
           };

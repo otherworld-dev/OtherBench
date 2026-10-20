@@ -86,7 +86,8 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
           <AppChats app={app} />
           <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
             <h3 className={HEADING}>Issues</h3>
-            <IssuesTab app={app} />
+            {/* Keyed: another app's home starts from its own open issues, not this one's filter or list. */}
+            <IssuesTab key={app.id} app={app} />
           </section>
         </div>
       </div>

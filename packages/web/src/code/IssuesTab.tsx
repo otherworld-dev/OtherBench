@@ -7,6 +7,7 @@ import { formatAge, formatRelativeTime } from '../lib/relativeTime.js';
 import { api } from '../state/api.js';
 import { CodeErrorLine, NO_GITHUB_REPO } from './CodeError.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
+import { useCodeRefresh } from './useCodeRefresh.js';
 
 type IssueState = 'open' | 'closed';
 
@@ -70,14 +71,23 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   const [reload, setReload] = useState(0);
   const repo = app.githubRepo;
 
+  // On focus and after a turn in one of the app's chats, as well as from ↻ (spec "Calls I made").
+  useCodeRefresh(app.id, () => setReload((n) => n + 1));
+  // Another app or state starts from Loading…; a refresh keeps the list showing until the new one arrives.
   useEffect(() => {
     setList(null);
     setError(null);
+  }, [app.id, repo, state]);
+  useEffect(() => {
     // Nothing to ask gh about: the server would only answer no-github-repo.
     if (!repo) return;
     let cancelled = false;
     api.apps.issues.list(app.id, state).then(
-      (r) => !cancelled && setList(r),
+      (r) => {
+        if (cancelled) return;
+        setList(r);
+        setError(null);
+      },
       (err: unknown) => !cancelled && setError(err)
     );
     return () => {
@@ -172,11 +182,15 @@ function IssueView({ app, number, onBack }: { app: App; number: number; onBack: 
   const [busy, setBusy] = useState<'comment' | 'state' | 'chat' | null>(null);
   const [actionError, setActionError] = useState<{ error: unknown; fallback: string } | null>(null);
 
+  useCodeRefresh(app.id, () => setReload((n) => n + 1));
   useEffect(() => {
     let cancelled = false;
-    setLoadError(null);
     api.apps.issues.get(app.id, number).then(
-      (r) => !cancelled && setIssue(r),
+      (r) => {
+        if (cancelled) return;
+        setIssue(r);
+        setLoadError(null);
+      },
       (err: unknown) => !cancelled && setLoadError(err)
     );
     return () => {

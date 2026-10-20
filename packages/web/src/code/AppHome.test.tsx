@@ -107,6 +107,20 @@ describe('AppHome', () => {
     }
   });
 
+  it("another app's home starts its issues afresh: open issues, its own list", async () => {
+    useOtherBenchStore.setState({ apps: [app(), app({ id: 'a2', name: 'Other' })], appsLoaded: true });
+    const user = userEvent.setup();
+    const { rerender } = render(<AppHome appId="a1" />);
+    await within(screen.getByTestId('app-home-issues')).findByTestId('issue-row-48');
+    await user.click(screen.getByRole('button', { name: 'Closed' }));
+    await waitFor(() => expect(api.apps.issues.list).toHaveBeenLastCalledWith('a1', 'closed'));
+    vi.mocked(api.apps.issues.list).mockClear();
+    rerender(<AppHome appId="a2" />);
+    await waitFor(() => expect(api.apps.issues.list).toHaveBeenCalledWith('a2', 'open'));
+    expect(api.apps.issues.list).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('waits for the app list before calling an app missing', () => {
     render(<AppHome appId="a1" />);
     expect(screen.getByText('Loading…')).toBeInTheDocument();

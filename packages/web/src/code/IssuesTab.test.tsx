@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { App } from '@otherbench/core/ports/store.js';
+import type { App, Chat } from '@otherbench/core/ports/store.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -28,6 +28,10 @@ import { startChatFromIssue } from './startChatFromIssue.js';
 
 const app = (over: Partial<App> = {}): App => ({
   id: 'a1', name: 'OtherBench', workspace: null, githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+});
+const chat = (id: string, appId: string | null): Chat => ({
+  id, title: `Chat ${id}`, profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
+  projectId: null, appId, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
 });
 const summary = (n: number, title: string, over: Partial<IssueSummary> = {}): IssueSummary => ({
   number: n, title, state: 'open', author: 'adam', labels: [], comments: 0, createdAt: `2026-10-${String(n % 28 + 1).padStart(2, '0')}T10:00:00Z`, updatedAt: '2026-10-20T10:00:00Z',
@@ -123,6 +127,40 @@ describe('IssuesTab', () => {
     await screen.findByTestId('issue-detail');
     await user.click(screen.getByRole('button', { name: 'Start a chat on this' }));
     expect(startChatFromIssue).toHaveBeenCalledWith(a, detail());
+  });
+
+  it('refetches the list when the window is focused (spec "Calls I made": refresh on focus)', async () => {
+    render(<IssuesTab app={app()} />);
+    await screen.findByTestId('issue-row-48');
+    expect(api.apps.issues.list).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(api.apps.issues.list).toHaveBeenCalledTimes(2));
+  });
+
+  it("refetches after a turn finishes in one of the app's chats, but not another app's", async () => {
+    useOtherBenchStore.setState({ chats: [chat('c1', 'a1'), chat('c2', 'a2')] });
+    render(<IssuesTab app={app()} />);
+    await screen.findByTestId('issue-row-48');
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'turn-finished', chatId: 'c2', messageId: 'm1', status: 'complete' }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.apps.issues.list).toHaveBeenCalledTimes(1);
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'm2', status: 'complete' }));
+    await waitFor(() => expect(api.apps.issues.list).toHaveBeenCalledTimes(2));
+  });
+
+  it('an open issue is fetched again on focus', async () => {
+    const user = userEvent.setup();
+    render(<IssuesTab app={app()} />);
+    await user.click(await screen.findByTestId('issue-row-48'));
+    await screen.findByTestId('issue-detail');
+    expect(api.apps.issues.get).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(api.apps.issues.get).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('issue-detail')).toBeInTheDocument();
   });
 
   it('gh-signed-out shows its one line', async () => {
