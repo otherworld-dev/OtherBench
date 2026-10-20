@@ -32,6 +32,11 @@
   --danger: #b42318;
   --success: #4d7c0f;
   --warn: #a16207;
+  /* File-edit diffs (spec 2026-10-20-code-tab-design, Goal 5). */
+  --diff-add-bg: #e3f1d3;
+  --diff-add-text: #2f5209;
+  --diff-del-bg: #fbe1de;
+  --diff-del-text: #8f1d14;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,6 +55,10 @@
     --danger: #e5484d;
     --success: #8fbf4a;
     --warn: #f5c518;
+    --diff-add-bg: #1f2d12;
+    --diff-add-text: #b5dd84;
+    --diff-del-bg: #3a1618;
+    --diff-del-text: #f29a9d;
   }
 }
 

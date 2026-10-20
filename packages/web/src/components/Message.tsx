@@ -3,6 +3,7 @@ import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherb
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
+import { editDiffOf } from '../lib/editDiff.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
@@ -11,6 +12,7 @@ import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
+import { EditDiff } from './EditDiff.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
@@ -484,9 +486,15 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   // state on the <details>) stays stable while more tool parts stream in.
   // Cards made while a run of tools is open wait for it, so parallel calls stay in one group.
   let cards: JSX.Element[] = [];
+  // File edits in the run: they stay in the group (counted, shown in its details) and ALSO show as
+  // diffs right after it, outside any activity fold, so they're visible while it's closed
+  // (spec 2026-10-20-code-tab-design, Goal 5). Pushed without `activity`, so a diff splits a fold.
+  let diffs: JSX.Element[] = [];
   const flush = (): void => {
     if (run.length > 0) out.push({ el: <ToolGroup key={`tools-${runStart}`} run={run} scope={scope} />, activity: { kind: 'tools', run } });
     run = [];
+    out.push(...diffs.map((el) => ({ el })));
+    diffs = [];
     out.push(...cards.map((el) => ({ el })));
     cards = [];
   };
@@ -534,6 +542,11 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       }
       if (run.length === 0) runStart = i;
       run.push(p);
+      const diff = p.type === 'tool-call' ? editDiffOf(p.name, p.args) : null;
+      if (p.type === 'tool-call' && diff) {
+        const result = results.get(p.id);
+        diffs.push(<EditDiff key={`diff-${p.id}`} info={diff} status={result ? (result.isError ? 'failed' : 'applied') : 'pending'} />);
+      }
       return;
     }
     flush();

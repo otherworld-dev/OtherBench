@@ -284,6 +284,23 @@ describe('Message', () => {
       expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();
     });
 
+    it('shows an edit as a diff outside the closed group, which still counts it (spec 2026-10-20-code-tab-design)', () => {
+      const edit = { type: 'tool-call' as const, id: 'e', name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } };
+      render(<Message message={base({ parts: [call('1', 'Read'), result('1', 'Read'), edit, result('e', 'Edit')] })} />);
+      expect(screen.getByText('Used 2 tools: Read, Edit').closest('details')).not.toHaveAttribute('open');
+      const diff = screen.getByTestId('edit-diff');
+      expect(diff.closest('details')).toBeNull();
+      expect(within(diff).getByText('two')).toBeInTheDocument();
+    });
+
+    it('keeps the edit diffs outside an activity fold and marks a failed one', () => {
+      const edit = (id: string) => ({ type: 'tool-call' as const, id, name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } });
+      const parts = [edit('e1'), result('e1', 'Edit', true), { type: 'text' as const, text: 'x' }, call('2', 'Bash'), result('2', 'Bash')];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByTestId('edit-diff').closest('details')).toBeNull();
+      expect(screen.getByText('failed')).toBeInTheDocument();
+    });
+
     it('counts results when a run has no calls', () => {
       render(<Message message={base({ parts: [result('1', 'Read'), result('2', 'Read')] })} />);
       expect(screen.getByText('Used 2 tools: Read ×2')).toBeInTheDocument();
