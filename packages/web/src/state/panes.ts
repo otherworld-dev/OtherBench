@@ -9,6 +9,7 @@
  */
 
 import { parseViewTab } from '../viewer/items.js';
+import { appTabId, parseAppTab } from './appTab.js';
 import { parseProjectTab, projectTabId } from './projectTab.js';
 
 export type Layout = 'single' | 'columns-2' | 'rows-2' | 'columns-3' | 'main-right-2' | 'grid-4';
@@ -73,8 +74,14 @@ export interface PaneState {
 
 export const DEFAULT_PANE_STATE: PaneState = { tabs: [], layout: 'single', panes: [null], focusedPane: 0, sizes: {}, maximised: false };
 
-/** localStorage key for the tabs, layout and what each pane shows. Per device. */
+/** localStorage key for the tabs, layout and what each pane shows. Per device. Chat mode's, and every layout saved before Code mode. */
 export const PANE_STATE_STORAGE_KEY = 'otherbench.panes';
+/**
+ * Code mode's own tabs and layout (spec 2026-10-20-code-tab-design, "Code is a
+ * whole-window mode": each mode keeps its own set of open tabs and pane
+ * layout). The pane functions here are the same for both; only the key differs.
+ */
+export const CODE_PANE_STATE_STORAGE_KEY = PANE_STATE_STORAGE_KEY + '.code';
 
 export function paneCount(layout: Layout): number {
   return LAYOUTS.find((l) => l.id === layout)?.panes ?? 1;
@@ -163,11 +170,12 @@ export function openTab(state: PaneState, chatId: string): PaneState {
  * doesn't sit on a chat with no tab left to close it by. A viewer tab (Deck
  * #826) hands its pane back to the file's chat when no other pane shows that
  * chat. Otherwise the pane takes the next tab not already showing, or empties.
- * A project page goes with its tab: its pane is emptied.
+ * A project page or an app's home goes with its tab: its pane is emptied.
  */
 export function closeTab(state: PaneState, chatId: string): PaneState {
-  // A project page goes even without a tab (an old saved layout), or its pane would be stuck on it.
+  // A project page goes even without a tab (an old saved layout), or its pane would be stuck on it. An app's home the same.
   if (parseProjectTab(chatId) !== null) return forgetProject(state, parseProjectTab(chatId)!);
+  if (parseAppTab(chatId) !== null) return forgetApp(state, parseAppTab(chatId)!);
   if (!state.tabs.includes(chatId)) return state;
   const tabs = state.tabs.filter((id) => id !== chatId);
   if (!state.panes.includes(chatId)) return { ...state, tabs };
@@ -191,6 +199,13 @@ export function forgetProject(state: PaneState, projectId: string): PaneState {
   return { ...state, tabs: state.tabs.filter((id) => id !== tab), panes: state.panes.map((id) => (id === tab ? null : id)) };
 }
 
+/** A deleted app's home leaves the tabs and every pane, as `forgetProject`. Its chats are the caller's to forget. */
+export function forgetApp(state: PaneState, appId: string): PaneState {
+  const tab = appTabId(appId);
+  if (!state.tabs.includes(tab) && !state.panes.includes(tab)) return state;
+  return { ...state, tabs: state.tabs.filter((id) => id !== tab), panes: state.panes.map((id) => (id === tab ? null : id)) };
+}
+
 /** Moves the tab `chatId` so it sits before `beforeId` (null = the end). */
 export function moveTab(state: PaneState, chatId: string, beforeId: string | null): PaneState {
   if (!state.tabs.includes(chatId) || chatId === beforeId) return state;
@@ -200,9 +215,10 @@ export function moveTab(state: PaneState, chatId: string, beforeId: string | nul
   return { ...state, tabs: [...rest.slice(0, at), chatId, ...rest.slice(at)] };
 }
 
-export function loadPaneState(): PaneState {
+/** The pane state saved under `key` (Chat mode's by default), repaired; the default for anything missing or unreadable. */
+export function loadPaneState(key: string = PANE_STATE_STORAGE_KEY): PaneState {
   try {
-    const raw = window.localStorage.getItem(PANE_STATE_STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return DEFAULT_PANE_STATE;
     const parsed = JSON.parse(raw) as Partial<PaneState>;
     const layout = LAYOUTS.some((l) => l.id === parsed.layout) ? (parsed.layout as Layout) : 'single';
@@ -224,9 +240,9 @@ export function loadPaneState(): PaneState {
   }
 }
 
-export function savePaneState(state: PaneState): void {
+export function savePaneState(state: PaneState, key: string = PANE_STATE_STORAGE_KEY): void {
   try {
-    window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(key, JSON.stringify(state));
   } catch {
     // storage blocked or full -- the layout still applies for this session.
   }

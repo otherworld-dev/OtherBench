@@ -3,6 +3,7 @@ import { viewTabId } from '../viewer/items.js';
 import { useOtherBenchStore } from './store.js';
 import {
   closeTab,
+  CODE_PANE_STATE_STORAGE_KEY,
   DEFAULT_PANE_STATE,
   focusPane,
   forgetChat,
@@ -134,6 +135,18 @@ describe('pane state (#824)', () => {
       expect(loadPaneState()).toEqual(DEFAULT_PANE_STATE);
       window.localStorage.setItem(PANE_STATE_STORAGE_KEY, '{not json');
       expect(loadPaneState()).toEqual(DEFAULT_PANE_STATE);
+    });
+
+    it("keeps Code mode's pane state under its own key, apart from Chat mode's", () => {
+      const chat = state({ tabs: ['a', 'b'], layout: 'columns-2', panes: ['a', 'b'], focusedPane: 1 });
+      const code = state({ tabs: ['app:x', 'c'], panes: ['c'] });
+      savePaneState(chat);
+      savePaneState(code, CODE_PANE_STATE_STORAGE_KEY);
+      expect(CODE_PANE_STATE_STORAGE_KEY).toBe(PANE_STATE_STORAGE_KEY + '.code');
+      expect(loadPaneState()).toEqual(chat);
+      expect(loadPaneState(PANE_STATE_STORAGE_KEY)).toEqual(chat);
+      expect(loadPaneState(CODE_PANE_STATE_STORAGE_KEY)).toEqual(code);
+      expect(loadPaneState('otherbench.panes.nothing')).toEqual(DEFAULT_PANE_STATE);
     });
   });
 
