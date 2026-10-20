@@ -99,7 +99,17 @@ export function parseRemotes(out: string): { name: string; url: string }[] {
   const remotes: { name: string; url: string }[] = [];
   for (const line of out.split('\n')) {
     const m = /^(\S+)\t(.*) \(fetch\)$/.exec(line.trimEnd());
-    if (m) remotes.push({ name: m[1]!, url: m[2]! });
+    if (m) remotes.push({ name: m[1]!, url: redactUrls(m[2]!) });
   }
   return remotes;
+}
+
+/**
+ * Removes `user:password@` / `token@` from URL-form addresses (`scheme://...@host`),
+ * in a remote's URL and in any text git printed (error messages, push/pull
+ * output), so a credential embedded in a remote never reaches the UI or a log.
+ * scp-style `git@host:path` has no `://`, carries no secret, and is left as is.
+ */
+export function redactUrls(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
 }

@@ -21,6 +21,8 @@ export interface RunResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** stdout hit STDOUT_CAP_BYTES and the rest was dropped. */
+  truncated: boolean;
 }
 
 export class ExecutableMissingError extends Error {
@@ -35,18 +37,24 @@ const STDERR_CAP_BYTES = 1024 * 1024;
 const TERMINATE_GRACE_MS = 1_000;
 
 /** Collects a stream as UTF-8 text up to `cap` bytes; later bytes are dropped. */
-function collector(cap: number): { push(chunk: Buffer): void; text(): string } {
+function collector(cap: number): { push(chunk: Buffer): void; text(): string; truncated(): boolean } {
   const decoder = new StringDecoder('utf8');
   let text = '';
   let size = 0;
+  let cut = false;
   return {
     push(chunk) {
-      if (size >= cap) return;
+      if (size >= cap) {
+        if (chunk.length > 0) cut = true;
+        return;
+      }
       const room = cap - size;
+      if (chunk.length > room) cut = true;
       const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
       size += part.length;
       text += decoder.write(part);
     },
+    truncated: () => cut,
     text: () => (text + decoder.end()).replace(/\r\n/g, '\n'),
   };
 }
@@ -97,7 +105,7 @@ export async function runProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, stdout: out.text(), stderr: err.text(), timedOut });
+      resolve({ code, stdout: out.text(), stderr: err.text(), timedOut, truncated: out.truncated() });
     });
 
     // A child that exits without reading its input raises EPIPE here; the exit code tells the story.

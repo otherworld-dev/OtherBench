@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBranches, parseRemotes, parseStatusV2 } from '../../src/code/git-parse.js';
+import { parseBranches, parseRemotes, parseStatusV2, redactUrls } from '../../src/code/git-parse.js';
 
 const Z = '\0';
 const H = '1111111111111111111111111111111111111111';
@@ -60,5 +60,21 @@ describe('parseRemotes', () => {
       { name: 'origin', url: 'https://h/a.git' },
       { name: 'up', url: 'git@h:b.git' },
     ]);
+  });
+});
+
+describe('redaction (F7)', () => {
+  it('strips userinfo from url-form remotes and leaves scp-style alone', () => {
+    const out = ['origin\thttps://user:tok@host/x.git (fetch)', 'ssh\tgit@host:x.git (fetch)', ''].join('\n');
+    expect(parseRemotes(out)).toEqual([
+      { name: 'origin', url: 'https://host/x.git' },
+      { name: 'ssh', url: 'git@host:x.git' },
+    ]);
+  });
+  it('redactUrls cleans free text', () => {
+    expect(redactUrls('fatal: unable to access https://u:p@h.com/r.git/ and ssh://bob@h/x')).toBe(
+      'fatal: unable to access https://h.com/r.git/ and ssh://h/x',
+    );
+    expect(redactUrls('git@host:x.git')).toBe('git@host:x.git');
   });
 });

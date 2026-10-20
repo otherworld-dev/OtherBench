@@ -1,10 +1,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
-import { GitError, git } from '../../src/code/git.js';
+import { GitError, gitEnv, git } from '../../src/code/git.js';
 import { ExecutableMissingError, runProcess } from '../../src/code/process.js';
 
 const hasGit = spawnSync('git', ['--version']).status === 0;
@@ -151,5 +151,81 @@ describe.skipIf(!hasGit)('git service', () => {
     const dir = repo();
     g(dir, 'remote', 'add', 'origin', 'https://example.com/a.git');
     expect(await git.remotes(dir)).toEqual([{ name: 'origin', url: 'https://example.com/a.git' }]);
+  });
+
+  it('treats pathspecs literally (F1)', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, '[a].txt'), 'x\n');
+    writeFileSync(join(dir, 'a.txt'), 'y\n');
+    await git.commit(dir, 'lit', ['[a].txt']);
+    expect((await git.status(dir)).files.map((f) => f.path)).toEqual(['a.txt']);
+  });
+
+  it('commits a symlink itself, not its target (F2)', async (ctx) => {
+    const dir = repo();
+    writeFileSync(join(dir, 'real.txt'), 'r\n');
+    try {
+      symlinkSync('real.txt', join(dir, 'link.txt'));
+    } catch {
+      ctx.skip();
+    }
+    await git.commit(dir, 'link', ['link.txt']);
+    expect(g(dir, 'ls-tree', '-r', '--name-only', 'HEAD').trim()).toBe('link.txt');
+  });
+
+  it('works when the root is reached through a junction (F2)', async (ctx) => {
+    if (process.platform !== 'win32') return ctx.skip();
+    const dir = repo();
+    const via = join(tmp(), 'via');
+    try {
+      symlinkSync(dir, via, 'junction');
+    } catch {
+      return ctx.skip();
+    }
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    await git.commit(via, 'j', ['a.txt']);
+    expect((await git.status(via)).files).toEqual([]);
+  });
+
+  it('does not run a repo-configured fsmonitor (F3)', async () => {
+    const dir = repo();
+    const marker = join(dir, '..', `fsm-${Date.now()}.txt`);
+    made.push(marker);
+    g(dir, 'config', 'core.fsmonitor', `echo ran > "${marker.replace(/\\/g, '/')}"`);
+    await git.status(dir);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('bounds a whole-tree diff of many untracked files (F4)', async () => {
+    const dir = repo();
+    for (let i = 0; i < 300; i++) writeFileSync(join(dir, `f${i}.txt`), `line ${i}\n`);
+    const out = await git.diff(dir);
+    expect(out).toContain('+line 0');
+    expect(out.trimEnd().endsWith('... diff truncated')).toBe(true);
+    expect(out).not.toContain('+line 299');
+  }, 120_000);
+
+  it('refuses an app root that is not the repo top level (F10)', async () => {
+    const dir = repo();
+    mkdirSync(join(dir, 'sub'));
+    expect(await code(git.status(join(dir, 'sub')))).toBe('not-a-repo');
+  });
+
+  it('redacts credentials in remotes (F7)', async () => {
+    const dir = repo();
+    g(dir, 'remote', 'add', 'origin', 'https://u:tok@example.com/a.git');
+    expect(await git.remotes(dir)).toEqual([{ name: 'origin', url: 'https://example.com/a.git' }]);
+  });
+});
+
+describe('gitEnv (F6)', () => {
+  it('strips repo-redirecting variables and adds the fixed ones', () => {
+    const env = gitEnv({
+      PATH: '/bin', GIT_DIR: 'x', git_work_tree: 'x', GIT_INDEX_FILE: 'x', GIT_OBJECT_DIRECTORY: 'x',
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: 'x', GIT_CONFIG_COUNT: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'x',
+      OTHERBENCH_TOKEN: 't',
+    });
+    expect(Object.keys(env).sort()).toEqual(['GH_NO_UPDATE_NOTIFIER', 'GH_PROMPT_DISABLED', 'GIT_PAGER', 'GIT_TERMINAL_PROMPT', 'NO_COLOR', 'PATH']);
   });
 });
