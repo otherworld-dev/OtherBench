@@ -40,4 +40,17 @@ describe('EditDiff', () => {
     render(<EditDiff info={{ ...info, truncated: 50 }} />);
     expect(screen.getByText('+50 more lines')).toBeInTheDocument();
   });
+
+  it('says added and removed in text for a screen reader', () => {
+    render(<EditDiff info={info} />);
+    expect(screen.getByText('removed')).toHaveClass('sr-only');
+    expect(screen.getByText('added')).toHaveClass('sr-only');
+  });
+
+  it('labels a Write as wrote, not new file, and shows a muted gap row', () => {
+    render(<EditDiff info={{ ...info, isNewFile: true, lines: [...info.lines, { kind: 'gap', text: '' }] }} />);
+    expect(screen.getByText('wrote')).toBeInTheDocument();
+    expect(screen.queryByText('new file')).toBeNull();
+    expect(screen.getByText('…').closest('[data-diff]')).toHaveAttribute('data-diff', 'gap');
+  });
 });

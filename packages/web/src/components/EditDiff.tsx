@@ -7,8 +7,9 @@ const ROW = {
   add: 'bg-[var(--diff-add-bg)] text-[var(--diff-add-text)]',
   del: 'bg-[var(--diff-del-bg)] text-[var(--diff-del-text)]',
   ctx: 'text-[var(--text-muted)]',
+  gap: 'text-[var(--text-faint)]',
 } as const;
-const MARK = { add: '+', del: '−', ctx: ' ' } as const;
+const MARK = { add: '+', del: '−', ctx: ' ', gap: ' ' } as const;
 
 /**
  * A file edit as a compact red/green diff (spec 2026-10-20-code-tab-design, Goal 5), shown in
@@ -22,7 +23,7 @@ export function EditDiff({ info, status = 'applied' }: { info: EditDiffInfo; sta
         <span className="min-w-0 flex-1 truncate font-mono font-medium" title={info.path}>
           <bdi>{info.path}</bdi>
         </span>
-        {info.isNewFile && <span className="text-[var(--text-muted)]">new file</span>}
+        {info.isNewFile && <span className="text-[var(--text-muted)]">wrote</span>}
         {status === 'failed' && <span className="text-[var(--danger)]">failed</span>}
         {status === 'pending' && <span className="text-[var(--text-muted)]">pending</span>}
         <span className="tabular-nums">{`+${info.added} −${info.removed}`}</span>
@@ -33,7 +34,9 @@ export function EditDiff({ info, status = 'applied' }: { info: EditDiffInfo; sta
             <span aria-hidden="true" className="w-4 shrink-0 select-none">
               {MARK[l.kind]}
             </span>
-            <span>{l.text}</span>
+            {l.kind === 'add' && <span className="sr-only">added</span>}
+            {l.kind === 'del' && <span className="sr-only">removed</span>}
+            <span>{l.kind === 'gap' ? '…' : l.text}</span>
           </div>
         ))}
         {info.truncated !== undefined && <div className="px-2 text-[var(--text-muted)]">{`+${info.truncated} more lines`}</div>}

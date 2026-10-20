@@ -5,7 +5,8 @@
  */
 
 export interface DiffLine {
-  kind: 'add' | 'del' | 'ctx';
+  /** `gap` stands for skipped unchanged lines between two hunks (its text is empty). */
+  kind: 'add' | 'del' | 'ctx' | 'gap';
   text: string;
 }
 
@@ -24,8 +25,11 @@ const MAX_LINES = 400;
 /** Unchanged lines kept either side of a change. */
 const CONTEXT = 3;
 
-/** An LCS table over this many cells is too big to be worth it; such a pair is shown as a plain replace. */
-const MAX_CELLS = 4_000_000;
+/**
+ * An LCS table over this many cells is too big to be worth it; such a pair is shown as a plain replace.
+ * Low on purpose: the view cuts at `MAX_LINES` anyway, and this runs while a reply streams.
+ */
+const MAX_CELLS = 250_000;
 
 function splitLines(text: string): string[] {
   return text === '' ? [] : text.split('\n');
@@ -83,7 +87,19 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   ];
   // Context inside the changed middle is trimmed too, so two far-apart edits don't drag the lines between them along.
   const keep = out.map((l, idx) => l.kind !== 'ctx' || out.slice(Math.max(0, idx - CONTEXT), idx + CONTEXT + 1).some((o) => o.kind !== 'ctx'));
-  return delsFirst(out.filter((_, idx) => keep[idx]));
+  // A "…" gap row where unchanged lines between two hunks were dropped (never at either end).
+  const kept: DiffLine[] = [];
+  let skipped = false;
+  out.forEach((l, idx) => {
+    if (!keep[idx]) {
+      skipped = kept.length > 0;
+      return;
+    }
+    if (skipped) kept.push({ kind: 'gap', text: '' });
+    skipped = false;
+    kept.push(l);
+  });
+  return delsFirst(kept);
 }
 
 /** Orders a run so a block of deletions comes before its additions. */
@@ -137,6 +153,20 @@ function build(path: string, lines: DiffLine[], isNewFile: boolean): EditDiffInf
  * `oldString`/`newString`).
  */
 export function editDiffOf(toolName: string, args: unknown): EditDiffInfo | null {
+  // A reply re-renders on every streamed token, and the args object of a stored call is stable, so each is diffed once.
+  if (typeof args === 'object' && args !== null) {
+    const hit = memo.get(args);
+    if (hit && hit.name === toolName) return hit.info;
+    const info = computeEditDiff(toolName, args);
+    memo.set(args, { name: toolName, info });
+    return info;
+  }
+  return null;
+}
+
+const memo = new WeakMap<object, { name: string; info: EditDiffInfo | null }>();
+
+function computeEditDiff(toolName: string, args: unknown): EditDiffInfo | null {
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return null;
   const o = args as Record<string, unknown>;
   const path = str(o, 'file_path', 'path');
@@ -155,7 +185,10 @@ export function editDiffOf(toolName: string, args: unknown): EditDiffInfo | null
         if (typeof e !== 'object' || e === null) return null;
         const r = e as Record<string, unknown>;
         if (typeof r['old_string'] !== 'string' || typeof r['new_string'] !== 'string') return null;
-        lines.push(...lineDiff(r['old_string'], r['new_string']));
+        const part = lineDiff(r['old_string'], r['new_string']);
+        // Edits are separate hunks, so a gap row sits between them.
+        if (lines.length > 0 && part.length > 0) lines.push({ kind: 'gap', text: '' });
+        lines.push(...part);
       }
       return build(path, lines, false);
     }

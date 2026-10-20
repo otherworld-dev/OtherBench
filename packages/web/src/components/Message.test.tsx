@@ -293,11 +293,17 @@ describe('Message', () => {
       expect(within(diff).getByText('two')).toBeInTheDocument();
     });
 
-    it('keeps the edit diffs outside an activity fold and marks a failed one', () => {
-      const edit = (id: string) => ({ type: 'tool-call' as const, id, name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } });
-      const parts = [edit('e1'), result('e1', 'Edit', true), { type: 'text' as const, text: 'x' }, call('2', 'Bash'), result('2', 'Bash')];
+    it('keeps an activity fold whole around an edit diff, with the diff outside it', () => {
+      const edit = { type: 'tool-call' as const, id: 'e', name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } };
+      const helper: Part = {
+        type: 'subagent', callId: 'c1', label: 'Check', prompt: 'p', profileId: 'p', profileName: 'Cheap', modelId: 'm', status: 'complete',
+        usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, parts: [],
+      };
+      const parts: Part[] = [call('1', 'Read'), result('1', 'Read'), edit, result('e', 'Edit', true), helper];
       render(<Message message={base({ parts })} />);
-      expect(screen.getByTestId('edit-diff').closest('details')).toBeNull();
+      expect(screen.getAllByTestId('activity-fold')).toHaveLength(1);
+      const diff = screen.getByTestId('edit-diff');
+      expect(diff.closest('details')).toBeNull();
       expect(screen.getByText('failed')).toBeInTheDocument();
     });
 

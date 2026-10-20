@@ -18,6 +18,15 @@ describe('lineDiff', () => {
     expect(lines.map((l) => l.text)).toEqual(['l7', 'l8', 'l9', 'l10', 'changed', 'l11', 'l12', 'l13']);
   });
 
+  it('marks the skipped lines between two far-apart changes with a gap row', () => {
+    const before = Array.from({ length: 20 }, (_, i) => `l${i}`).join('\n');
+    const after = before.replace('l2', 'A').replace('l15', 'B');
+    const kinds = lineDiff(before, after).map((l) => l.kind);
+    expect(kinds.filter((k) => k === 'gap')).toHaveLength(1);
+    expect(kinds[0]).not.toBe('gap');
+    expect(kinds[kinds.length - 1]).not.toBe('gap');
+  });
+
   it('is empty when nothing changed', () => {
     expect(lineDiff('a\nb', 'a\nb')).toEqual([]);
   });
@@ -83,5 +92,31 @@ describe('editDiffOf', () => {
     expect(info?.added).toBe(450);
     expect(info?.lines).toHaveLength(400);
     expect(info?.truncated).toBe(50);
+  });
+
+  it('separates the edits of a MultiEdit with a gap row', () => {
+    const info = editDiffOf('MultiEdit', {
+      file_path: 'a.ts',
+      edits: [
+        { old_string: 'a', new_string: 'b' },
+        { old_string: 'c', new_string: 'd' },
+      ],
+    });
+    expect(info?.lines.map((l) => l.kind)).toEqual(['del', 'add', 'gap', 'del', 'add']);
+    expect(info?.added).toBe(2);
+  });
+
+  it('falls back to a plain delete-then-add for a pair too big to diff', () => {
+    const before = ['first', ...Array.from({ length: 998 }, (_, i) => `m${i}`), 'last'].join('\n');
+    const after = ['FIRST', ...Array.from({ length: 998 }, (_, i) => `m${i}`), 'LAST'].join('\n');
+    const info = editDiffOf('Edit', { file_path: 'big', old_string: before, new_string: after });
+    expect(info?.removed).toBe(1000);
+    expect(info?.added).toBe(1000);
+    expect(info?.lines.some((l) => l.kind === 'ctx')).toBe(false);
+  });
+
+  it('computes once per args object', () => {
+    const args = { file_path: 'a.ts', old_string: 'x', new_string: 'y' };
+    expect(editDiffOf('Edit', args)).toBe(editDiffOf('Edit', args));
   });
 });
