@@ -61,4 +61,35 @@ describe('changedFiles', () => {
     const files = changedFiles(messages, 'E:\\Git\\App');
     expect(files).toMatchObject([{ path: 'src/a.ts', added: 3 }]);
   });
+
+  it('treats a leading ./ as the same file', () => {
+    const messages = [
+      msg('a1', null, [
+        call('t1', 'write_file', { path: './src/a.ts', content: 'x' }), ok('t1', 'write_file'),
+        call('t2', 'write_file', { path: 'src/a.ts', content: 'y' }), ok('t2', 'write_file'),
+      ]),
+    ];
+    expect(changedFiles(messages)).toMatchObject([{ path: 'src/a.ts', added: 2 }]);
+  });
+
+  it('on a drive-letter root, groups paths that differ only in case and shows the first one seen', () => {
+    const messages = [
+      msg('a1', null, [call('t1', 'Write', { file_path: 'e:\\git\\app\\Src\\A.ts', content: 'x' }), ok('t1', 'Write')], 1),
+      msg('a2', null, [call('t2', 'write_file', { path: 'src/a.ts', content: 'y' }), ok('t2', 'write_file')], 2),
+    ];
+    const files = changedFiles(messages, 'E:\\Git\\App');
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ path: 'Src/A.ts', added: 2 });
+    expect(files[0]!.edits).toHaveLength(2);
+  });
+
+  it('keeps case apart on a root without a drive letter', () => {
+    const messages = [
+      msg('a1', null, [
+        call('t1', 'write_file', { path: 'A.ts', content: 'x' }), ok('t1', 'write_file'),
+        call('t2', 'write_file', { path: 'a.ts', content: 'y' }), ok('t2', 'write_file'),
+      ]),
+    ];
+    expect(changedFiles(messages, '/home/adam/app').map((f) => f.path)).toEqual(['A.ts', 'a.ts']);
+  });
 });

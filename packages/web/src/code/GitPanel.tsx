@@ -15,6 +15,8 @@ export interface GitPanelProps {
   /** Fetch the status again (the git bar's own refresh); awaited after every action. */
   onChanged: () => void | Promise<void>;
   onClose: () => void;
+  /** Told when an action starts and ends, so the bar doesn't close the panel under it. */
+  onBusyChange?: (busy: boolean) => void;
 }
 
 /** git's XY letters as one short code: `??` for an untracked file, else the letters that aren't blank. */
@@ -23,7 +25,17 @@ function statusCode(f: GitFileChange): string {
   return `${f.index}${f.worktree}`.replace(/ /g, '');
 }
 
-type Outcome = { kind: 'ok'; text: string } | { kind: 'error'; error: unknown };
+/**
+ * Whether a status row covers a diff entry: the same path, or, for a row
+ * ending in `/`, any file under it. `git status --untracked-files=normal`
+ * lists a new folder as one `newdir/` row while the diff lists each file in
+ * it, so the folder's row shows all of their diffs.
+ */
+function coversPath(row: string, file: string): boolean {
+  return row.endsWith('/') ? file.startsWith(row) : file === row;
+}
+
+type Outcome ={ kind: 'ok'; text: string } | { kind: 'error'; error: unknown };
 
 /**
  * The git panel the git bar's branch opens (spec 2026-10-20-code-tab-design,
@@ -40,9 +52,9 @@ type Outcome = { kind: 'ok'; text: string } | { kind: 'error'; error: unknown };
  * Adam made") the actions are off; the status and diffs still show, since
  * they are this machine's copy and say so in the bar.
  */
-export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanelProps): JSX.Element {
+export function GitPanel({ app, status, readOnly, onChanged, onClose, onBusyChange }: GitPanelProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
-  const [diff, setDiff] = useState<{ files: Map<string, DiffLine[]>; truncated: boolean } | null>(null);
+  const [diff, setDiff] = useState<{ files: { path: string; lines: DiffLine[] }[]; truncated: boolean } | null>(null);
   const [diffError, setDiffError] = useState<unknown>(null);
   const [branches, setBranches] = useState<GitBranch[] | null>(null);
   const [branchesError, setBranchesError] = useState<unknown>(null);
@@ -63,7 +75,7 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
     api.apps.git.diff(app.id).then(
       ({ diff: text }) => {
         if (cancelled) return;
-        setDiff({ files: new Map(parseUnifiedDiff(text).map((f) => [f.path, f.lines])), truncated: diffTruncated(text) });
+        setDiff({ files: parseUnifiedDiff(text), truncated: diffTruncated(text) });
         setDiffError(null);
       },
       (err: unknown) => !cancelled && setDiffError(err)
@@ -92,9 +104,19 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
     return names;
   }, [branches, status.branch]);
 
+  // The guard every action passes, whatever drives it: a disabled control is only the visible half of it.
+  // A ref, so two requests in one tick (before `busy` re-renders) can't both start.
+  const busyRef = useRef(false);
+  const busyChange = useRef(onBusyChange);
+  busyChange.current = onBusyChange;
+  useEffect(() => () => {
+    if (busyRef.current) busyChange.current?.(false);
+  }, []);
   async function run(action: () => Promise<string | null>): Promise<boolean> {
-    if (busy) return false;
+    if (readOnly || busyRef.current) return false;
+    busyRef.current = true;
     setBusy(true);
+    onBusyChange?.(true);
     setOutcome(null);
     let ok = false;
     try {
@@ -108,7 +130,9 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
       try {
         await onChanged();
       } finally {
+        busyRef.current = false;
         setBusy(false);
+        onBusyChange?.(false);
       }
     }
     return ok;
@@ -117,7 +141,9 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
   const commit = async (): Promise<void> => {
     const text = message;
     const done = await run(async () => {
-      const { sha } = await api.apps.git.commit(app.id, { message: text, paths: allChecked ? 'all' : checked.map((f) => f.path) });
+      // A checked rename stages both sides, or the commit would add the new name and leave the old one still tracked.
+      const paths = checked.flatMap((f) => (f.origPath !== undefined ? [f.origPath, f.path] : [f.path]));
+      const { sha } = await api.apps.git.commit(app.id, { message: text, paths: allChecked ? 'all' : paths });
       return `Committed ${sha.slice(0, 7)}`;
     });
     if (done) {
@@ -234,7 +260,8 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
       ) : (
         <ul aria-label="Changed files" className="flex flex-col gap-1">
           {status.files.map((f) => {
-            const lines = diff?.files.get(f.path);
+            const entries = (diff?.files ?? []).filter((d) => coversPath(f.path, d.path) && d.lines.length > 0);
+            const isNewFile = f.index === '?' && f.worktree === '?';
             return (
               <li key={f.path} data-path={f.path} className="flex items-start gap-2">
                 <input type="checkbox" aria-label={f.path} checked={!unchecked.has(f.path)} onChange={() => toggle(f.path)} className="mt-2 shrink-0" />
@@ -242,10 +269,13 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose }: GitPanel
                   {statusCode(f)}
                 </span>
                 <div className="min-w-0 flex-1">
-                  {lines && lines.length > 0 ? (
-                    <EditDiff
-                      info={{ path: f.path, lines, added: lines.filter((l) => l.kind === 'add').length, removed: lines.filter((l) => l.kind === 'del').length, isNewFile: false }}
-                    />
+                  {entries.length > 0 ? (
+                    entries.map((d) => (
+                      <EditDiff
+                        key={d.path}
+                        info={{ path: d.path, lines: d.lines, added: d.lines.filter((l) => l.kind === 'add').length, removed: d.lines.filter((l) => l.kind === 'del').length, isNewFile }}
+                      />
+                    ))
                   ) : (
                     <p className="mt-1 truncate font-mono text-xs" title={f.origPath ? `${f.origPath} → ${f.path}` : f.path}>
                       <bdi>{f.path}</bdi>

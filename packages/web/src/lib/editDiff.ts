@@ -217,8 +217,33 @@ export function diffTruncated(text: string): boolean {
 
 const BACKSLASH = '\\';
 
-/** A path from a `---`/`+++` line: git's C-style quoting undone, the `a/`/`b/` prefix and a trailing tab (git adds one to names with spaces) dropped. */
-function diffPath(raw: string): string | null {
+/**
+ * The new-side path of a `diff --git <a> <b>` header (`rest` is what follows
+ * `diff --git `). It names a file that has no `---`/`+++` lines: a binary, a
+ * mode-only change or a pure rename. A quoted `b` side is the last ` "b/`
+ * (inside a quoted name a quote is always escaped). Unquoted, the two sides
+ * of an unrenamed file are the same name, which pins where they split even
+ * with spaces in it; failing that, the split is the last ` b/`.
+ */
+function headerPath(rest: string): string {
+  if (rest.endsWith('"')) {
+    const at = rest.lastIndexOf(' "b/');
+    if (at !== -1) return diffPath(rest.slice(at + 1)) ?? rest;
+  }
+  const n = (rest.length - 5) / 2;
+  if (Number.isInteger(n) && n > 0 && rest.startsWith('a/') && rest.slice(2 + n, 5 + n) === ' b/' && rest.slice(2, 2 + n) === rest.slice(5 + n)) {
+    return rest.slice(5 + n);
+  }
+  const at = rest.lastIndexOf(' b/');
+  return at === -1 ? rest : rest.slice(at + 3);
+}
+
+/**
+ * A path from a `---`/`+++` line (or, `prefixed` false, a `rename to` line):
+ * git's C-style quoting undone, the `a/`/`b/` prefix (pinned by the server)
+ * and a trailing tab (git adds one to names with spaces) dropped.
+ */
+function diffPath(raw: string, prefixed = true): string | null {
   let p = raw.replace(/\t$/, '');
   if (p === '/dev/null') return null;
   if (p.startsWith('"') && p.endsWith('"') && p.length >= 2) {
@@ -244,7 +269,7 @@ function diffPath(raw: string): string | null {
     }
     p = new TextDecoder().decode(new Uint8Array(bytes));
   }
-  return p.replace(/^[ab]\//, '');
+  return prefixed ? p.replace(/^[ab]\//, '') : p;
 }
 
 /**
@@ -268,9 +293,7 @@ export function parseUnifiedDiff(text: string): { path: string; lines: DiffLine[
     if (line === DIFF_TRUNCATED_MARKER) break;
     if (line.startsWith('diff --git ')) {
       settle();
-      // `a/x b/x`: with equal names the second half is the name; a quoted or spaced pair is fixed up by the ---/+++ lines.
-      const m = /^diff --git (?:"?a\/)(.*?)"? (?:"?b\/)(.*?)"?$/.exec(line);
-      cur = { path: m?.[2] ?? line.slice('diff --git '.length), lines: [], oldPath: null, inHunk: false };
+      cur = { path: headerPath(line.slice('diff --git '.length)), lines: [], oldPath: null, inHunk: false };
       continue;
     }
     if (!cur) continue;
@@ -281,7 +304,9 @@ export function parseUnifiedDiff(text: string): { path: string; lines: DiffLine[
       continue;
     }
     if (!c.inHunk) {
-      if (line.startsWith('--- ')) c.oldPath = diffPath(line.slice(4));
+      // A rename names its new path here, unprefixed; a pure rename has no ---/+++ lines to say it.
+      if (line.startsWith('rename to ')) c.path = diffPath(line.slice('rename to '.length), false) ?? c.path;
+      else if (line.startsWith('--- ')) c.oldPath = diffPath(line.slice(4));
       else if (line.startsWith('+++ ')) c.path = diffPath(line.slice(4)) ?? c.oldPath ?? c.path;
       continue;
     }

@@ -8,7 +8,7 @@ import { api } from '../state/api.js';
 import { machineName } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { viewerActionsFor } from '../viewer/ViewerContext.js';
-import { codeErrorText } from './CodeError.js';
+import { CodeErrorLine } from './CodeError.js';
 import { GitPanel } from './GitPanel.js';
 import { useCodeRefresh } from './useCodeRefresh.js';
 
@@ -32,7 +32,8 @@ type Popover = 'git' | 'changed';
  *
  * A chat that runs on another machine ("Decisions Adam made") still shows
  * this machine's status, says so, and its git panel is read-only: there is no
- * forwarding of git to the peer.
+ * forwarding of git to the peer. The panel is read-only too while this
+ * window hasn't loaded which machine it is.
  */
 export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[] }): JSX.Element | null {
   const app = useOtherBenchStore((s) => s.apps.find((a) => a.id === chat.appId) ?? null);
@@ -40,6 +41,10 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
   const setCodePanelTab = useOtherBenchStore((s) => s.setCodePanelTab);
   const appId = app?.id ?? '';
   const [status, setStatus] = useState<GitStatus | null>(null);
+  // The last status that loaded, which an open git panel keeps showing when a refresh fails, so a failed
+  // push's stderr isn't swept away by the refresh after it (the bar itself shows the failure).
+  const [panelStatus, setPanelStatus] = useState<GitStatus | null>(null);
+  const panelBusy = useRef(false);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState<Popover | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -55,6 +60,7 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
       const next = await api.apps.git.status(appId);
       if (mine !== seq.current) return;
       setStatus(next);
+      setPanelStatus(next);
       setError(null);
     } catch (err) {
       if (mine !== seq.current) return;
@@ -65,6 +71,7 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
 
   useEffect(() => {
     setStatus(null);
+    setPanelStatus(null);
     setError(null);
     setOpen(null);
     void load();
@@ -76,6 +83,8 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
     if (open === null) return;
     const onDown = (e: PointerEvent): void => {
       if (e.target instanceof Node && rootRef.current?.contains(e.target)) return;
+      // Never under a running action: its outcome, and git's stderr if it failed, must stay to be read.
+      if (panelBusy.current) return;
       setOpen(null);
     };
     document.addEventListener('pointerdown', onDown);
@@ -87,6 +96,8 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
   if (!app) return null;
 
   const elsewhere = machines !== null && chat.runsOn !== machines.self.id;
+  // Until this window knows which machine it is, it can't tell that the chat runs here, so nothing may change git yet.
+  const readOnly = machines === null || elsewhere;
   const closeTo = (ref: RefObject<HTMLButtonElement | null>) => (): void => {
     setOpen(null);
     ref.current?.focus();
@@ -130,9 +141,8 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
           )}
         </>
       ) : error !== null ? (
-        <span data-testid="git-bar-error" className="text-[var(--danger)]">
-          {codeErrorText(error, "Couldn't read the git status.").message}
-        </span>
+        // git's stderr as-is for a git-failed status ("Error states"); the known states are their one line.
+        <CodeErrorLine error={error} fallback="Couldn't read the git status." testId="git-bar-error" />
       ) : (
         <span className="text-[var(--text-faint)]">Loading…</span>
       )}
@@ -159,7 +169,18 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
       >
         <span aria-hidden="true">↻</span>
       </button>
-      {open === 'git' && status !== null && <GitPanel app={app} status={status} readOnly={elsewhere} onChanged={load} onClose={closeTo(branchRef)} />}
+      {open === 'git' && panelStatus !== null && (
+        <GitPanel
+          app={app}
+          status={panelStatus}
+          readOnly={readOnly}
+          onChanged={load}
+          onClose={closeTo(branchRef)}
+          onBusyChange={(b) => {
+            panelBusy.current = b;
+          }}
+        />
+      )}
       {open === 'changed' && <ChangedList files={changed} onOpen={openInFiles} onClose={closeTo(pillRef)} />}
     </div>
   );

@@ -9,9 +9,9 @@ export interface ChangedFile {
   edits: EditDiffInfo[];
 }
 
-/** Slashes one way and no trailing one, so `E:\a\b` and `E:/a/b/` compare equal. */
+/** Slashes one way, no trailing one and no leading `./`, so `E:\a\b`, `E:/a/b/` and `./x`/`x` compare equal. */
 function normalise(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '');
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').replace(/^(?:\.\/)+/, '');
 }
 
 /**
@@ -55,23 +55,29 @@ function collect(parts: Part[], into: EditDiffInfo[]): void {
  * commands that change files can't be seen here, which the spec accepts.
  *
  * With `root` (the app's folder on this machine) a path inside it is shown,
- * and grouped, relative to it. Files are sorted by path; each file's edits
- * keep the order their messages were written in.
+ * and grouped, relative to it. On a drive-letter (Windows) root, paths that
+ * differ only in case are one file, as they are on disk there, and the file
+ * is shown as first written. A chat that ran on another machine may name
+ * that machine's absolute paths, which aren't under this root; they are
+ * listed as they are. Files are sorted by path; each file's edits keep the
+ * order their messages were written in.
  */
 export function changedFiles(messages: CanonMessage[], root?: string | null): ChangedFile[] {
-  const byPath = new Map<string, ChangedFile>();
+  const byKey = new Map<string, ChangedFile>();
+  const foldCase = !!root && /^[A-Za-z]:/.test(normalise(root));
   const ordered = [...messages].sort((a, b) => a.createdAt - b.createdAt);
   for (const m of ordered) {
     const edits: EditDiffInfo[] = [];
     collect(m.parts, edits);
     for (const e of edits) {
       const path = underRoot(e.path, root);
-      const file = byPath.get(path) ?? { path, added: 0, removed: 0, edits: [] };
+      const key = foldCase ? path.toLowerCase() : path;
+      const file = byKey.get(key) ?? { path, added: 0, removed: 0, edits: [] };
       file.added += e.added;
       file.removed += e.removed;
       file.edits.push(e);
-      byPath.set(path, file);
+      byKey.set(key, file);
     }
   }
-  return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return [...byKey.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }

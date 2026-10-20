@@ -178,4 +178,47 @@ describe('parseUnifiedDiff', () => {
   it('is empty for an empty diff', () => {
     expect(parseUnifiedDiff('')).toEqual([]);
   });
+
+  it('names a renamed file by its new path, with or without content changes', () => {
+    const text = [
+      'diff --git a/old.ts b/new.ts',
+      'similarity index 100%',
+      'rename from old.ts',
+      'rename to new.ts',
+      'diff --git a/x.ts b/y.ts',
+      'similarity index 80%',
+      'rename from x.ts',
+      'rename to y.ts',
+      'index 1111111..2222222 100644',
+      '--- a/x.ts',
+      '+++ b/y.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      '',
+    ].join('\n');
+    expect(parseUnifiedDiff(text)).toEqual([
+      { path: 'new.ts', lines: [] },
+      { path: 'y.ts', lines: [{ kind: 'del', text: 'a' }, { kind: 'add', text: 'b' }] },
+    ]);
+  });
+
+  it('a binary file is an entry with no lines', () => {
+    const text = 'diff --git a/img.png b/img.png\nindex 1111111..2222222 100644\nBinary files a/img.png and b/img.png differ\n';
+    expect(parseUnifiedDiff(text)).toEqual([{ path: 'img.png', lines: [] }]);
+  });
+
+  it('unquotes a quoted path, octal escapes included', () => {
+    const q = '"a/sp\\303\\251cial \\"q\\".ts"';
+    const qb = '"b/sp\\303\\251cial \\"q\\".ts"';
+    const text = [`diff --git ${q} ${qb}`, `--- ${q}`, `+++ ${qb}`, '@@ -1 +1 @@', '-x', '+y', ''].join('\n');
+    expect(parseUnifiedDiff(text)).toEqual([{ path: 'spécial "q".ts', lines: [{ kind: 'del', text: 'x' }, { kind: 'add', text: 'y' }] }]);
+    // With no ---/+++ lines (a mode change), the quoted header alone names it.
+    expect(parseUnifiedDiff(`diff --git ${q} ${qb}\nold mode 100644\nnew mode 100755\n`)).toEqual([{ path: 'spécial "q".ts', lines: [] }]);
+  });
+
+  it('a mode-only change is an entry with no lines, named from the header even with a space in it', () => {
+    const text = 'diff --git a/run me.sh b/run me.sh\nold mode 100644\nnew mode 100755\n';
+    expect(parseUnifiedDiff(text)).toEqual([{ path: 'run me.sh', lines: [] }]);
+  });
 });

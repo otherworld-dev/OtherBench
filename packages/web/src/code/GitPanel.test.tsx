@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { App } from '@otherbench/core/ports/store.js';
@@ -187,6 +187,69 @@ describe('GitPanel', () => {
     screen.getByRole('dialog', { name: 'Git' }).focus();
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("a new folder's row shows the diff of every file under it", async () => {
+    vi.mocked(api.apps.git.diff).mockResolvedValue({
+      diff: [
+        'diff --git a/newdir/a.ts b/newdir/a.ts', 'new file mode 100644', '--- /dev/null', '+++ b/newdir/a.ts', '@@ -0,0 +1 @@', '+first',
+        'diff --git a/newdir/sub/b.ts b/newdir/sub/b.ts', 'new file mode 100644', '--- /dev/null', '+++ b/newdir/sub/b.ts', '@@ -0,0 +1 @@', '+second',
+        'diff --git a/newdirx.ts b/newdirx.ts', '--- /dev/null', '+++ b/newdirx.ts', '@@ -0,0 +1 @@', '+not under it',
+        '',
+      ].join('\n'),
+    });
+    renderPanel({ status: status({ files: [{ path: 'newdir/', index: '?', worktree: '?' }] }) });
+    const row = screen.getByRole('checkbox', { name: 'newdir/' }).closest('li')!;
+    expect(await within(row).findByText('first')).toBeInTheDocument();
+    expect(within(row).getByText('second')).toBeInTheDocument();
+    expect(within(row).getAllByTestId('edit-diff')).toHaveLength(2);
+    expect(screen.queryByText('not under it')).toBeNull();
+  });
+
+  it('an untracked file shows as a new file', async () => {
+    renderPanel();
+    const row = screen.getByRole('checkbox', { name: 'b.ts' }).closest('li')!;
+    expect(await within(row).findByTestId('edit-diff')).toHaveTextContent('wrote');
+    const tracked = screen.getByRole('checkbox', { name: 'a.ts' }).closest('li')!;
+    expect(within(tracked).getByTestId('edit-diff')).not.toHaveTextContent('wrote');
+  });
+
+  it('a partial commit of a renamed file sends its old path too', async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      status: status({
+        files: [
+          { path: 'new.ts', origPath: 'old.ts', index: 'R', worktree: ' ' },
+          { path: 'b.ts', index: '?', worktree: '?' },
+        ],
+      }),
+    });
+    await user.click(screen.getByRole('checkbox', { name: 'b.ts' }));
+    await user.type(screen.getByRole('textbox', { name: 'Commit message' }), 'msg');
+    await user.click(screen.getByRole('button', { name: 'Commit' }));
+    await waitFor(() => expect(api.apps.git.commit).toHaveBeenCalledWith('a1', { message: 'msg', paths: ['old.ts', 'new.ts'] }));
+  });
+
+  it('read-only refuses an action even when the control is driven directly', async () => {
+    renderPanel({ readOnly: true });
+    await screen.findByRole('option', { name: 'main' });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Branch' }), { target: { value: 'main' } });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.apps.git.checkout).not.toHaveBeenCalled();
+  });
+
+  it('one action at a time: a second request while one runs is ignored', async () => {
+    let finish!: (v: { output: string }) => void;
+    vi.mocked(api.apps.git.pull).mockReturnValue(new Promise((r) => (finish = r)));
+    renderPanel();
+    await screen.findByRole('option', { name: 'main' });
+    const input = screen.getByRole('textbox', { name: 'New branch' });
+    fireEvent.change(input, { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(api.apps.git.branch).not.toHaveBeenCalled();
+    finish({ output: 'ok' });
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
 
   it('a clean tree says so', () => {

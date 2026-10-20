@@ -132,9 +132,65 @@ describe('GitBar', () => {
     expect(screen.getByText("Runs on PC: git shows this machine's copy")).toBeInTheDocument();
     await user.click(await screen.findByTestId('git-branch'));
     const panel = await screen.findByRole('dialog', { name: 'Git' });
+    // With a message typed, so only the machine keeps Commit off.
+    await user.type(within(panel).getByRole('textbox', { name: 'Commit message' }), 'msg');
     expect(within(panel).getByRole('button', { name: 'Commit' })).toBeDisabled();
     expect(within(panel).getByRole('button', { name: 'Pull' })).toBeDisabled();
     expect(within(panel).getByRole('button', { name: 'Push' })).toBeDisabled();
+  });
+
+  it("while this window doesn't know its machine yet, the panel is read-only", async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ machines: null });
+    render(<GitBar chat={chat()} messages={[]} />);
+    expect(screen.queryByText(/Runs on/)).toBeNull();
+    await user.click(await screen.findByTestId('git-branch'));
+    const panel = await screen.findByRole('dialog', { name: 'Git' });
+    await user.type(within(panel).getByRole('textbox', { name: 'Commit message' }), 'msg');
+    expect(within(panel).getByRole('button', { name: 'Commit' })).toBeDisabled();
+    expect(within(panel).getByRole('button', { name: 'Pull' })).toBeDisabled();
+    expect(within(panel).getByRole('button', { name: 'Push' })).toBeDisabled();
+  });
+
+  it("a git-failed status shows git's stderr as-is", async () => {
+    vi.mocked(api.apps.git.status).mockRejectedValue(new ApiError(409, 'fatal: bad object HEAD', undefined, { code: 'git-failed', stderr: 'fatal: bad object HEAD\nhint: run git fsck' }));
+    render(<GitBar chat={chat()} messages={[]} />);
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByText('fatal: bad object HEAD', { selector: 'p' })).toBeInTheDocument();
+    expect(alert.querySelector('pre')?.textContent).toBe('fatal: bad object HEAD\nhint: run git fsck');
+  });
+
+  it("a failed push's stderr stays on screen even when the refresh after it fails too", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.apps.git.push).mockRejectedValue(new ApiError(409, 'push failed', undefined, { code: 'git-failed', stderr: ' ! [rejected] dev -> dev (fetch first)' }));
+    render(<GitBar chat={chat()} messages={[]} />);
+    await user.click(await screen.findByTestId('git-branch'));
+    const panel = await screen.findByRole('dialog', { name: 'Git' });
+    vi.mocked(api.apps.git.status).mockRejectedValue(new ApiError(409, 'gone', undefined, { code: 'not-a-repo' }));
+    await user.click(within(panel).getByRole('button', { name: 'Push' }));
+    await waitFor(() => expect(api.apps.git.status).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(' ! [rejected] dev -> dev (fetch first)', { normalizer: (s) => s })).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Git' })).toBeInTheDocument();
+  });
+
+  it('a press outside does not close the panel while an action runs', async () => {
+    const user = userEvent.setup();
+    let finish!: (v: { output: string }) => void;
+    vi.mocked(api.apps.git.pull).mockReturnValue(new Promise((r) => (finish = r)));
+    render(
+      <>
+        <GitBar chat={chat()} messages={[]} />
+        <button type="button">elsewhere</button>
+      </>
+    );
+    await user.click(await screen.findByTestId('git-branch'));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Git' })).getByRole('button', { name: 'Pull' }));
+    await user.click(screen.getByRole('button', { name: 'elsewhere' }));
+    expect(screen.getByRole('dialog', { name: 'Git' })).toBeInTheDocument();
+    await act(async () => finish({ output: 'done' }));
+    expect(await screen.findByText('done')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'elsewhere' }));
+    expect(screen.queryByRole('dialog', { name: 'Git' })).toBeNull();
   });
 
   it('a chat on this machine has no "Runs on" line and an enabled panel', async () => {
