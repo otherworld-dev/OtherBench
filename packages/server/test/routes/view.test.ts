@@ -65,6 +65,17 @@ describe('POST /api/view/links', () => {
     expect((await json(await open(join(outside, 'ref.md'), 'c2')))['kind']).toBe('markdown');
   });
 
+  it("opens files in an app chat's linked project's extra folders, as its turns can use them (M4)", async () => {
+    writeFileSync(join(outside, 'ref.md'), 'ref');
+    container.store.projects.create({
+      id: 'proj', name: 'Shop', workspaceRoot: null, defaultProfileId: null,
+      folders: [{ workspace: { kind: 'machine', nodeId: 'node-self', root: outside }, access: 'read' }],
+    } as never);
+    container.store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId: 'proj' });
+    chat('c3', { kind: 'machine', nodeId: 'node-self', root: ws }, { projectId: null, appId: 'app-1' });
+    expect((await json(await open(join(outside, 'ref.md'), 'c3')))['kind']).toBe('markdown');
+  });
+
   it("refuses what isn't in the chat's folders: elsewhere, escaping with .., or through a junction", async () => {
     writeFileSync(join(outside, 'secret.txt'), 'no');
     for (const path of [join(outside, 'secret.txt'), '../' + 'x.txt']) {

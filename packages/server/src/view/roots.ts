@@ -26,7 +26,12 @@ export function chatRoots(container: Container, chat: Chat): ChatRoots {
   const exists = container.pathExists ?? existsSync;
   const status = resolveWorkspace(chat.workspace, self, paths, exists);
   const workspaceRoot = status.status === 'ok' ? status.root : null;
-  const project = chat.projectId ? container.store.projects.get(chat.projectId) : null;
+  // An app chat has no project of its own; its app's linked project lends it folders, the same chain its
+  // turns use (TurnRunner.projectChain; spec 2026-10-20-code-tab-design, Goal 9 and "Turn context"), so the
+  // viewer opens what the model can read.
+  const linked = chat.appId ? (container.store.apps.get(chat.appId)?.linkedProjectId ?? null) : null;
+  const projectId = chat.projectId ?? linked;
+  const project = projectId ? container.store.projects.get(projectId) : null;
   // A sub-project's parent's folders open here too, as its chats' turns can use them (spec 2026-10-15-sub-projects-design §3).
   const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
   const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(parent?.folders, project?.folders, chat.folders), self, paths, exists, workspaceRoot);

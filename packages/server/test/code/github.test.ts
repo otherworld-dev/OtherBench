@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutableMissingError, type RunResult } from '../../src/code/process.js';
-import { GhError, ghEnv, githubService, type Runner } from '../../src/code/github.js';
+import { ExecutableNotFoundError } from '@otherbench/tools/mcp/spawn.js';
+import { GhError, ghEnv, ghRunner, githubService, type Runner } from '../../src/code/github.js';
 
 const ok = (stdout: string): RunResult => ({ code: 0, stdout, stderr: '', timedOut: false, truncated: false });
 const fail = (stderr: string, code = 1): RunResult => ({ code, stdout: '', stderr, timedOut: false, truncated: false });
@@ -112,5 +113,31 @@ describe('ghEnv', () => {
     expect(env.GH_PROMPT_DISABLED).toBe('1');
     expect(env.GH_NO_UPDATE_NOTIFIER).toBe('1');
     expect(env.NO_COLOR).toBe('1');
+  });
+});
+
+describe('ghRunner (M5)', () => {
+  it('resolves gh once and reuses the path, rather than a synchronous `where` per call', async () => {
+    let resolved = 0;
+    // node stands in for gh, so the runner really spawns what the resolver returned.
+    const run = ghRunner(() => {
+      resolved += 1;
+      return process.execPath;
+    });
+    const a = await run(['-e', 'process.stdout.write("1")']);
+    const b = await run(['-e', 'process.stdout.write("2")']);
+    expect([a.stdout, b.stdout]).toEqual(['1', '2']);
+    expect(resolved).toBe(1);
+  });
+
+  it('a gh that is not found is gh-missing, and is looked for again next time', async () => {
+    let resolved = 0;
+    const run = ghRunner(() => {
+      resolved += 1;
+      throw new ExecutableNotFoundError('gh');
+    });
+    expect(await code(run(['--version']))).toBe('gh-missing');
+    expect(await code(run(['--version']))).toBe('gh-missing');
+    expect(resolved).toBe(2);
   });
 });

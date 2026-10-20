@@ -1,7 +1,8 @@
 import { tmpdir } from 'node:os';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
-import { isGithubRepo } from '@otherbench/core/domain/apps.js';
+import { isGithubRepo, ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { GhErrorCode, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
+import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 import { redactUrls } from './git-parse.js';
 import { ExecutableMissingError, runProcess, type RunResult } from './process.js';
 
@@ -52,18 +53,37 @@ export function ghEnv(base: Readonly<Record<string, string | undefined>> = proce
 
 const GH_TIMEOUT_MS = 60_000;
 
-/** The default Runner: `gh` resolved by runProcess, run from a neutral folder (every call passes --repo). */
-export function ghRunner(): Runner {
+const GH_MISSING = 'The GitHub CLI (gh) is not installed, or is not on the PATH.';
+
+/**
+ * The default Runner: `gh` run from a neutral folder (every call passes
+ * --repo). The executable is resolved once per runner and the path reused, as
+ * git.ts does for git: on Windows resolveExecutable is a synchronous `where`
+ * spawn, too slow to repeat for every issue-list refresh (spec
+ * 2026-10-20-code-tab-design, Goal 3). A gh that is not found is not cached, so
+ * installing it later works without restarting the server. `resolve` is
+ * injectable for tests.
+ */
+export function ghRunner(resolve: (command: string) => string = resolveExecutable): Runner {
+  let ghExe: string | undefined;
   return async (args, input) => {
+    if (ghExe === undefined) {
+      try {
+        ghExe = resolve('gh');
+      } catch (err) {
+        if (err instanceof ExecutableNotFoundError) throw new GhError('gh-missing', GH_MISSING);
+        throw err;
+      }
+    }
     try {
-      return await runProcess('gh', args, {
+      return await runProcess(ghExe, args, {
         cwd: tmpdir(),
         env: ghEnv(),
         timeoutMs: GH_TIMEOUT_MS,
         ...(input !== undefined ? { input } : {}),
       });
     } catch (err) {
-      if (err instanceof ExecutableMissingError) throw new GhError('gh-missing', 'The GitHub CLI (gh) is not installed, or is not on the PATH.');
+      if (err instanceof ExecutableMissingError) throw new GhError('gh-missing', GH_MISSING);
       const reason = err instanceof Error ? err.message : String(err);
       throw new GhError('gh-failed', `Could not start gh: ${redactUrls(reason)}`);
     }
@@ -117,7 +137,7 @@ export function githubService(run: Runner) {
     try {
       r = await run(args, input);
     } catch (err) {
-      if (err instanceof ExecutableMissingError) throw new GhError('gh-missing', 'The GitHub CLI (gh) is not installed, or is not on the PATH.');
+      if (err instanceof ExecutableMissingError) throw new GhError('gh-missing', GH_MISSING);
       if (err instanceof GhError) throw err;
       // An injected runner's spawn failure other than a missing gh (EINVAL, EACCES...): still gh-failed, as git.ts
       // does for git, never a raw error the route would answer with a 500.
@@ -153,7 +173,7 @@ export function githubService(run: Runner) {
   return {
     async list(repo: string, state: 'open' | 'closed'): Promise<IssueSummary[]> {
       checkRepo(repo);
-      const out = await gh(['issue', 'list', '--repo', repo, '--state', state, '--limit', '100', '--json', SUMMARY_FIELDS]);
+      const out = await gh(['issue', 'list', '--repo', repo, '--state', state, '--limit', String(ISSUE_LIST_LIMIT), '--json', SUMMARY_FIELDS]);
       return parse<RawIssue[]>(out)
         .map(summary)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
