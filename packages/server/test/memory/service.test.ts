@@ -197,6 +197,26 @@ describe('quiet timer', () => {
     expect(clock.pending()).toEqual([]);
   });
 
+  it("never folds an app chat into its linked project's note (spec 2026-10-20-code-tab-design, Goal 9: the link is read-only)", async () => {
+    store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId: 'proj' });
+    addChat('app-chat', { projectId: null });
+    store.chats.update('app-chat', { appId: 'app-1' });
+    store.projectMemory.save('proj', note({ goals: '- Untouched' }), 'user', null);
+    const before = store.projectMemory.get('proj');
+    exchange('app-chat', 'We use SQLite', 'Noted');
+
+    service.noteTurnCompleted('app-chat');
+    expect(clock.pending()).toEqual([]);
+    clock.advance(MEMORY_QUIET_MS * 2);
+    service.sweep();
+    expect(clock.pending()).toEqual([]);
+    expect(await service.updateNow('app-chat')).toMatchObject({ status: 'discarded' });
+    await service.idle();
+
+    expect(requests).toHaveLength(0);
+    expect(store.projectMemory.get('proj')).toEqual(before);
+  });
+
   it('starts no timer for a chat that runs on another machine: that machine summarises it', () => {
     addChat('elsewhere');
     store.chats.update('elsewhere', { runsOn: 'node-other' });

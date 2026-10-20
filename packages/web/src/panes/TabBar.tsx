@@ -3,6 +3,7 @@ import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { Menu } from '../components/Menu.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { useChatActivity } from '../state/chatStatus.js';
+import { parseAppTab } from '../state/appTab.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -48,6 +49,8 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
   const projectsLoaded = useOtherBenchStore((s) => s.projectsLoaded);
+  const apps = useOtherBenchStore((s) => s.apps);
+  const appsLoaded = useOtherBenchStore((s) => s.appsLoaded);
   const paneState = useOtherBenchStore((s) => s.paneState);
   const activeChatId = useOtherBenchStore((s) => s.activeChatId);
   const { waiting, working, background } = useChatActivity();
@@ -71,10 +74,13 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         // Once the project list has arrived, a project that isn't in it is really gone: keep its tab, closable.
         const projectId = parseProjectTab(id);
         if (projectId !== null) return [{ id, title: projectDisplayNameById(projects, projectId) ?? (projectsLoaded ? 'Missing project' : 'Loading…') }];
+        // An app's home (spec 2026-10-20-code-tab-design), named like a project's.
+        const appId = parseAppTab(id);
+        if (appId !== null) return [{ id, title: apps.find((a) => a.id === appId)?.name ?? (appsLoaded ? 'Missing app' : 'Loading…') }];
         const chat = chats.find((c) => c.id === id);
         return chat ? [{ id: chat.id, title: chat.title }] : [];
       }),
-    [paneState.tabs, chats, projects, projectsLoaded]
+    [paneState.tabs, chats, projects, projectsLoaded, apps, appsLoaded]
   );
   const multi = !narrow && paneState.panes.length > 1;
   const paneOf = (chatId: string): number => (paneState.focusedPane >= 0 && chatId === activeChatId ? paneState.focusedPane : paneState.panes.indexOf(chatId));
@@ -177,7 +183,13 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
               <button
                 type="button"
                 aria-label={`Close tab ${t.title}`}
-                title={parseProjectTab(t.id) === null ? 'Close tab (the chat stays in the sidebar)' : 'Close tab (the project stays in the sidebar)'}
+                title={
+                  parseProjectTab(t.id) !== null
+                    ? 'Close tab (the project stays in the sidebar)'
+                    : parseAppTab(t.id) !== null
+                      ? 'Close tab (the app stays in the sidebar)'
+                      : 'Close tab (the chat stays in the sidebar)'
+                }
                 onClick={() => closeTab(t.id)}
                 className="mr-1 shrink-0 rounded px-1 text-xs text-[var(--text-muted)] opacity-60 hover:bg-[var(--bg-sunken)] hover:opacity-100 focus-visible:opacity-100"
               >

@@ -1,7 +1,7 @@
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 
 const desktopListeners = new Map<string, () => void>();
@@ -21,6 +21,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
       ...actual.api,
       chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), export: vi.fn() },
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      apps: { ...actual.api.apps, list: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       searchChats: vi.fn(),
       health: vi.fn(),
     },
@@ -31,7 +32,7 @@ vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api } from '../state/api.js';
-import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed } from '../state/sidebarGroups.js';
+import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed, UNKNOWN_APP_KEY } from '../state/sidebarGroups.js';
 import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ChatList } from './ChatList.js';
@@ -50,6 +51,8 @@ const mockedProjectPatch = vi.mocked(api.projects.patch);
 const mockedProjectDelete = vi.mocked(api.projects.delete);
 const mockedSearch = vi.mocked(api.searchChats);
 const mockedHealth = vi.mocked(api.health);
+const mockedAppPatch = vi.mocked(api.apps.patch);
+const mockedAppDelete = vi.mocked(api.apps.delete);
 
 const profile: Profile = {
   id: 'profile-1',
@@ -77,7 +80,7 @@ const chat: Chat = {
   projectPinned: false,
   unread: false,
   autoMode: false,
-  projectId: null,
+  projectId: null, appId: null,
   memoryCursor: null,
   memoryExcluded: false,
   sortOrder: 0,
@@ -92,6 +95,10 @@ function makeChat(overrides: Partial<Chat> & { id: string }): Chat {
 
 function makeProject(overrides: Partial<Project> & { id: string }): Project {
   return { name: overrides.id, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+}
+
+function makeApp(overrides: Partial<App> & { id: string }): App {
+  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */
@@ -1547,5 +1554,212 @@ describe('ChatList dragging project headings', () => {
     mockedSearch.mockResolvedValue([]);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'Alpha' } });
     await waitFor(() => expect(nameOf('p-a')).toHaveAttribute('draggable', 'false'));
+  });
+});
+
+describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', () => {
+  const alpha = makeApp({ id: 'A', name: 'Alpha', workspaceRoot: '/alpha' });
+  const beta = makeApp({ id: 'B', name: 'Beta', workspaceRoot: '/beta' });
+
+  function setup(over: Partial<ReturnType<typeof useOtherBenchStore.getState>> = {}) {
+    useOtherBenchStore.setState({
+      apps: [alpha, beta],
+      appsLoaded: true,
+      projects: [makeProject({ id: 'p-a', name: 'Planning' })],
+      chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A', workspaceRoot: '/alpha' }), makeChat({ id: 'cp', title: 'Plain', projectId: 'p-a' })],
+      ...over,
+    });
+    render(<ChatList />);
+    return userEvent.setup();
+  }
+
+  it('clicking Code in the mode switch calls setMode("code")', async () => {
+    const setMode = vi.fn();
+    const user = setup({ setMode });
+    const modeSwitch = screen.getByTestId('mode-switch');
+    expect(within(modeSwitch).getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(modeSwitch).getByRole('button', { name: 'Code' }));
+    expect(setMode).toHaveBeenCalledWith('code');
+  });
+
+  it('switches the list between modes: Code shows the app and its chat, not projects; Chat hides the app chat', async () => {
+    const user = setup();
+    expect(screen.queryByTestId('chat-row-ca')).toBeNull();
+    expect(screen.getByTestId('chat-row-cp')).toBeInTheDocument();
+
+    await user.click(within(screen.getByTestId('mode-switch')).getByRole('button', { name: 'Code' }));
+    expect(useOtherBenchStore.getState().mode).toBe('code');
+    expect(within(screen.getByTestId('group-heading-A')).getByText('Alpha')).toBeInTheDocument();
+    expect(rowIds('group-A')).toEqual(['ca']);
+    expect(screen.getByTestId('group-B')).toBeInTheDocument();
+    expect(screen.queryByTestId('group-p-a')).toBeNull();
+    expect(screen.queryByTestId(`group-${NO_PROJECT_KEY}`)).toBeNull();
+    expect(screen.queryByTestId('chat-row-cp')).toBeNull();
+    expect(screen.getByRole('button', { name: '+ New app' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '+ New chat' })).toBeNull();
+  });
+
+  it('a chat whose app is not loaded shows in an Unknown app group at the end', () => {
+    setup({ mode: 'code', chats: [makeChat({ id: 'cx', title: 'Stray', appId: 'gone' })] });
+    expect(headingOrder()).toEqual(['A', 'B', UNKNOWN_APP_KEY]);
+    expect(within(screen.getByTestId(`group-heading-${UNKNOWN_APP_KEY}`)).getByText('Unknown app')).toBeInTheDocument();
+    expect(rowIds(`group-${UNKNOWN_APP_KEY}`)).toEqual(['cx']);
+  });
+
+  it("clicking an app's name opens its home", async () => {
+    const user = setup({ mode: 'code' });
+    await user.click(screen.getByRole('button', { name: /^Alpha/ }));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('app:A');
+    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it("an app's heading collapses its group from the arrow", async () => {
+    const user = setup({ mode: 'code' });
+    await user.click(screen.getByRole('button', { name: 'Collapse Alpha' }));
+    expect(screen.queryByTestId('chat-row-ca')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Expand Alpha' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it("an app's + New chat row creates a chat in the app and shows it", async () => {
+    mockedCreate.mockResolvedValue(makeChat({ id: 'c-new', title: 'New Chat', appId: 'B', workspaceRoot: '/beta' }));
+    const user = setup({ mode: 'code' });
+    await user.click(screen.getByTestId('app-new-chat-B'));
+    expect(mockedCreate).toHaveBeenCalledWith({ appId: 'B' });
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c-new'));
+    expect(useOtherBenchStore.getState().mode).toBe('code');
+    expect(rowIds('group-B')).toEqual(['c-new']);
+  });
+
+  it('+ New app opens the app form', async () => {
+    const user = setup({ mode: 'code' });
+    await user.click(screen.getByRole('button', { name: '+ New app' }));
+    expect(useOtherBenchStore.getState().appPage).toEqual({ mode: 'create' });
+  });
+
+  it('search works in Code mode: only matching app chats, and apps without a match hide', async () => {
+    mockedSearch.mockResolvedValue([]);
+    const user = setup({ mode: 'code', chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A' }), makeChat({ id: 'cb', title: 'Other', appId: 'B' })] });
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
+    await waitFor(() => expect(screen.queryByTestId('group-B')).toBeNull());
+    expect(rowIds('group-A')).toEqual(['ca']);
+  });
+
+  it('a Chat mode search lists a matching app chat under "In Code mode", and clicking it switches to Code mode (I3)', async () => {
+    mockedSearch.mockResolvedValue([]);
+    const user = setup();
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
+    const section = await screen.findByTestId('other-mode-section');
+    expect(within(section).getByRole('heading', { name: 'In Code mode' })).toBeInTheDocument();
+    expect(rowIds('other-mode-section')).toEqual(['ca']);
+    expect(screen.queryByText('No chats match your search.')).toBeNull();
+    await user.click(within(section).getByRole('button', { name: 'Fix SSE' }));
+    expect(useOtherBenchStore.getState().mode).toBe('code');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('ca');
+  });
+
+  it('a Code mode search lists a matching plain chat under "In Chat mode"; nothing shows there when not searching (I3)', async () => {
+    mockedSearch.mockResolvedValue([]);
+    const user = setup({ mode: 'code' });
+    expect(screen.queryByTestId('other-mode-section')).toBeNull();
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'plain');
+    const section = await screen.findByTestId('other-mode-section');
+    expect(within(section).getByRole('heading', { name: 'In Chat mode' })).toBeInTheDocument();
+    expect(rowIds('other-mode-section')).toEqual(['cp']);
+    await user.click(within(section).getByRole('button', { name: 'Plain' }));
+    expect(useOtherBenchStore.getState().mode).toBe('chat');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('cp');
+  });
+
+  it("a pinned app chat's menu has no Move up / Move down: Code mode has no hand ordering (D1)", async () => {
+    setup({ mode: 'code', chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A', pinned: true }), makeChat({ id: 'cb', title: 'Other', appId: 'A' })] });
+    for (const name of ['Fix SSE', 'Other']) {
+      fireEvent.contextMenu(screen.getByRole('button', { name }));
+      expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Move up' })).toBeNull();
+      expect(screen.queryByRole('menuitem', { name: 'Move down' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('menu', { name: 'Chat actions' }), { key: 'Escape' });
+    }
+  });
+
+  it('Move to app… sends PATCH {appId}, and the active chat is followed into Code mode', async () => {
+    const user = setup({ activeChatId: 'cp' });
+    mockedPatch.mockImplementation(
+      async (id, body) => ({ ...useOtherBenchStore.getState().chats.find((c) => c.id === id)!, ...body, projectId: null, workspaceRoot: '/alpha' }) as Chat
+    );
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Plain' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to app…' }));
+    await user.click(within(screen.getByRole('menu', { name: 'Move to app…' })).getByRole('menuitemradio', { name: 'Alpha' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('cp', { appId: 'A' });
+    await waitFor(() => expect(useOtherBenchStore.getState().mode).toBe('code'));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('cp');
+    expect(useOtherBenchStore.getState().chats.find((c) => c.id === 'cp')!.appId).toBe('A');
+    await waitFor(() => expect(rowIds('group-A').sort()).toEqual(['ca', 'cp']));
+  });
+
+  it('Move to app… on a chat that is not open moves it without switching mode', async () => {
+    const user = setup({ activeChatId: null });
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Plain' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to app…' }));
+    await user.click(within(screen.getByRole('menu', { name: 'Move to app…' })).getByRole('menuitemradio', { name: 'Beta' }));
+    await waitFor(() => expect(screen.queryByTestId('chat-row-cp')).toBeNull());
+    expect(useOtherBenchStore.getState().mode).toBe('chat');
+  });
+
+  it('in Code mode, Move out of app sends {appId: null} and the active chat follows to Chat mode', async () => {
+    const user = setup({ mode: 'code' });
+    act(() => useOtherBenchStore.getState().setActiveChatId('ca'));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Fix SSE' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move out of app' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('ca', { appId: null });
+    await waitFor(() => expect(useOtherBenchStore.getState().mode).toBe('chat'));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('ca');
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['ca']);
+  });
+
+  it('in Code mode, Move to app… moves the chat to another app', async () => {
+    const user = setup({ mode: 'code' });
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Fix SSE' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to app…' }));
+    await user.click(within(screen.getByRole('menu', { name: 'Move to app…' })).getByRole('menuitemradio', { name: 'Beta' }));
+    expect(mockedPatch).toHaveBeenCalledWith('ca', { appId: 'B' });
+    await waitFor(() => expect(rowIds('group-B')).toEqual(['ca']));
+  });
+
+  it("an app's menu offers Rename, Edit… and Delete…; Rename saves the new name", async () => {
+    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+    const user = setup({ mode: 'code' });
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    const menu = screen.getByRole('menu', { name: 'App actions' });
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Delete…']);
+    await user.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'App name' });
+    await user.clear(input);
+    await user.type(input, 'Renamed{Enter}');
+    expect(mockedAppPatch).toHaveBeenCalledWith('A', { name: 'Renamed' });
+    await waitFor(() => expect(within(screen.getByTestId('group-heading-A')).getByText('Renamed')).toBeInTheDocument());
+  });
+
+  it('Edit… opens the app form on that app', async () => {
+    const user = setup({ mode: 'code' });
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Edit…' }));
+    expect(useOtherBenchStore.getState().appPage).toEqual({ mode: 'edit', appId: 'A', returnFocus: '[data-testid="group-heading-A"] [data-heading-main]' });
+  });
+
+  it('Delete… confirms, then the app goes and its chats go back to Chat mode, not deleted', async () => {
+    mockedAppDelete.mockResolvedValue(undefined);
+    const user = setup({ mode: 'code' });
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete Alpha?' });
+    expect(dialog).toHaveTextContent('Its chats move back to Chat mode; nothing is deleted.');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(mockedAppDelete).toHaveBeenCalledWith('A');
+    await waitFor(() => expect(screen.queryByTestId('group-A')).toBeNull());
+    expect(useOtherBenchStore.getState().chats.find((c) => c.id === 'ca')!.appId).toBeNull();
+    expect(mockedDelete).not.toHaveBeenCalled();
   });
 });

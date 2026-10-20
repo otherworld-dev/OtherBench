@@ -284,6 +284,29 @@ describe('Message', () => {
       expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();
     });
 
+    it('shows an edit as a diff outside the closed group, which still counts it (spec 2026-10-20-code-tab-design)', () => {
+      const edit = { type: 'tool-call' as const, id: 'e', name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } };
+      render(<Message message={base({ parts: [call('1', 'Read'), result('1', 'Read'), edit, result('e', 'Edit')] })} />);
+      expect(screen.getByText('Used 2 tools: Read, Edit').closest('details')).not.toHaveAttribute('open');
+      const diff = screen.getByTestId('edit-diff');
+      expect(diff.closest('details')).toBeNull();
+      expect(within(diff).getByText('two')).toBeInTheDocument();
+    });
+
+    it('keeps an activity fold whole around an edit diff, with the diff outside it', () => {
+      const edit = { type: 'tool-call' as const, id: 'e', name: 'Edit', args: { file_path: 'a.ts', old_string: 'one', new_string: 'two' } };
+      const helper: Part = {
+        type: 'subagent', callId: 'c1', label: 'Check', prompt: 'p', profileId: 'p', profileName: 'Cheap', modelId: 'm', status: 'complete',
+        usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, parts: [],
+      };
+      const parts: Part[] = [call('1', 'Read'), result('1', 'Read'), edit, result('e', 'Edit', true), helper];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getAllByTestId('activity-fold')).toHaveLength(1);
+      const diff = screen.getByTestId('edit-diff');
+      expect(diff.closest('details')).toBeNull();
+      expect(screen.getByText('failed')).toBeInTheDocument();
+    });
+
     it('counts results when a run has no calls', () => {
       render(<Message message={base({ parts: [result('1', 'Read'), result('2', 'Read')] })} />);
       expect(screen.getByText('Used 2 tools: Read ×2')).toBeInTheDocument();

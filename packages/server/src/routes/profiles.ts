@@ -6,6 +6,7 @@ import type { ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/co
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
+import { clearAppDefaultProfile } from './apps.js';
 import { clearProjectDefaultProfile } from './projects.js';
 import { clearMemoryProfile } from './settings.js';
 
@@ -188,9 +189,10 @@ export function profilesRoutes(container: Container): Hono {
       const holder = container.computer?.holder() ?? null;
       if (holder !== null && container.store.chats.get(holder)?.profileId === id) await container.computer?.stop(holder);
     }
-    // Spec section 5: an archived profile stops being any project's default.
+    // Spec section 5: an archived profile stops being any project's default, or any app's (spec 2026-10-20-code-tab-design).
     if (updated.archivedAt !== null) {
       clearProjectDefaultProfile(container.store, id);
+      clearAppDefaultProfile(container.store, id);
       clearMemoryProfile(container.store, id);
     }
     return c.json(updated);

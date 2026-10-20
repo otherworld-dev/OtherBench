@@ -3,6 +3,7 @@ import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherb
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
+import { editDiffOf } from '../lib/editDiff.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
@@ -11,6 +12,7 @@ import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
+import { EditDiff } from './EditDiff.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
@@ -477,16 +479,23 @@ interface RenderContext {
  */
 function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   const { scope } = ctx;
-  const out: { el: JSX.Element; activity?: Activity }[] = [];
+  const out: { el: JSX.Element; activity?: Activity; diff?: boolean }[] = [];
   let run: ToolPart[] = [];
   let runStart = 0;
   // Keyed by the run's FIRST part so the key (and the user's open/closed
   // state on the <details>) stays stable while more tool parts stream in.
   // Cards made while a run of tools is open wait for it, so parallel calls stay in one group.
   let cards: JSX.Element[] = [];
+  // File edits in the run: they stay in the group (counted, shown in its details) and ALSO show as
+  // diffs right after it, outside any activity fold, so they're visible while it's closed
+  // (spec 2026-10-20-code-tab-design, Goal 5). Marked `diff` so the fold loop below passes over
+  // them instead of letting them split a fold: they land right after the fold their run is in.
+  let diffs: JSX.Element[] = [];
   const flush = (): void => {
     if (run.length > 0) out.push({ el: <ToolGroup key={`tools-${runStart}`} run={run} scope={scope} />, activity: { kind: 'tools', run } });
     run = [];
+    out.push(...diffs.map((el) => ({ el, diff: true })));
+    diffs = [];
     out.push(...cards.map((el) => ({ el })));
     cards = [];
   };
@@ -534,6 +543,11 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       }
       if (run.length === 0) runStart = i;
       run.push(p);
+      const diff = p.type === 'tool-call' ? editDiffOf(p.name, p.args) : null;
+      if (p.type === 'tool-call' && diff) {
+        const result = results.get(p.id);
+        diffs.push(<EditDiff key={`diff-${p.id}`} info={diff} status={result ? (result.isError ? 'failed' : 'applied') : 'pending'} />);
+      }
       return;
     }
     flush();
@@ -545,14 +559,16 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   const folded: JSX.Element[] = [];
   for (let i = 0; i < out.length; ) {
     let j = i;
-    while (j < out.length && out[j]!.activity) j++;
-    if (j - i >= 2) {
-      const blocks = out.slice(i, j);
+    while (j < out.length && (out[j]!.activity || out[j]!.diff)) j++;
+    const blocks = out.slice(i, j).filter((b) => b.activity);
+    if (blocks.length >= 2) {
       folded.push(
         <ActivityFold key={`activity-${String(blocks[0]!.el.key)}`} items={blocks.map((b) => b.activity!)}>
           {blocks.map((b) => b.el)}
         </ActivityFold>
       );
+      // The edit diffs of the run stay visible, after the fold, in order.
+      for (const b of out.slice(i, j)) if (b.diff) folded.push(b.el);
       i = j;
     } else {
       folded.push(out[i]!.el);

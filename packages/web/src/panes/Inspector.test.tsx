@@ -85,7 +85,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     projectPinned: false,
     unread: false,
     autoMode: false,
-    projectId: null,
+    projectId: null, appId: null,
     memoryCursor: null,
     memoryExcluded: false,
     sortOrder: 0,
@@ -1069,5 +1069,35 @@ describe('Inspector condensed sections', () => {
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(workspaceSection()).getByRole('combobox', { name: 'Runs on' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: /^Runs on/ })).toBeNull();
+  });
+});
+
+describe("Inspector workspace for an app chat (spec 2026-10-20-code-tab-design, \"An app chat's folder is the app's folder\")", () => {
+  afterEach(cleanup);
+
+  it("shows the folder read-only with \"Uses the app's folder\", and no control to change or clear it", async () => {
+    render(
+      <Inspector chat={makeChat({ appId: 'A', workspaceRoot: 'E:\\Git\\OtherBench' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />
+    );
+    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\OtherBench');
+    expect(within(workspaceSection()).getByTestId('workspace-app-folder')).toHaveTextContent("Uses the app's folder");
+    expect(within(workspaceSection()).queryByRole('button', { name: 'Change…' })).toBeNull();
+    expect(within(workspaceSection()).queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+
+  it("says where the app's folder is when it isn't on this machine, without offering to pick another", async () => {
+    render(
+      <Inspector
+        chat={makeChat({ appId: 'A', workspaceRoot: null, workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'D:\\Work' } } })}
+        profile={makeProfile()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+      />
+    );
+    expect(await within(workspaceSection()).findByTestId('workspace-unresolved')).toHaveTextContent('D:\\Work');
+    expect(within(workspaceSection()).getByTestId('workspace-app-folder')).toHaveTextContent("Uses the app's folder");
+    expect(within(workspaceSection()).queryByRole('button', { name: 'Choose folder…' })).toBeNull();
+    expect(within(workspaceSection()).queryByRole('button', { name: 'No folder' })).toBeNull();
+    expect(within(workspaceSection()).queryByRole('button', { name: /set workspace/i })).toBeNull();
   });
 });

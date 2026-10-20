@@ -4,19 +4,25 @@ import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherben
 import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
 import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
+import { parseViewTab } from '../viewer/items.js';
+import { appTabId, parseAppTab } from './appTab.js';
+import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
 import {
   closeTab as closePaneTab,
+  CODE_PANE_STATE_STORAGE_KEY,
   focusPane as focusPaneIn,
+  forgetApp,
   forgetChat,
   forgetProject,
   loadPaneState,
+  PANE_STATE_STORAGE_KEY,
   moveTab as movePaneTab,
   openTab as openPaneTab,
   savePaneState,
@@ -27,6 +33,7 @@ import {
   type Layout,
   type PaneState,
 } from './panes.js';
+import { parseProjectTab } from './projectTab.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 import type { PeersOverview } from './api.js';
 
@@ -45,12 +52,17 @@ export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnect
  * is gone by then (a menu item).
  */
 export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+/** The app form (spec 2026-10-20-code-tab-design, "Creating an app"), as `ProjectPageState`: a new app, or one to edit. */
+export type AppPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; appId: string; returnFocus?: string };
 
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
 
 /** A note on its way back to the box; `takenBack` when the user took it back, rather than it not being sent. */
 export type ReturnedNote = ReplyNote & { takenBack?: true };
+
+/** The Code mode right panel's tabs (spec 2026-10-20-code-tab-design: Issues, Files, and Chat holding the Inspector). */
+export type CodePanelTab = 'issues' | 'files' | 'chat';
 
 export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -85,13 +97,25 @@ export interface OtherBenchState {
   // --- chats -----------------------------------------------------------------
   chats: Chat[];
   activeChatId: string | null;
+  /** Also drops each chat from the pane state of the mode it doesn't live in (moved into or out of an app since the tabs were saved). */
   setChats(chats: Chat[]): void;
+  /** A chat that moved into or out of an app also leaves the pane state of the mode it left, as `removeChat` would. */
   upsertChat(chat: Chat): void;
+  /** Takes it out of both modes' pane states. */
   removeChat(chatId: string): void;
+  /**
+   * Shows the chat (or tab id) in the focused pane, first switching to the mode it lives in (`modeOfChat`)
+   * when that isn't the one showing: "opening an app chat from anywhere switches to Code mode, and the same
+   * goes for an ordinary chat and Chat mode" (spec 2026-10-20-code-tab-design). A chat this window hasn't
+   * loaded, and null, stay in the mode showing.
+   */
   setActiveChatId(chatId: string | null): void;
-  /** Tabs, layout and the chat in each pane (#824). The focused pane's chat is always `activeChatId`. */
+  /**
+   * Tabs, layout and the chat in each pane (#824), of the mode showing (`mode`). The focused pane's chat is
+   * always `activeChatId`. The other mode's are kept in `otherPaneState`.
+   */
   paneState: PaneState;
-  /** Adds the chat as a tab (once) and shows it in the focused pane. */
+  /** Adds the chat as a tab (once) and shows it in the focused pane, switching mode first as `setActiveChatId` does. */
   openTab(chatId: string): void;
   /** Removes the tab only; a pane showing the chat keeps it. */
   closeTab(chatId: string): void;
@@ -117,6 +141,13 @@ export interface OtherBenchState {
   appBackgroundChats: Record<string, number>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
+  /**
+   * The app event stream's latest `turn-finished`, a fresh object each time,
+   * so a subscriber sees every one, two in a row in one chat included. The
+   * Code tab refreshes its issues (and git) after a turn in one of the app's
+   * chats (`code/useCodeRefresh.ts`, spec 2026-10-20-code-tab-design).
+   */
+  lastTurnFinished: { chatId: string; messageId: string } | null;
   /**
    * Per chat, bumped when a turn starts or finishes there that this window
    * didn't start and hasn't loaded (sent from another window, or from the
@@ -147,6 +178,45 @@ export interface OtherBenchState {
    * removeConnection. Chats are never removed.
    */
   removeProject(id: string): void;
+
+  // --- apps and Code mode (spec 2026-10-20-code-tab-design) -------------------
+  apps: App[];
+  /** The app list has arrived from the server, as `projectsLoaded`. */
+  appsLoaded: boolean;
+  /** An app missing from the new list (deleted elsewhere) also has its home tab closed, as `setProjects`. */
+  setApps(apps: App[]): void;
+  /** Inserts or replaces one app by id. */
+  upsertApp(app: App): void;
+  /**
+   * Removes an app and, in the SAME update, takes its chats out of it (`appId: null`), mirroring the server's
+   * DELETE: they go back to Chat mode, never deleted. Its home tab and its chats leave Code mode's pane state.
+   */
+  removeApp(id: string): void;
+  /** Which half of the window is showing. Remembered per browser, never synced. */
+  mode: Mode;
+  /** The pane state of the mode NOT showing, put away until `setMode` swaps it back with `paneState`. */
+  otherPaneState: PaneState;
+  /** Switches mode: the showing pane state is put away as it is, and the other mode's comes back with its own active chat. */
+  setMode(mode: Mode): void;
+  /** Opens the app's home (`appTabId`) as a tab in Code mode, switching to Code mode first. */
+  openAppHome(appId: string): void;
+  /** The Code mode right panel's tab. Remembered per browser. */
+  codePanelTab: CodePanelTab;
+  setCodePanelTab(tab: CodePanelTab): void;
+  /**
+   * Text handed to a chat's composer from outside it, by chat id, not yet
+   * taken: "Start a chat on this" puts an issue's number, title, URL and body
+   * in the new chat's box rather than sending it (spec
+   * 2026-10-20-code-tab-design, Goal 7 and "Calls I made"). The composer
+   * keeps its draft in its own state, so this is a hand-off the way
+   * `returnedNotes` is: the box takes it (after any draft) when it mounts or
+   * when it arrives. Not persisted: a reload before the chat shows drops it,
+   * as it drops a draft.
+   */
+  composerPrefills: Record<string, string>;
+  prefillComposer(chatId: string, text: string): void;
+  /** The chat's handed-over text, removed from the store, or null when there is none. */
+  takeComposerPrefill(chatId: string): string | null;
 
   // --- messages + the SSE reconciliation seam --------------------------------
   /** Every message the client has learned about, across whatever chat(s) have been loaded or streamed into, keyed by id. */
@@ -273,6 +343,10 @@ export interface OtherBenchState {
   projectPage: ProjectPageState | null;
   openProjectPage(page: ProjectPageState): void;
   closeProjectPage(): void;
+  /** The open app form, or null. Opened from Code mode's sidebar; App renders it. */
+  appPage: AppPageState | null;
+  openAppPage(page: AppPageState): void;
+  closeAppPage(): void;
   /** The open Scheduled overlay, or null. App renders it. */
   schedulesPage: SchedulesPageState | null;
   openSchedules(prefill?: ScheduleTarget): void;
@@ -309,7 +383,85 @@ function withPanes(next: PaneState): { paneState: PaneState; activeChatId: strin
   return { paneState: next, activeChatId: next.panes[next.focusedPane] ?? null };
 }
 
-const initialPanes = loadPaneState();
+/*
+ * Code is a whole-window mode (spec 2026-10-20-code-tab-design, "Decisions Adam
+ * made"): Chat mode and Code mode each keep their own tabs and pane layout, and
+ * switching swaps them. The store holds the showing mode's as `paneState`, so
+ * every pane action and every component reading it works unchanged in either
+ * mode, and the other mode's as `otherPaneState`, untouched until a switch
+ * swaps the two. A chat lives in one mode only (`modeOfChat`), so a pane state
+ * never keeps a chat of the other mode: one that moves into or out of an app
+ * leaves the pane state of the mode it left, the way a deleted chat does.
+ */
+
+const otherMode = (mode: Mode): Mode => (mode === 'chat' ? 'code' : 'chat');
+
+/** Where a mode's pane state is saved: Chat mode keeps the key every layout was saved under before Code mode. */
+const paneStateKey = (mode: Mode): string => (mode === 'code' ? CODE_PANE_STATE_STORAGE_KEY : PANE_STATE_STORAGE_KEY);
+
+type ModeView = Pick<OtherBenchState, 'mode' | 'paneState' | 'otherPaneState' | 'activeChatId'>;
+
+/**
+ * The mode a tab or pane id belongs in: an app's home in Code mode, a project's
+ * page in Chat mode, a chat (or a viewer tab, by its chat) in its chat's mode.
+ * Null when this window can't tell (a chat it hasn't loaded yet) or for null.
+ */
+function modeOfTab(id: string | null, chats: Chat[]): Mode | null {
+  if (id === null) return null;
+  if (parseAppTab(id) !== null) return 'code';
+  if (parseProjectTab(id) !== null) return 'chat';
+  const chatId = parseViewTab(id)?.chatId ?? id;
+  const chat = chats.find((c) => c.id === chatId);
+  return chat ? modeOfChat(chat) : null;
+}
+
+/**
+ * The store's mode fields with `mode` showing. A switch puts the showing pane
+ * state away exactly as it is (synced with the active chat) and brings the other
+ * back with its own focused pane's chat active; the same mode changes nothing.
+ */
+function inMode(state: ModeView, mode: Mode): ModeView {
+  if (mode === state.mode) return { mode, paneState: state.paneState, otherPaneState: state.otherPaneState, activeChatId: state.activeChatId };
+  const back = state.otherPaneState;
+  return { mode, paneState: back, otherPaneState: synced(state), activeChatId: back.panes[back.focusedPane] ?? null };
+}
+
+/** `forget` applied to both modes' pane states, the active chat following the showing one. */
+function forgetInBoth(state: ModeView, forget: (panes: PaneState) => PaneState): Pick<OtherBenchState, 'paneState' | 'otherPaneState' | 'activeChatId'> {
+  return { ...withPanes(forget(synced(state))), otherPaneState: forget(state.otherPaneState) };
+}
+
+/** `change` applied to `mode`'s pane state, whether it is showing or put away. */
+function inPanesOf(state: ModeView, mode: Mode, change: (panes: PaneState) => PaneState): Partial<OtherBenchState> {
+  return mode === state.mode ? withPanes(change(synced(state))) : { otherPaneState: change(state.otherPaneState) };
+}
+
+/**
+ * Each of `chats` dropped (with its viewer tabs, as `forgetChat`) from the pane
+ * state of the mode it doesn't live in. Nothing when no pane state held one, so
+ * an update that moved nothing leaves both pane states as they were.
+ */
+function refiled(state: ModeView, chats: readonly Chat[]): Partial<OtherBenchState> {
+  if (chats.length === 0) return {};
+  const base = synced(state);
+  let showing = base;
+  let away = state.otherPaneState;
+  for (const chat of chats) {
+    if (modeOfChat(chat) === state.mode) away = forgetChat(away, chat.id);
+    else showing = forgetChat(showing, chat.id);
+  }
+  if (showing === base && away === state.otherPaneState) return {};
+  return { ...withPanes(showing), otherPaneState: away };
+}
+
+/** `after` when it moved into or out of an app since `before` (a chat this window already had), for `refiled`. */
+function movedModes(before: Chat | undefined, after: Chat): Chat[] {
+  return before !== undefined && modeOfChat(before) !== modeOfChat(after) ? [after] : [];
+}
+
+const initialMode = loadMode();
+const initialPanes = loadPaneState(paneStateKey(initialMode));
+const initialOtherPanes = loadPaneState(paneStateKey(otherMode(initialMode)));
 
 /** localStorage key: whether the docked inspector is collapsed. Per device. */
 export const INSPECTOR_COLLAPSED_STORAGE_KEY = 'otherbench.inspectorCollapsed';
@@ -327,6 +479,27 @@ function saveInspectorCollapsed(collapsed: boolean): void {
     window.localStorage.setItem(INSPECTOR_COLLAPSED_STORAGE_KEY, String(collapsed));
   } catch {
     // storage blocked or full -- the choice still applies for this session.
+  }
+}
+
+/** localStorage key: the Code mode right panel's tab. Per browser. */
+export const CODE_PANEL_TAB_STORAGE_KEY = 'otherbench.codePanelTab';
+
+/** The stored tab; Issues for anything missing, unreadable or unknown. */
+export function loadCodePanelTab(): CodePanelTab {
+  try {
+    const raw = window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY);
+    return raw === 'files' || raw === 'chat' ? raw : 'issues';
+  } catch {
+    return 'issues';
+  }
+}
+
+function saveCodePanelTab(tab: CodePanelTab): void {
+  try {
+    window.localStorage.setItem(CODE_PANEL_TAB_STORAGE_KEY, tab);
+  } catch {
+    // storage blocked or full -- the tab still applies for this session.
   }
 }
 
@@ -458,7 +631,11 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   chats: [],
   activeChatId: initialPanes.panes[initialPanes.focusedPane] ?? null,
   paneState: initialPanes,
-  openTab: (chatId) => set((state) => withPanes(openPaneTab(synced(state), chatId))),
+  openTab: (chatId) =>
+    set((state) => {
+      const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
+      return { ...view, ...withPanes(openPaneTab(synced(view), chatId)) };
+    }),
   // A closed viewer tab can hand its pane back to its chat, so the active chat follows the pane.
   closeTab: (chatId) => set((state) => withPanes(closePaneTab(synced(state), chatId))),
   moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
@@ -466,18 +643,23 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   focusPane: (index) => set((state) => withPanes(focusPaneIn(synced(state), index))),
   setSplitSizes: (key, sizes) => set((state) => ({ paneState: setPaneSplitSizes(state.paneState, key, sizes) })),
   toggleMaximised: () => set((state) => ({ paneState: togglePaneMaximised(state.paneState) })),
-  setChats: (chats) => set({ chats }),
+  // The whole list, so every chat is checked: the saved tabs may predate a move made on another machine.
+  setChats: (chats) => set((state) => ({ chats, ...refiled(state, chats) })),
   upsertChat: (chat) =>
     set((state) => {
       const idx = state.chats.findIndex((c) => c.id === chat.id);
       if (idx === -1) return { chats: [...state.chats, chat] };
       const next = [...state.chats];
       next[idx] = chat;
-      return { chats: next };
+      return { chats: next, ...refiled(state, movedModes(state.chats[idx], chat)) };
     }),
-  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((c) => c.id !== chatId), ...withPanes(forgetChat(synced(state), chatId)) })),
-  // Fills the focused pane, or focuses the pane already showing the chat.
-  setActiveChatId: (chatId) => set((state) => withPanes(showChat(synced(state), chatId))),
+  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((c) => c.id !== chatId), ...forgetInBoth(state, (p) => forgetChat(p, chatId)) })),
+  // Fills the focused pane, or focuses the pane already showing the chat, in the chat's own mode.
+  setActiveChatId: (chatId) =>
+    set((state) => {
+      const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
+      return { ...view, ...withPanes(showChat(synced(view), chatId)) };
+    }),
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
@@ -489,6 +671,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   computerSessions: {},
   appBackgroundChats: {},
   syncRevision: 0,
+  lastTurnFinished: null,
   chatReloads: {},
   machines: null,
   setMachines: (machines) =>
@@ -513,14 +696,16 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       switch (event.type) {
         case 'chat-created':
         case 'chat-updated': {
+          // A chat new to this window is never dropped: it may be the one just opened, before its row arrived.
           const idx = state.chats.findIndex((c) => c.id === event.chat.id);
           if (idx === -1) return { chats: [...state.chats, event.chat] };
           const chats = [...state.chats];
           chats[idx] = event.chat;
-          return { chats };
+          // Moved into or out of an app (here, in another window or on the other machine): it leaves the mode it left.
+          return { chats, ...refiled(state, movedModes(state.chats[idx], event.chat)) };
         }
         case 'chat-deleted':
-          return { chats: state.chats.filter((c) => c.id !== event.chatId), ...withPanes(forgetChat(synced(state), event.chatId)) };
+          return { chats: state.chats.filter((c) => c.id !== event.chatId), ...forgetInBoth(state, (p) => forgetChat(p, event.chatId)) };
         case 'approval-requested': {
           const { chatId, messageId, requestId, toolName, kind } = event;
           return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName, ...(kind ? { kind } : {}) } } };
@@ -550,6 +735,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
           const stale = !known || known.status === 'streaming';
           return {
             appRunningTurns: running,
+            lastTurnFinished: { chatId: event.chatId, messageId: event.messageId },
             ...(kept.length === entries.length ? {} : { appPendingApprovals: Object.fromEntries(kept) }),
             ...(stale ? { chatReloads: bump(state.chatReloads, event.chatId) } : {}),
           };
@@ -593,8 +779,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     set((state) => {
       // A project deleted elsewhere (another tab or machine) arrives as a list without it: its page closes too.
       const kept = new Set(projects.map((p) => p.id));
-      const paneState = state.projects.filter((p) => !kept.has(p.id)).reduce((panes, p) => forgetProject(panes, p.id), synced(state));
-      return { projects, projectsLoaded: true, ...withPanes(paneState) };
+      const gone = state.projects.filter((p) => !kept.has(p.id));
+      return { projects, projectsLoaded: true, ...forgetInBoth(state, (panes) => gone.reduce((next, p) => forgetProject(next, p.id), panes)) };
     }),
   upsertProject: (project) =>
     set((state) => {
@@ -609,8 +795,57 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       // Its sub-projects become top level, as on the server.
       projects: state.projects.filter((p) => p.id !== id).map((p) => (p.parentId === id ? { ...p, parentId: null } : p)),
       chats: state.chats.map((c) => (c.projectId === id ? { ...c, projectId: null } : c)),
-      ...withPanes(forgetProject(synced(state), id)),
+      ...forgetInBoth(state, (panes) => forgetProject(panes, id)),
     })),
+
+  apps: [],
+  appsLoaded: false,
+  setApps: (apps) =>
+    set((state) => {
+      // An app deleted elsewhere (another tab or machine) arrives as a list without it: its home closes too.
+      const kept = new Set(apps.map((a) => a.id));
+      const gone = state.apps.filter((a) => !kept.has(a.id));
+      return { apps, appsLoaded: true, ...inPanesOf(state, 'code', (panes) => gone.reduce((next, a) => forgetApp(next, a.id), panes)) };
+    }),
+  upsertApp: (app) =>
+    set((state) => {
+      const idx = state.apps.findIndex((a) => a.id === app.id);
+      if (idx === -1) return { apps: [...state.apps, app] };
+      const next = [...state.apps];
+      next[idx] = app;
+      return { apps: next };
+    }),
+  removeApp: (id) =>
+    set((state) => {
+      // Its chats go back to Chat mode, so they leave Code mode's tabs, as any chat moved out of an app does.
+      const moved = state.chats.filter((c) => c.appId === id).map((c) => c.id);
+      return {
+        apps: state.apps.filter((a) => a.id !== id),
+        chats: state.chats.map((c) => (c.appId === id ? { ...c, appId: null } : c)),
+        ...inPanesOf(state, 'code', (panes) => moved.reduce((next, chatId) => forgetChat(next, chatId), forgetApp(panes, id))),
+      };
+    }),
+  mode: initialMode,
+  otherPaneState: initialOtherPanes,
+  setMode: (mode) => set((state) => inMode(state, mode)),
+  openAppHome: (appId) =>
+    set((state) => {
+      const view = inMode(state, 'code');
+      return { ...view, ...withPanes(openPaneTab(synced(view), appTabId(appId))) };
+    }),
+  codePanelTab: loadCodePanelTab(),
+  setCodePanelTab: (tab) => set({ codePanelTab: tab }),
+  composerPrefills: {},
+  prefillComposer: (chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
+  takeComposerPrefill: (chatId) => {
+    const text = get().composerPrefills[chatId];
+    if (text === undefined) return null;
+    set((state) => {
+      const { [chatId]: _taken, ...composerPrefills } = state.composerPrefills;
+      return { composerPrefills };
+    });
+    return text;
+  },
 
   messages: {},
   extras: {},
@@ -840,6 +1075,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
   closeProjectPage: () => set({ projectPage: null }),
+  appPage: null,
+  openAppPage: (page) => set({ appPage: page }),
+  closeAppPage: () => set({ appPage: null }),
   schedulesPage: null,
   openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
   closeSchedules: () => set({ schedulesPage: null }),
@@ -849,10 +1087,15 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
 export const selectPendingApprovalCount = (s: OtherBenchState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
-// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device;
-// the notes this tab sent, in this tab.
+// Tabs, layout and panes (each mode's under its own key), the mode, the Code panel's tab and whether the
+// inspector is collapsed are remembered on this device; the notes this tab sent, in this tab. A mode switch
+// swaps which state is showing, so both are saved again then, each under its mode's key.
 useOtherBenchStore.subscribe((state, previous) => {
-  if (state.paneState !== previous.paneState) savePaneState(state.paneState);
+  const switched = state.mode !== previous.mode;
+  if (switched || state.paneState !== previous.paneState) savePaneState(state.paneState, paneStateKey(state.mode));
+  if (switched || state.otherPaneState !== previous.otherPaneState) savePaneState(state.otherPaneState, paneStateKey(otherMode(state.mode)));
+  if (switched) saveMode(state.mode);
+  if (state.codePanelTab !== previous.codePanelTab) saveCodePanelTab(state.codePanelTab);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
   if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
 });

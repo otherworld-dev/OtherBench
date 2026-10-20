@@ -1,5 +1,6 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { App, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
+import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
@@ -30,16 +31,39 @@ export interface AuthStatus {
   };
 }
 
+/**
+ * The `code` a Code tab route's failure names (spec 2026-10-20-code-tab-design,
+ * "Error states the panels must handle"; server `code/route-errors.ts`). The
+ * panels pick their one-line copy by it.
+ */
+export type CodeErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo';
+
 export class ApiError extends Error {
   readonly status: number;
   /** The `kind` a refusal's body names (a note's 409: `idle`, `command`, `workspace_unresolved`), when it has one. */
   readonly kind?: string;
-  constructor(status: number, message: string, kind?: string) {
+  /**
+   * The `code` a Code tab route's failure names beside its message (a `CodeErrorCode`), when it has one.
+   * A string, not the union: the server may name one this build doesn't know yet.
+   */
+  readonly code?: string;
+  /** git's or gh's own stderr, as-is (already URL-redacted by the server), for `git-failed` and `gh-failed`. */
+  readonly stderr?: string;
+  constructor(status: number, message: string, kind?: string, extra?: { code?: string; stderr?: string }) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     if (kind !== undefined) this.kind = kind;
+    if (extra?.code !== undefined) this.code = extra.code;
+    if (extra?.stderr !== undefined) this.stderr = extra.stderr;
   }
+}
+
+/** A string field of an error body, or undefined. */
+function bodyString(body: unknown, field: string): string | undefined {
+  if (!body || typeof body !== 'object' || !(field in body)) return undefined;
+  const value = (body as Record<string, unknown>)[field];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function errorMessageOf(res: Response, body: unknown): string {
@@ -60,8 +84,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null);
-    const kind = body && typeof body === 'object' && 'kind' in body && typeof (body as { kind: unknown }).kind === 'string' ? (body as { kind: string }).kind : undefined;
-    throw new ApiError(res.status, errorMessageOf(res, body), kind);
+    const code = bodyString(body, 'code');
+    const stderr = bodyString(body, 'stderr');
+    throw new ApiError(res.status, errorMessageOf(res, body), bodyString(body, 'kind'), {
+      ...(code !== undefined ? { code } : {}),
+      ...(stderr !== undefined ? { stderr } : {}),
+    });
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -218,6 +246,40 @@ export interface CreateChatBody {
   workspaceRoot?: string | null;
   /** Files the new chat in this project; it starts with the project's folder unless a folder is given. */
   projectId?: string;
+  /**
+   * Files the new chat in this app (spec 2026-10-20-code-tab-design): it takes the app's folder and,
+   * when usable, its default profile. Never with `projectId` or a folder (both 400).
+   */
+  appId?: string;
+}
+
+/** `POST /api/apps` (spec 2026-10-20-code-tab-design, "The New app form"). The folder is required. */
+export interface CreateAppBody {
+  /** Trimmed, 1 to 80 characters. */
+  name: string;
+  /** An absolute path on this machine. */
+  workspacePath: string;
+  /** "owner/name"; null or blank for none. */
+  githubRepo?: string | null;
+  linkedProjectId?: string | null;
+  /** Not an archived profile. */
+  defaultProfileId?: string | null;
+  /** Left out: the new app goes to the bottom. */
+  sortOrder?: number;
+}
+
+/** `PATCH /api/apps/:id`: any of these. The folder can't be cleared; a new one moves every chat in the app with it. */
+export type PatchAppBody = Partial<CreateAppBody>;
+
+/** `GET /api/apps/detect-repo`: `isRepo` only for a repo's top level; its GitHub `origin`, when it has one. */
+export interface DetectRepoResult {
+  githubRepo: string | null;
+  isRepo: boolean;
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
 }
 
 /** One server in Claude Desktop's config, as the import lists it (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §3). */
@@ -269,8 +331,13 @@ export type ChatPatchBody = Partial<{
   effort: ClaudeEffort | null;
   /** The chat's extra folders, the whole list (spec 2026-10-07-extra-folders). */
   folders: FolderEntry[];
-  /** Moves the chat between projects (null = No project); never changes its folder or profile. */
+  /** Moves the chat between projects (null = No project); never changes its folder or profile. A project also takes it out of its app. */
   projectId: string | null;
+  /**
+   * Moves the chat into an app ("Move to app"): it takes the app's folder, leaves its project and,
+   * with no `profileId` here, takes the app's default profile. Null takes it out of its app and leaves the folder alone.
+   */
+  appId: string | null;
   /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */
   memoryExcluded: boolean;
   /** Its place in its sidebar section, higher first (#823). Not chat activity: leaves updatedAt alone. */
@@ -513,6 +580,55 @@ export const api = {
     patch: (id: string, body: PatchProjectBody) => patch<Project>(`/projects/${id}`, body),
     /** Its chats move to No project; none are deleted. */
     delete: (id: string) => del(`/projects/${id}`),
+  },
+
+  /**
+   * Apps and their git, GitHub issues and files (spec 2026-10-20-code-tab-design; server `routes/apps.ts`).
+   * Each failure's `code` (a `CodeErrorCode`) and, for git-failed/gh-failed, `stderr` are on the ApiError.
+   * The git and files routes answer 409 `not-on-this-machine` when the app's folder isn't here; the issue routes
+   * work wherever the folder is, and answer 409 `no-github-repo` for an app with none.
+   */
+  apps: {
+    /** In sidebar order. */
+    list: () => request<App[]>('/apps'),
+    get: (id: string) => request<App>(`/apps/${encodeURIComponent(id)}`),
+    create: (body: CreateAppBody) => post<App>('/apps', body),
+    patch: (id: string, body: PatchAppBody) => patch<App>(`/apps/${encodeURIComponent(id)}`, body),
+    /** Its chats go back to Chat mode (`appId: null`); none are deleted. */
+    delete: (id: string) => del(`/apps/${encodeURIComponent(id)}`),
+    /** What the New app form pre-fills from a folder: an absolute path on this machine. */
+    detectRepo: (path: string) => request<DetectRepoResult>(`/apps/detect-repo?path=${encodeURIComponent(path)}`),
+    git: {
+      status: (id: string) => request<GitStatus>(`/apps/${encodeURIComponent(id)}/git/status`),
+      /** One file's diff, or the whole tree's without `path`. */
+      diff: (id: string, path?: string) =>
+        request<{ diff: string }>(`/apps/${encodeURIComponent(id)}/git/diff${path !== undefined ? `?path=${encodeURIComponent(path)}` : ''}`),
+      /** `paths` defaults to 'all' (every change); a list commits only those. */
+      commit: (id: string, body: { message: string; paths?: string[] | 'all' }) => post<{ sha: string }>(`/apps/${encodeURIComponent(id)}/git/commit`, body),
+      pull: (id: string) => post<{ output: string }>(`/apps/${encodeURIComponent(id)}/git/pull`),
+      /** `setUpstream` for a branch with no upstream yet ("Push and set upstream"). */
+      push: (id: string, opts: { setUpstream?: boolean } = {}) => post<{ output: string }>(`/apps/${encodeURIComponent(id)}/git/push`, opts),
+      branches: (id: string) => request<{ branches: GitBranch[] }>(`/apps/${encodeURIComponent(id)}/git/branches`),
+      /** Switches to an existing branch (204); refetch the status after. */
+      checkout: (id: string, branch: string) => post<void>(`/apps/${encodeURIComponent(id)}/git/checkout`, { branch }),
+      /** Creates the branch and switches to it (204); refetch the status after. */
+      branch: (id: string, branch: string) => post<void>(`/apps/${encodeURIComponent(id)}/git/branch`, { branch }),
+    },
+    issues: {
+      /** Open issues unless `state` says closed. */
+      list: (id: string, state?: 'open' | 'closed') =>
+        request<{ repo: string; issues: IssueSummary[] }>(`/apps/${encodeURIComponent(id)}/issues${state !== undefined ? `?state=${state}` : ''}`),
+      get: (id: string, n: number) => request<IssueDetail>(`/apps/${encodeURIComponent(id)}/issues/${n}`),
+      /** A blank comment is a 400 (204 otherwise); refetch the issue after. */
+      comment: (id: string, n: number, body: string) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/comment`, { body }),
+      close: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/close`),
+      reopen: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/reopen`),
+    },
+    /** A folder's entries; the app's root without `path`. A relative path is read inside the root. */
+    files: (id: string, path?: string) =>
+      request<{ path: string; entries: ViewEntry[] }>(`/apps/${encodeURIComponent(id)}/files${path !== undefined ? `?path=${encodeURIComponent(path)}` : ''}`),
+    /** A file's text inside the app's folder, as `view.text` reads one for a chat. */
+    text: (id: string, path: string) => request<ViewText>(`/apps/${encodeURIComponent(id)}/text?path=${encodeURIComponent(path)}`),
   },
 
   /** A project's shared memory note (spec 2026-10-03-project-memory-design §4). */

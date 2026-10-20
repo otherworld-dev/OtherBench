@@ -105,6 +105,11 @@ export interface Chat {
    */
   projectId: string | null;
   /**
+   * The app this chat is filed under in Code mode (spec 2026-10-20-code-tab-design), or null. A chat has an app or a
+   * project, never both. Not a foreign key (sync order, migration 029): `AppRepo.delete` clears it.
+   */
+  appId: string | null;
+  /**
    * Project memory (spec 2026-10-03-project-memory-design §1): the id of the
    * last message already folded into the project's note, or null when none
    * has been. `ChatRepo.update` resets it whenever `projectId` changes.
@@ -141,7 +146,7 @@ export interface Chat {
  */
 export type NewChat = Omit<
   Chat,
-  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'projectPinned' | 'unread' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
+  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'appId' | 'projectPinned' | 'unread' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
@@ -151,6 +156,7 @@ export type NewChat = Omit<
   updatedAt?: number;
   autoMode?: boolean;
   projectId?: string | null;
+  appId?: string | null;
   memoryCursor?: string | null;
   memoryExcluded?: boolean;
   projectPinned?: boolean;
@@ -235,6 +241,59 @@ export interface ProjectRepo {
    * Deletes the project and its memory note and versions. Its chats move to
    * no project (`projectId: null`, `memoryCursor: null`); chats are never deleted.
    */
+  delete(id: string): void;
+}
+
+// --- apps ----------------------------------------------------------------------
+
+/**
+ * A codebase the Code tab works on (spec 2026-10-20-code-tab-design, "Data"): a folder, optionally the GitHub repo
+ * it came from, and optionally a project whose memory and instructions its chats borrow. Chats filed under an app
+ * carry `appId`; a chat has an app or a project, never both.
+ */
+export interface App {
+  id: string;
+  name: string;
+  /** The app's folder, portable across machines like `Project.workspace`. Unlike a project it has no extra folders: those come only from the linked project. */
+  workspace: Workspace | null;
+  /** API only, as on `Project`: `workspace` resolved on this machine, filled by the server. */
+  workspaceRoot?: string | null;
+  workspaceStatus?: WorkspaceStatus;
+  /** "owner/name" on GitHub, or null. */
+  githubRepo: string | null;
+  /** Not trusted on read: a synced row can name a project that is missing here, and the column is not a foreign key (migration 029). */
+  linkedProjectId: string | null;
+  /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
+  defaultProfileId: string | null;
+  /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareApps`. */
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** What `AppRepo.create` takes: timestamps default to now, `sortOrder` to 0, the links to null; `workspace` and a bare `workspaceRoot` as on `NewProject`. */
+export type NewApp = Omit<
+  App,
+  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId'
+> & {
+  workspace?: Workspace | null;
+  workspaceRoot?: string | null;
+  githubRepo?: string | null;
+  linkedProjectId?: string | null;
+  defaultProfileId?: string | null;
+  sortOrder?: number;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export interface AppRepo {
+  create(a: NewApp): App;
+  get(id: string): App | null;
+  /** Every app, in sidebar order (`compareApps`). */
+  list(): App[];
+  /** A `workspaceRoot` in the patch (and no `workspace`) is stored as a folder bound to this machine. */
+  update(id: string, patch: Partial<Omit<App, 'id'>>): App;
+  /** Deletes the app. Its chats keep existing with `appId: null` (cleared through the chat repo so the change syncs); chats are never deleted. */
   delete(id: string): void;
 }
 
@@ -917,6 +976,7 @@ export interface Store {
   profiles: ProfileRepo;
   chats: ChatRepo;
   projects: ProjectRepo;
+  apps: AppRepo;
   projectMemory: ProjectMemoryRepo;
   globalMemory: GlobalMemoryRepo;
   settings: SettingsRepo;

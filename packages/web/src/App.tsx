@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { CodePanel } from './code/CodePanel.js';
 import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, GearIcon, SignOutIcon } from './components/icons.js';
 import { isIndicatorView, isQuickView } from './desktop/bridge.js';
@@ -18,6 +19,7 @@ import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { useMarkRead } from './state/useMarkRead.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
+import { AppView } from './views/AppView.js';
 import { IndicatorView } from './views/IndicatorView.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
@@ -43,6 +45,8 @@ function MainApp(): JSX.Element {
   const setInspectorCollapsed = useOtherBenchStore((s) => s.setInspectorCollapsed);
   const projectPage = useOtherBenchStore((s) => s.projectPage);
   const closeProjectPage = useOtherBenchStore((s) => s.closeProjectPage);
+  const appPage = useOtherBenchStore((s) => s.appPage);
+  const closeAppPage = useOtherBenchStore((s) => s.closeAppPage);
   const schedulesPage = useOtherBenchStore((s) => s.schedulesPage);
   const openSchedules = useOtherBenchStore((s) => s.openSchedules);
   const closeSchedules = useOtherBenchStore((s) => s.closeSchedules);
@@ -52,6 +56,8 @@ function MainApp(): JSX.Element {
   const setProfiles = useOtherBenchStore((s) => s.setProfiles);
   const setChats = useOtherBenchStore((s) => s.setChats);
   const setProjects = useOtherBenchStore((s) => s.setProjects);
+  const setApps = useOtherBenchStore((s) => s.setApps);
+  const mode = useOtherBenchStore((s) => s.mode);
 
   // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
   const signedInRemotely = useAuthStore((s) => s.mode === 'login');
@@ -99,9 +105,10 @@ function MainApp(): JSX.Element {
       api.profiles.list().then(setProfiles),
       api.chats.list().then(setChats),
       api.projects.list().then(setProjects),
+      api.apps.list().then(setApps),
     ]).then((results) => {
       if (cancelled) return;
-      const labels = ['connections', 'models', 'profiles', 'chats', 'projects'] as const;
+      const labels = ['connections', 'models', 'profiles', 'chats', 'projects', 'apps'] as const;
       results.forEach((r, i) => {
         if (r.status === 'rejected') console.error(`[otherbench-web] failed to load ${labels[i]}:`, r.reason);
       });
@@ -112,7 +119,7 @@ function MainApp(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [setConnections, setModels, setProfiles, setChats, setProjects]);
+  }, [setConnections, setModels, setProfiles, setChats, setProjects, setApps]);
 
   useAppEvents();
   useTrayStatus();
@@ -185,8 +192,17 @@ function MainApp(): JSX.Element {
           <PaneGrid narrow={isNarrow} />
         </div>
 
+        {/* Code mode's right column is the Code panel (spec 2026-10-20-code-tab-design): Issues and Files
+            follow the focused pane's app, so it is useful with no chat open (an app home), and its Chat tab
+            holds this same Inspector. It shares the Inspector's collapsed preference: one right column. */}
+        {!isNarrow && mode === 'code' && (
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '24rem' }}>
+            <CodePanel collapsed={inspectorCollapsed} onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)} />
+          </div>
+        )}
+
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
-        {!isNarrow && (
+        {!isNarrow && mode === 'chat' && (
           <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
             {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
             <Inspector
@@ -211,8 +227,12 @@ function MainApp(): JSX.Element {
               onClick={() => setNarrowOverlayOpen(false)}
               className="absolute inset-0 z-10 bg-black/30"
             />
-            <div className="absolute inset-y-0 right-0 z-20 w-80 shadow-lg">
-              <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+            <div className={`absolute inset-y-0 right-0 z-20 shadow-lg ${mode === 'code' ? 'w-96 max-w-full' : 'w-80'}`}>
+              {mode === 'code' ? (
+                <CodePanel collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+              ) : (
+                <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+              )}
             </div>
           </>
         )}
@@ -230,6 +250,7 @@ function MainApp(): JSX.Element {
       {projectPage && (
         <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
       )}
+      {appPage && <AppView key={appPage.mode === 'edit' ? appPage.appId : 'new'} page={appPage} onClose={closeAppPage} />}
     </div>
   );
 }

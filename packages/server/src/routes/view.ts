@@ -7,7 +7,7 @@ import { sniffBinary } from '@otherbench/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import { kindByName, type ViewKind } from '../view/kinds.js';
 import type { ViewLinks } from '../view/links.js';
-import { chatRoots, listForView, locateForView, openForView } from '../view/roots.js';
+import { chatRoots, listForView, locateForView, openForView, viewFailure, type ViewFailure } from '../view/roots.js';
 
 /** The most of a text file `GET /api/view/text` returns (spec 2026-10-07-viewer). */
 export const MAX_VIEW_TEXT_BYTES = 2 * 1024 * 1024;
@@ -19,9 +19,60 @@ function chatOf(container: Container, raw: unknown): Chat {
   return chat;
 }
 
-function pathOf(raw: unknown): string {
+export function pathOf(raw: unknown): string {
   if (typeof raw !== 'string' || raw.trim() === '' || raw.includes('\0')) throw new HTTPException(400, { message: '"path" must be a file path.' });
   return raw.trim();
+}
+
+/** What `GET /api/view/text` answers: the file's resolved path, at most MAX_VIEW_TEXT_BYTES of it as UTF-8, and whether it was cut. */
+export interface ViewText {
+  path: string;
+  content: string;
+  truncated: boolean;
+  size: number;
+}
+
+/** One entry of a `GET /api/view/dirs` listing. */
+export interface ViewDirEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+}
+
+/**
+ * Reads a text file for the viewer: `target` already contained to `root`,
+ * opened through fs-tools' verified open. A folder is a 400, a binary file a
+ * 415. Shared by `GET /api/view/text` and the Code tab's app-scoped
+ * `GET /api/apps/:id/text` (spec 2026-10-20-code-tab-design, Goal 4), so the
+ * two can never read files differently. `fail` turns a refusal into the
+ * caller's answer (the viewer's messages by default).
+ */
+export async function readViewText(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<ViewText> {
+  const { handle, resolved } = await openForView(root, target, shownAs, fail);
+  try {
+    const st = await handle.stat();
+    if (st.isDirectory()) throw new HTTPException(400, { message: `${shownAs} is a folder; open a file in it.` });
+    if (await sniffBinary(handle)) throw new HTTPException(415, { message: "Can't preview this." });
+    const want = Math.min(st.size, MAX_VIEW_TEXT_BYTES);
+    const buf = Buffer.alloc(want);
+    const { bytesRead } = await handle.read(buf, 0, want, 0);
+    return { path: resolved, content: buf.subarray(0, bytesRead).toString('utf8'), truncated: st.size > MAX_VIEW_TEXT_BYTES, size: st.size };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * One folder of the Files tree, folders first and then by name: `target`
+ * already contained to `root`, listed through fs-tools' verified readdir.
+ * Shared by `GET /api/view/dirs` and the Code tab's `GET /api/apps/:id/files`; `fail` as for readViewText.
+ */
+export async function listViewDir(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<{ path: string; entries: ViewDirEntry[] }> {
+  const { resolved, dirents } = await listForView(root, target, shownAs, fail);
+  const entries = dirents
+    .map((d) => ({ name: d.name, path: join(resolved, d.name), type: d.isDirectory() ? ('dir' as const) : ('file' as const) }))
+    .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+  return { path: resolved, entries };
 }
 
 /**
@@ -76,18 +127,7 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
     const chat = chatOf(container, c.req.query('chatId'));
     const path = pathOf(c.req.query('path'));
     const { root, target } = locateForView(chatRoots(container, chat), path);
-    const { handle, resolved } = await openForView(root, target, path);
-    try {
-      const st = await handle.stat();
-      if (st.isDirectory()) throw new HTTPException(400, { message: `${path} is a folder; open a file in it.` });
-      if (await sniffBinary(handle)) throw new HTTPException(415, { message: "Can't preview this." });
-      const want = Math.min(st.size, MAX_VIEW_TEXT_BYTES);
-      const buf = Buffer.alloc(want);
-      const { bytesRead } = await handle.read(buf, 0, want, 0);
-      return c.json({ path: resolved, content: buf.subarray(0, bytesRead).toString('utf8'), truncated: st.size > MAX_VIEW_TEXT_BYTES, size: st.size });
-    } finally {
-      await handle.close();
-    }
+    return c.json(await readViewText(root, target, path));
   });
 
   app.get('/dirs', async (c) => {
@@ -106,11 +146,7 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
     }
     const path = pathOf(raw);
     const { root, target } = locateForView(roots, path);
-    const { resolved, dirents } = await listForView(root, target, path);
-    const entries = dirents
-      .map((d) => ({ name: d.name, path: join(resolved, d.name), type: d.isDirectory() ? ('dir' as const) : ('file' as const) }))
-      .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
-    return c.json({ path: resolved, entries });
+    return c.json(await listViewDir(root, target, path));
   });
 
   return app;

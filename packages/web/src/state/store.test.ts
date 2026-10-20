@@ -1,10 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
-import { INSPECTOR_COLLAPSED_STORAGE_KEY, loadInspectorCollapsed, selectPendingApprovalCount, useOtherBenchStore } from './store.js';
+import { viewTabId } from '../viewer/items.js';
+import { appTabId } from './appTab.js';
+import { MODE_STORAGE_KEY } from './mode.js';
+import { CODE_PANE_STATE_STORAGE_KEY, DEFAULT_PANE_STATE, PANE_STATE_STORAGE_KEY, type PaneState } from './panes.js';
+import { projectTabId } from './projectTab.js';
+import {
+  CODE_PANEL_TAB_STORAGE_KEY,
+  INSPECTOR_COLLAPSED_STORAGE_KEY,
+  loadCodePanelTab,
+  loadInspectorCollapsed,
+  selectPendingApprovalCount,
+  useOtherBenchStore,
+} from './store.js';
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -75,7 +87,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     projectPinned: false,
     unread: false,
     autoMode: false,
-    projectId: null,
+    projectId: null, appId: null,
     memoryCursor: null,
     memoryExcluded: false,
     sortOrder: 0,
@@ -121,7 +133,7 @@ describe('useOtherBenchStore', () => {
       projectPinned: false,
       unread: false,
       autoMode: false,
-      projectId: null,
+      projectId: null, appId: null,
       memoryCursor: null,
       memoryExcluded: false,
       sortOrder: 0,
@@ -277,7 +289,7 @@ describe('useOtherBenchStore', () => {
       projectPinned: false,
       unread: false,
       autoMode: false,
-      projectId: null,
+      projectId: null, appId: null,
       memoryCursor: null,
       memoryExcluded: false,
       sortOrder: 0,
@@ -771,5 +783,241 @@ describe('notes (messages sent while a reply runs)', () => {
     s.noteTakenBack(note('n2'));
     s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n2', outcome: 'removed', clientId: CLIENT_ID });
     expect(useOtherBenchStore.getState().earlyResolved).toEqual({});
+  });
+});
+
+function makeApp(overrides: Partial<App> = {}): App {
+  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+}
+
+describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-design)', () => {
+  const s = () => useOtherBenchStore.getState();
+  const chatPanes: PaneState = { ...DEFAULT_PANE_STATE, tabs: ['plain-1', 'plain-2'], layout: 'columns-2', panes: ['plain-1', 'plain-2'], focusedPane: 1, sizes: { 'columns-2/root': [2, 1] } };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    useOtherBenchStore.setState({
+      mode: 'chat',
+      paneState: chatPanes,
+      otherPaneState: DEFAULT_PANE_STATE,
+      activeChatId: 'plain-2',
+      chats: [makeChat({ id: 'plain-1' }), makeChat({ id: 'plain-2' }), makeChat({ id: 'app-chat', appId: 'a' }), makeChat({ id: 'app-chat-2', appId: 'a' })],
+      apps: [makeApp()],
+    });
+  });
+
+  it('setMode swaps the pane states: going to Code and back restores the chat pane state exactly', () => {
+    s().setMode('code');
+    expect(s().mode).toBe('code');
+    expect(s().paneState).toEqual(DEFAULT_PANE_STATE);
+    expect(s().activeChatId).toBeNull();
+    expect(s().otherPaneState).toEqual(chatPanes);
+
+    s().openTab('app-chat');
+    s().setMode('chat');
+    expect(s().mode).toBe('chat');
+    expect(s().paneState).toEqual(chatPanes);
+    expect(s().activeChatId).toBe('plain-2');
+    expect(s().otherPaneState).toMatchObject({ tabs: ['app-chat'], panes: ['app-chat'] });
+  });
+
+  it('setMode to the mode already showing changes nothing', () => {
+    const before = s();
+    s().setMode('chat');
+    expect(s().paneState).toBe(before.paneState);
+    expect(s().otherPaneState).toBe(before.otherPaneState);
+  });
+
+  it('opening an app chat from Chat mode switches to Code mode and leaves the chat pane state as it was', () => {
+    s().setActiveChatId('app-chat');
+    expect(s().mode).toBe('code');
+    expect(s().activeChatId).toBe('app-chat');
+    expect(s().paneState.panes[s().paneState.focusedPane]).toBe('app-chat');
+    expect(s().otherPaneState).toEqual(chatPanes);
+  });
+
+  it('opening an ordinary chat from Code mode switches back to Chat mode, keeping the code pane state', () => {
+    s().setActiveChatId('app-chat');
+    const code = s().paneState;
+    s().setActiveChatId('plain-1');
+    expect(s().mode).toBe('chat');
+    expect(s().activeChatId).toBe('plain-1');
+    // The chat pane state already showed plain-1, so it is focused there, not opened twice.
+    expect(s().paneState).toEqual({ ...chatPanes, focusedPane: 0 });
+    expect(s().otherPaneState).toEqual(code);
+  });
+
+  it('a viewer tab follows its chat, an app tab opens in Code mode and a project tab in Chat mode', () => {
+    s().setActiveChatId(viewTabId('app-chat', { kind: 'file', path: 'a.ts' }));
+    expect(s().mode).toBe('code');
+    s().setActiveChatId(projectTabId('p1'));
+    expect(s().mode).toBe('chat');
+    s().setActiveChatId(appTabId('a'));
+    expect(s().mode).toBe('code');
+    expect(s().activeChatId).toBe('app:a');
+  });
+
+  it("a chat this window doesn't know, or null, shows in the mode already showing", () => {
+    s().setActiveChatId('not-loaded');
+    expect(s().mode).toBe('chat');
+    expect(s().activeChatId).toBe('not-loaded');
+    s().setActiveChatId(null);
+    expect(s().mode).toBe('chat');
+    expect(s().activeChatId).toBeNull();
+  });
+
+  it('openTab of an app chat from Chat mode opens it as a tab in Code mode', () => {
+    s().openTab('app-chat');
+    expect(s().mode).toBe('code');
+    expect(s().paneState.tabs).toEqual(['app-chat']);
+    expect(s().otherPaneState).toEqual(chatPanes);
+  });
+
+  it("openAppHome opens the app's home as a tab in Code mode", () => {
+    s().openAppHome('a');
+    expect(s().mode).toBe('code');
+    expect(s().activeChatId).toBe('app:a');
+    expect(s().paneState.tabs).toEqual(['app:a']);
+    expect(s().otherPaneState).toEqual(chatPanes);
+    s().openAppHome('a');
+    expect(s().paneState.tabs).toEqual(['app:a']);
+  });
+
+  it('setApps, upsertApp and appsLoaded', () => {
+    expect(useOtherBenchStore.getInitialState().appsLoaded).toBe(false);
+    s().setApps([makeApp({ id: 'a' }), makeApp({ id: 'b', name: 'B' })]);
+    expect(s().appsLoaded).toBe(true);
+    s().upsertApp(makeApp({ id: 'b', name: 'Renamed' }));
+    s().upsertApp(makeApp({ id: 'c', name: 'C' }));
+    expect(s().apps.map((a) => [a.id, a.name])).toEqual([['a', 'OtherBench'], ['b', 'Renamed'], ['c', 'C']]);
+  });
+
+  it("an app deleted elsewhere arrives as a list without it: its home tab closes, in whichever mode's pane state holds it", () => {
+    s().setApps([makeApp({ id: 'a' }), makeApp({ id: 'b' })]);
+    s().openAppHome('a');
+    s().openAppHome('b');
+    s().setMode('chat');
+    s().setApps([makeApp({ id: 'b' })]);
+    expect(s().otherPaneState.tabs).toEqual(['app:b']);
+  });
+
+  it('removeApp clears appId on its chats and drops its home tab and its chats from the code pane state', () => {
+    s().openAppHome('a');
+    s().openTab('app-chat');
+    s().removeApp('a');
+    expect(s().apps).toEqual([]);
+    expect(s().chats.filter((c) => c.appId !== null)).toEqual([]);
+    expect(s().chats.find((c) => c.id === 'app-chat')!.appId).toBeNull();
+    expect(s().paneState.tabs).toEqual([]);
+    expect(s().paneState.panes.every((p) => p === null)).toBe(true);
+    expect(s().activeChatId).toBeNull();
+    expect(s().otherPaneState).toEqual(chatPanes);
+  });
+
+  it('removeApp from Chat mode cleans the inactive code pane state too', () => {
+    s().openAppHome('a');
+    s().openTab('app-chat');
+    s().setMode('chat');
+    s().removeApp('a');
+    expect(s().otherPaneState.tabs).toEqual([]);
+    expect(s().paneState).toEqual(chatPanes);
+  });
+
+  it('a chat-updated moving a chat into an app takes it out of the chat pane state, whichever mode is showing', () => {
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'plain-2', appId: 'a' }) });
+    expect(s().mode).toBe('chat');
+    expect(s().paneState).toMatchObject({ tabs: ['plain-1'], panes: ['plain-1', null] });
+    expect(s().activeChatId).toBeNull();
+
+    s().setMode('code');
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'plain-1', appId: 'a' }) });
+    expect(s().otherPaneState).toMatchObject({ tabs: [], panes: [null, null] });
+  });
+
+  it('a chat-updated moving a chat out of its app takes it out of the code pane state, with its viewer tabs', () => {
+    const view = viewTabId('app-chat', { kind: 'file', path: 'a.ts' });
+    s().openTab('app-chat');
+    s().openTab(view);
+    s().openTab('app-chat-2');
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'app-chat', appId: null }) });
+    expect(s().paneState.tabs).toEqual(['app-chat-2']);
+    expect(s().otherPaneState).toEqual(chatPanes);
+
+    s().setMode('chat');
+    s().upsertChat(makeChat({ id: 'app-chat-2', appId: null }));
+    expect(s().otherPaneState.tabs).toEqual([]);
+  });
+
+  it('a chat-updated that keeps the chat in its mode leaves the pane states alone', () => {
+    const before = s();
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'plain-2', title: 'Renamed' }) });
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'app-chat', appId: 'b' }) });
+    expect(s().paneState).toBe(before.paneState);
+    expect(s().otherPaneState).toBe(before.otherPaneState);
+  });
+
+  it('a chat new to this window is never dropped from the pane showing it', () => {
+    s().setActiveChatId('new-chat');
+    s().applyAppEvent({ type: 'chat-created', chat: makeChat({ id: 'new-chat', appId: 'a' }) });
+    expect(s().activeChatId).toBe('new-chat');
+  });
+
+  it('a loaded chat list drops chats sitting in the wrong mode (moved on another machine since the tabs were saved)', () => {
+    useOtherBenchStore.setState({ chats: [] });
+    s().setChats([makeChat({ id: 'plain-1' }), makeChat({ id: 'plain-2', appId: 'a' })]);
+    expect(s().paneState).toMatchObject({ tabs: ['plain-1'], panes: ['plain-1', null] });
+  });
+
+  it("a deleted chat leaves the inactive mode's pane state too", () => {
+    s().openTab('app-chat');
+    expect(s().mode).toBe('code');
+    s().applyAppEvent({ type: 'chat-deleted', chatId: 'plain-1' });
+    expect(s().otherPaneState.tabs).toEqual(['plain-2']);
+    s().setMode('chat');
+    s().removeChat('app-chat');
+    expect(s().otherPaneState.tabs).toEqual([]);
+  });
+
+  it("removeProject closes a project's page in the inactive chat pane state", () => {
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p1' })] });
+    s().openTab(projectTabId('p1'));
+    s().setMode('code');
+    s().removeProject('p1');
+    expect(s().otherPaneState.tabs).not.toContain(projectTabId('p1'));
+  });
+
+  it('codePanelTab starts on issues and is remembered per browser', () => {
+    expect(useOtherBenchStore.getInitialState().codePanelTab).toBe('issues');
+    s().setCodePanelTab('files');
+    expect(s().codePanelTab).toBe('files');
+    expect(window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY)).toBe('files');
+    expect(loadCodePanelTab()).toBe('files');
+    window.localStorage.setItem(CODE_PANEL_TAB_STORAGE_KEY, 'nonsense');
+    expect(loadCodePanelTab()).toBe('issues');
+  });
+
+  it('remembers the mode, and each pane state under its own key', () => {
+    s().setActiveChatId('app-chat');
+    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('code');
+    expect(JSON.parse(window.localStorage.getItem(PANE_STATE_STORAGE_KEY)!)).toEqual(chatPanes);
+    expect(JSON.parse(window.localStorage.getItem(CODE_PANE_STATE_STORAGE_KEY)!)).toEqual(s().paneState);
+    s().setMode('chat');
+    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('chat');
+    expect(JSON.parse(window.localStorage.getItem(PANE_STATE_STORAGE_KEY)!)).toEqual(chatPanes);
+    expect(JSON.parse(window.localStorage.getItem(CODE_PANE_STATE_STORAGE_KEY)!)).toMatchObject({ tabs: [], panes: ['app-chat'] });
+  });
+
+  it("a fresh load starts in the remembered mode, with that mode's panes showing", async () => {
+    const code: PaneState = { ...DEFAULT_PANE_STATE, tabs: ['app-chat'], panes: ['app-chat'] };
+    window.localStorage.setItem(MODE_STORAGE_KEY, 'code');
+    window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify(chatPanes));
+    window.localStorage.setItem(CODE_PANE_STATE_STORAGE_KEY, JSON.stringify(code));
+    vi.resetModules();
+    const fresh = (await import('./store.js')).useOtherBenchStore.getState();
+    expect(fresh.mode).toBe('code');
+    expect(fresh.paneState).toEqual(code);
+    expect(fresh.activeChatId).toBe('app-chat');
+    expect(fresh.otherPaneState).toEqual(chatPanes);
   });
 });

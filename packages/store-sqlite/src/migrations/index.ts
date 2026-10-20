@@ -27,6 +27,7 @@ import { MIGRATION_025_MCP_OAUTH } from './025-mcp-oauth.js';
 import { MIGRATION_026_USAGE_SUBAGENT } from './026-usage-subagent.js';
 import { MIGRATION_027_PROJECT_PARENT } from './027-project-parent.js';
 import { MIGRATION_028_USAGE_PURPOSE } from './028-usage-purpose.js';
+import { MIGRATION_029_APPS } from './029-apps.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -60,6 +61,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_026_USAGE_SUBAGENT,
   MIGRATION_027_PROJECT_PARENT,
   MIGRATION_028_USAGE_PURPOSE,
+  MIGRATION_029_APPS,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

@@ -18,7 +18,7 @@ const mockedPatch = vi.mocked(api.chats.patch);
 
 const makeChat = (head: string | null): Chat => ({
   id: 'chat-1', title: 'Chat 1', profileId: 'p1', headMessageId: head, workspace: null, runsOn: 'node-self', workspaceRoot: null,
-  pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
+  pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
 });
 const msg = (id: string, overrides: Partial<CanonMessage>): CanonMessage => ({
   id, chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 0, ...overrides,

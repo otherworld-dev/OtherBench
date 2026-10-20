@@ -58,7 +58,7 @@ export function resolveExecutable(command: string, options: ResolveExecutableOpt
 
   let output: string;
   try {
-    output = execFileSync('where', [command], { encoding: 'utf8', windowsHide: true });
+    output = execFileSync('where', [command], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
     throw new ExecutableNotFoundError(command);
   }

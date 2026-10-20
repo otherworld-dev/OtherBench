@@ -43,10 +43,13 @@ import type {
   MessageRepo,
   ModelRepo,
   NewChat,
+  NewApp,
   NewProject,
   NodeRepo,
   PeerRepo,
   ProfileRepo,
+  App,
+  AppRepo,
   Project,
   ProjectMemory,
   ProjectMemoryRepo,
@@ -75,6 +78,7 @@ import { UserAsks } from '../domain/user-asks.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
+import { compareApps } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
@@ -598,6 +602,7 @@ class InMemoryProfileRepo implements ProfileRepo {
   private readonly repo = new InMemoryCrudRepo<Profile>();
   constructor(
     private readonly projects: ProjectRepo,
+    private readonly apps: AppRepo,
     private readonly onDelete: (profileId: string) => void = () => {}
   ) {}
   create(p: Profile): Profile {
@@ -616,6 +621,10 @@ class InMemoryProfileRepo implements ProfileRepo {
     // Mirrors project.default_profile_id's ON DELETE SET NULL (migration 007).
     for (const project of this.projects.list()) {
       if (project.defaultProfileId === id) this.projects.update(project.id, { defaultProfileId: null });
+    }
+    // Mirrors app.default_profile_id's ON DELETE SET NULL (migration 029).
+    for (const app of this.apps.list()) {
+      if (app.defaultProfileId === id) this.apps.update(app.id, { defaultProfileId: null });
     }
     this.repo.delete(id);
     this.onDelete(id);
@@ -729,6 +738,7 @@ class InMemoryChatRepo implements ChatRepo {
       autoMode: c.autoMode ?? false,
       planMode: c.planMode ?? false,
       projectId: c.projectId ?? null,
+      appId: c.appId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
       projectPinned: c.projectPinned ?? false,
@@ -806,6 +816,50 @@ class InMemoryProjectRepo implements ProjectRepo {
     // Its sub-projects become top level, as SqliteProjectRepo.delete does (parent_id has no foreign key).
     for (const p of this.repo.list()) {
       if (p.parentId === id) this.repo.update(p.id, { parentId: null });
+    }
+    this.repo.delete(id);
+  }
+}
+
+class InMemoryAppRepo implements AppRepo {
+  private readonly repo = new InMemoryCrudRepo<App>();
+  constructor(
+    private readonly chats: ChatRepo,
+    private readonly selfNodeId: string
+  ) {}
+  create(a: NewApp): App {
+    const now = Date.now();
+    const fields = toStoredWorkspace(a, this.selfNodeId);
+    return this.repo.create({
+      ...fields,
+      workspace: fields.workspace ?? null,
+      githubRepo: a.githubRepo ?? null,
+      linkedProjectId: a.linkedProjectId ?? null,
+      defaultProfileId: a.defaultProfileId ?? null,
+      sortOrder: a.sortOrder ?? 0,
+      createdAt: a.createdAt ?? now,
+      updatedAt: a.updatedAt ?? now,
+    });
+  }
+  /** A deleted location takes its apps' folders with it, as for projects. */
+  clearLocation(locationId: string): void {
+    for (const a of this.repo.list()) {
+      if (a.workspace?.kind === 'location' && a.workspace.locationId === locationId) this.repo.update(a.id, { workspace: null });
+    }
+  }
+  get(id: string): App | null {
+    return this.repo.get(id);
+  }
+  list(): App[] {
+    return this.repo.list().sort(compareApps);
+  }
+  update(id: string, patch: Partial<Omit<App, 'id'>>): App {
+    return this.repo.update(id, toStoredWorkspace(patch, this.selfNodeId));
+  }
+  delete(id: string): void {
+    // chat.app_id has no foreign key (migration 029): its chats are cleared here, through the chat repo, as SqliteAppRepo does.
+    for (const chat of this.chats.list()) {
+      if (chat.appId === id) this.chats.update(chat.id, { appId: null });
     }
     this.repo.delete(id);
   }
@@ -1357,6 +1411,7 @@ export class InMemoryStore implements Store {
   readonly projectMemory: ProjectMemoryRepo;
   readonly globalMemory: GlobalMemoryRepo = new InMemoryGlobalMemoryRepo();
   readonly projects: ProjectRepo;
+  readonly apps: AppRepo;
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
   readonly messages: MessageRepo;
@@ -1389,11 +1444,14 @@ export class InMemoryStore implements Store {
       selfNodeId
     );
     this.projects = projects;
+    const apps = new InMemoryAppRepo(this.chats, selfNodeId);
+    this.apps = apps;
     this.locations = new InMemoryLocationRepo((id) => {
       chats.clearLocation(id);
       projects.clearLocation(id);
+      apps.clearLocation(id);
     });
-    this.profiles = new InMemoryProfileRepo(this.projects, (id) => schedules.profileDeleted(id));
+    this.profiles = new InMemoryProfileRepo(this.projects, this.apps, (id) => schedules.profileDeleted(id));
   }
 
   /** Just runs `fn`: there is nothing to roll back to. */

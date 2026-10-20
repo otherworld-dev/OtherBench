@@ -62,6 +62,11 @@ export interface ProjectGroupProps {
   active?: boolean;
   /** Projects only: drag this heading to reorder it among its siblings. */
   reorder?: ProjectReorder;
+  /** The rename field's name and length cap; an app heading (Code mode) passes its own. */
+  renameLabel?: string;
+  renameMaxLength?: number;
+  /** The name's hover text when it opens a page. */
+  openTitle?: string;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -72,11 +77,14 @@ function carriesProject(e: DragEvent): boolean {
   return Array.from(e.dataTransfer.types).includes(PROJECT_DRAG_MIME);
 }
 
-/** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
+/**
+ * A collapsible sidebar group (a project, or No project; in Code mode an app, or Unknown app) whose heading is also
+ * a drop target for chat rows.
+ */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, statusSummary, onOpen, active = false } = props;
-  const { menuLabel = 'Project actions', reorder } = props;
+  const { menuLabel = 'Project actions', reorder, renameLabel = 'Project name', renameMaxLength = PROJECT_NAME_MAX, openTitle = 'Open the project page' } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -124,7 +132,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         }`}
       >
         {renaming && onRename && onRenameCancel ? (
-          <InlineNameInput initial={name} label="Project name" maxLength={PROJECT_NAME_MAX} onCommit={onRename} onCancel={onRenameCancel} />
+          <InlineNameInput initial={name} label={renameLabel} maxLength={renameMaxLength} onCommit={onRename} onCancel={onRenameCancel} />
         ) : (
           <>
           {/* Before the h3, not in it: inside, the heading would read "Collapse Alpha Alpha 1 chat". */}
@@ -159,7 +167,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             aria-expanded={onOpen ? undefined : !collapsed}
             aria-controls={onOpen || collapsed || empty ? undefined : listId}
             aria-current={active ? 'true' : undefined}
-            title={onOpen ? 'Open the project page' : undefined}
+            title={onOpen ? openTitle : undefined}
             onClick={onOpen ?? onToggle}
             onContextMenu={
               onOpenMenu

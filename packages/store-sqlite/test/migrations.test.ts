@@ -29,14 +29,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-8).map((m) => m.name)).toEqual(['021-chat-unread', '022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose']);
+    expect(MIGRATIONS.slice(-8).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(28);
+      expect(SCHEMA_VERSION).toBe(29);
     } finally {
       db.close();
     }
@@ -201,10 +201,28 @@ describe('runMigrations', () => {
     }
   });
 
+  it('apps adds the app table and chat.app_id: existing chats are in no app, and neither link is a foreign key', () => {
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < 29));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'P', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare('SELECT app_id FROM chat WHERE id = ?').get('legacy')).toEqual({ app_id: null });
+      // A chat may name an app that is not here, and an app a project that is not here (sync order).
+      db.exec(`UPDATE chat SET app_id = 'later' WHERE id = 'legacy'`);
+      db.exec(`INSERT INTO app (id, name, linked_project_id, created_at, updated_at) VALUES ('a1', 'A', 'no-such-project', 1, 1)`);
+      expect(db.prepare(`SELECT tbl, op FROM change_log WHERE tbl = 'app'`).all()).toEqual([{ tbl: 'app', op: 'upsert' }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it('usage-purpose adds usage.tokens_cache_write (0 for existing rows) and a nullable usage.purpose', () => {
     const db = freshDb();
     try {
-      runMigrations(db, MIGRATIONS.filter((m) => !m.name.endsWith('usage-purpose')));
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < 28));
       runMigrations(db);
       const columns = db.prepare('PRAGMA table_info(usage)').all() as { name: string; notnull: number; dflt_value: string | null }[];
       expect(columns.find((c) => c.name === 'tokens_cache_write')).toMatchObject({ notnull: 1, dflt_value: '0' });

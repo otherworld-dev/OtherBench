@@ -8,9 +8,9 @@ import { BASE_URL } from '../playwright.config.js';
  * first call in a chat gets a card, and "Allow for this chat" covers the
  * rest; a profile with Search past chats off isn't offered the tool.
  *
- * A chat is retitled from its first reply (auto-title) shortly after that
- * reply finishes, so chats are found by id, never by title, and recall's
- * answer is checked against the old chat's title once that has settled.
+ * Chats are found by id, never by title. A chat created with its own title
+ * keeps it (auto-title only renames a chat still called "New Chat"), so
+ * recall's answer is checked against the title the old chat was created with.
  */
 
 /** A Mock profile and two chats under it; returns their ids. */
@@ -33,19 +33,6 @@ async function mockChats(request: APIRequestContext, recall: boolean): Promise<{
   return { old: ids[0]!, asking: ids[1]! };
 }
 
-/** The chat's title once its auto-title (from the first reply) has replaced the one it was created with. */
-async function settledTitle(request: APIRequestContext, chatId: string, created: string): Promise<string> {
-  let title = created;
-  await expect
-    .poll(async () => {
-      const chats = (await (await request.get(`${BASE_URL}/api/chats`)).json()) as { id: string; title: string }[];
-      title = chats.find((c) => c.id === chatId)?.title ?? created;
-      return title;
-    })
-    .not.toBe(created);
-  return title;
-}
-
 async function send(page: Page, chatId: string, text: string, waitForReply = true): Promise<void> {
   await page.getByTestId(`chat-row-${chatId}`).locator('[data-row-main]').click();
   const textbox = page.getByRole('textbox', { name: /message/i });
@@ -58,9 +45,8 @@ test('the model finds an earlier chat by what was said in it, after one card for
   const word = `zebrafish${randomUUID().slice(0, 6)}`;
   const { old, asking } = await mockChats(request, true);
   await page.goto('/');
-  const created = (await (await request.get(`${BASE_URL}/api/chats/${old}`)).json()) as { title: string };
+  const oldTitle = ((await (await request.get(`${BASE_URL}/api/chats/${old}`)).json()) as { title: string }).title;
   await send(page, old, `The staging host is called ${word}.`);
-  const oldTitle = await settledTitle(request, old, created.title);
 
   await send(page, asking, `#recall ${word}`, false);
   const card = page.getByRole('alert').filter({ hasText: `Search past chats for "${word}"` });

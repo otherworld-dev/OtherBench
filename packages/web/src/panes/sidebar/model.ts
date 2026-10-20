@@ -1,6 +1,7 @@
+import { compareApps } from '@otherbench/core/domain/apps.js';
 import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
-import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 
 export interface SidebarGroup {
@@ -48,6 +49,21 @@ export interface SidebarModel {
   groups: SidebarGroup[];
   /** Archived chats (newest activity first; only search matches while searching), for the "Show archived" section. */
   archived: Chat[];
+  /** While searching, Code mode's matching chats (see `otherModeMatches`); empty otherwise. */
+  otherMode: Chat[];
+}
+
+/**
+ * While searching, the matches that live in the other mode, archived ones
+ * included, newest activity first; empty when not searching. Search is
+ * scoped to the showing mode's lists, but opening an app chat "from anywhere,
+ * such as search" switches to Code mode, and an ordinary chat to Chat mode
+ * (spec 2026-10-20-code-tab-design, "Decisions Adam made"), so the sidebar
+ * lists these in a trailing "In Code mode" / "In Chat mode" section.
+ */
+function otherModeMatches(chats: Chat[], matches: ReadonlySet<string> | null, inOtherMode: (c: Chat) => boolean): Chat[] {
+  if (matches === null) return [];
+  return chats.filter((c) => inOtherMode(c) && matches.has(c.id)).sort(byActivity);
 }
 
 const byActivity = (a: Chat, b: Chat): number => b.updatedAt - a.updatedAt;
@@ -121,6 +137,13 @@ export function titleMatches(title: string, query: string): boolean {
  * set), every list is filtered to those chat ids and groups left with no
  * match are dropped. `sortOf` says how each group orders its chats
  * (default: all `manual`; the app passes the saved sorts).
+ *
+ * App chats (`appId` set) are left out of every list, pinned and archived
+ * included: a chat lives in one mode only (spec 2026-10-20-code-tab-design,
+ * "Calls I made"), and Code mode's `buildCodeSidebar` lists them. One whose
+ * app isn't loaded stays out too, in Code mode's Unknown app group, since it
+ * is still an app chat and `modeOfChat` would send it to Code mode anyway.
+ * While searching, the matching ones come back in `otherMode` only.
  */
 export function buildSidebar(
   chats: Chat[],
@@ -128,7 +151,8 @@ export function buildSidebar(
   matches: ReadonlySet<string> | null,
   sortOf: (key: string) => GroupSort = () => 'manual'
 ): SidebarModel {
-  const live = chats.filter((c) => c.archivedAt === null);
+  const own = chats.filter((c) => c.appId === null);
+  const live = own.filter((c) => c.archivedAt === null);
   const known = new Set(projects.map((p) => p.id));
   const keyOf = (c: Chat): string => (c.projectId !== null && known.has(c.projectId) ? c.projectId : NO_PROJECT_KEY);
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
@@ -162,7 +186,65 @@ export function buildSidebar(
   return {
     pinned: live.filter((c) => c.pinned && shown(c)).sort(byOrder),
     groups: matches === null ? groups : groups.filter(hasMatch),
-    archived: chats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    archived: own.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    otherMode: otherModeMatches(chats, matches, (c) => c.appId !== null),
+  };
+}
+
+/** One app's group in Code mode's sidebar, or (`app` null) the Unknown app group. */
+export interface CodeSidebarGroup {
+  /** Null for the Unknown app group: chats whose `appId` names no loaded app. */
+  app: App | null;
+  /** The app's id, or `UNKNOWN_APP_KEY`. Also the group's collapse-state key. */
+  key: string;
+  /** Its unarchived chats, pinned ones first, then sidebar order (`byOrder`); only search matches while searching. */
+  chats: Chat[];
+  /** Every unarchived chat in the group, matched or not. */
+  total: number;
+}
+
+export interface CodeSidebarModel {
+  /** Every loaded app in `compareApps` order (while searching, only those with a match), then Unknown app when it has chats. */
+  groups: CodeSidebarGroup[];
+  /** Archived app chats, newest activity first; only search matches while searching. */
+  archived: Chat[];
+  /** While searching, Chat mode's matching chats (see `otherModeMatches`); empty otherwise. */
+  otherMode: Chat[];
+}
+
+/**
+ * Code mode's sidebar (spec 2026-10-20-code-tab-design, Goal 1): each app with
+ * its chats, and nothing else, since chats outside an app live in Chat mode
+ * only. A chat whose app isn't loaded (a synced row, or an app deleted
+ * elsewhere before its chats' updates arrive) goes in a trailing Unknown app
+ * group rather than vanishing. There is no Pinned section here: a pinned app
+ * chat just leads its own group. Archived chats are kept out of the groups and
+ * returned in `archived`. While searching (`matches` set) every list is
+ * filtered to those ids and groups left with no match are dropped; otherwise
+ * an app with no chats still shows, so it can be opened and given one. While
+ * searching, matching chats outside an app come back in `otherMode`.
+ */
+export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySet<string> | null): CodeSidebarModel {
+  const appChats = chats.filter((c) => c.appId !== null);
+  const live = appChats.filter((c) => c.archivedAt === null);
+  const known = new Set(apps.map((a) => a.id));
+  const keyOf = (c: Chat): string => (c.appId !== null && known.has(c.appId) ? c.appId : UNKNOWN_APP_KEY);
+  const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
+  const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
+
+  const group = (key: string, app: App | null): CodeSidebarGroup => {
+    const members = live.filter((c) => keyOf(c) === key);
+    return { app, key, chats: members.filter(shown).sort(pinnedFirst), total: members.length };
+  };
+  const groups = [...apps].sort(compareApps).map((a) => group(a.id, a));
+  const unknown = group(UNKNOWN_APP_KEY, null);
+  if (unknown.total > 0) groups.push(unknown);
+
+  return {
+    // Unknown app shows only with chats; while searching, any group only with a match.
+    groups: groups.filter((g) => (matches === null ? g.app !== null || g.total > 0 : g.chats.length > 0)),
+    archived: appChats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    otherMode: otherModeMatches(chats, matches, (c) => c.appId === null),
   };
 }
 

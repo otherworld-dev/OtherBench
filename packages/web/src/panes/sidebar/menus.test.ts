@@ -1,18 +1,68 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
-import { chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import { appMenuItems, chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
-  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string): Project {
   return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 }
 
-function chatHandlers(): ChatMenuHandlers {
-  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), setProjectPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), schedule: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+function app(id: string, name: string): App {
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 }
+
+function chatHandlers(): ChatMenuHandlers {
+  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), setProjectPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), moveToApp: vi.fn(), moveOutOfApp: vi.fn(), exportAs: vi.fn(), schedule: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+}
+
+describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () => {
+  const apps = [app('A', 'Alpha'), app('B', 'Beta')];
+
+  it('offers Move to app…, listing the apps, right after Move to project…, and selecting one moves the chat there', () => {
+    const h = chatHandlers();
+    const items = chatMenuItems(chat(), [], h, null, false, apps);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', 'Move to app…', "Don't add to memory", 'Schedule…', 'Export…', 'Archive', 'Delete…']);
+    const submenu = items.find((i) => i.id === 'move-app')!.submenu!;
+    expect(submenu.map((i) => i.label)).toEqual(['Alpha', 'Beta']);
+    submenu[0]!.onSelect!();
+    expect(h.moveToApp).toHaveBeenCalledWith('A');
+  });
+
+  it('has no Move to app… while there are no apps', () => {
+    expect(chatMenuItems(chat(), [], chatHandlers()).some((i) => i.id === 'move-app')).toBe(false);
+  });
+
+  it('for an app chat, checks its app and adds Move out of app, which takes it out; Move to project… stays', () => {
+    const h = chatHandlers();
+    const items = chatMenuItems(chat({ appId: 'B' }), [project('p', 'P')], h, null, false, apps);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', 'Move to app…', 'Move out of app', "Don't add to memory", 'Schedule…', 'Export…', 'Archive', 'Delete…']);
+    expect(items.find((i) => i.id === 'move-app')!.submenu!.map((i) => i.checked)).toEqual([false, true]);
+    // An app chat isn't in No project: nothing in Move to project… is checked, and its No project entry takes it out of the app.
+    const projectItems = items.find((i) => i.id === 'move')!.submenu!;
+    expect(projectItems.filter((i) => i.checked)).toEqual([]);
+    projectItems.find((i) => i.label === 'No project')!.onSelect!();
+    expect(h.moveOutOfApp).toHaveBeenCalledTimes(1);
+    expect(h.moveTo).not.toHaveBeenCalled();
+    items.find((i) => i.id === 'move-out-app')!.onSelect!();
+    expect(h.moveOutOfApp).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('appMenuItems', () => {
+  it('offers Rename, Edit… and Delete…, each calling its handler', () => {
+    const h = { rename: vi.fn(), edit: vi.fn(), requestDelete: vi.fn() };
+    const items = appMenuItems(h);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Delete…']);
+    expect(items[2]!.danger).toBe(true);
+    for (const item of items) item.onSelect!();
+    expect(h.rename).toHaveBeenCalled();
+    expect(h.edit).toHaveBeenCalled();
+    expect(h.requestDelete).toHaveBeenCalled();
+  });
+});
 
 describe('chatMenuItems', () => {
   it('offers Open in new tab (Go to tab once open), Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {

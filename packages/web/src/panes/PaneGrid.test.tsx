@@ -13,11 +13,13 @@ vi.mock('./Thread.js', () => ({
   Thread: ({ chat }: { chat: Chat | null }) => <div data-testid="thread">{chat?.title ?? 'no chat'}</div>,
 }));
 
+vi.mock('../code/AppHome.js', () => ({ AppHome: ({ appId }: { appId: string }) => <div data-testid="app-home-stub">{appId}</div> }));
 vi.mock('../views/ProjectHome.js', () => ({ ProjectHome: ({ projectId }: { projectId: string }) => <div data-testid="project-home-stub">{projectId}</div> }));
 
 vi.mock('../viewer/ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
 
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { appTabId } from '../state/appTab.js';
 import { projectTabId } from '../state/projectTab.js';
 import { viewTabId } from '../viewer/items.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -27,7 +29,7 @@ import { PaneGrid } from './PaneGrid.js';
 function chat(id: string): Chat {
   return {
     id, title: `Chat ${id}`, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
-    projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
+    projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
   };
 }
 
@@ -164,6 +166,21 @@ describe('PaneGrid (#824)', () => {
     render(<PaneGrid narrow={false} />);
     expect(screen.getByTestId('project-home-stub')).toHaveTextContent('p1');
     expect(within(screen.getByTestId('pane-0')).getByText('Alpha')).toBeInTheDocument();
+    expect(synced.filter((s) => s.chatId === tab)).toEqual([]);
+  });
+
+  it('shows an app tab as its home page, named in the pane header, with no chat sync (spec 2026-10-20-code-tab-design)', () => {
+    const tab = appTabId('a1');
+    useOtherBenchStore.setState({
+      mode: 'code',
+      apps: [{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+      appsLoaded: true,
+      paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [tab, 'a'], panes: [tab, 'a'], focusedPane: 0 },
+      activeChatId: tab,
+    });
+    render(<PaneGrid narrow={false} />);
+    expect(screen.getByTestId('app-home-stub')).toHaveTextContent('a1');
+    expect(within(screen.getByTestId('pane-0')).getByText('OtherBench')).toBeInTheDocument();
     expect(synced.filter((s) => s.chatId === tab)).toEqual([]);
   });
 });

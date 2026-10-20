@@ -496,9 +496,9 @@ describe('ProfilesPanel', () => {
     useOtherBenchStore.getState().setModels([makeModel()]);
     useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
     useOtherBenchStore.getState().setChats([
-      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
-      { id: 'chat-2', title: 'B', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
-      { id: 'chat-3', title: 'C', profileId: 'some-other-profile', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-2', title: 'B', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-3', title: 'C', profileId: 'some-other-profile', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
     ]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -527,7 +527,7 @@ describe('ProfilesPanel', () => {
     useOtherBenchStore.getState().setModels([makeModel()]);
     useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Local Llama' })]);
     useOtherBenchStore.getState().setChats([
-      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
     ]);
     mockedDelete.mockResolvedValue(undefined);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);

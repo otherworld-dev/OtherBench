@@ -35,7 +35,7 @@ function chat(over: Partial<Chat>): Chat {
     unread: false,
     archivedAt: null,
     autoMode: false,
-    projectId: null,
+    projectId: null, appId: null,
     memoryCursor: null,
     memoryExcluded: false,
     sortOrder: 0,

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type {
   Store,
   Chat,
+  App,
   Project,
   Attachment,
   UsageRecord,
@@ -328,6 +329,57 @@ export function runStoreContract(
       });
       expect(result).toBe('inner');
       expect(store.chats.get('chat-a')).not.toBeNull();
+    });
+
+    describe('apps', () => {
+      function makeAppInput(over: { id: string } & Partial<App>) {
+        return { name: 'Test App', ...over };
+      }
+
+      it('create/get round-trip, with the links null, sortOrder 0 and the timestamps now', () => {
+        const created = store.apps.create(makeAppInput({ id: 'a1', name: 'Alpha' }));
+        expect(created).toMatchObject({ workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0 });
+        expectRecentTimestamp(created.createdAt);
+        expectRecentTimestamp(created.updatedAt);
+        expect(store.apps.get('a1')).toEqual(created);
+        expect(store.apps.get('does-not-exist')).toBeNull();
+      });
+
+      it('update persists a patch (a bare workspaceRoot is a folder on this machine) and delete is idempotent', () => {
+        store.apps.create(makeAppInput({ id: 'a1', githubRepo: 'o/n', linkedProjectId: 'not-here' }));
+        const updated = store.apps.update('a1', { name: 'Renamed', workspaceRoot: '/ws', githubRepo: null, sortOrder: 3 });
+        const workspace = { kind: 'machine', nodeId: store.nodes.self().id, root: '/ws' };
+        expect(updated).toMatchObject({ name: 'Renamed', workspace, githubRepo: null, linkedProjectId: 'not-here', sortOrder: 3 });
+        expect(updated).not.toHaveProperty('workspaceRoot');
+        expect(() => store.apps.update('does-not-exist', { name: 'x' })).toThrow(Error);
+        store.apps.delete('a1');
+        expect(store.apps.get('a1')).toBeNull();
+        expect(() => store.apps.delete('a1')).not.toThrow();
+      });
+
+      it('list orders by sortOrder, then name ignoring ASCII case, then id', () => {
+        store.apps.create(makeAppInput({ id: 'p3', name: 'beta', sortOrder: 1 }));
+        store.apps.create(makeAppInput({ id: 'p5', name: 'Same', sortOrder: 1 }));
+        store.apps.create(makeAppInput({ id: 'p2', name: 'Alpha', sortOrder: 1 }));
+        store.apps.create(makeAppInput({ id: 'p4', name: 'same', sortOrder: 1 }));
+        store.apps.create(makeAppInput({ id: 'p1', name: 'Zed', sortOrder: 0 }));
+        expect(store.apps.list().map((a) => a.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+      });
+
+      it('chats: appId defaults to null and round-trips; deleting the app clears it on its chats only', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.apps.create(makeAppInput({ id: 'a1' }));
+        store.apps.create(makeAppInput({ id: 'a2' }));
+        expect(store.chats.create(makeChatInput({ id: 'c0', profileId })).appId).toBeNull();
+        store.chats.create(makeChatInput({ id: 'c1', profileId, appId: 'a1' }));
+        store.chats.create(makeChatInput({ id: 'c2', profileId, appId: 'a2' }));
+        expect(store.chats.get('c1')!.appId).toBe('a1');
+
+        store.apps.delete('a1');
+
+        expect(store.chats.get('c1')).toMatchObject({ appId: null });
+        expect(store.chats.get('c2')!.appId).toBe('a2');
+      });
     });
 
     describe('projects', () => {

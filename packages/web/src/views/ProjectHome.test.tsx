@@ -25,7 +25,7 @@ const project = (over: Partial<Project> = {}): Project => ({
 });
 const chat = (id: string, over: Partial<Chat> = {}): Chat => ({
   id, title: `Chat ${id}`, profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
-  projectId: 'p1', memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  projectId: 'p1', appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const profile = (id: string, name: string): Profile => ({
   id, name, description: null, colour: null, connectionId: 'c', modelId: 'm', systemPrompt: null, params: {},

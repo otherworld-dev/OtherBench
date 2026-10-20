@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ApiError, api, type ArtifactSummary, type ViewEntry, type ViewRoot } from '../state/api.js';
 import { useArtifactsStamp } from './stamp.js';
 
@@ -6,21 +6,39 @@ function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : "Couldn't list this folder.";
 }
 
-function Folder({ chatId, path, label, readOnly = false, onOpen, startOpen }: { chatId: string; path: string; label: string; readOnly?: boolean; onOpen: (path: string) => void; startOpen: boolean }): JSX.Element {
+/**
+ * Lists one folder: a chat's through `/api/view/dirs`, or an app's through
+ * `/api/apps/:id/files` (the Code panel's Files tab, spec
+ * 2026-10-20-code-tab-design Goal 4), where `undefined` is the app's root.
+ */
+export type LoadDir = (path: string | undefined) => Promise<{ entries: ViewEntry[] }>;
+
+interface FolderProps {
+  loadDir: LoadDir;
+  path: string | undefined;
+  label: string;
+  readOnly?: boolean;
+  onOpen: (path: string) => void;
+  startOpen: boolean;
+  /** What a failed listing says; the server's message by default. */
+  describeError?: (err: unknown) => string;
+}
+
+function Folder({ loadDir, path, label, readOnly = false, onOpen, startOpen, describeError = failure }: FolderProps): JSX.Element {
   const [open, setOpen] = useState(startOpen);
   const [entries, setEntries] = useState<ViewEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!open || entries) return;
     let cancelled = false;
-    api.view.dir(chatId, path).then(
+    loadDir(path).then(
       (r) => !cancelled && setEntries(r.entries),
-      (err: unknown) => !cancelled && setError(failure(err))
+      (err: unknown) => !cancelled && setError(describeError(err))
     );
     return () => {
       cancelled = true;
     };
-  }, [open, entries, chatId, path]);
+  }, [open, entries, loadDir, path, describeError]);
   return (
     <li role="treeitem" aria-expanded={open} aria-label={readOnly ? `${label} (read-only)` : label}>
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1 rounded px-1 text-left hover:bg-[var(--bg-sunken)]">
@@ -34,7 +52,7 @@ function Folder({ chatId, path, label, readOnly = false, onOpen, startOpen }: { 
           {entries?.length === 0 && <li className="text-[var(--text-faint)]">Empty.</li>}
           {entries?.map((e) =>
             e.type === 'dir' ? (
-              <Folder key={e.path} chatId={chatId} path={e.path} label={e.name} onOpen={onOpen} startOpen={false} />
+              <Folder key={e.path} loadDir={loadDir} path={e.path} label={e.name} onOpen={onOpen} startOpen={false} describeError={describeError} />
             ) : (
               <li key={e.path} role="treeitem" aria-label={e.name}>
                 <button type="button" onClick={() => onOpen(e.path)} className="w-full truncate rounded px-1 pl-4 text-left hover:bg-[var(--bg-sunken)]">
@@ -49,12 +67,28 @@ function Folder({ chatId, path, label, readOnly = false, onOpen, startOpen }: { 
   );
 }
 
+/**
+ * One folder as the same lazy tree, with its own loader: the Code panel's
+ * Files tab roots it at the app's folder (`loadDir(undefined)` lists it).
+ * `loadDir` and `describeError` should be stable (a memo), or an open folder
+ * asks again each time they change.
+ */
+export function DirTree({ label, loadDir, onOpen, describeError }: { label: string; loadDir: LoadDir; onOpen: (path: string) => void; describeError?: (err: unknown) => string }): JSX.Element {
+  return (
+    <ul role="tree" aria-label="Files" className="space-y-0.5 p-2 text-xs">
+      <Folder loadDir={loadDir} path={undefined} label={label} onOpen={onOpen} startOpen {...(describeError ? { describeError } : {})} />
+    </ul>
+  );
+}
+
 /** The chat's artifacts on its branch (Deck #896), then its workspace and extra folders as a lazily loaded tree (Deck #826); a click opens one. */
 export function FileTree({ chatId, onOpen, onOpenArtifact }: { chatId: string; onOpen: (path: string) => void; onOpenArtifact: (item: { artifactId: string; title: string }) => void }): JSX.Element {
   const [roots, setRoots] = useState<ViewRoot[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const stamp = useArtifactsStamp(chatId);
+  // A chat's folders list through the viewer's own route, contained to the chat's folders there.
+  const loadDir = useCallback<LoadDir>((path) => api.view.dir(chatId, path ?? ''), [chatId]);
   // Loaded on its own: a failure here leaves the list out, never the folders.
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +134,7 @@ export function FileTree({ chatId, onOpen, onOpenArtifact }: { chatId: string; o
       ) : (
         <ul role="tree" aria-label="Files" className="space-y-0.5 p-2 text-xs">
           {roots.map((r) => (
-            <Folder key={r.path} chatId={chatId} path={r.path} label={r.label} readOnly={r.access === 'read'} onOpen={onOpen} startOpen={r.workspace} />
+            <Folder key={r.path} loadDir={loadDir} path={r.path} label={r.label} readOnly={r.access === 'read'} onOpen={onOpen} startOpen={r.workspace} />
           ))}
         </ul>
       )}

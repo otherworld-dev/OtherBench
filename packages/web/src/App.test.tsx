@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSidebarWidthForTests } from './state/sidebarWidth.js';
@@ -13,10 +13,12 @@ vi.mock('./state/api.js', () => ({
     profiles: { list: vi.fn() },
     chats: { list: vi.fn() },
     projects: { list: vi.fn() },
+    apps: { list: vi.fn() },
     usage: { get: vi.fn() },
     mcpServers: { list: vi.fn(), refresh: vi.fn() },
     grants: { list: vi.fn(), revoke: vi.fn() },
     audit: { list: vi.fn() },
+    health: vi.fn(async () => ({ status: 'ok', time: '', platform: 'linux' })),
   },
 }));
 
@@ -32,6 +34,7 @@ const mockedModels = vi.mocked(api.models.list);
 const mockedProfiles = vi.mocked(api.profiles.list);
 const mockedChats = vi.mocked(api.chats.list);
 const mockedProjects = vi.mocked(api.projects.list);
+const mockedApps = vi.mocked(api.apps.list);
 const mockedUsage = vi.mocked(api.usage.get);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
 const mockedGrantsList = vi.mocked(api.grants.list);
@@ -47,6 +50,7 @@ function reset(): void {
   mockedProfiles.mockReset();
   mockedChats.mockReset();
   mockedProjects.mockReset().mockResolvedValue([]);
+  mockedApps.mockReset().mockResolvedValue([]);
   mockedUsage.mockReset();
   // The Inspector's honest-state sections (task 26) mount alongside every
   // other App view regardless of which one the test is exercising -- give
@@ -93,6 +97,34 @@ describe('App bootstrap', () => {
     await waitFor(() => expect(useOtherBenchStore.getState().projects.map((p) => p.id)).toEqual(['p-a']));
   });
 
+  it('loads apps at startup too (spec 2026-10-20-code-tab-design)', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    mockedApps.mockResolvedValue([
+      { id: 'a-1', name: 'OtherBench', workspace: null, githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => expect(useOtherBenchStore.getState()).toMatchObject({ appsLoaded: true, apps: [{ id: 'a-1' }] }));
+  });
+
+  it('shows the app form while appPage is set, and closes it with the store', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    render(<App />);
+    expect(screen.queryByTestId('app-view')).toBeNull();
+
+    act(() => useOtherBenchStore.getState().openAppPage({ mode: 'create' }));
+    expect(await screen.findByTestId('app-view')).toHaveTextContent('New app');
+    act(() => useOtherBenchStore.getState().closeAppPage());
+    expect(screen.queryByTestId('app-view')).toBeNull();
+  });
+
   it('has a Sign out button in sign-in mode only', async () => {
     mockedConnections.mockResolvedValue([]);
     mockedModels.mockResolvedValue([]);
@@ -114,6 +146,7 @@ describe('App bootstrap', () => {
     mockedProfiles.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedChats.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedProjects.mockRejectedValue(new TypeError('Failed to fetch'));
+    mockedApps.mockRejectedValue(new TypeError('Failed to fetch'));
 
     render(<App />);
 
@@ -224,6 +257,14 @@ describe('App view', () => {
     expect(strip).toHaveAttribute('aria-disabled', 'true');
     expect(useOtherBenchStore.getState().inspectorCollapsed).toBe(false);
     expect(screen.queryByRole('complementary', { name: 'Inspector' })).toBeNull();
+  });
+
+  it('in Code mode the right column is the code panel, not the inspector (spec 2026-10-20-code-tab-design)', async () => {
+    useOtherBenchStore.setState({ mode: 'code' });
+    render(<App />);
+    expect(await screen.findByRole('complementary', { name: 'Code panel' })).toBeInTheDocument();
+    expect(screen.getByTestId('code-panel-empty')).toHaveTextContent('Pick an app or a chat');
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
   });
 
   it('sizes the sidebar column from --sidebar-w, capped at 40% of the window', () => {

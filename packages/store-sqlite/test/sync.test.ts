@@ -1454,3 +1454,69 @@ describe('what a synced message and file row may hold (the caps the local path h
     expect(b.store.sync.apply([fileRow('good-shot', 'm-a'), fileRow('good-upload', 'u-a', { mime: 'application/pdf', size: 25 * 1024 * 1024 })]).applied).toBe(2);
   });
 });
+
+describe('apps (spec 2026-10-20-code-tab-design)', () => {
+  const app = (n: Node, id: string, over: Record<string, unknown> = {}): void => {
+    n.store.apps.create({ id, name: id, ...over });
+  };
+
+  it('deleting an app clears appId on its chats only, logging the chat and the app, and leaves a tombstone', () => {
+    const a = node('a');
+    seedProfile(a);
+    app(a, 'a1');
+    app(a, 'a2');
+    chat(a, 'c1', { appId: 'a1' });
+    chat(a, 'c2', { appId: 'a2' });
+    const before = latest(a);
+
+    a.store.apps.delete('a1');
+
+    expect(a.store.chats.get('c1')!.appId).toBeNull();
+    expect(a.store.chats.get('c2')!.appId).toBe('a2');
+    expect(since(a, before).sort()).toEqual(['app:delete', 'chat:upsert']);
+    const stone = a.db.prepare("SELECT row_id FROM tombstone WHERE tbl = 'app'").all() as { row_id: string }[];
+    expect(stone.map((s) => s.row_id)).toEqual(['a1']);
+  });
+
+  it('an app made on one machine is created on the other', () => {
+    const a = node('a');
+    const b = node('b');
+    app(a, 'a1', { name: 'Alpha', githubRepo: 'o/n' });
+    pair(a, b).aToB();
+    expect(b.store.apps.get('a1')).toMatchObject({ name: 'Alpha', githubRepo: 'o/n' });
+  });
+
+  it('a chat whose app is not here yet keeps its local appId, and takes the new one once the app arrives and the chat is re-sent', () => {
+    const a = node('a');
+    const b = node('b');
+    seedProfile(a);
+    chat(a, 'c');
+    pair(a, b).aToB();
+    expect(b.store.chats.get('c')!.appId).toBeNull();
+
+    // The chat is filed under an app that B has not received.
+    app(a, 'a1');
+    a.store.chats.update('c', { appId: 'a1' });
+    const chatOnly = a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'chat');
+    b.store.sync.apply(chatOnly);
+    expect(b.store.apps.get('a1')).toBeNull();
+    expect(b.store.chats.get('c')!.appId).toBeNull();
+
+    // The app arrives, then the chat is sent again.
+    b.store.sync.apply(a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'app'));
+    b.store.sync.apply(chatOnly);
+    expect(b.store.chats.get('c')!.appId).toBe('a1');
+  });
+
+  it('an app linked to a project that is not here is written with no link', () => {
+    const a = node('a');
+    const b = node('b');
+    a.store.projects.create({ id: 'pr', name: 'P', workspace: null, defaultProfileId: null });
+    app(a, 'a1', { linkedProjectId: 'pr' });
+    expect(a.store.apps.get('a1')!.linkedProjectId).toBe('pr');
+
+    b.store.sync.apply(a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'app'));
+
+    expect(b.store.apps.get('a1')).toMatchObject({ name: 'a1', linkedProjectId: null });
+  });
+});

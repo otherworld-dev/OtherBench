@@ -26,7 +26,12 @@ export function chatRoots(container: Container, chat: Chat): ChatRoots {
   const exists = container.pathExists ?? existsSync;
   const status = resolveWorkspace(chat.workspace, self, paths, exists);
   const workspaceRoot = status.status === 'ok' ? status.root : null;
-  const project = chat.projectId ? container.store.projects.get(chat.projectId) : null;
+  // An app chat has no project of its own; its app's linked project lends it folders, the same chain its
+  // turns use (TurnRunner.projectChain; spec 2026-10-20-code-tab-design, Goal 9 and "Turn context"), so the
+  // viewer opens what the model can read.
+  const linked = chat.appId ? (container.store.apps.get(chat.appId)?.linkedProjectId ?? null) : null;
+  const projectId = chat.projectId ?? linked;
+  const project = projectId ? container.store.projects.get(projectId) : null;
   // A sub-project's parent's folders open here too, as its chats' turns can use them (spec 2026-10-15-sub-projects-design §3).
   const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
   const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(parent?.folders, project?.folders, chat.folders), self, paths, exists, workspaceRoot);
@@ -74,6 +79,9 @@ export function locateForView(roots: ChatRoots, path: string): { root: string; t
   }
 }
 
+/** Turns a filesystem refusal into the route's answer; never returns. */
+export type ViewFailure = (err: unknown, path: string) => never;
+
 /** A filesystem refusal as the panel's message (spec: the panel always says why). */
 export function viewFailure(err: unknown, path: string): never {
   if (err instanceof HTTPException) throw err;
@@ -85,21 +93,21 @@ export function viewFailure(err: unknown, path: string): never {
   throw err;
 }
 
-/** fs-tools' verified open, read-only, with refusals as the panel's messages. `shownAs` is the path as asked for. */
-export async function openForView(root: string, target: string, shownAs: string): Promise<Awaited<ReturnType<typeof openVerified>>> {
+/** fs-tools' verified open, read-only, with refusals as the panel's messages (or `fail`'s). `shownAs` is the path as asked for. */
+export async function openForView(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<Awaited<ReturnType<typeof openVerified>>> {
   try {
     return await openVerified(root, target, fsConstants.O_RDONLY);
   } catch (err) {
-    viewFailure(err, shownAs);
+    fail(err, shownAs);
   }
 }
 
-/** fs-tools' verified listing, with refusals as the panel's messages. */
-export async function listForView(root: string, target: string, shownAs: string): Promise<Awaited<ReturnType<typeof readdirVerified>>> {
+/** fs-tools' verified listing, with refusals as the panel's messages (or `fail`'s). */
+export async function listForView(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<Awaited<ReturnType<typeof readdirVerified>>> {
   try {
     return await readdirVerified(root, target);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | null)?.code === 'ENOTDIR') throw new HTTPException(400, { message: `${shownAs} is a file, not a folder.` });
-    viewFailure(err, shownAs);
+    fail(err, shownAs);
   }
 }

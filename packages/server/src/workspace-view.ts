@@ -1,14 +1,14 @@
 import { existsSync } from 'node:fs';
 import { HTTPException } from 'hono/http-exception';
 import { classifyPath, MAX_EXTRA_FOLDERS, mergeFolders, parseFolders, resolveWorkspace, sameWorkspace } from '@otherbench/core/domain/workspace.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { ExtraFolder, FolderView, Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import type { Container } from './container.js';
 import { optionalWorkspaceRoot } from './validation.js';
 
 /**
- * Chats and projects as the API returns them: the stored, portable
+ * Chats, projects and apps as the API returns them: the stored, portable
  * `workspace` plus what it means on THIS machine (v2 spec §6), so the UI
  * never resolves a folder itself.
  */
@@ -71,6 +71,17 @@ export function projectView(container: Container, project: Project, resolve = wo
 export function projectViews(container: Container, projects: Project[]): Project[] {
   const resolve = workspaceResolver(container);
   return projects.map((project) => projectView(container, project, resolve));
+}
+
+/** An app (spec 2026-10-20-code-tab-design) as the API shows it: its folder resolved on this machine, like a project's. Apps have no extra folders. */
+export function appView(container: Container, app: App, resolve = workspaceResolver(container)): App {
+  const status = resolve(app.workspace);
+  return { ...app, workspaceRoot: viewRoot(status), workspaceStatus: status };
+}
+
+export function appViews(container: Container, apps: App[]): App[] {
+  const resolve = workspaceResolver(container);
+  return apps.map((app) => appView(container, app, resolve));
 }
 
 /** An app event as the events stream sends it: a chat it carries is shown as the API shows chats. */

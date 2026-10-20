@@ -84,6 +84,8 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
   const machines = useOtherBenchStore((s) => s.machines);
   const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
   const setOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
+  // In Code mode the overlay is the Code panel, whose Chat tab holds the Inspector (spec 2026-10-20-code-tab-design).
+  const codeMode = useOtherBenchStore((s) => s.mode === 'code');
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const [open, setOpen] = useState(readOpen);
   const [pinError, setPinError] = useState<string | null>(null);
@@ -197,7 +199,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
         )}
         {isNarrow && (
           <button type="button" onClick={() => setOverlayOpen(!overlayOpen)} aria-expanded={overlayOpen} className="btn shrink-0 px-2 py-0.5">
-            Inspector
+            {codeMode ? 'Panel' : 'Inspector'}
           </button>
         )}
       </div>

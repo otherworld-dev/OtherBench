@@ -43,6 +43,7 @@ const chatIn = (id: string, projectId: string): Chat => ({
   unread: false,
   autoMode: false,
   projectId,
+  appId: null,
   memoryCursor: null,
   memoryExcluded: false,
   sortOrder: 0,
