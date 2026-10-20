@@ -647,6 +647,63 @@ describe('TurnRunner with a sub-project (spec 2026-10-15-sub-projects-design §3
   });
 });
 
+describe('TurnRunner with an app chat (spec 2026-10-20-code-tab-design, Goal 9)', () => {
+  const fin: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const nc = (subpath: string) => ({ kind: 'location' as const, locationId: 'nc', subpath });
+
+  function setup(linkedProjectId: string | null) {
+    const store = new InMemoryStore('node-laptop');
+    store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    store.locations.setPath({ locationId: 'nc', nodeId: 'node-laptop', path: '/home/adam/Nextcloud' });
+    store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId });
+    // An app chat has no projectId of its own; the link is the app's.
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: nc('phd'), pinned: false, archivedAt: null, projectId: null, appId: 'app-1' });
+    return store;
+  }
+
+  async function run(store: InMemoryStore) {
+    const engine = new FakeChatEngine([fin]);
+    const runner = new TurnRunner(store, engine, { pathExists: () => true });
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    const request = engine.requests[0]!;
+    const system = request.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+    return { request, system };
+  }
+
+  it("carries the linked project's instructions", async () => {
+    const store = setup('p');
+    store.projects.create({ id: 'p', name: 'Shop', workspaceRoot: null, defaultProfileId: null, instructions: 'Use tabs' });
+    expect((await run(store)).system).toContain('Use tabs');
+  });
+
+  it("puts a parent project's instructions before the linked sub-project's", async () => {
+    const store = setup('p');
+    store.projects.create({ id: 'q', name: 'Top', workspaceRoot: null, defaultProfileId: null, instructions: 'Q first' });
+    store.projects.create({ id: 'p', name: 'Shop', workspaceRoot: null, defaultProfileId: null, parentId: 'q', instructions: 'Use tabs' });
+    const { system } = await run(store);
+    expect(system).toContain('Q first');
+    expect(system.indexOf('Q first')).toBeLessThan(system.indexOf('Use tabs'));
+  });
+
+  it("carries the linked project's memory note and extra folders", async () => {
+    const store = setup('p');
+    store.projects.create({ id: 'p', name: 'Shop', workspaceRoot: null, defaultProfileId: null, folders: [{ workspace: nc('refs'), access: 'read' }] });
+    store.projectMemory.save('p', 'Prefers pnpm over npm', 'user', null);
+    const { request, system } = await run(store);
+    expect(system).toContain('Prefers pnpm over npm');
+    expect(request.folders).toEqual([{ root: '/home/adam/Nextcloud/refs', access: 'read' }]);
+  });
+
+  it('adds nothing for an app with no link, or one naming a missing project', async () => {
+    for (const link of [null, 'gone']) {
+      const { request, system } = await run(setup(link));
+      expect(system).not.toContain('Use tabs');
+      expect(request.folders ?? []).toEqual([]);
+    }
+  });
+});
+
 describe('TurnRunner names the tools a turn can use', () => {
   const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
   const fs = (access: 'off' | 'read' | 'readwrite') => ({ fs: access, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const });

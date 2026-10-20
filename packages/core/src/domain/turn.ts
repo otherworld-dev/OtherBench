@@ -1231,12 +1231,27 @@ export class TurnRunner {
    * The chat's project and, for a sub-project, its parent first (spec
    * 2026-10-15-sub-projects-design §3): what instructions, memory and extra
    * folders are read from, top down. Empty outside a project.
+   *
+   * An app chat (spec 2026-10-20-code-tab-design, Goal 9 and "Turn context")
+   * has no project of its own (`projectId` is null, so the memory summariser
+   * never folds it into a note), but if its app links a project it reads that
+   * project's instructions, memory note and folders through this same chain.
+   * The link is read-only: nothing here writes to the project. It isn't
+   * trusted: an app can name a project that no longer exists, which adds
+   * nothing, same as a chat with no project.
    */
   private projectChain(chat: Chat | null): Project[] {
-    const project = chat?.projectId ? this.store.projects.get(chat.projectId) : null;
+    const projectId = chat?.projectId ?? this.linkedProjectId(chat);
+    const project = projectId ? this.store.projects.get(projectId) : null;
     if (!project) return [];
     const parent = projectParentOf(project, (id) => this.store.projects.get(id));
     return parent ? [parent, project] : [project];
+  }
+
+  /** The project an app chat's app links, if any (see `projectChain`). */
+  private linkedProjectId(chat: Chat | null): string | null {
+    const app = chat?.appId ? this.store.apps.get(chat.appId) : null;
+    return app?.linkedProjectId ?? null;
   }
 
   /**
