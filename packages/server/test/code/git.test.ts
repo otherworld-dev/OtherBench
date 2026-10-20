@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
-import { GitError, gitEnv, git } from '../../src/code/git.js';
+import { GitError, firstLine, gitEnv, git } from '../../src/code/git.js';
 import { ExecutableMissingError, runProcess } from '../../src/code/process.js';
 
 const hasGit = spawnSync('git', ['--version']).status === 0;
@@ -54,6 +54,18 @@ describe('runProcess', () => {
     const r = await runProcess(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { cwd: tmpdir(), timeoutMs: 300 });
     expect(r.timedOut).toBe(true);
   }, 15_000);
+});
+
+describe('firstLine', () => {
+  it("picks git's error over the warnings and hints printed ahead of it", () => {
+    const stderr = "warning: in the working copy of 'a.txt', LF will be replaced by CRLF\nhint: try this\nfatal: pathspec 'b' did not match any files\n";
+    expect(firstLine(stderr)).toBe("fatal: pathspec 'b' did not match any files");
+  });
+  it('falls back to the first line that is not a warning, then to any line', () => {
+    expect(firstLine('warning: w\n! [rejected] main -> main (fetch first)\n')).toBe('! [rejected] main -> main (fetch first)');
+    expect(firstLine('warning: only this\n')).toBe('warning: only this');
+    expect(firstLine('')).toBe('');
+  });
 });
 
 describe.skipIf(!hasGit)('git service', () => {
@@ -112,6 +124,44 @@ describe.skipIf(!hasGit)('git service', () => {
     const changed = g(dir, 'show', '--no-renames', '--name-status', '--format=', 'HEAD').trim().split('\n').sort();
     expect(changed).toEqual(['A\tnew.txt', 'D\tgone.txt', 'D\told.txt', 'M\tmod.txt']);
     expect((await git.status(dir)).files.map((f) => f.path)).toEqual(['keep.txt']);
+  });
+
+  it('a partial commit takes a case-only rename (a file alias on Windows and macOS)', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'Foo.txt'), 'f\n');
+    writeFileSync(join(dir, 'other.txt'), 'o\n');
+    await git.commit(dir, 'first', 'all');
+    g(dir, 'mv', 'Foo.txt', 'foo.txt');
+    writeFileSync(join(dir, 'other.txt'), 'o2\n');
+    await git.commit(dir, 'rename', ['foo.txt', 'Foo.txt']);
+    expect(g(dir, 'ls-tree', '--name-only', 'HEAD').trim().split('\n').sort()).toEqual(['foo.txt', 'other.txt']);
+    expect((await git.status(dir)).files.map((f) => f.path)).toEqual(['other.txt']);
+  });
+
+  it('a partial commit leaves the other files staged as they were', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    writeFileSync(join(dir, 'z.txt'), 'z\n');
+    await git.commit(dir, 'first', 'all');
+    writeFileSync(join(dir, 'a.txt'), 'a2\n');
+    writeFileSync(join(dir, 'z.txt'), 'z2\n');
+    g(dir, 'add', 'z.txt');
+    await git.commit(dir, 'only a', ['a.txt']);
+    expect(g(dir, 'show', '--name-status', '--format=', 'HEAD').trim()).toBe('M\ta.txt');
+    expect((await git.status(dir)).files.map((f) => `${f.index}${f.worktree} ${f.path}`)).toEqual(['M  z.txt']);
+  });
+
+  it('a partial commit of a file untracked with `git rm --cached` commits the removal', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'x.txt'), 'x\n');
+    writeFileSync(join(dir, 'y.txt'), 'y\n');
+    await git.commit(dir, 'first', 'all');
+    g(dir, 'rm', '-q', '--cached', 'x.txt');
+    writeFileSync(join(dir, 'y.txt'), 'y2\n');
+    await git.commit(dir, 'untrack x', ['x.txt']);
+    expect(g(dir, 'show', '--name-status', '--format=', 'HEAD').trim()).toBe('D\tx.txt');
+    const files = (await git.status(dir)).files;
+    expect(files.map((f) => `${f.index}${f.worktree} ${f.path}`).sort()).toEqual([' M y.txt', '?? x.txt']);
   });
 
   it('diff of an untracked file shows it as added', async () => {

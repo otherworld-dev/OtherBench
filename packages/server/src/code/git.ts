@@ -1,5 +1,7 @@
-import { lstatSync, realpathSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve, sep } from 'node:path';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { containPath } from '@otherbench/core/domain/paths.js';
 import type { GitErrorCode, GitStatus } from '@otherbench/core/types/code.js';
@@ -122,13 +124,18 @@ function gitMissing(): GitError {
 }
 
 /** Every git invocation goes through here, so the prefix, environment and error mapping are applied exactly once. */
-async function run(root: string, args: string[], opts: { timeoutMs?: number; okCodes?: number[] } = {}): Promise<RunResult> {
+async function run(
+  root: string,
+  args: string[],
+  opts: { timeoutMs?: number; okCodes?: number[]; indexFile?: string } = {}
+): Promise<RunResult> {
   const exe = gitExecutable();
   let result: RunResult;
   try {
     result = await runProcess(exe, [...GIT_PREFIX, ...args], {
       cwd: root,
-      env: gitEnv(),
+      // indexFile is only ever a scratch index this module made (partialCommit), never anything from outside.
+      env: opts.indexFile === undefined ? gitEnv() : { ...gitEnv(), GIT_INDEX_FILE: opts.indexFile },
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
   } catch (err) {
@@ -146,8 +153,20 @@ async function run(root: string, args: string[], opts: { timeoutMs?: number; okC
   return result;
 }
 
-function firstLine(s: string): string {
-  return s.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
+/**
+ * The line of git's stderr that says what went wrong: the first `error:` or
+ * `fatal:` line, else the first that isn't a `warning:` or `hint:` (git prints
+ * those ahead of the real error, such as the CRLF warning on Windows), else the
+ * first line of any kind.
+ */
+export function firstLine(s: string): string {
+  const lines = s.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  return (
+    lines.find((l) => /^(error|fatal):/i.test(l)) ??
+    lines.find((l) => !/^(warning|hint):/i.test(l)) ??
+    lines[0] ??
+    ''
+  );
 }
 
 const canonical = (p: string): string => {
@@ -188,13 +207,49 @@ function pathspec(root: string, candidate: string): string {
   return rel === '' ? '.' : rel.split(sep).join('/');
 }
 
-function existsUnder(root: string, spec: string): boolean {
-  try {
-    lstatSync(resolve(root, spec));
-    return true;
-  } catch {
-    return false;
+/**
+ * Commits only `specs` (spec 2026-10-20-code-tab-design, Goal 2: commit the
+ * checked files), through a scratch index built from HEAD, the way
+ * `git commit --only` works inside, but without `--only` itself, which refuses
+ * two things the git panel offers:
+ *
+ *  - a case-only rename (`Foo.txt` to `foo.txt`) on a case-insensitive disk,
+ *    where it stops with "will not add file alias";
+ *  - a file untracked with `git rm --cached`, which it adds straight back from
+ *    the disk and then finds nothing to commit.
+ *
+ * Status says what each spec is. A rename's old side, and a deletion (staged
+ * or on disk only), are removed from the scratch index first; everything else
+ * is added from the disk. The real index is then set to the new HEAD for those
+ * paths, so they show as committed, and its other staged changes stay as they
+ * were.
+ */
+async function partialCommit(root: string, message: string, specs: string[]): Promise<void> {
+  const status = parseStatusV2((await run(root, ['status', '--porcelain=v2', '--untracked-files=normal', '-z'])).stdout);
+  const removed = new Set<string>();
+  for (const f of status.files) {
+    if (f.origPath !== undefined) removed.add(f.origPath);
+    if (f.index === 'D' || f.worktree === 'D') removed.add(f.path);
   }
+  const removals = specs.filter((s) => removed.has(s));
+  const additions = specs.filter((s) => !removed.has(s));
+
+  const scratch = join(tmpdir(), `otherbench-commit-${randomUUID()}.index`);
+  try {
+    const seed = (await hasHead(root)) ? ['read-tree', 'HEAD'] : ['read-tree', '--empty'];
+    await run(root, seed, { indexFile: scratch });
+    if (removals.length > 0) {
+      await run(root, ['rm', '--cached', '--quiet', '--ignore-unmatch', '-r', '--', ...removals], { indexFile: scratch });
+    }
+    if (additions.length > 0) await run(root, ['add', '--', ...additions], { indexFile: scratch });
+    // "Nothing to commit" is exit 1 with the reason on stdout, not stderr.
+    const r = await run(root, ['commit', '-m', message], { indexFile: scratch, okCodes: [1] });
+    if (r.code !== 0) throw new GitError('git-failed', firstLine(r.stdout) || 'Nothing to commit.', redactUrls(r.stdout + r.stderr));
+  } finally {
+    rmSync(scratch, { force: true });
+    rmSync(`${scratch}.lock`, { force: true });
+  }
+  await run(root, ['reset', '-q', '--', ...specs]);
 }
 
 async function checkBranch(root: string, name: string): Promise<void> {
@@ -277,16 +332,7 @@ export const git = {
       await run(root, ['commit', '-m', message]);
     } else {
       if (paths.length === 0) throw new GitError('git-failed', 'Choose at least one file to commit.');
-      const specs = paths.map((p) => pathspec(root, p));
-      // Only what is on disk is added: a staged deletion, or the old side of a
-      // staged rename (the git panel sends both sides), is gone from the index
-      // and the worktree, so `git add` exits 128 on it. `git commit -- <specs>`
-      // still gets every spec and records those deletions itself, against HEAD
-      // (spec 2026-10-20-code-tab-design, Goal 2: commit the checked files).
-      // lstat, so a link is judged by itself, not its target.
-      const onDisk = specs.filter((s) => existsUnder(root, s));
-      if (onDisk.length > 0) await run(root, ['add', '--', ...onDisk]);
-      await run(root, ['commit', '-m', message, '--', ...specs]);
+      await partialCommit(root, message, paths.map((p) => pathspec(root, p)));
     }
     const head = await run(root, ['rev-parse', 'HEAD']);
     return { sha: head.stdout.trim() };
