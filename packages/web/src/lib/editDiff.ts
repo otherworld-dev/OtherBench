@@ -201,3 +201,95 @@ function computeEditDiff(toolName: string, args: unknown): EditDiffInfo | null {
       return null;
   }
 }
+
+/**
+ * The line the server's git diff ends with when it cut the diff short
+ * (`DIFF_TRUNCATED_MARKER` in packages/server/src/code/git.ts; the web can't
+ * import from the server, so it is repeated here). A diff line always starts
+ * with one of ` +-@\` or a header word, so a line equal to this is never content.
+ */
+export const DIFF_TRUNCATED_MARKER = '... diff truncated';
+
+/** Whether a `git diff` from the server was cut short (spec 2026-10-20-code-tab-design, Goal 2: the git panel says so rather than showing a silently partial diff). */
+export function diffTruncated(text: string): boolean {
+  return text.split('\n').some((l) => l === DIFF_TRUNCATED_MARKER);
+}
+
+const BACKSLASH = '\\';
+
+/** A path from a `---`/`+++` line: git's C-style quoting undone, the `a/`/`b/` prefix and a trailing tab (git adds one to names with spaces) dropped. */
+function diffPath(raw: string): string | null {
+  let p = raw.replace(/\t$/, '');
+  if (p === '/dev/null') return null;
+  if (p.startsWith('"') && p.endsWith('"') && p.length >= 2) {
+    const ESC: Record<string, string> = { n: '\n', t: '\t', '"': '"', [BACKSLASH]: BACKSLASH, a: '\x07', b: '\b', f: '\f', r: '\r', v: '\v' };
+    const utf8 = new TextEncoder();
+    const bytes: number[] = [];
+    const body = p.slice(1, -1);
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i]!;
+      if (ch !== BACKSLASH) {
+        bytes.push(...utf8.encode(ch));
+        continue;
+      }
+      const next = body[i + 1] ?? '';
+      const oct = /^[0-7]{3}/.exec(body.slice(i + 1));
+      if (oct) {
+        bytes.push(parseInt(oct[0], 8));
+        i += 3;
+      } else {
+        bytes.push(...utf8.encode(ESC[next] ?? next));
+        i += 1;
+      }
+    }
+    p = new TextDecoder().decode(new Uint8Array(bytes));
+  }
+  return p.replace(/^[ab]\//, '');
+}
+
+/**
+ * A unified `git diff` (as the git panel's diff route sends it) split per
+ * file into the same `DiffLine`s an edit diff uses, so `EditDiff` shows both
+ * (spec 2026-10-20-code-tab-design, Goal 2: the git panel shows the real git
+ * diff). Hunk headers become `gap` rows between hunks; file headers, mode
+ * lines and "\ No newline" notes are dropped; the server's truncation marker
+ * is dropped too (ask `diffTruncated`). A file is named by its `+++` path, or
+ * its `---` path when it was deleted, or the `diff --git` line when neither is
+ * there (a binary or mode-only change, which then has no lines).
+ */
+export function parseUnifiedDiff(text: string): { path: string; lines: DiffLine[] }[] {
+  const out: { path: string; lines: DiffLine[] }[] = [];
+  let cur: { path: string; lines: DiffLine[]; oldPath: string | null; inHunk: boolean } | null = null;
+  const settle = (): void => {
+    if (cur) out.push({ path: cur.path, lines: cur.lines });
+    cur = null;
+  };
+  for (const line of text.split('\n')) {
+    if (line === DIFF_TRUNCATED_MARKER) break;
+    if (line.startsWith('diff --git ')) {
+      settle();
+      // `a/x b/x`: with equal names the second half is the name; a quoted or spaced pair is fixed up by the ---/+++ lines.
+      const m = /^diff --git (?:"?a\/)(.*?)"? (?:"?b\/)(.*?)"?$/.exec(line);
+      cur = { path: m?.[2] ?? line.slice('diff --git '.length), lines: [], oldPath: null, inHunk: false };
+      continue;
+    }
+    if (!cur) continue;
+    const c: { path: string; lines: DiffLine[]; oldPath: string | null; inHunk: boolean } = cur;
+    if (line.startsWith('@@')) {
+      if (c.lines.length > 0) c.lines.push({ kind: 'gap', text: '' });
+      c.inHunk = true;
+      continue;
+    }
+    if (!c.inHunk) {
+      if (line.startsWith('--- ')) c.oldPath = diffPath(line.slice(4));
+      else if (line.startsWith('+++ ')) c.path = diffPath(line.slice(4)) ?? c.oldPath ?? c.path;
+      continue;
+    }
+    if (line.startsWith('+')) c.lines.push({ kind: 'add', text: line.slice(1) });
+    else if (line.startsWith('-')) c.lines.push({ kind: 'del', text: line.slice(1) });
+    else if (line.startsWith(' ')) c.lines.push({ kind: 'ctx', text: line.slice(1) });
+    // "\ No newline at end of file", and the empty last line, are not content.
+  }
+  settle();
+  return out;
+}

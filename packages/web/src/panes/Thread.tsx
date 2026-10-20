@@ -4,6 +4,7 @@ import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import { GitBar } from '../code/GitBar.js';
 import { Composer } from '../components/Composer.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
@@ -348,6 +349,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
             </div>
           )}
           <ConversationStrip chat={chat} viewer={{ open: viewer.open, onToggle: () => setViewerOpen(chat.id, !viewer.open) }} />
+          {/* An app chat's git bar (spec 2026-10-20-code-tab-design, Goals 2 and 6), never a Chat mode chat's. It gets the chat's whole
+              tree, every branch and variant this window holds (GET /chats/:id/messages sends all of it), not just the path shown. */}
+          {chat.appId !== null && <GitBar chat={chat} messages={chatMessages} />}
           <div className="relative min-h-0 flex-1">
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { editDiffOf, lineDiff } from './editDiff.js';
+import { DIFF_TRUNCATED_MARKER, diffTruncated, editDiffOf, lineDiff, parseUnifiedDiff } from './editDiff.js';
 
 describe('lineDiff', () => {
   it('marks a changed line as del then add, keeping context', () => {
@@ -118,5 +118,64 @@ describe('editDiffOf', () => {
   it('computes once per args object', () => {
     const args = { file_path: 'a.ts', old_string: 'x', new_string: 'y' };
     expect(editDiffOf('Edit', args)).toBe(editDiffOf('Edit', args));
+  });
+});
+
+describe('parseUnifiedDiff', () => {
+  const twoFiles = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,3 @@',
+    ' keep',
+    '-old',
+    '+new',
+    '@@ -10,2 +10,3 @@ function f() {',
+    ' tail',
+    '+more',
+    '\\ No newline at end of file',
+    'diff --git a/b.txt b/b.txt',
+    'new file mode 100644',
+    'index 0000000..3333333',
+    '--- /dev/null',
+    '+++ b/b.txt',
+    '@@ -0,0 +1,2 @@',
+    '+one',
+    '+two',
+    '',
+  ].join('\n');
+
+  it('returns one entry per file with its add, del and context lines', () => {
+    const files = parseUnifiedDiff(twoFiles);
+    expect(files.map((f) => f.path)).toEqual(['src/a.ts', 'b.txt']);
+    expect(files[0]!.lines).toEqual([
+      { kind: 'ctx', text: 'keep' },
+      { kind: 'del', text: 'old' },
+      { kind: 'add', text: 'new' },
+      { kind: 'gap', text: '' },
+      { kind: 'ctx', text: 'tail' },
+      { kind: 'add', text: 'more' },
+    ]);
+    expect(files[1]!.lines).toEqual([
+      { kind: 'add', text: 'one' },
+      { kind: 'add', text: 'two' },
+    ]);
+  });
+
+  it('names a deleted file by its old path', () => {
+    const text = 'diff --git a/gone.ts b/gone.ts\ndeleted file mode 100644\n--- a/gone.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n';
+    expect(parseUnifiedDiff(text)).toEqual([{ path: 'gone.ts', lines: [{ kind: 'del', text: 'bye' }] }]);
+  });
+
+  it("drops the server's truncation marker, which diffTruncated reports", () => {
+    const text = `${twoFiles}${DIFF_TRUNCATED_MARKER}\n`;
+    expect(parseUnifiedDiff(text).at(-1)!.lines.at(-1)).toEqual({ kind: 'add', text: 'two' });
+    expect(diffTruncated(text)).toBe(true);
+    expect(diffTruncated(twoFiles)).toBe(false);
+  });
+
+  it('is empty for an empty diff', () => {
+    expect(parseUnifiedDiff('')).toEqual([]);
   });
 });

@@ -9,6 +9,13 @@ import { useViewerStore, viewerFor } from '../viewer/state.js';
 
 vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
 
+// The git bar has its own tests (code/GitBar.test.tsx); here only where it goes and what it is given.
+vi.mock('../code/GitBar.js', () => ({
+  GitBar: ({ chat, messages }: { chat: { id: string }; messages: { id: string }[] }) => (
+    <div data-testid="git-bar" data-chat={chat.id} data-messages={messages.map((m) => m.id).sort().join(',')} />
+  ),
+}));
+
 vi.mock('../state/api.js', () => ({
   api: {
     claude: { planUsage: vi.fn(async () => ({ usage: null })) },
@@ -124,6 +131,28 @@ describe('Thread', () => {
     expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Viewer' }));
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+  });
+
+  it("shows the git bar above an app chat's thread, given every message of the chat's tree, and never in a Chat mode chat", () => {
+    useOtherBenchStore.setState({
+      chats: [makeChat({ appId: 'a1', headMessageId: 'v1' }), makeChat({ id: 'chat-2' })],
+      messages: {
+        u1: makeMessage('u1', 'chat-1'),
+        v1: variantMessage('v1', 'u1'),
+        v2: variantMessage('v2', 'u1', { producedBy: { profileId: 'p', profileName: 'P', connectionId: 'c1', modelId: 'm', regenerated: true } }),
+        other: makeMessage('other', 'chat-2'),
+      },
+    });
+    const { unmount } = render(<ThreadForChat chatId="chat-1" />);
+    const bar = screen.getByTestId('git-bar');
+    expect(bar).toHaveAttribute('data-chat', 'chat-1');
+    // Both branches, not only the one showing; never another chat's.
+    expect(bar).toHaveAttribute('data-messages', 'u1,v1,v2');
+    // Above the thread itself.
+    expect(bar.compareDocumentPosition(screen.getByTestId('thread-scroll')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    render(<ThreadForChat chatId="chat-2" />);
+    expect(screen.queryByTestId('git-bar')).toBeNull();
   });
 
   it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
