@@ -263,7 +263,7 @@ export interface App {
   githubRepo: string | null;
   /** Not trusted on read: a synced row can name a project that is missing here, and the column is not a foreign key (migration 029). */
   linkedProjectId: string | null;
-  /** Cleared (null) when that profile is deleted (ON DELETE SET NULL) or archived. */
+  /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareApps`. */
   sortOrder: number;

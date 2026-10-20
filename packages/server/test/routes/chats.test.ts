@@ -1209,3 +1209,96 @@ describe('chats in projects', () => {
     expect(await json(await patchChat(id, { projectId: 'proj-2' }))).toMatchObject({ projectId: 'proj-2', memoryCursor: null });
   });
 });
+
+describe('chats in apps (spec 2026-10-20-code-tab-design, "Data")', () => {
+  const APP_ROOT = process.platform === 'win32' ? 'C:\\Users\\Test\\app' : '/home/test/app';
+  const OTHER_ROOT = process.platform === 'win32' ? 'D:\\elsewhere' : '/srv/elsewhere';
+
+  function addProfile(id: string, over: { isDefault?: boolean; archivedAt?: number | null } = {}): void {
+    container.store.profiles.create({
+      id,
+      name: id,
+      description: null,
+      colour: null,
+      connectionId: 'conn-1',
+      modelId: 'model-1',
+      systemPrompt: null,
+      params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+      isDefault: over.isDefault ?? false,
+      archivedAt: over.archivedAt ?? null,
+    });
+  }
+
+  beforeEach(() => {
+    addProfile('profile-coder');
+    addProfile('profile-app-default', { isDefault: true });
+    container.store.projects.create({ id: 'proj-1', name: 'Planning', workspaceRoot: OTHER_ROOT, defaultProfileId: null });
+    container.store.apps.create({ id: 'app-1', name: 'OtherBench', workspaceRoot: APP_ROOT, defaultProfileId: 'profile-coder' });
+    container.store.apps.create({ id: 'app-bare', name: 'Bare', workspaceRoot: APP_ROOT, defaultProfileId: null });
+  });
+
+  function post(body: Record<string, unknown>): Promise<Response> {
+    return Promise.resolve(app().request('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+  }
+
+  function patchChat(id: string, body: Record<string, unknown>): Promise<Response> {
+    return Promise.resolve(app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+  }
+
+  it("a chat created in an app takes the app's folder and default profile", async () => {
+    const res = await post({ appId: 'app-1' });
+    expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ appId: 'app-1', projectId: null, workspaceRoot: APP_ROOT, profileId: 'profile-coder' });
+    // The app's default wins over the request's profile.
+    expect(await json(await post({ appId: 'app-1', profileId: 'profile-1' }))).toMatchObject({ profileId: 'profile-coder' });
+  });
+
+  it("an app with no default profile uses the request's, else the usual default", async () => {
+    expect(await json(await post({ appId: 'app-bare', profileId: 'profile-1' }))).toMatchObject({ appId: 'app-bare', profileId: 'profile-1' });
+    expect(await json(await post({ appId: 'app-bare' }))).toMatchObject({ profileId: 'profile-app-default' });
+    // An archived app default is passed over.
+    container.store.profiles.update('profile-coder', { archivedAt: 5 });
+    expect(await json(await post({ appId: 'app-1' }))).toMatchObject({ profileId: 'profile-app-default' });
+  });
+
+  it('refuses an unknown app, a folder of its own, or a project as well, with 400', async () => {
+    expect((await post({ appId: 'nope' })).status).toBe(400);
+    expect((await post({ appId: 'app-1', workspaceRoot: OTHER_ROOT })).status).toBe(400);
+    expect((await post({ appId: 'app-1', projectId: 'proj-1' })).status).toBe(400);
+    expect(container.store.chats.list()).toEqual([]);
+  });
+
+  it("PATCH appId moves the chat into the app: no project, the app's folder and profile", async () => {
+    const id = (await json(await post({ projectId: 'proj-1', profileId: 'profile-1' })))['id'] as string;
+    const res = await patchChat(id, { appId: 'app-1' });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ appId: 'app-1', projectId: null, workspaceRoot: APP_ROOT, profileId: 'profile-coder' });
+    // An app with no default profile leaves the chat's profile alone.
+    expect(await json(await patchChat(id, { appId: 'app-bare' }))).toMatchObject({ appId: 'app-bare', profileId: 'profile-coder' });
+    expect((await patchChat(id, { appId: 'nope' })).status).toBe(400);
+    expect((await patchChat(id, { appId: 'app-1', projectId: 'proj-1' })).status).toBe(400);
+  });
+
+  it('PATCH appId: null leaves the app and keeps the folder', async () => {
+    const id = (await json(await post({ appId: 'app-1' })))['id'] as string;
+    expect(await json(await patchChat(id, { appId: null }))).toMatchObject({ appId: null, workspaceRoot: APP_ROOT });
+  });
+
+  it('PATCH projectId clears appId', async () => {
+    const id = (await json(await post({ appId: 'app-1' })))['id'] as string;
+    expect(await json(await patchChat(id, { projectId: 'proj-1' }))).toMatchObject({ projectId: 'proj-1', appId: null, workspaceRoot: APP_ROOT });
+  });
+
+  it("an app chat's folder is its app's: a workspace PATCH is a 400", async () => {
+    const id = (await json(await post({ appId: 'app-1' })))['id'] as string;
+    for (const body of [{ workspaceRoot: OTHER_ROOT }, { workspacePath: OTHER_ROOT }, { workspace: null }]) {
+      const res = await patchChat(id, body);
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe("An app chat uses its app's folder.");
+    }
+    expect(container.store.chats.get(id)).toMatchObject({ workspace: { kind: 'machine', root: APP_ROOT } });
+    // Leaving the app in the same PATCH frees the folder.
+    expect(await json(await patchChat(id, { appId: null, workspaceRoot: OTHER_ROOT }))).toMatchObject({ appId: null, workspaceRoot: OTHER_ROOT });
+  });
+});

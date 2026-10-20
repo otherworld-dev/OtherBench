@@ -106,6 +106,9 @@ function summary(r: RawIssue): IssueSummary {
   };
 }
 
+/** What githubService returns; the container's `github` is one of these. */
+export type GithubService = ReturnType<typeof githubService>;
+
 export function githubService(run: Runner) {
   async function gh(args: string[], input?: string): Promise<string> {
     let r: RunResult;

@@ -7,7 +7,7 @@ import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@otherbench/core/domain/export.js';
 import { projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import { CLAUDE_EFFORTS, isClaudeEffort } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -35,6 +35,7 @@ interface ChatBody {
   effort?: unknown;
   folders?: unknown;
   projectId?: unknown;
+  appId?: unknown;
   memoryExcluded?: unknown;
   sortOrder?: unknown;
   runsOn?: unknown;
@@ -42,7 +43,10 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
+
+/** Spec 2026-10-20-code-tab-design, "Calls I made": an app chat's folder is the app's folder, so it can't be set on the chat. */
+const APP_FOLDER_LOCKED = "An app chat uses its app's folder.";
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -69,17 +73,33 @@ function requireExistingProject(container: Container, value: unknown): Project {
   return project;
 }
 
+/** An unknown app in a chat body is a bad request, as an unknown project is. */
+function requireExistingApp(container: Container, value: unknown): App {
+  const appId = requireNonEmptyString(value, 'appId');
+  const app = container.store.apps.get(appId);
+  if (!app) throw new HTTPException(400, { message: `"appId": app "${appId}" not found.` });
+  return app;
+}
+
+/** `id` when it names a profile that exists and isn't archived, else null: a default that was archived or deleted is passed over. */
+function usableProfileId(container: Container, id: string | null): string | null {
+  if (id === null) return null;
+  const profile = container.store.profiles.get(id);
+  return profile && profile.archivedAt === null ? profile.id : null;
+}
+
+/** Whether a chat body names a folder at all (an explicit null included). */
+function setsWorkspace(body: ChatBody): boolean {
+  return body.workspace !== undefined || body.workspacePath !== undefined || body.workspaceRoot !== undefined;
+}
+
 /**
  * The profile a chat created in `project` starts with when the request names
  * none (spec §2, §5): the project's default, else its parent's for a
  * sub-project (spec 2026-10-15-sub-projects-design §3), else the app default.
  */
 function inheritedProfileId(container: Container, project: Project, parent: Project | null): string {
-  const usable = (id: string | null): string | null => {
-    if (id === null) return null;
-    const profile = container.store.profiles.get(id);
-    return profile && profile.archivedAt === null ? profile.id : null;
-  };
+  const usable = (id: string | null): string | null => usableProfileId(container, id);
   // The project's default, unless it was archived or deleted; then the app
   // default the web client also uses (the default profile, else the first).
   const appDefault = appDefaultProfileId(container.store);
@@ -122,9 +142,21 @@ export function chatsRoutes(container: Container): Hono {
     const body = (await c.req.json().catch(() => ({}))) as ChatBody;
     const project = body.projectId === undefined || body.projectId === null ? null : requireExistingProject(container, body.projectId);
     const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
+    // Spec 2026-10-20-code-tab-design, "Data": a chat created under an app takes the app's folder (always: the
+    // folder is locked to the app's) and the app's default profile, else the request's or the usual default.
+    const appRow = body.appId === undefined || body.appId === null ? null : requireExistingApp(container, body.appId);
+    if (appRow && project) throw new HTTPException(400, { message: 'A chat has an app or a project, never both.' });
+    if (appRow && setsWorkspace(body)) throw new HTTPException(400, { message: APP_FOLDER_LOCKED });
 
     let profileId: string;
-    if (body.profileId === undefined && project) {
+    const appProfile = appRow ? usableProfileId(container, appRow.defaultProfileId) : null;
+    if (appProfile !== null) {
+      profileId = appProfile;
+    } else if (body.profileId === undefined && appRow) {
+      const fallback = appDefaultProfileId(container.store);
+      if (!fallback) throw new HTTPException(400, { message: 'There is no profile to start this chat with -- create one in Settings first.' });
+      profileId = fallback;
+    } else if (body.profileId === undefined && project) {
       profileId = inheritedProfileId(container, project, parent);
     } else {
       profileId = requireNonEmptyString(body.profileId, 'profileId');
@@ -138,7 +170,7 @@ export function chatsRoutes(container: Container): Hono {
     // Not checked on disk here: the chat shows where it doesn't resolve. A
     // sub-project without a folder falls back to its parent's.
     const requested = parseWorkspaceBody(container, body);
-    const workspace = requested !== undefined ? requested : (project?.workspace ?? parent?.workspace ?? null);
+    const workspace = appRow ? appRow.workspace : requested !== undefined ? requested : (project?.workspace ?? parent?.workspace ?? null);
 
     const created = container.store.chats.create({
       id: randomUUID(),
@@ -149,6 +181,7 @@ export function chatsRoutes(container: Container): Hono {
       pinned: false,
       archivedAt: null,
       projectId: project?.id ?? null,
+      appId: appRow?.id ?? null,
       // A new chat starts with Auto on (Claude Code decides routine tool calls), unless the request says otherwise.
       autoMode: body.autoMode === undefined ? true : optionalBoolean(body.autoMode, 'autoMode', true),
     });
@@ -159,7 +192,7 @@ export function chatsRoutes(container: Container): Hono {
 
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
-    getChatOrThrow(container, id);
+    const current = getChatOrThrow(container, id);
     const body = (await c.req.json().catch(() => ({}))) as ChatBody;
 
     // headMessageId is deliberately not accepted here -- moving it is an
@@ -180,11 +213,39 @@ export function chatsRoutes(container: Container): Hono {
       }
       patch.runsOn = body.runsOn;
     }
+    // Spec 2026-10-20-code-tab-design: a chat has an app or a project, never both. "Move to app" deliberately
+    // differs from "Move to project": it sets the chat's folder to the app's, and its profile to the app's default
+    // when one is set ("Calls I made"). Those follow from the move, so they don't count as chat activity either.
+    const derived = new Set<string>();
+    const setsProject = body.projectId !== undefined && body.projectId !== null;
+    let movedTo: App | null = null;
+    if (body.appId !== undefined) {
+      if (body.appId === null) {
+        patch.appId = null;
+      } else {
+        movedTo = requireExistingApp(container, body.appId);
+        if (setsProject) throw new HTTPException(400, { message: 'A chat has an app or a project, never both.' });
+        patch.appId = movedTo.id;
+      }
+    }
+    // An app chat's folder is locked to the app's: changing it is the app's folder setting, which moves every chat in
+    // the app. Leaving the app in the same PATCH (appId: null, or into a project) frees it.
+    const appAfter = body.appId !== undefined ? (movedTo?.id ?? null) : setsProject ? null : current.appId;
+    if (setsWorkspace(body) && appAfter !== null) throw new HTTPException(400, { message: APP_FOLDER_LOCKED });
     // A folder is a path on the machine the chat runs on (after this patch).
-    const workspace = parseWorkspaceBody(container, body, patch.runsOn ?? getChatOrThrow(container, id).runsOn);
+    const workspace = parseWorkspaceBody(container, body, patch.runsOn ?? current.runsOn);
     if (workspace !== undefined) patch.workspace = workspace;
+    if (movedTo) {
+      patch.workspace = movedTo.workspace;
+      patch.projectId = null;
+      derived.add('workspace');
+      const appProfile = body.profileId === undefined ? usableProfileId(container, movedTo.defaultProfileId) : null;
+      if (appProfile !== null) {
+        patch.profileId = appProfile;
+        derived.add('profileId');
+      }
+    }
     if (body.folders !== undefined) {
-      const current = getChatOrThrow(container, id);
       patch.folders = parseFoldersBody(container, body.folders, current.folders ?? [], patch.workspace !== undefined ? patch.workspace : current.workspace, patch.runsOn ?? current.runsOn);
     }
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
@@ -207,9 +268,11 @@ export function chatsRoutes(container: Container): Hono {
       }
       patch.sortOrder = body.sortOrder;
     }
-    if (body.projectId !== undefined) {
+    if (body.projectId !== undefined && !movedTo) {
       // Moving files the chat; its folder and profile stay as they are (spec §2).
       patch.projectId = body.projectId === null ? null : requireExistingProject(container, body.projectId).id;
+      // Into a project means out of its app (spec 2026-10-20-code-tab-design, "Data").
+      if (patch.projectId !== null) patch.appId = null;
     }
     if (body.projectPinned !== undefined) {
       patch.projectPinned = optionalBoolean(body.projectPinned, 'projectPinned', false);
@@ -223,7 +286,7 @@ export function chatsRoutes(container: Container): Hono {
     // Toggling Auto, turning project memory off or on, moving a chat to another project, pinning it within its
     // project, reordering it or marking it read is not chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
     const keys = Object.keys(patch);
-    const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
+    const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k) || derived.has(k));
     if (!nonActivity) patch.updatedAt = Date.now();
 
     const updated = container.store.chats.update(id, patch);

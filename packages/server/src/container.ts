@@ -58,6 +58,7 @@ import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
 import { NotesService } from './notes/service.js';
 import { workspaceResolver } from './workspace-view.js';
+import type { GithubService } from './code/github.js';
 import { toolImageSaver } from './tool-images.js';
 
 /** The wired-up dependency set every route handler is given. */
@@ -124,6 +125,12 @@ export interface Container {
   events?: AppEventBus;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
   pathExists?: (path: string) => boolean;
+  /**
+   * The Code tab's GitHub issues, through the machine's own `gh` (spec
+   * 2026-10-20-code-tab-design). Unset means `githubService(ghRunner())`, the
+   * real gh (routes/apps.ts); tests pass a fake so no test ever runs gh.
+   */
+  github?: GithubService;
   /** Replies and approvals running on paired machines, for the calls this machine forwards (Task 52). */
   remoteRuns?: RemoteRuns;
   /**

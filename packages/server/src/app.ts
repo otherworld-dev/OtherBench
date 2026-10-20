@@ -1,10 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
+import { CodeRouteError } from './code/route-errors.js';
 import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
 import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
+import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
 import { computerRoutes } from './routes/computer.js';
@@ -122,6 +124,10 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/profiles', profilesRoutes(container));
   authed.route('/chats', chatsRoutes(container));
   authed.route('/projects', projectsRoutes(container));
+  // The Code tab's apps, and their git, issues and files (spec 2026-10-20-code-tab-design). User actions, not model
+  // tools, so they never pass the PermissionBroker -- and for the same reason they are never on the peer listener
+  // (peer/forward.ts): a paired machine must not be able to commit, push or comment from here.
+  authed.route('/apps', appsRoutes(container));
   authed.route('/settings', settingsRoutes(container));
   authed.route('/locations', locationsRoutes(container));
   authed.route('/node', nodeRoutes(container));
@@ -228,7 +234,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
       // before this. Wrapping it in the same `{error}` shape the 500
       // catch-all below already uses is what actually gets it in front of
       // the user.
-      return c.json({ error: err.message }, err.status);
+      // The Code tab's failures add a machine-readable `code` (and git's stderr) beside the message (code/route-errors.ts).
+      return c.json({ error: err.message, ...(err instanceof CodeRouteError ? err.extras() : {}) }, err.status);
     }
     console.error('[otherbench-server] unhandled error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
