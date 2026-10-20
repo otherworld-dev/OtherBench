@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { formatAge, formatRelativeTime } from './relativeTime.js';
+import { formatAge, formatRelativeTime, formatStamp } from './relativeTime.js';
+
+describe('formatStamp', () => {
+  const now = new Date(2026, 9, 21, 15, 30).getTime();
+  const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  it('is the clock alone for a time today', () => {
+    const at = new Date(2026, 9, 21, 9, 5).getTime();
+    expect(formatStamp(at, now)).toBe(clock(at));
+  });
+
+  it('adds the day and month for an earlier day this year', () => {
+    const at = new Date(2026, 9, 20, 23, 59).getTime();
+    expect(formatStamp(at, now)).toBe(`${new Date(at).toLocaleDateString([], { day: 'numeric', month: 'short' })} ${clock(at)}`);
+  });
+
+  it('adds the year for a time in another year', () => {
+    const at = new Date(2025, 0, 2, 8, 0).getTime();
+    expect(formatStamp(at, now)).toBe(`${new Date(at).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })} ${clock(at)}`);
+  });
+});
 
 describe('formatRelativeTime', () => {
   const now = 1_700_000_000_000;

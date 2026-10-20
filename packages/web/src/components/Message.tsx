@@ -4,6 +4,7 @@ import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestio
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import { editDiffOf } from '../lib/editDiff.js';
+import { formatStamp } from '../lib/relativeTime.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbench/core/domain/computer-apps.js';
@@ -797,6 +798,9 @@ export function Message({
       <div data-message-header="" className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
         <span className={`label-caps ${isUser ? 'text-[var(--text-muted)]' : 'text-[var(--accent)]'}`}>{label}</span>
         {!isUser && message.producedBy && <span className="font-mono text-[var(--text-faint)]">{message.producedBy.modelId}</span>}
+        <time dateTime={new Date(message.createdAt).toISOString()} title={new Date(message.createdAt).toLocaleString()} className="text-[var(--text-faint)]">
+          {formatStamp(message.createdAt)}
+        </time>
         {message.status === 'error' && <span className="text-[var(--danger)]">error</span>}
         {message.status === 'cancelled' && <span>stopped</span>}
         {branch && branch.total > 1 && <BranchSwitcher branch={branch} />}

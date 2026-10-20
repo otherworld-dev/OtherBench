@@ -9,6 +9,17 @@ export function formatRelativeTime(at: number, now: number = Date.now()): string
   return new Date(at).toLocaleString();
 }
 
+/** A message's time: "14:05" today, "21 Oct 14:05" earlier this year, "21 Oct 2025 14:05" before that. */
+export function formatStamp(at: number, now: number = Date.now()): string {
+  const d = new Date(at);
+  const n = new Date(now);
+  const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === n.toDateString()) return clock;
+  const sameYear = d.getFullYear() === n.getFullYear();
+  const date = d.toLocaleDateString([], { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+  return `${date} ${clock}`;
+}
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;

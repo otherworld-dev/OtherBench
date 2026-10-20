@@ -46,6 +46,15 @@ describe('Message', () => {
     expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
   });
 
+  it("shows the message's time on its header line, the full date and time on hover", () => {
+    const at = Date.now();
+    const { container } = render(<Message message={base({ createdAt: at })} />);
+    const time = container.querySelector('[data-message-header] time');
+    expect(time).toHaveAttribute('datetime', new Date(at).toISOString());
+    expect(time).toHaveAttribute('title', new Date(at).toLocaleString());
+    expect(time).toHaveTextContent(new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  });
+
   it('renders a compact summary closed, with the token counts, and the summary once opened', async () => {
     const message = base({ parts: [{ type: 'context-summary', text: 'The **gist**', preTokens: 120000, postTokens: 8000 }] });
     render(<Message message={message} />);
