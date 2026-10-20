@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
-import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
+import { ageBucket, allGroups, bucketRuns, buildCodeSidebar, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -11,7 +11,93 @@ function project(id: string, name: string, sortOrder = 0): Project {
   return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
+function app(id: string, name: string, sortOrder = 0): App {
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+}
+
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
+
+describe('buildSidebar and apps (spec 2026-10-20-code-tab-design, "Chats live in one mode only")', () => {
+  it('lists only the plain chat when one chat is in an app', () => {
+    const model = buildSidebar([chat('in-app', { appId: 'A' }), chat('plain')], [], null);
+    expect(model.groups.flatMap((g) => ids(g.chats))).toEqual(['plain']);
+  });
+
+  it('leaves app chats out of Pinned, every group and Archived, even when their app is not loaded', () => {
+    const model = buildSidebar(
+      [
+        chat('pinned-app', { appId: 'A', pinned: true }),
+        chat('project-app', { appId: 'A', projectId: 'p' }),
+        chat('archived-app', { appId: 'A', archivedAt: 5 }),
+        chat('unknown-app', { appId: 'gone' }),
+        chat('plain', { projectId: 'p' }),
+      ],
+      [project('p', 'P')],
+      null
+    );
+    expect(model.pinned).toEqual([]);
+    expect(allGroups(model).flatMap((g) => [...ids(g.pinnedChats), ...ids(g.chats)])).toEqual(['plain']);
+    expect(model.groups.find((g) => g.key === 'p')!.total).toBe(1);
+    expect(model.archived).toEqual([]);
+  });
+});
+
+describe('buildCodeSidebar', () => {
+  it('groups two chats under app A in sortOrder, and puts a chat whose app is not loaded in a trailing Unknown app group', () => {
+    const model = buildCodeSidebar(
+      [chat('low', { appId: 'A', sortOrder: 1 }), chat('high', { appId: 'A', sortOrder: 2 }), chat('stray', { appId: 'gone' }), chat('plain')],
+      [app('A', 'Alpha')],
+      null
+    );
+    expect(model.groups.map((g) => g.key)).toEqual(['A', UNKNOWN_APP_KEY]);
+    expect(model.groups[0]!.app?.id).toBe('A');
+    expect(ids(model.groups[0]!.chats)).toEqual(['high', 'low']);
+    expect(model.groups[0]!.total).toBe(2);
+    expect(model.groups[1]!.app).toBeNull();
+    expect(ids(model.groups[1]!.chats)).toEqual(['stray']);
+  });
+
+  it('orders apps with compareApps, shows an app with no chats, and has no Unknown app group when every app is loaded', () => {
+    const model = buildCodeSidebar([chat('a1', { appId: 'a' })], [app('b', 'beta', 1), app('a', 'Alpha', 1), app('z', 'Zed', 0)], null);
+    expect(model.groups.map((g) => g.key)).toEqual(['z', 'a', 'b']);
+    expect(model.groups[0]!.chats).toEqual([]);
+    expect(model.groups[0]!.total).toBe(0);
+  });
+
+  it('keeps archived chats out of the groups and lists archived app chats, newest activity first; never a plain chat', () => {
+    const model = buildCodeSidebar(
+      [
+        chat('live', { appId: 'A' }),
+        chat('old', { appId: 'A', archivedAt: 5, updatedAt: 1 }),
+        chat('new', { appId: 'gone', archivedAt: 6, updatedAt: 9 }),
+        chat('plain-archived', { archivedAt: 7 }),
+      ],
+      [app('A', 'Alpha')],
+      null
+    );
+    expect(model.groups.map((g) => g.key)).toEqual(['A']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['live']);
+    expect(model.groups[0]!.total).toBe(1);
+    expect(ids(model.archived)).toEqual(['new', 'old']);
+  });
+
+  it('lists a pinned app chat first in its own group (there is no Pinned section in Code mode)', () => {
+    const model = buildCodeSidebar([chat('top', { appId: 'A', sortOrder: 9 }), chat('kept', { appId: 'A', pinned: true, sortOrder: 1 })], [app('A', 'Alpha')], null);
+    expect(ids(model.groups[0]!.chats)).toEqual(['kept', 'top']);
+  });
+
+  it('while searching, keeps only matching chats and drops apps left with none', () => {
+    const model = buildCodeSidebar(
+      [chat('hit', { appId: 'A' }), chat('miss', { appId: 'A' }), chat('other', { appId: 'B' }), chat('gone-miss', { appId: 'gone' }), chat('arch', { appId: 'B', archivedAt: 3 })],
+      [app('A', 'Alpha'), app('B', 'Beta')],
+      new Set(['hit', 'arch'])
+    );
+    expect(model.groups.map((g) => g.key)).toEqual(['A']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['hit']);
+    expect(model.groups[0]!.total).toBe(2);
+    expect(ids(model.archived)).toEqual(['arch']);
+  });
+});
 
 describe('buildSidebar', () => {
   it('orders project groups by sortOrder then name, with No project last', () => {

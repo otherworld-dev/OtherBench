@@ -18,6 +18,7 @@ import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { useMarkRead } from './state/useMarkRead.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
+import { AppView } from './views/AppView.js';
 import { IndicatorView } from './views/IndicatorView.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
@@ -43,6 +44,8 @@ function MainApp(): JSX.Element {
   const setInspectorCollapsed = useOtherBenchStore((s) => s.setInspectorCollapsed);
   const projectPage = useOtherBenchStore((s) => s.projectPage);
   const closeProjectPage = useOtherBenchStore((s) => s.closeProjectPage);
+  const appPage = useOtherBenchStore((s) => s.appPage);
+  const closeAppPage = useOtherBenchStore((s) => s.closeAppPage);
   const schedulesPage = useOtherBenchStore((s) => s.schedulesPage);
   const openSchedules = useOtherBenchStore((s) => s.openSchedules);
   const closeSchedules = useOtherBenchStore((s) => s.closeSchedules);
@@ -232,6 +235,7 @@ function MainApp(): JSX.Element {
       {projectPage && (
         <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
       )}
+      {appPage && <AppView key={appPage.mode === 'edit' ? appPage.appId : 'new'} page={appPage} onClose={closeAppPage} />}
     </div>
   );
 }

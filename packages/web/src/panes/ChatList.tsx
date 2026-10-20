@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
@@ -10,18 +11,21 @@ import { saveFile } from '../lib/saveFile.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
+import { appTabId } from '../state/appTab.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { chatStatus, groupStatus, groupStatusSummary, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
+import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
-import { chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
+import { appMenuItems, chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
   AGE_BUCKET_LABELS,
   allGroups,
   bucketRuns,
+  buildCodeSidebar,
   buildSidebar,
   capRows,
   GROUP_ROW_CAP,
@@ -31,6 +35,7 @@ import {
   placeProjectPatches,
   projectSiblings,
   titleMatches,
+  type CodeSidebarGroup,
   type SidebarGroup,
 } from './sidebar/model.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
@@ -104,6 +109,15 @@ function headingSelector(projectId: string): string {
  * `GROUP_ROW_CAP` chats until "Show N more", and orders them by hand or, with
  * date headings, by recent activity (its menu's sort item).
  *
+ * A Chat | Code switch above the search picks the mode (spec
+ * 2026-10-20-code-tab-design, Goal 1). Code mode lists each app with its chats
+ * instead (`buildCodeSidebar`), and Chat mode never shows an app chat: a chat
+ * lives in one mode only. Search and the chips work the same in both. An app's
+ * heading opens its home, collapses from its arrow, and has a menu (Rename,
+ * Edit…, Delete…); each app's list ends with a "+ New chat" row, and "+ New
+ * app" takes the place of "+ New chat" at the bottom. In Code mode there is no
+ * Pinned section and no reordering by hand: a pinned app chat leads its group.
+ *
  * `footer` renders at the end of the New chat / New project row, for
  * app-level controls the caller owns (Settings, Usage). `wrapFooter` lets
  * that row wrap onto a second line instead of running out of the sidebar
@@ -126,6 +140,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const openSchedules = useOtherBenchStore((s) => s.openSchedules);
   const paneTabs = useOtherBenchStore((s) => s.paneState.tabs);
   const machines = useOtherBenchStore((s) => s.machines);
+  const apps = useOtherBenchStore((s) => s.apps);
+  const mode = useOtherBenchStore((s) => s.mode);
+  const setMode = useOtherBenchStore((s) => s.setMode);
+  const openAppHome = useOtherBenchStore((s) => s.openAppHome);
+  const openAppPage = useOtherBenchStore((s) => s.openAppPage);
+  const upsertApp = useOtherBenchStore((s) => s.upsertApp);
+  const removeApp = useOtherBenchStore((s) => s.removeApp);
+  const codeMode = mode === 'code';
   const collapsedGroups = useCollapsedGroups();
   const groupSorts = useGroupSorts();
   const now = useNow(60_000);
@@ -160,6 +182,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(loadShowArchived);
+  const [appMenu, setAppMenu] = useState<{ appId: string; position: { x: number; y: number } } | null>(null);
+  const [renamingAppId, setRenamingAppId] = useState<string | null>(null);
+  const [deletingAppId, setDeletingAppId] = useState<string | null>(null);
 
   const trimmedQuery = query.trim();
   // A chip left on for a machine since unpaired would hide everything, with no chip shown to turn it off.
@@ -177,6 +202,10 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working, background]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
+  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, matches), [chats, apps, matches]);
+  const archived = codeMode ? codeSidebar.archived : sidebar.archived;
+  const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
+  const deletingApp = deletingAppId ? (apps.find((a) => a.id === deletingAppId) ?? null) : null;
   const lookup = useMemo(() => projectLookup(projects), [projects]);
   /** Sidebar order: each top-level project, then its sub-projects. */
   const orderedProjects = useMemo(() => {
@@ -216,10 +245,19 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     }
   }
 
-  async function createChat(projectId?: string): Promise<void> {
+  /**
+   * A new chat in a project, an app (Code mode), or neither. `into` names the
+   * group the "+" belongs to; nothing means No project.
+   */
+  async function createChat(into?: { projectId: string } | { appId: string }): Promise<void> {
     if (creating) return;
+    const projectId = into && 'projectId' in into ? into.projectId : undefined;
     let body: CreateChatBody;
-    if (projectId !== undefined) {
+    if (into && 'appId' in into) {
+      // As for a project: the server gives the chat the app's folder and its
+      // default profile, else the app-wide default (spec 2026-10-20-code-tab-design).
+      body = { appId: into.appId };
+    } else if (projectId !== undefined) {
       // The server copies the project's folder and default profile onto the
       // new chat, falling back to the app default profile (spec §2).
       body = { projectId };
@@ -229,7 +267,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       body = { profileId: defaultProfile.id };
     }
     // A chat created into a collapsed group (or one inside a collapsed parent) would be invisible.
-    setGroupCollapsed(projectId ?? NO_PROJECT_KEY, false);
+    setGroupCollapsed(into && 'appId' in into ? into.appId : (projectId ?? NO_PROJECT_KEY), false);
     const parent = projectId === undefined ? undefined : lookup(projectId);
     const parentId = parent ? projectParentOf(parent, lookup)?.id : undefined;
     if (parentId) setGroupCollapsed(parentId, false);
@@ -272,7 +310,32 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const group = allGroups(sidebar).find((g) => g.key === (projectId ?? NO_PROJECT_KEY))?.chats ?? [];
     const top = chat.pinned ? [] : placeChatPatches(group, chat, group[0]?.id ?? null).filter((p) => p.id === chat.id);
     const body: ChatPatchBody = { projectId, ...(top[0] ? { sortOrder: top[0].sortOrder } : {}) };
-    if (await patchChat(chat, body, "Couldn't move the chat")) focusLater(chatRowSelector(chatId));
+    // An app chat moved to a project leaves its app (the server clears appId), so it changes mode too.
+    await moveAcrossModes(chat, body, "Couldn't move the chat");
+  }
+
+  /**
+   * Sends a PATCH that may take the chat into or out of an app, so out of the
+   * mode showing. The store then drops it from this mode's tabs (a chat lives
+   * in one mode only, spec 2026-10-20-code-tab-design); when it was the open
+   * chat, the window follows it into its new mode rather than losing it.
+   */
+  async function moveAcrossModes(chat: Chat, body: ChatPatchBody, action: string): Promise<void> {
+    const wasOpen = useOtherBenchStore.getState().activeChatId === chat.id;
+    const updated = await patchChat(chat, body, action);
+    if (!updated) return;
+    if (wasOpen && modeOfChat(updated) !== modeOfChat(chat)) setActiveChatId(updated.id);
+    focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+  }
+
+  /**
+   * "Move to app…" (spec 2026-10-20-code-tab-design, Goal 8): the server sets the chat's folder and profile from
+   * the app and takes it out of its project. Null is "Move out of app": back to Chat mode, folder kept.
+   */
+  async function moveChatToApp(chatId: string, appId: string | null): Promise<void> {
+    const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
+    if (!chat || chat.appId === appId) return;
+    await moveAcrossModes(chat, { appId }, appId === null ? "Couldn't move the chat out of its app" : "Couldn't move the chat to the app");
   }
 
   /**
@@ -372,6 +435,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   function openChatMenu(chatId: string, position: { x: number; y: number }, source: MenuSource): void {
     setProjectMenu(null);
     setNoProjectMenu(null);
+    setAppMenu(null);
     if (source === 'button' && chatMenu?.chatId === chatId) {
       setChatMenu(null);
       focusLater(chatRowSelector(chatId), LIST_SELECTOR);
@@ -583,7 +647,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           if (moving) void placeProject(moving, project.id, position);
         },
       },
-      onNewChat: () => void createChat(project.id),
+      onNewChat: () => void createChat({ projectId: project.id }),
       onOpen: () => openTab(projectTabId(project.id)),
       active: activeChatId === projectTabId(project.id),
       newChatDisabled: creating || profiles.length === 0,
@@ -596,6 +660,46 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         focusLater(headingSelector(project.id), LIST_SELECTOR);
       },
     };
+  }
+
+  function openAppMenu(appId: string, position: { x: number; y: number }, source: MenuSource): void {
+    setChatMenu(null);
+    if (source === 'button' && appMenu?.appId === appId) {
+      setAppMenu(null);
+      focusLater(headingSelector(appId), LIST_SELECTOR);
+      return;
+    }
+    setAppMenu({ appId, position });
+  }
+
+  async function renameApp(appId: string, name: string): Promise<void> {
+    setRenamingAppId(null);
+    setError(null);
+    try {
+      upsertApp(await api.apps.patch(appId, { name }));
+    } catch (err) {
+      console.error(`[otherbench-web] failed to rename app ${appId}:`, err);
+      setError(errorText(err, "Couldn't rename the app"));
+    }
+    focusLater(headingSelector(appId), LIST_SELECTOR);
+  }
+
+  /**
+   * Rejects on failure, which keeps the confirmation dialog open with the message. Its chats go back to Chat mode
+   * (spec 2026-10-20-code-tab-design, "Creating an app"): `removeApp` clears their `appId` here as the server does,
+   * and the server's chat-updated events bring the rest.
+   */
+  async function deleteApp(appId: string): Promise<void> {
+    const next = neighbourHeadingSelector(appId);
+    try {
+      await api.apps.delete(appId);
+    } catch (err) {
+      // Already gone (deleted in another tab): same end state the user asked for.
+      if (!(err instanceof ApiError && err.status === 404)) throw err;
+    }
+    removeApp(appId);
+    setDeletingAppId(null);
+    focusLater(next, LIST_SELECTOR);
   }
 
   // The tray menu's "New chat" does exactly what the button does. The ref
@@ -713,7 +817,91 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }
 
-  function renderRow(chat: Chat, section: Section | null): JSX.Element {
+  /**
+   * One app's group in Code mode, or the Unknown app group (`group.app` null). An app's list always ends with
+   * "+ New chat", so it never reads as empty; the name opens the app's home and the arrow folds the list.
+   */
+  function renderAppGroup(group: CodeSidebarGroup): JSX.Element {
+    const app = group.app;
+    const expanded = searching || expandedGroups.has(group.key);
+    const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
+    const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
+    const statuses = group.chats.map(statusOf);
+    return (
+      <ProjectGroup
+        key={group.key}
+        groupKey={group.key}
+        name={app?.name ?? 'Unknown app'}
+        count={group.total}
+        empty={false}
+        collapsed={!searching && collapsedGroups.has(group.key)}
+        status={groupStatus(statuses)}
+        statusSummary={groupStatusSummary(statuses)}
+        dropActive={app !== null && dropTarget === group.key}
+        onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
+        // Dropping a chat on an app's heading files it there, as Move to app… does; Unknown app takes no drops.
+        onDragTarget={(on) => {
+          if (app) setDropTarget((current) => (on ? group.key : current === group.key ? null : current));
+        }}
+        onDropChat={(chatId) => {
+          if (app) void moveChatToApp(chatId, app.id);
+        }}
+        {...(app ? appGroupProps(app) : {})}
+      >
+        {visible.map((c) => renderRow(c, null, false))}
+        {(hidden > 0 || (!searching && expandedGroups.has(group.key) && group.chats.length > GROUP_ROW_CAP)) && (
+          <li key="row-cap-toggle">
+            <button
+              type="button"
+              data-testid={`group-more-${group.key}`}
+              onClick={() => setGroupExpanded(group.key, hidden > 0, firstHidden?.id)}
+              className="w-full rounded-sm px-2 py-[3px] text-left text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+            >
+              {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
+            </button>
+          </li>
+        )}
+        {app && (
+          <li key="new-chat">
+            <button
+              type="button"
+              data-testid={`app-new-chat-${app.id}`}
+              aria-label={`New chat in ${app.name}`}
+              // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
+              aria-disabled={creating || profiles.length === 0 || undefined}
+              onClick={() => void createChat({ appId: app.id })}
+              className="w-full rounded-sm px-2 py-[3px] text-left text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] aria-disabled:opacity-40"
+            >
+              + New chat
+            </button>
+          </li>
+        )}
+      </ProjectGroup>
+    );
+  }
+
+  /** The app-only props of a Code mode group heading. */
+  function appGroupProps(app: App): Partial<ProjectGroupProps> {
+    return {
+      onOpen: () => openAppHome(app.id),
+      openTitle: "Open the app's home",
+      active: activeChatId === appTabId(app.id),
+      menuOpen: appMenu?.appId === app.id,
+      menuLabel: 'App actions',
+      renaming: renamingAppId === app.id,
+      renameLabel: 'App name',
+      renameMaxLength: APP_NAME_MAX,
+      onOpenMenu: (position, source) => openAppMenu(app.id, position, source),
+      onRename: (name) => void renameApp(app.id, name),
+      onRenameCancel: () => {
+        setRenamingAppId(null);
+        focusLater(headingSelector(app.id), LIST_SELECTOR);
+      },
+    };
+  }
+
+  /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */
+  function renderRow(chat: Chat, section: Section | null, muted = section === null): JSX.Element {
     return (
       <ChatRow
         key={chat.id}
@@ -744,7 +932,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         }
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
-        muted={section === null}
+        muted={muted}
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
@@ -763,7 +951,22 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
-        {draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
+        <div role="group" aria-label="Mode" data-testid="mode-switch" className="mb-2 grid grid-cols-2 gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
+          {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              aria-pressed={mode === m}
+              onClick={() => setMode(m)}
+              className={`rounded-[3px] px-2 py-1 text-xs ${
+                mode === m ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {m === 'chat' ? 'Chat' : 'Code'}
+            </button>
+          ))}
+        </div>
+        {!codeMode && draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
           <div
             data-testid="pinned-drop-zone"
             data-drop-active={pinZoneActive ? 'true' : undefined}
@@ -830,20 +1033,24 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
       <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
-        {sidebar.pinned.length > 0 && (
+        {!codeMode && sidebar.pinned.length > 0 && (
           <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
             <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false }))}</ul>
           </div>
         )}
 
-        {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && sidebar.archived.length === 0 && (
+        {searching && (codeMode ? codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) && archived.length === 0 && (
           <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
         )}
 
-        {sidebar.groups.map(renderGroup)}
+        {codeMode && !searching && apps.length === 0 && codeSidebar.groups.length === 0 && (
+          <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No apps yet. An app is a repo folder; its chats show here, under it.</p>
+        )}
 
-        {sidebar.archived.length > 0 && (
+        {codeMode ? codeSidebar.groups.map(renderAppGroup) : sidebar.groups.map(renderGroup)}
+
+        {archived.length > 0 && (
           <div className="mb-1.5" data-testid="archived-section">
             <button
               type="button"
@@ -851,9 +1058,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               onClick={toggleArchived}
               className="label-caps w-full rounded-sm px-2 py-1 text-left text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
             >
-              {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
+              {showArchived ? 'Hide archived' : `Show archived (${archived.length})`}
             </button>
-            {showArchived && <ul>{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
+            {showArchived && <ul>{archived.map((c) => renderRow(c, null))}</ul>}
           </div>
         )}
 
@@ -865,19 +1072,28 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       </div>
 
       <div className={`flex items-center gap-1 border-t border-[var(--border)] p-2${wrapFooter ? ' flex-wrap' : ''}`}>
-        <button
-          type="button"
-          onClick={() => void createChat()}
-          // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
-          aria-disabled={creating || profiles.length === 0 || undefined}
-          title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
-          className="btn btn-primary flex-1 px-2 py-1.5"
-        >
-          + New chat
-        </button>
-        <button type="button" onClick={() => openProjectPage({ mode: 'create' })} aria-label="New project" title="New project" className="btn px-2 py-1.5">
-          <FolderPlusIcon />
-        </button>
+        {codeMode ? (
+          // In Code mode a new chat starts from its app's "+ New chat" row, so the main button makes an app.
+          <button type="button" onClick={() => openAppPage({ mode: 'create' })} className="btn btn-primary flex-1 px-2 py-1.5">
+            + New app
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => void createChat()}
+              // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
+              aria-disabled={creating || profiles.length === 0 || undefined}
+              title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
+              className="btn btn-primary flex-1 px-2 py-1.5"
+            >
+              + New chat
+            </button>
+            <button type="button" onClick={() => openProjectPage({ mode: 'create' })} aria-label="New project" title="New project" className="btn px-2 py-1.5">
+              <FolderPlusIcon />
+            </button>
+          </>
+        )}
         {footer}
       </div>
 
@@ -897,6 +1113,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               reorder: (dir) => void reorderChat(menuChat, dir),
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
               moveToNewProject: () => void moveToNewProject(menuChat),
+              moveToApp: (appId) => void moveChatToApp(menuChat.id, appId),
+              moveOutOfApp: () => void moveChatToApp(menuChat.id, null),
               exportAs: (format) => void exportChat(menuChat, format),
               schedule: () => openSchedules({ kind: 'chat', chatId: menuChat.id }),
               setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
@@ -905,7 +1123,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               requestDelete: () => setDeletingChatId(menuChat.id),
             },
             menuPosition(menuChat),
-            paneTabs.includes(menuChat.id)
+            paneTabs.includes(menuChat.id),
+            apps
           )}
           onClose={(reason) => {
             setChatMenu(null);
@@ -977,6 +1196,36 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           onClose={(reason) => {
             setNoProjectMenu(null);
             if (reason === 'dismiss') focusLater(headingSelector(NO_PROJECT_KEY), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {appMenu && menuApp && (
+        <Menu
+          key={`app:${menuApp.id}`}
+          label="App actions"
+          position={appMenu.position}
+          items={appMenuItems({
+            rename: () => setRenamingAppId(menuApp.id),
+            edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
+            requestDelete: () => setDeletingAppId(menuApp.id),
+          })}
+          onClose={(reason) => {
+            setAppMenu(null);
+            if (reason === 'dismiss') focusLater(headingSelector(menuApp.id), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {deletingApp && (
+        <ConfirmDialog
+          title={`Delete ${deletingApp.name}?`}
+          message="Its chats move back to Chat mode; nothing is deleted."
+          confirmLabel="Delete"
+          onConfirm={() => deleteApp(deletingApp.id)}
+          onCancel={() => {
+            setDeletingAppId(null);
+            focusLater(headingSelector(deletingApp.id), LIST_SELECTOR);
           }}
         />
       )}

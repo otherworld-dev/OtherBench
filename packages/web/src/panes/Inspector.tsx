@@ -246,6 +246,58 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
     unresolved || (displayedWorkspaceRoot && elsewhere) ? 'warn' : 'normal'
   );
 
+  // An app chat's folder is the app's folder (spec 2026-10-20-code-tab-design, "Calls I made"): the server
+  // refuses a folder PATCH on it, and changing the app's folder moves every chat in it. So it's shown read-only,
+  // with no control to change, clear or pick one; the app's form is where it changes.
+  if (chat.appId) {
+    const where =
+      status?.status === 'unresolved'
+        ? status.reason === 'other-machine'
+          ? `The app's folder is on another machine${status.hint ? `: ${status.hint.path}` : ''}.`
+          : `${status.hint?.path ?? "The app's folder"} isn't available on this machine.`
+        : null;
+    return (
+      <div className="space-y-2" data-testid="workspace-section">
+        {where ? (
+          <p data-testid="workspace-unresolved" className="text-sm text-[var(--warn)]">
+            {where}
+          </p>
+        ) : (
+          <p data-testid="workspace-root-value" className="rounded bg-[var(--bg-sunken)] px-2 py-1 font-mono text-sm break-all">
+            {displayedWorkspaceRoot ?? 'No folder'}
+          </p>
+        )}
+        <p data-testid="workspace-app-folder" className="text-xs text-[var(--text-muted)]">
+          Uses the app's folder. Edit the app to change it.
+        </p>
+        {activeElsewhere.map((a) => (
+          <p key={`${a.machine}:${a.chatId}`} data-testid="workspace-also-active" role="status" className="text-xs text-[var(--warn)]">
+            Also active on {a.machine}: "{a.title}" has a reply running in this folder.
+          </p>
+        ))}
+        {displayedWorkspaceRoot && <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>}
+        {isDesktop() && runsHere && displayedWorkspaceRoot && (
+          <button
+            type="button"
+            title="A terminal window in this folder, for commands to run yourself"
+            onClick={() => {
+              setError(null);
+              openTerminal(displayedWorkspaceRoot).catch((err: unknown) => setError(`Couldn't open a terminal: ${err instanceof Error ? err.message : String(err)}`));
+            }}
+            className="btn px-2 py-1"
+          >
+            Open terminal
+          </button>
+        )}
+        {error && (
+          <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   function openEdit(): void {
     setDraft(displayedWorkspaceRoot ?? '');
     setError(null);

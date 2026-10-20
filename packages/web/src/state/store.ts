@@ -52,6 +52,8 @@ export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnect
  * is gone by then (a menu item).
  */
 export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+/** The app form (spec 2026-10-20-code-tab-design, "Creating an app"), as `ProjectPageState`: a new app, or one to edit. */
+export type AppPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; appId: string; returnFocus?: string };
 
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
@@ -320,6 +322,10 @@ export interface OtherBenchState {
   projectPage: ProjectPageState | null;
   openProjectPage(page: ProjectPageState): void;
   closeProjectPage(): void;
+  /** The open app form, or null. Opened from Code mode's sidebar; App renders it. */
+  appPage: AppPageState | null;
+  openAppPage(page: AppPageState): void;
+  closeAppPage(): void;
   /** The open Scheduled overlay, or null. App renders it. */
   schedulesPage: SchedulesPageState | null;
   openSchedules(prefill?: ScheduleTarget): void;
@@ -1035,6 +1041,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
   closeProjectPage: () => set({ projectPage: null }),
+  appPage: null,
+  openAppPage: (page) => set({ appPage: page }),
+  closeAppPage: () => set({ appPage: null }),
   schedulesPage: null,
   openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
   closeSchedules: () => set({ schedulesPage: null }),

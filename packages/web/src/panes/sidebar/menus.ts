@@ -1,5 +1,6 @@
+import { compareApps } from '@otherbench/core/domain/apps.js';
 import { projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { MenuItem } from '../../components/Menu.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
@@ -17,6 +18,10 @@ export interface ChatMenuHandlers {
   moveTo(projectId: string | null): void;
   /** Makes a new project named after the chat and moves the chat into it. */
   moveToNewProject(): void;
+  /** Files the chat under an app, which sets its folder and profile from the app (spec 2026-10-20-code-tab-design, Goal 8). */
+  moveToApp(appId: string): void;
+  /** Takes an app chat out of its app, back to Chat mode's No project; its folder stays. */
+  moveOutOfApp(): void;
   /** Downloads the chat (#820). */
   exportAs(format: 'markdown' | 'json'): void;
   /** Opens the Scheduled overlay's editor for a new schedule on this chat. */
@@ -35,14 +40,21 @@ export interface ChatMenuHandlers {
  * "Unarchive" in place of "Archive" (controller ruling R2). `position` is the
  * chat's place in its sidebar section; without it (archived, or while
  * searching) there is no Move up / Move down.
+ *
+ * `apps` adds "Move to app…" beside "Move to project…" (spec 2026-10-20-code-tab-design, Goal 8), left out while
+ * there are none. An app chat also gets "Move out of app", and in Move to project… nothing is checked (it isn't in
+ * No project) and No project does the same as Move out of app: a null `projectId` alone wouldn't take it out of the
+ * app, while a real project does (the server clears `appId`).
  */
 export function chatMenuItems(
   chat: Chat,
   orderedProjects: Project[],
   h: ChatMenuHandlers,
   position: { index: number; count: number } | null = null,
-  isTab = false
+  isTab = false,
+  apps: App[] = []
 ): MenuItem[] {
+  const inApp = chat.appId !== null;
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
   const lookup = projectLookup(orderedProjects);
   const archived = chat.archivedAt !== null;
@@ -79,10 +91,22 @@ export function chatMenuItems(
           ...(projectParentOf(p, lookup) ? { indent: true } : {}),
           onSelect: () => h.moveTo(p.id),
         })),
-        { id: NO_PROJECT_KEY, label: 'No project', checked: !inListedProject, onSelect: () => h.moveTo(null) },
+        inApp
+          ? { id: NO_PROJECT_KEY, label: 'No project', checked: false, onSelect: h.moveOutOfApp }
+          : { id: NO_PROJECT_KEY, label: 'No project', checked: !inListedProject, onSelect: () => h.moveTo(null) },
         { id: 'new-project', label: 'New project…', onSelect: h.moveToNewProject },
       ],
     },
+    ...(apps.length === 0
+      ? []
+      : [
+          {
+            id: 'move-app',
+            label: 'Move to app…',
+            submenu: [...apps].sort(compareApps).map((a) => ({ id: a.id, label: a.name, checked: chat.appId === a.id, onSelect: () => h.moveToApp(a.id) })),
+          },
+        ]),
+    ...(inApp ? [{ id: 'move-out-app', label: 'Move out of app', onSelect: h.moveOutOfApp }] : []),
     ...memory,
     ...(archived ? [] : [{ id: 'schedule', label: 'Schedule…', onSelect: h.schedule }]),
     {
@@ -96,6 +120,22 @@ export function chatMenuItems(
     archived
       ? { id: 'unarchive', label: 'Unarchive', onSelect: h.unarchive }
       : { id: 'archive', label: 'Archive', onSelect: h.archive },
+    { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
+  ];
+}
+
+export interface AppMenuHandlers {
+  rename(): void;
+  /** Opens the app form on this app. */
+  edit(): void;
+  requestDelete(): void;
+}
+
+/** An app heading's ⋯ menu in Code mode (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit, delete. */
+export function appMenuItems(h: AppMenuHandlers): MenuItem[] {
+  return [
+    { id: 'rename', label: 'Rename', onSelect: h.rename },
+    { id: 'edit', label: 'Edit…', onSelect: h.edit },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
   ];
 }

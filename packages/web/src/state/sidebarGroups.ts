@@ -6,6 +6,12 @@ export const COLLAPSED_GROUPS_STORAGE_KEY = 'otherbench.collapsedGroups';
 /** The group key of "No project". Project ids are UUIDs, so it can't collide. */
 export const NO_PROJECT_KEY = '__no_project__';
 
+/**
+ * Code mode's group key for chats whose app isn't loaded (spec 2026-10-20-code-tab-design): they are app chats,
+ * so they stay out of Chat mode, and sit together at the end of the Code sidebar. App ids are UUIDs too.
+ */
+export const UNKNOWN_APP_KEY = '__unknown_app__';
+
 /** DOM id of a sidebar group's wrapper, for scrolling to it. */
 export function groupDomId(key: string): string {
   return `project-group-${key}`;
