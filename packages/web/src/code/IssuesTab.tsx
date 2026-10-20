@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX, type MouseEvent } from 'react';
+import { ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
@@ -97,11 +98,13 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
 
   // gh lists newest first already; sorted here too so the order never depends on it.
   const issues = list ? [...list.issues].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number) : null;
+  // A list as long as the fetch limit was probably cut there, so it says "100+", not an exact count.
+  const count = list ? (list.issues.length >= ISSUE_LIST_LIMIT ? `${ISSUE_LIST_LIMIT}+` : String(list.issues.length)) : '';
 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <p className={`min-w-0 flex-1 truncate ${MUTED}`}>{list ? `${list.repo} · ${list.issues.length} ${state}` : (repo ?? '')}</p>
+        <p className={`min-w-0 flex-1 truncate ${MUTED}`}>{list ? `${list.repo} · ${count} ${state}` : (repo ?? '')}</p>
         <div role="group" aria-label="Issue state" className="flex shrink-0 rounded border border-[var(--border)] text-xs">
           {(['open', 'closed'] as const).map((s) => (
             <button

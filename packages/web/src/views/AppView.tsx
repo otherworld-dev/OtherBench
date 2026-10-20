@@ -94,6 +94,8 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   // for an earlier folder can't land over a later one's.
   const detectedFor = useRef(initial.folder);
   const detectSeq = useRef(0);
+  // The latest lookup while it runs. It answers with the repo it filled in, or undefined when it filled in nothing.
+  const pendingDetect = useRef<Promise<string | undefined> | null>(null);
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const beforeQuestion = useRef<HTMLElement | null>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -120,14 +122,21 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     if (!typed.current.name && path !== '') set('name', folderName(path).slice(0, APP_NAME_MAX));
     if (path === '' || validateWorkspaceRoot(path, serverPlatform) !== null) return;
     const seq = ++detectSeq.current;
-    try {
-      const { githubRepo } = await api.apps.detectRepo(path);
-      if (seq !== detectSeq.current || typed.current.githubRepo) return;
-      set('githubRepo', githubRepo ?? '');
-    } catch (err) {
-      // A folder that isn't there yet is the server's to refuse on Create; the repo just stays as it is.
-      console.error('[otherbench-web] failed to look up the GitHub repo for', path, err);
-    }
+    const lookup = (async (): Promise<string | undefined> => {
+      try {
+        const { githubRepo } = await api.apps.detectRepo(path);
+        if (seq !== detectSeq.current || typed.current.githubRepo) return undefined;
+        set('githubRepo', githubRepo ?? '');
+        return githubRepo ?? '';
+      } catch (err) {
+        // A folder that isn't there yet is the server's to refuse on Create; the repo just stays as it is.
+        console.error('[otherbench-web] failed to look up the GitHub repo for', path, err);
+        return undefined;
+      }
+    })();
+    pendingDetect.current = lookup;
+    await lookup;
+    if (pendingDetect.current === lookup) pendingDetect.current = null;
   }
 
   function close(): void {
@@ -155,61 +164,67 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   }
 
   /** The first thing to fix before sending, or null. The server is the hard gate; this is the friendlier early one. */
-  function problem(): string | null {
-    const folder = draft.folder.trim();
+  function problem(d: AppDraft): string | null {
+    const folder = d.folder.trim();
     // Editing an app whose folder isn't on this machine shows an empty field: left empty, the folder isn't changed.
     if (folder === '' && (creating || initial.folder !== '')) return "Choose the app's folder.";
     if (folder !== '') {
       const bad = validateWorkspaceRoot(folder, serverPlatform);
       if (bad) return bad;
     }
-    const name = draft.name.trim();
+    const name = d.name.trim();
     if (name === '') return 'Give the app a name.';
     if (name.length > APP_NAME_MAX) return `The name can be at most ${APP_NAME_MAX} characters.`;
-    const repo = draft.githubRepo.trim();
+    const repo = d.githubRepo.trim();
     if (repo !== '' && !isGithubRepo(repo)) return 'The GitHub repo is "owner/name", such as otherworld-dev/OtherBench.';
     return null;
   }
 
-  function createBody(): CreateAppBody {
+  function createBody(d: AppDraft): CreateAppBody {
     return {
-      name: draft.name.trim(),
-      workspacePath: draft.folder.trim(),
-      githubRepo: orNull(draft.githubRepo),
-      linkedProjectId: orNull(draft.linkedProjectId),
-      defaultProfileId: orNull(draft.defaultProfileId),
+      name: d.name.trim(),
+      workspacePath: d.folder.trim(),
+      githubRepo: orNull(d.githubRepo),
+      linkedProjectId: orNull(d.linkedProjectId),
+      defaultProfileId: orNull(d.defaultProfileId),
     };
   }
 
-  function patchBody(): PatchAppBody {
+  function patchBody(d: AppDraft): PatchAppBody {
     const body: PatchAppBody = {};
-    if (draft.name.trim() !== initial.name) body.name = draft.name.trim();
-    if (draft.folder.trim() !== '' && draft.folder.trim() !== initial.folder) body.workspacePath = draft.folder.trim();
-    if (draft.githubRepo.trim() !== initial.githubRepo) body.githubRepo = orNull(draft.githubRepo);
-    if (draft.linkedProjectId !== initial.linkedProjectId) body.linkedProjectId = orNull(draft.linkedProjectId);
-    if (draft.defaultProfileId !== initial.defaultProfileId) body.defaultProfileId = orNull(draft.defaultProfileId);
+    if (d.name.trim() !== initial.name) body.name = d.name.trim();
+    if (d.folder.trim() !== '' && d.folder.trim() !== initial.folder) body.workspacePath = d.folder.trim();
+    if (d.githubRepo.trim() !== initial.githubRepo) body.githubRepo = orNull(d.githubRepo);
+    if (d.linkedProjectId !== initial.linkedProjectId) body.linkedProjectId = orNull(d.linkedProjectId);
+    if (d.defaultProfileId !== initial.defaultProfileId) body.defaultProfileId = orNull(d.defaultProfileId);
     return body;
   }
 
   async function submit(): Promise<void> {
     if (saving) return;
-    const why = problem();
+    setSaving(true);
+    // A folder typed and then left by clicking Create/Save starts its repo lookup on that same click, so the
+    // lookup is waited for and its answer sent, rather than racing it and saving without the repo (spec
+    // 2026-10-20-code-tab-design, "Creating an app": the repo is auto-filled from the folder's git remotes).
+    const detected = pendingDetect.current ? await pendingDetect.current : undefined;
+    const d = detected === undefined ? draft : { ...draft, githubRepo: detected };
+    const why = problem(d);
     if (why) {
       setError(why);
+      setSaving(false);
       return;
     }
-    setSaving(true);
     setError(null);
     try {
       if (app === null) {
-        const created = await api.apps.create(createBody());
+        const created = await api.apps.create(createBody(d));
         upsertApp(created);
         close();
         // A new app has no chats yet: its home is where the first one starts.
         openAppHome(created.id);
         return;
       }
-      const body = patchBody();
+      const body = patchBody(d);
       if (Object.keys(body).length > 0) upsertApp(await api.apps.patch(app.id, body));
       close();
     } catch (err) {
@@ -290,6 +305,9 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
             </label>
             <input
               id="app-name"
+              // Editing starts here (creating starts at Folder): something in the form must hold focus, or Escape,
+              // which the form listens for, would go to the page behind it and do nothing.
+              autoFocus={!creating}
               value={draft.name}
               maxLength={APP_NAME_MAX}
               onChange={(e) => {

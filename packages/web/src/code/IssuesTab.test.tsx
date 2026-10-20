@@ -75,6 +75,16 @@ describe('IssuesTab', () => {
     expect(screen.getByText('otherworld-dev/OtherBench · 2 open')).toBeInTheDocument();
   });
 
+  it('a list that hit the fetch limit says "100+", open or closed, since there may be more (M8)', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => summary(i + 1, `Issue ${i + 1}`));
+    vi.mocked(api.apps.issues.list).mockResolvedValue({ repo: 'otherworld-dev/OtherBench', issues: full });
+    const user = userEvent.setup();
+    render(<IssuesTab app={app()} />);
+    expect(await screen.findByText('otherworld-dev/OtherBench · 100+ open')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Closed' }));
+    expect(await screen.findByText('otherworld-dev/OtherBench · 100+ closed')).toBeInTheDocument();
+  });
+
   it('the Closed toggle lists closed issues', async () => {
     const user = userEvent.setup();
     render(<IssuesTab app={app()} />);

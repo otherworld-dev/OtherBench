@@ -182,6 +182,23 @@ describe('AppView, creating (spec 2026-10-20-code-tab-design, "Creating an app")
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('Create clicked straight after typing a folder waits for its repo lookup and sends the detected repo (D2)', async () => {
+    const user = userEvent.setup();
+    let answer: (v: { githubRepo: string | null; isRepo: boolean }) => void = () => {};
+    mockedDetect.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    mockedCreate.mockResolvedValue(app({ id: 'a-new' }));
+    render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    await user.type(screen.getByRole('textbox', { name: 'Folder' }), '/home/me/otherbench');
+    // The click itself leaves the field: the lookup starts, and Create comes before its answer.
+    await user.click(screen.getByRole('button', { name: 'Create app' }));
+    expect(mockedDetect).toHaveBeenCalledWith('/home/me/otherbench');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    answer({ githubRepo: 'o/r', isRepo: true });
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith({ name: 'otherbench', workspacePath: '/home/me/otherbench', githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null })
+    );
+  });
+
   it('Escape with nothing typed closes; with a draft it asks first', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -214,6 +231,16 @@ describe('AppView, editing', () => {
     expect(mockedPatch).toHaveBeenCalledWith('A', { name: 'Alpha 2' });
     expect(mockedDetect).not.toHaveBeenCalled();
     expect(useOtherBenchStore.getState().apps[0]!.name).toBe('Alpha 2');
+  });
+
+  it('opens with the Name field focused, so Escape closes the form straight away (D3)', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    useOtherBenchStore.setState({ apps: [existing] });
+    render(<AppView page={{ mode: 'edit', appId: 'A' }} onClose={onClose} />);
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('says so when the app is gone', () => {
