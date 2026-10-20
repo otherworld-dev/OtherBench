@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { App } from '@otherbench/core/ports/store.js';
@@ -250,6 +250,26 @@ describe('GitPanel', () => {
     expect(api.apps.git.branch).not.toHaveBeenCalled();
     finish({ output: 'ok' });
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('two actions in the same tick, before a re-render: only the first runs', async () => {
+    let finish!: (v: { output: string }) => void;
+    vi.mocked(api.apps.git.pull).mockReturnValue(new Promise((r) => (finish = r)));
+    renderPanel();
+    await screen.findByRole('option', { name: 'main' });
+    const input = screen.getByRole('textbox', { name: 'New branch' });
+    fireEvent.change(input, { target: { value: 'x' } });
+    const pullButton = screen.getByRole('button', { name: 'Pull' });
+    // One act: React doesn't re-render between the two, so `busy` state can't be what stops the second.
+    act(() => {
+      fireEvent.click(pullButton);
+      fireEvent.keyDown(input, { key: 'Enter' });
+    });
+    expect(api.apps.git.pull).toHaveBeenCalledTimes(1);
+    expect(api.apps.git.branch).not.toHaveBeenCalled();
+    await act(async () => finish({ output: 'ok' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(api.apps.git.branch).not.toHaveBeenCalled();
   });
 
   it('a clean tree says so', () => {

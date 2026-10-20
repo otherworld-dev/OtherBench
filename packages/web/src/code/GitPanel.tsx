@@ -35,7 +35,7 @@ function coversPath(row: string, file: string): boolean {
   return row.endsWith('/') ? file.startsWith(row) : file === row;
 }
 
-type Outcome ={ kind: 'ok'; text: string } | { kind: 'error'; error: unknown };
+type Outcome = { kind: 'ok'; text: string } | { kind: 'error'; error: unknown };
 
 /**
  * The git panel the git bar's branch opens (spec 2026-10-20-code-tab-design,
