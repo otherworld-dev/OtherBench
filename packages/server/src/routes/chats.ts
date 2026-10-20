@@ -602,6 +602,10 @@ export function subscribeAutoTitle(container: Container): () => void {
     if (!chat) return;
     // A scheduled run's own chat keeps the title it was made with ("Weekly report · 12 Oct 2026").
     if (container.store.schedules.madeChat(chat.id)) return;
+    // Only a chat still called the default is titled: one made with its own
+    // title (an issue's "#48 …", spec 2026-10-20-code-tab-design Goal 7) or
+    // renamed before its first reply keeps it.
+    if (chat.title !== DEFAULT_TITLE) return;
 
     const completedCount = collectMessageTree(container.store, message.chatId).filter(
       (m) => m.role === 'assistant' && m.status === 'complete'

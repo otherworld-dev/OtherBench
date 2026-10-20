@@ -934,6 +934,45 @@ describe('auto-title', () => {
     }
   });
 
+  it("keeps a title the chat was created with: only a default-titled chat is auto-titled (spec 2026-10-20-code-tab-design, Goal 7)", async () => {
+    const created = await createChat('profile-1', '#48 MCP tools vanish on reconnect');
+    const chatId = created['id'] as string;
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'Look into this issue');
+    push(assistantMessageIds[0] as string, { type: 'text-delta', text: 'On it.' });
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+
+    expect(requests.filter((r) => r.messageId !== assistantMessageIds[0])).toEqual([]);
+    expect(container.store.chats.get(chatId)!.title).toBe('#48 MCP tools vanish on reconnect');
+  });
+
+  it('keeps a title the chat was renamed to before its first reply', async () => {
+    const created = await createChat();
+    const chatId = created['id'] as string;
+    const res = await app().request(`/api/chats/${chatId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'My own name' }) });
+    expect(res.status).toBe(200);
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'hello');
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+
+    expect(requests.filter((r) => r.messageId !== assistantMessageIds[0])).toEqual([]);
+    expect(container.store.chats.get(chatId)!.title).toBe('My own name');
+  });
+
+  it('a chat created with the default title still is auto-titled', async () => {
+    const created = await createChat('profile-1', 'New Chat');
+    const chatId = created['id'] as string;
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'What is the capital of France?');
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+    const titleReq = requests.find((r) => r.messageId !== assistantMessageIds[0]);
+    expect(titleReq).toBeDefined();
+    push(titleReq!.messageId, { type: 'text-delta', text: 'Capital of France' });
+    push(titleReq!.messageId, FINISH);
+    await flush();
+    expect(container.store.chats.get(chatId)!.title).toBe('Capital of France');
+  });
+
   it('never re-triggers on a second turn in the same chat', async () => {
     const created = await createChat();
     const chatId = created['id'] as string;
