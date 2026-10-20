@@ -235,6 +235,21 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (taken.some((n) => !n.takenBack)) setNoteReturned(true);
   }, [returnedCount, chat.id]);
 
+  // Text handed to this chat's box from outside (an issue's "Start a chat on
+  // this", spec 2026-10-20-code-tab-design Goal 7): it goes after the draft,
+  // the same as a returned note, and is never sent from here.
+  const hasPrefill = useOtherBenchStore((s) => s.composerPrefills[chat.id] !== undefined);
+  useEffect(() => {
+    if (!hasPrefill) return;
+    const handed = useOtherBenchStore.getState().takeComposerPrefill(chat.id);
+    if (handed === null) return;
+    const kept = browsing?.draft;
+    setText((draft) => [kept ?? draft, handed].filter((t) => t.trim().length > 0).join('\n\n'));
+    setBrowsing(null);
+    caretTo.current = 'end';
+    textareaRef.current?.focus();
+  }, [hasPrefill, chat.id]);
+
   async function handleStop(): Promise<void> {
     await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[otherbench-web] failed to cancel ${id}:`, err))));
   }

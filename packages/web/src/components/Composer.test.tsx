@@ -1324,3 +1324,37 @@ describe('Composer while a reply runs (notes)', () => {
     expect(screen.queryByText(/Not sent:/)).not.toBeInTheDocument();
   });
 });
+
+describe('Composer prefill (spec 2026-10-20-code-tab-design, Goal 7)', () => {
+  const box = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: /message/i });
+  beforeEach(() => {
+    reset();
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
+    mockedAttachmentList.mockResolvedValue([]);
+  });
+  afterEach(cleanup);
+
+  it('puts text handed to the chat in the box without sending it, once', async () => {
+    useOtherBenchStore.getState().prefillComposer('chat-1', '#48 MCP tools vanish\nhttps://github.com/x/y/issues/48');
+    render(<Composer chat={makeChat()} />);
+    await waitFor(() => expect(box()).toHaveValue('#48 MCP tools vanish\nhttps://github.com/x/y/issues/48'));
+    expect(useOtherBenchStore.getState().composerPrefills).toEqual({});
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(mockedNoteSend).not.toHaveBeenCalled();
+  });
+
+  it('text handed over while the box has a draft goes after it', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    await user.type(box(), 'my draft');
+    act(() => useOtherBenchStore.getState().prefillComposer('chat-1', 'from the issue'));
+    await waitFor(() => expect(box()).toHaveValue('my draft\n\nfrom the issue'));
+  });
+
+  it("another chat's text stays where it is", async () => {
+    useOtherBenchStore.getState().prefillComposer('chat-2', 'not mine');
+    render(<Composer chat={makeChat()} />);
+    expect(box()).toHaveValue('');
+    expect(useOtherBenchStore.getState().composerPrefills).toEqual({ 'chat-2': 'not mine' });
+  });
+});

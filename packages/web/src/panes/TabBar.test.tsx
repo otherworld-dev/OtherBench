@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { appTabId } from '../state/appTab.js';
 import { projectTabId } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -178,5 +179,17 @@ describe('TabBar (#824)', () => {
     expect(screen.getByRole('tab', { name: /Alpha/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Missing project/ })).toBeInTheDocument();
     expect(screen.queryByTestId(`tab-status-${projectTabId('p1')}`)).toBeNull();
+  });
+
+  it('labels an app tab with the app name, Loading… before the list arrives, or Missing app after (spec 2026-10-20-code-tab-design)', () => {
+    useOtherBenchStore.setState({ mode: 'code', paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
+    const { rerender } = render(<TabBar narrow={false} />);
+    expect(screen.getAllByRole('tab', { name: /Loading…/ })).toHaveLength(2);
+    useOtherBenchStore.getState().setApps([{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
+    useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
+    rerender(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: /OtherBench/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Missing app/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close tab OtherBench' })).toHaveAttribute('title', 'Close tab (the app stays in the sidebar)');
   });
 });

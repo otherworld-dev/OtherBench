@@ -196,6 +196,20 @@ export interface OtherBenchState {
   /** The Code mode right panel's tab. Remembered per browser. */
   codePanelTab: CodePanelTab;
   setCodePanelTab(tab: CodePanelTab): void;
+  /**
+   * Text handed to a chat's composer from outside it, by chat id, not yet
+   * taken: "Start a chat on this" puts an issue's number, title, URL and body
+   * in the new chat's box rather than sending it (spec
+   * 2026-10-20-code-tab-design, Goal 7 and "Calls I made"). The composer
+   * keeps its draft in its own state, so this is a hand-off the way
+   * `returnedNotes` is: the box takes it (after any draft) when it mounts or
+   * when it arrives. Not persisted: a reload before the chat shows drops it,
+   * as it drops a draft.
+   */
+  composerPrefills: Record<string, string>;
+  prefillComposer(chatId: string, text: string): void;
+  /** The chat's handed-over text, removed from the store, or null when there is none. */
+  takeComposerPrefill(chatId: string): string | null;
 
   // --- messages + the SSE reconciliation seam --------------------------------
   /** Every message the client has learned about, across whatever chat(s) have been loaded or streamed into, keyed by id. */
@@ -812,6 +826,17 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     }),
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
+  composerPrefills: {},
+  prefillComposer: (chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
+  takeComposerPrefill: (chatId) => {
+    const text = get().composerPrefills[chatId];
+    if (text === undefined) return null;
+    set((state) => {
+      const { [chatId]: _taken, ...composerPrefills } = state.composerPrefills;
+      return { composerPrefills };
+    });
+    return text;
+  },
 
   messages: {},
   extras: {},

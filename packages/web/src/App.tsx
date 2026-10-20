@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { CodePanel } from './code/CodePanel.js';
 import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, GearIcon, SignOutIcon } from './components/icons.js';
 import { isIndicatorView, isQuickView } from './desktop/bridge.js';
@@ -56,6 +57,7 @@ function MainApp(): JSX.Element {
   const setChats = useOtherBenchStore((s) => s.setChats);
   const setProjects = useOtherBenchStore((s) => s.setProjects);
   const setApps = useOtherBenchStore((s) => s.setApps);
+  const mode = useOtherBenchStore((s) => s.mode);
 
   // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
   const signedInRemotely = useAuthStore((s) => s.mode === 'login');
@@ -190,8 +192,17 @@ function MainApp(): JSX.Element {
           <PaneGrid narrow={isNarrow} />
         </div>
 
+        {/* Code mode's right column is the Code panel (spec 2026-10-20-code-tab-design): Issues and Files
+            follow the focused pane's app, so it is useful with no chat open (an app home), and its Chat tab
+            holds this same Inspector. It shares the Inspector's collapsed preference: one right column. */}
+        {!isNarrow && mode === 'code' && (
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '24rem' }}>
+            <CodePanel collapsed={inspectorCollapsed} onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)} />
+          </div>
+        )}
+
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
-        {!isNarrow && (
+        {!isNarrow && mode === 'chat' && (
           <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
             {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
             <Inspector
@@ -216,8 +227,12 @@ function MainApp(): JSX.Element {
               onClick={() => setNarrowOverlayOpen(false)}
               className="absolute inset-0 z-10 bg-black/30"
             />
-            <div className="absolute inset-y-0 right-0 z-20 w-80 shadow-lg">
-              <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+            <div className={`absolute inset-y-0 right-0 z-20 shadow-lg ${mode === 'code' ? 'w-96 max-w-full' : 'w-80'}`}>
+              {mode === 'code' ? (
+                <CodePanel collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+              ) : (
+                <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+              )}
             </div>
           </>
         )}

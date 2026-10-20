@@ -1,5 +1,7 @@
 import { Fragment, useState, type DragEvent, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
+import { AppHome } from '../code/AppHome.js';
+import { parseAppTab } from '../state/appTab.js';
 import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -29,6 +31,9 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
   const projectName = useOtherBenchStore((s) =>
     projectId === null ? null : (projectDisplayNameById(s.projects, projectId) ?? (s.projectsLoaded ? 'Missing project' : 'Loading…'))
   );
+  // An app's home (spec 2026-10-20-code-tab-design), named the same way.
+  const appId = parseAppTab(chatId);
+  const appName = useOtherBenchStore((s) => (appId === null ? null : (s.apps.find((a) => a.id === appId)?.name ?? (s.appsLoaded ? 'Missing app' : 'Loading…'))));
   const chat = useOtherBenchStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useOtherBenchStore((s) => s.focusPane);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
@@ -76,7 +81,7 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
           className={`flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-1 text-xs ${focused ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
         >
           <span className="tabular-nums text-[var(--text-faint)]">{index + 1}</span>
-          <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (projectName ?? chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
+          <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (projectName ?? appName ?? chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
           <button
             type="button"
             aria-label={maximised ? 'Restore pane' : 'Maximise pane'}
@@ -92,7 +97,13 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
           </button>
         </div>
       )}
-      {isViewTab(chatId) ? <ViewerTab tabId={chatId} /> : projectId !== null ? <ProjectHome projectId={projectId} /> : <Thread chat={chat} />}
+      {isViewTab(chatId) ? <ViewerTab tabId={chatId} /> : projectId !== null ? (
+        <ProjectHome projectId={projectId} />
+      ) : appId !== null ? (
+        <AppHome appId={appId} />
+      ) : (
+        <Thread chat={chat} />
+      )}
     </div>
   );
 }

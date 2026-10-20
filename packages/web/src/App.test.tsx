@@ -259,6 +259,14 @@ describe('App view', () => {
     expect(screen.queryByRole('complementary', { name: 'Inspector' })).toBeNull();
   });
 
+  it('in Code mode the right column is the code panel, not the inspector (spec 2026-10-20-code-tab-design)', async () => {
+    useOtherBenchStore.setState({ mode: 'code' });
+    render(<App />);
+    expect(await screen.findByRole('complementary', { name: 'Code panel' })).toBeInTheDocument();
+    expect(screen.getByTestId('code-panel-empty')).toHaveTextContent('Pick an app or a chat');
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
+  });
+
   it('sizes the sidebar column from --sidebar-w, capped at 40% of the window', () => {
     const { container } = render(<App />);
     expect((container.firstElementChild as HTMLElement).style.gridTemplateColumns).toBe('min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)');
