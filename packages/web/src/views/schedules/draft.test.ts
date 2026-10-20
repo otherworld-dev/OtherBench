@@ -4,7 +4,7 @@ import type { Profile } from '@otherbench/core/types/config.js';
 import { createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, targetHasFolder, type ScheduleDraft } from './draft.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
-  return { id: 'c1', title: 'Trip plans', profileId: 'p-chat', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 'c1', title: 'Trip plans', profileId: 'p-chat', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 function project(over: Partial<Project> = {}): Project {
   return { id: 'pr1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: 'p-project', sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };

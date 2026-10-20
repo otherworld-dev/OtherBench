@@ -4,7 +4,7 @@ import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
-  return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {

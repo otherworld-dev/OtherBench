@@ -326,6 +326,16 @@ export class SqliteSyncRepo implements SyncRepo {
           row['workspace_subpath'] = null;
         }
         return true;
+      case 'app':
+        if (row['default_profile_id'] != null && !this.exists('profile', row['default_profile_id'])) row['default_profile_id'] = null;
+        if (row['workspace_location_id'] != null && !this.exists('location', row['workspace_location_id'])) {
+          row['workspace_location_id'] = null;
+          row['workspace_subpath'] = null;
+        }
+        // Not a foreign key (migration 029): a link to a project that isn't here is written as none rather than
+        // refusing the app; the link comes back the next time the app itself changes.
+        if (row['linked_project_id'] != null && !this.exists('project', row['linked_project_id'])) row['linked_project_id'] = null;
+        return true;
       case 'project_memory':
         return this.exists('project', row['project_id']);
       case 'global_memory':
@@ -532,6 +542,8 @@ export class SqliteSyncRepo implements SyncRepo {
     const accept = (field: string, row: SyncRow): boolean => {
       if (field === 'profileId') return this.exists('profile', row['profile_id']);
       if (field === 'projectId') return row['project_id'] == null || this.exists('project', row['project_id']);
+      // Not a foreign key (migration 029), but a chat stays out of an app that isn't here yet and takes it once it is.
+      if (field === 'appId') return row['app_id'] == null || this.exists('app', row['app_id']);
       if (field === 'workspace') return row['workspace_location_id'] == null || this.exists('location', row['workspace_location_id']);
       if (field === 'headMessageId') {
         if (row['head_message_id'] == null || this.exists('message', row['head_message_id'])) return true;

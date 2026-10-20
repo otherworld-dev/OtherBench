@@ -109,7 +109,7 @@ describe('SchedulesView', () => {
 
   it('opens the editor on its prefilled chat, with the profile warnings, and saves a new schedule', async () => {
     list.mockResolvedValue([]);
-    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     create.mockResolvedValue(view());
     const user = userEvent.setup();
     render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);

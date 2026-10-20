@@ -6,7 +6,7 @@ import { CHAT_DRAG_MIME, ChatRow, type ChatRowProps } from './ChatRow.js';
 
 afterEach(cleanup);
 
-const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 
 function renderRow(props: Partial<ChatRowProps> = {}) {
   const handlers = { onSelect: vi.fn(), onDragEnd: vi.fn(), onOpenMenu: vi.fn(), onRename: vi.fn(), onRenameCancel: vi.fn() };

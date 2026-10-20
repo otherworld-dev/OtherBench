@@ -21,7 +21,7 @@ const profile = (id: string, over: Partial<Profile> = {}): Profile => ({
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return {
     id, title: 'New Chat', profileId: 'p-default', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
-    projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+    projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
   };
 }
 

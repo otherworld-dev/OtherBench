@@ -85,7 +85,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     projectPinned: false,
     unread: false,
     autoMode: false,
-    projectId: null,
+    projectId: null, appId: null,
     memoryCursor: null,
     memoryExcluded: false,
     sortOrder: 0,

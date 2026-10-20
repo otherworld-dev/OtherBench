@@ -17,7 +17,7 @@ const profile = (id: string): Profile => ({
 });
 const chat = (id: string, over: Partial<Chat> = {}): Chat => ({
   id, title: 'New Chat', profileId: 'p-project', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
-  projectId: 'proj', memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  projectId: 'proj', appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 
 beforeEach(() => {
