@@ -695,6 +695,15 @@ describe('TurnRunner with an app chat (spec 2026-10-20-code-tab-design, Goal 9)'
     expect(request.folders).toEqual([{ root: '/home/adam/Nextcloud/refs', access: 'read' }]);
   });
 
+  it("marks the linked project as this chat's project in the project index (M4)", async () => {
+    const store = setup('p');
+    store.projects.create({ id: 'p', name: 'Shop', workspaceRoot: null, defaultProfileId: null });
+    store.projects.create({ id: 'q', name: 'Other', workspaceRoot: null, defaultProfileId: null });
+    const prompt = (await run(store)).request.profile.systemPrompt ?? '';
+    expect(prompt).toContain("- Shop (this chat's project)");
+    expect(prompt).not.toContain("- Other (this chat's project)");
+  });
+
   it('adds nothing for an app with no link, or one naming a missing project', async () => {
     for (const link of [null, 'gone']) {
       const { request, system } = await run(setup(link));

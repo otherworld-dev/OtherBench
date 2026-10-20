@@ -1192,6 +1192,10 @@ export class TurnRunner {
       return kept.block;
     }
     const lookup = (id: string): Project | null => this.store.projects.get(id);
+    // An app chat's own project is its app's linked one, the same chain its
+    // instructions and memory come from (projectChain; spec
+    // 2026-10-20-code-tab-design, Goal 9 and "Turn context").
+    const ownProjectId = chat?.projectId ?? this.linkedProjectId(chat);
     const index = projectIndexPrompt(
       this.store.projects
         .list()
@@ -1200,7 +1204,7 @@ export class TurnRunner {
           name: projectDisplayName(p, lookup),
           description: p.description,
           currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
-          current: p.id === chat?.projectId,
+          current: p.id === ownProjectId,
         })),
       canRecall
     );

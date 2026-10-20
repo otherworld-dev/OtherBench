@@ -3,6 +3,13 @@ import type { App } from '../ports/store.js';
 /** Longest app name, after trimming (spec 2026-10-20-code-tab-design, "Data"). Same bound as a project's. */
 export const APP_NAME_MAX = 80;
 
+/**
+ * Most issues one Issues tab list fetches (`gh issue list --limit`). A list
+ * that comes back this long may have been cut, so the tab says "100+" rather
+ * than claiming an exact count (spec 2026-10-20-code-tab-design, Goal 3).
+ */
+export const ISSUE_LIST_LIMIT = 100;
+
 /** Folds A-Z only, exactly like SQLite's NOCASE collation, so both stores order names identically. */
 function asciiFold(s: string): string {
   return s.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
