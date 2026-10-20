@@ -1,19 +1,21 @@
-import { useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { hasMemoryContent } from '@otherbench/core/domain/memory.js';
 import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { Chat, Project } from '@otherbench/core/ports/store.js';
+import type { Project } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
+import { StartBox } from '../components/StartBox.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { allGroups, buildSidebar } from '../panes/sidebar/model.js';
-import { ApiError } from '../state/api.js';
 import { chatStatus, useChatActivity } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
-import { StartChatError, startChat } from '../state/startChat.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
 import { awayFolderWhere } from './project/folders.js';
+
+// The start box's pending chats now live with it; re-exported for the tests that reset them.
+export { resetPendingStartsForTests } from '../components/StartBox.js';
 
 const HEADING = 'label-caps mb-1.5 text-[var(--text-muted)]';
 const EMPTY = 'text-sm text-[var(--text-faint)]';
@@ -68,7 +70,9 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
             Settings…
           </button>
         </div>
-        <StartBox project={project} />
+        <StartBox
+          target={{ pendingKey: `project:${project.id}`, name: project.name, tabId: projectTabId(project.id), owns: (c) => c.projectId === project.id, create: { projectId: project.id } }}
+        />
         <SubProjects projectId={project.id} />
         {/* minmax(0, …) tracks and min-w-0 items: a long unbroken word wraps rather than widening the page. */}
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[minmax(0,1fr)_18rem]">
@@ -76,99 +80,6 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
           <About project={project} />
         </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * Per project, the chat a start whose message didn't send made: the retry
- * sends into it rather than making another. Outside the component so it
- * survives the page being left and reopened.
- */
-const pendingStarts = new Map<string, string>();
-
-export function resetPendingStartsForTests(): void {
-  pendingStarts.clear();
-}
-
-/**
- * The pending chat as it is now, if it can still take a first message: not
- * deleted, archived or moved to another project, and still empty. Otherwise
- * it's forgotten and the next send makes a new chat.
- */
-function pendingStart(projectId: string): Chat | undefined {
-  const id = pendingStarts.get(projectId);
-  if (id === undefined) return undefined;
-  const chat = useOtherBenchStore.getState().chats.find((c) => c.id === id);
-  if (chat && chat.projectId === projectId && chat.archivedAt === null && chat.headMessageId === null) return chat;
-  pendingStarts.delete(projectId);
-  return undefined;
-}
-
-/**
- * Puts a chat started from a project page in the pane showing that page,
- * leaving focus wherever the user went while it was sending. A pane that has
- * moved on to something else is left alone: the chat waits in the sidebar.
- */
-function showInPagePane(projectId: string, chatId: string): void {
-  const { paneState, focusPane, setActiveChatId } = useOtherBenchStore.getState();
-  const at = paneState.panes.indexOf(projectTabId(projectId));
-  if (at === -1) return;
-  const back = paneState.focusedPane;
-  focusPane(at);
-  setActiveChatId(chatId);
-  focusPane(back);
-}
-
-function StartBox({ project }: { project: Project }): JSX.Element {
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function send(): Promise<void> {
-    const body = text.trim();
-    if (!body || sending) return;
-    setSending(true);
-    setError(null);
-    try {
-      const pending = pendingStart(project.id);
-      const chat = await startChat({ projectId: project.id, ...(pending ? { chat: pending } : {}), text: body });
-      pendingStarts.delete(project.id);
-      setText('');
-      showInPagePane(project.id, chat.id);
-    } catch (err) {
-      if (err instanceof StartChatError) pendingStarts.set(project.id, err.chat.id);
-      const cause = err instanceof StartChatError ? err.cause : err;
-      console.error(`[otherbench-web] failed to start a chat in project ${project.id}:`, cause);
-      setError(cause instanceof ApiError ? cause.message : "Couldn't start the chat. Please try again.");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    void send();
-  }
-
-  return (
-    <div>
-      <textarea
-        aria-label={`Start a chat in ${project.name}`}
-        placeholder={`Start a chat in ${project.name}…`}
-        value={text}
-        readOnly={sending}
-        rows={3}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        className="w-full resize-y rounded border border-[var(--border-strong)] bg-[var(--bg)] px-3 py-2 text-sm read-only:opacity-60 focus:border-[var(--accent)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
-      />
-      {error && (
-        <p role="alert" className="mt-1 text-sm text-[var(--danger)]">
-          {error}
-        </p>
-      )}
     </div>
   );
 }

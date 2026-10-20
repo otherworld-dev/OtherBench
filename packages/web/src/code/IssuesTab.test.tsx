@@ -139,6 +139,23 @@ describe('IssuesTab', () => {
     expect(startChatFromIssue).toHaveBeenCalledWith(a, detail());
   });
 
+  it("a row's Chat button starts a chat from that issue without opening it", async () => {
+    const user = userEvent.setup();
+    const a = app();
+    render(<IssuesTab app={a} />);
+    await user.click(await screen.findByRole('button', { name: 'Start a chat on #48' }));
+    await waitFor(() => expect(startChatFromIssue).toHaveBeenCalledWith(a, detail()));
+    expect(api.apps.issues.get).toHaveBeenCalledWith('a1', 48);
+    expect(screen.queryByTestId('issue-detail')).not.toBeInTheDocument();
+  });
+
+  it("a row's Chat button that fails says why", async () => {
+    vi.mocked(api.apps.issues.get).mockRejectedValue(new ApiError(409, 'gh is not logged in.', undefined, { code: 'gh-signed-out' }));
+    render(<IssuesTab app={app()} />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Start a chat on #48' }));
+    expect(await screen.findByText(/gh isn't signed in/)).toBeInTheDocument();
+  });
+
   it('refetches the list when the window is focused (spec "Calls I made": refresh on focus)', async () => {
     render(<IssuesTab app={app()} />);
     await screen.findByTestId('issue-row-48');
