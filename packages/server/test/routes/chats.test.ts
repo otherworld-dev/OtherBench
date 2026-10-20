@@ -1262,6 +1262,13 @@ describe('chats in apps (spec 2026-10-20-code-tab-design, "Data")', () => {
     expect(await json(await post({ appId: 'app-1' }))).toMatchObject({ profileId: 'profile-app-default' });
   });
 
+  it("still checks the request's profile when the app's default wins", async () => {
+    expect((await post({ appId: 'app-1', profileId: 'no-such-profile' })).status).toBe(404);
+    expect((await post({ appId: 'app-1', profileId: 7 })).status).toBe(400);
+    expect((await post({ appId: 'app-1', profileId: '' })).status).toBe(400);
+    expect(container.store.chats.list()).toEqual([]);
+  });
+
   it('refuses an unknown app, a folder of its own, or a project as well, with 400', async () => {
     expect((await post({ appId: 'nope' })).status).toBe(400);
     expect((await post({ appId: 'app-1', workspaceRoot: OTHER_ROOT })).status).toBe(400);

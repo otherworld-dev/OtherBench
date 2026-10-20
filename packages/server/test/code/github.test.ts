@@ -82,6 +82,16 @@ describe('githubService', () => {
     const f = fake(fail('failed https://user:tok@github.com/x\nsecond'));
     const err = await githubService(f.run).list('o/r', 'open').catch((e: unknown) => e as GhError);
     expect(err.message).toBe('failed https://github.com/x');
+    // The whole stderr too, redacted, for the panel to show as-is (spec "Error states").
+    expect(err.stderr).toBe('failed https://github.com/x\nsecond');
+  });
+
+  it('a gh that cannot be started for another reason is gh-failed, not a raw error', async () => {
+    const f = fake(Object.assign(new Error('spawn EINVAL https://user:tok@github.com/x'), { code: 'EINVAL' }));
+    const err = await githubService(f.run).list('o/r', 'open').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GhError);
+    expect((err as GhError).code).toBe('gh-failed');
+    expect((err as GhError).message).toBe('Could not start gh: spawn EINVAL https://github.com/x');
   });
 
   it('refuses a bad repo or number without running', async () => {

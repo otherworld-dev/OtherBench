@@ -153,6 +153,16 @@ function githubRepoOrThrow(app: App): string {
   return app.githubRepo;
 }
 
+/**
+ * A Files refusal as the app routes answer it: an escape is a 400 `bad-path`, whether containPath caught it up front
+ * or fs-tools' verified open or listing caught it afterwards (a link swapped in between); anything else is the
+ * viewer's own message.
+ */
+function filesFailure(err: unknown, path: string): never {
+  if (err instanceof PathEscapeError) throw new CodeRouteError(400, 'bad-path', `"${path}" is outside the app's folder.`);
+  viewFailure(err, path);
+}
+
 /** A path from the Files tab, contained to the app's root: relative paths mean inside it, and anything that escapes is a 400 `bad-path`. */
 function filesTarget(root: string, path: string): string {
   // As the viewer: a hidden stream or a segment Windows would trim names a different file from the one asked for.
@@ -161,8 +171,7 @@ function filesTarget(root: string, path: string): string {
   try {
     return containPath(root, absolute);
   } catch (err) {
-    if (err instanceof PathEscapeError) throw new CodeRouteError(400, 'bad-path', `"${path}" is outside the app's folder.`);
-    viewFailure(err, path);
+    filesFailure(err, path);
   }
 }
 
@@ -172,8 +181,10 @@ function issueNumberOf(raw: string): number {
   return n;
 }
 
+/** A NUL can't be in an argv value at all (spawn would refuse it as "Could not start git"), so it's the request's fault. */
 function requireBranch(value: unknown): string {
   if (typeof value !== 'string') throw new CodeRouteError(400, 'bad-branch', '"branch" is required and must be a string.');
+  if (value.includes('\0')) throw new CodeRouteError(400, 'bad-branch', 'A branch name cannot contain a NUL character.');
   return value;
 }
 
@@ -313,6 +324,7 @@ export function appsRoutes(container: Container): Hono {
     if (typeof body.message !== 'string' || body.message.trim() === '') {
       throw new HTTPException(400, { message: '"message" is required: a commit needs a message.' });
     }
+    if (body.message.includes('\0')) throw new HTTPException(400, { message: 'A commit message cannot contain a NUL character.' });
     // Every changed file by default (spec Goal 2: "all of them by default").
     const paths = body.paths === undefined ? 'all' : body.paths;
     if (paths !== 'all' && (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === 'string' && p !== ''))) {
@@ -396,13 +408,13 @@ export function appsRoutes(container: Container): Hono {
     const root = rootOf(c.req.param('id'));
     const raw = c.req.query('path');
     const path = raw === undefined || raw === '' ? '.' : pathOf(raw);
-    return c.json(await listViewDir(root, filesTarget(root, path), path));
+    return c.json(await listViewDir(root, filesTarget(root, path), path, filesFailure));
   });
 
   app.get('/:id/text', async (c) => {
     const root = rootOf(c.req.param('id'));
     const path = pathOf(c.req.query('path'));
-    return c.json(await readViewText(root, filesTarget(root, path), path));
+    return c.json(await readViewText(root, filesTarget(root, path), path, filesFailure));
   });
 
   return app;

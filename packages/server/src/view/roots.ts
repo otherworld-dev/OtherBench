@@ -74,6 +74,9 @@ export function locateForView(roots: ChatRoots, path: string): { root: string; t
   }
 }
 
+/** Turns a filesystem refusal into the route's answer; never returns. */
+export type ViewFailure = (err: unknown, path: string) => never;
+
 /** A filesystem refusal as the panel's message (spec: the panel always says why). */
 export function viewFailure(err: unknown, path: string): never {
   if (err instanceof HTTPException) throw err;
@@ -85,21 +88,21 @@ export function viewFailure(err: unknown, path: string): never {
   throw err;
 }
 
-/** fs-tools' verified open, read-only, with refusals as the panel's messages. `shownAs` is the path as asked for. */
-export async function openForView(root: string, target: string, shownAs: string): Promise<Awaited<ReturnType<typeof openVerified>>> {
+/** fs-tools' verified open, read-only, with refusals as the panel's messages (or `fail`'s). `shownAs` is the path as asked for. */
+export async function openForView(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<Awaited<ReturnType<typeof openVerified>>> {
   try {
     return await openVerified(root, target, fsConstants.O_RDONLY);
   } catch (err) {
-    viewFailure(err, shownAs);
+    fail(err, shownAs);
   }
 }
 
-/** fs-tools' verified listing, with refusals as the panel's messages. */
-export async function listForView(root: string, target: string, shownAs: string): Promise<Awaited<ReturnType<typeof readdirVerified>>> {
+/** fs-tools' verified listing, with refusals as the panel's messages (or `fail`'s). */
+export async function listForView(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<Awaited<ReturnType<typeof readdirVerified>>> {
   try {
     return await readdirVerified(root, target);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | null)?.code === 'ENOTDIR') throw new HTTPException(400, { message: `${shownAs} is a file, not a folder.` });
-    viewFailure(err, shownAs);
+    fail(err, shownAs);
   }
 }

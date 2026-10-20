@@ -13,7 +13,7 @@ import { ExecutableMissingError } from './process.js';
  *
  * The body keeps the shape every other route already answers with,
  * `{ error: message }` (app.ts's onError), and adds `code` (and, for a git
- * failure, git's `stderr`) beside it, so the web client's existing error
+ * or gh failure, the tool's `stderr`) beside it, so the web client's existing error
  * reading still finds the message and no other route's response changes.
  */
 export type CodeRouteErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo';
@@ -45,16 +45,17 @@ const BAD_REQUEST: ReadonlySet<CodeRouteErrorCode> = new Set(['bad-path', 'bad-b
 
 /**
  * Rethrows a git, gh or missing-executable failure as a CodeRouteError, and
- * anything else unchanged. `git-failed` carries git's stderr as-is: the git
- * service already redacted credentials in URLs from it, and the spec says to
- * show a rejected push or a conflicting pull exactly as git wrote it.
+ * anything else unchanged. `git-failed` and `gh-failed` carry the tool's
+ * stderr as-is: both services already redacted credentials in URLs from it,
+ * and the spec says to show a rejected push or a conflicting pull exactly as
+ * git wrote it.
  */
 export function asCodeRouteError(err: unknown): never {
   if (err instanceof GitError) {
     const status = BAD_REQUEST.has(err.code) ? 400 : 409;
     throw new CodeRouteError(status, err.code, err.message, err.code === 'git-failed' ? (err.stderr ?? '') : undefined);
   }
-  if (err instanceof GhError) throw new CodeRouteError(409, err.code, err.message);
+  if (err instanceof GhError) throw new CodeRouteError(409, err.code, err.message, err.code === 'gh-failed' ? (err.stderr ?? '') : undefined);
   if (err instanceof ExecutableMissingError) {
     throw err.command === 'gh'
       ? new CodeRouteError(409, 'gh-missing', 'The GitHub CLI (gh) is not installed, or is not on the PATH.')

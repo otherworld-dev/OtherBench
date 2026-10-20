@@ -29,6 +29,8 @@ export class GhError extends Error {
   constructor(
     readonly code: GhErrorCode,
     message: string,
+    /** gh's whole stderr, credentials in URLs redacted, for a `gh-failed` the panel shows as-is (spec "Error states"). */
+    readonly stderr?: string,
   ) {
     super(message);
     this.name = 'GhError';
@@ -116,16 +118,20 @@ export function githubService(run: Runner) {
       r = await run(args, input);
     } catch (err) {
       if (err instanceof ExecutableMissingError) throw new GhError('gh-missing', 'The GitHub CLI (gh) is not installed, or is not on the PATH.');
-      throw err;
+      if (err instanceof GhError) throw err;
+      // An injected runner's spawn failure other than a missing gh (EINVAL, EACCES...): still gh-failed, as git.ts
+      // does for git, never a raw error the route would answer with a 500.
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new GhError('gh-failed', `Could not start gh: ${redactUrls(reason)}`);
     }
-    if (r.timedOut) throw new GhError('gh-failed', `gh ${args[0] ?? ''} ${args[1] ?? ''} timed out.`);
+    if (r.timedOut) throw new GhError('gh-failed', `gh ${args[0] ?? ''} ${args[1] ?? ''} timed out.`, redactUrls(r.stderr));
     if (r.code !== 0) {
       const stderr = redactUrls(r.stderr);
       if (/gh auth login|not logged in|authentication/i.test(stderr)) {
         throw new GhError('gh-signed-out', 'The GitHub CLI is not signed in. Run `gh auth login` in a terminal.');
       }
       if (/Could not resolve to a Repository|not found/i.test(stderr)) throw new GhError('repo-not-found', 'That repository was not found on GitHub.');
-      throw new GhError('gh-failed', firstLine(stderr) || `gh ${args[0] ?? ''} ${args[1] ?? ''} failed.`);
+      throw new GhError('gh-failed', firstLine(stderr) || `gh ${args[0] ?? ''} ${args[1] ?? ''} failed.`, stderr);
     }
     return r.stdout;
   }

@@ -151,6 +151,8 @@ export function chatsRoutes(container: Container): Hono {
     let profileId: string;
     const appProfile = appRow ? usableProfileId(container, appRow.defaultProfileId) : null;
     if (appProfile !== null) {
+      // The app's default wins, but a profile the request names is still checked: a bad one is a bad request either way.
+      if (body.profileId !== undefined) requireExistingProfile(container, requireNonEmptyString(body.profileId, 'profileId'));
       profileId = appProfile;
     } else if (body.profileId === undefined && appRow) {
       const fallback = appDefaultProfileId(container.store);

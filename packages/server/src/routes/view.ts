@@ -7,7 +7,7 @@ import { sniffBinary } from '@otherbench/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import { kindByName, type ViewKind } from '../view/kinds.js';
 import type { ViewLinks } from '../view/links.js';
-import { chatRoots, listForView, locateForView, openForView } from '../view/roots.js';
+import { chatRoots, listForView, locateForView, openForView, viewFailure, type ViewFailure } from '../view/roots.js';
 
 /** The most of a text file `GET /api/view/text` returns (spec 2026-10-07-viewer). */
 export const MAX_VIEW_TEXT_BYTES = 2 * 1024 * 1024;
@@ -44,10 +44,11 @@ export interface ViewDirEntry {
  * opened through fs-tools' verified open. A folder is a 400, a binary file a
  * 415. Shared by `GET /api/view/text` and the Code tab's app-scoped
  * `GET /api/apps/:id/text` (spec 2026-10-20-code-tab-design, Goal 4), so the
- * two can never read files differently.
+ * two can never read files differently. `fail` turns a refusal into the
+ * caller's answer (the viewer's messages by default).
  */
-export async function readViewText(root: string, target: string, shownAs: string): Promise<ViewText> {
-  const { handle, resolved } = await openForView(root, target, shownAs);
+export async function readViewText(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<ViewText> {
+  const { handle, resolved } = await openForView(root, target, shownAs, fail);
   try {
     const st = await handle.stat();
     if (st.isDirectory()) throw new HTTPException(400, { message: `${shownAs} is a folder; open a file in it.` });
@@ -64,10 +65,10 @@ export async function readViewText(root: string, target: string, shownAs: string
 /**
  * One folder of the Files tree, folders first and then by name: `target`
  * already contained to `root`, listed through fs-tools' verified readdir.
- * Shared by `GET /api/view/dirs` and the Code tab's `GET /api/apps/:id/files`.
+ * Shared by `GET /api/view/dirs` and the Code tab's `GET /api/apps/:id/files`; `fail` as for readViewText.
  */
-export async function listViewDir(root: string, target: string, shownAs: string): Promise<{ path: string; entries: ViewDirEntry[] }> {
-  const { resolved, dirents } = await listForView(root, target, shownAs);
+export async function listViewDir(root: string, target: string, shownAs: string, fail: ViewFailure = viewFailure): Promise<{ path: string; entries: ViewDirEntry[] }> {
+  const { resolved, dirents } = await listForView(root, target, shownAs, fail);
   const entries = dirents
     .map((d) => ({ name: d.name, path: join(resolved, d.name), type: d.isDirectory() ? ('dir' as const) : ('file' as const) }))
     .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));

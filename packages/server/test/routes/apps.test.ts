@@ -10,7 +10,7 @@ import type { Profile } from '@otherbench/core/types/config.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
-import { GhError } from '../../src/code/github.js';
+import { GhError, githubService } from '../../src/code/github.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';
 import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
@@ -354,15 +354,25 @@ describe.skipIf(!hasGit)('git routes', () => {
     expect(await json(res)).toMatchObject({ code: 'not-a-repo' });
   });
 
-  it("git's own failure is a 409 git-failed carrying stderr", async () => {
+  it("git's own failure is a 409 git-failed carrying stderr as-is", async () => {
     newApp('a1', repo());
-    // Nothing to commit on a fresh repo: git commit fails with its own message.
-    const res = await send('POST', '/api/apps/a1/git/commit', { message: 'm', paths: 'all' });
+    // A branch that doesn't exist: git switch fails, saying so on stderr.
+    const res = await send('POST', '/api/apps/a1/git/checkout', { branch: 'no-such-branch' });
     expect(res.status).toBe(409);
     const body = await json<{ code: string; stderr?: string; error: string }>(res);
     expect(body.code).toBe('git-failed');
-    expect(typeof body.error).toBe('string');
-    expect('stderr' in body).toBe(true);
+    expect(body.stderr).toContain('no-such-branch');
+    expect(body.stderr?.split('\n').map((l) => l.trim())).toContain(body.error);
+  });
+
+  it('refuses a NUL in a branch name or commit message with 400, before git runs', async () => {
+    newApp('a1', repo());
+    for (const path of ['/api/apps/a1/git/branch', '/api/apps/a1/git/checkout']) {
+      const res = await send('POST', path, { branch: 'a\u0000b' });
+      expect(res.status, path).toBe(400);
+      expect(await json(res)).toMatchObject({ code: 'bad-branch' });
+    }
+    expect((await send('POST', '/api/apps/a1/git/commit', { message: 'a\u0000b', paths: 'all' })).status).toBe(400);
   });
 
   it('refuses a commit with no message or bad paths with 400', async () => {
@@ -511,6 +521,26 @@ describe('issue routes', () => {
     const res = await send('GET', '/api/apps/a1/issues');
     expect(res.status).toBe(status);
     expect(await json(res)).toMatchObject({ code, error: `failed: ${code}` });
+  });
+});
+
+describe('gh failures through the real github service', () => {
+  it("gh-failed carries gh's stderr as-is", async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    container.github = githubService(async () => ({ code: 1, stdout: '', stderr: 'HTTP 502: bad gateway\nretry later', timedOut: false, truncated: false }));
+    const res = await send('GET', '/api/apps/a1/issues');
+    expect(res.status).toBe(409);
+    expect(await json(res)).toEqual({ error: 'HTTP 502: bad gateway', code: 'gh-failed', stderr: 'HTTP 502: bad gateway\nretry later' });
+  });
+
+  it('a gh that cannot be started is a 409 gh-failed, never a 500', async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    container.github = githubService(async () => {
+      throw Object.assign(new Error('spawn EACCES'), { code: 'EACCES' });
+    });
+    const res = await send('GET', '/api/apps/a1/issues');
+    expect(res.status).toBe(409);
+    expect(await json(res)).toMatchObject({ code: 'gh-failed', error: 'Could not start gh: spawn EACCES' });
   });
 });
 
