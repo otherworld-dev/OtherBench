@@ -26,3 +26,23 @@ export interface GitStatus {
 }
 
 export type GitErrorCode = 'git-missing' | 'not-a-repo' | 'bad-path' | 'bad-branch' | 'git-failed';
+
+/** Failure kinds of the GitHub issues service (spec 2026-10-20-code-tab-design, "Error states"); the `GhError` class stays in the server. */
+export type GhErrorCode = 'gh-missing' | 'gh-signed-out' | 'repo-not-found' | 'gh-failed';
+
+export interface IssueSummary {
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  author: string;
+  labels: string[];
+  comments: number;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+}
+
+export interface IssueDetail extends IssueSummary {
+  body: string;
+  commentList: { author: string; body: string; createdAt: string }[];
+}
