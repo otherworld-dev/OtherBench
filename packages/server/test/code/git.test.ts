@@ -101,6 +101,22 @@ describe.skipIf(!hasGit)('git service', () => {
     expect(await git.diff(dir, 'u.txt')).toContain('+fresh');
   });
 
+  it('diff headers keep the a/ and b/ prefixes whatever the repo config says (the web parser relies on them)', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 't.txt'), 'one\n');
+    await git.commit(dir, 'first', 'all');
+    g(dir, 'config', 'diff.mnemonicPrefix', 'true');
+    g(dir, 'config', 'diff.noprefix', 'true');
+    writeFileSync(join(dir, 't.txt'), 'one\ntwo\n');
+    writeFileSync(join(dir, 'u.txt'), 'fresh\n');
+    const out = await git.diff(dir);
+    expect(out).toContain('diff --git a/t.txt b/t.txt');
+    expect(out).toContain('--- a/t.txt');
+    expect(out).toContain('+++ b/t.txt');
+    expect(out).toContain('+++ b/u.txt');
+    expect(out).not.toMatch(/^(---|\+\+\+) [icwo]\//m);
+  });
+
   it('commit with an empty message is git-failed', async () => {
     const dir = repo();
     writeFileSync(join(dir, 'a.txt'), 'a\n');

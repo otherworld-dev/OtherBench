@@ -198,10 +198,19 @@ async function hasHead(root: string): Promise<boolean> {
   return r.code === 0;
 }
 
+/**
+ * Flags every diff here passes. The `a/`/`b/` prefixes are pinned because the
+ * web's `parseUnifiedDiff` reads paths from them, and a user's
+ * `diff.mnemonicPrefix` (`i/`, `w/`, `c/`) or `diff.noprefix` would otherwise
+ * change them (spec 2026-10-20-code-tab-design, Goal 2: the git panel shows
+ * each file's real diff).
+ */
+const DIFF_FLAGS = ['diff', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/'];
+
 /** A new file has no diff against HEAD; show it the way git would against an empty file. */
 async function untrackedDiff(root: string, spec: string): Promise<string> {
   // `--no-index` exits 1 when the files differ, which is the normal case here.
-  const r = await run(root, ['diff', '--no-index', '--no-ext-diff', '--no-textconv', '--', '/dev/null', spec], { okCodes: [1] });
+  const r = await run(root, [...DIFF_FLAGS, '--no-index', '--', '/dev/null', spec], { okCodes: [1] });
   return r.stdout;
 }
 
@@ -224,9 +233,8 @@ export const git = {
     await requireTopLevel(root);
     const spec = path === undefined ? undefined : pathspec(root, path);
     const scope = spec === undefined ? [] : ['--', spec];
-    const flags = ['diff', '--no-ext-diff', '--no-textconv'];
     // Unborn branch: there is no HEAD to compare to, so the staged diff is all there is.
-    const base = (await hasHead(root)) ? [...flags, 'HEAD'] : [...flags, '--cached'];
+    const base = (await hasHead(root)) ? [...DIFF_FLAGS, 'HEAD'] : [...DIFF_FLAGS, '--cached'];
     const tracked = await run(root, [...base, ...scope]);
     let out = tracked.stdout;
     let truncated = tracked.truncated;
