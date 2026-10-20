@@ -95,6 +95,25 @@ describe.skipIf(!hasGit)('git service', () => {
     expect((await git.status(dir)).files.map((f) => f.path)).toEqual(['b.txt']);
   });
 
+  it('a partial commit takes a staged rename and deletion along with a modification (I1)', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'old.txt'), 'o\n');
+    writeFileSync(join(dir, 'gone.txt'), 'g\n');
+    writeFileSync(join(dir, 'mod.txt'), 'm\n');
+    writeFileSync(join(dir, 'keep.txt'), 'k\n');
+    await git.commit(dir, 'first', 'all');
+    g(dir, 'mv', 'old.txt', 'new.txt');
+    g(dir, 'rm', '-q', 'gone.txt');
+    writeFileSync(join(dir, 'mod.txt'), 'm2\n');
+    writeFileSync(join(dir, 'keep.txt'), 'k2\n');
+    // The git panel sends both sides of a rename, and a staged deletion is gone from the index and the disk.
+    await git.commit(dir, 'partial', ['new.txt', 'old.txt', 'gone.txt', 'mod.txt']);
+    // --no-renames: the rename shows as its two sides, so the check does not depend on rename detection.
+    const changed = g(dir, 'show', '--no-renames', '--name-status', '--format=', 'HEAD').trim().split('\n').sort();
+    expect(changed).toEqual(['A\tnew.txt', 'D\tgone.txt', 'D\told.txt', 'M\tmod.txt']);
+    expect((await git.status(dir)).files.map((f) => f.path)).toEqual(['keep.txt']);
+  });
+
   it('diff of an untracked file shows it as added', async () => {
     const dir = repo();
     writeFileSync(join(dir, 'u.txt'), 'fresh\n');
@@ -239,7 +258,7 @@ describe('gitEnv (F6)', () => {
   it('strips repo-redirecting variables and adds the fixed ones', () => {
     const env = gitEnv({
       PATH: '/bin', GIT_DIR: 'x', git_work_tree: 'x', GIT_INDEX_FILE: 'x', GIT_OBJECT_DIRECTORY: 'x',
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: 'x', GIT_CONFIG_COUNT: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'x',
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: 'x', GIT_COMMON_DIR: 'x', GIT_CONFIG_COUNT: '1', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'x',
       OTHERBENCH_TOKEN: 't',
     });
     expect(Object.keys(env).sort()).toEqual(['GH_NO_UPDATE_NOTIFIER', 'GH_PROMPT_DISABLED', 'GIT_PAGER', 'GIT_TERMINAL_PROMPT', 'NO_COLOR', 'PATH']);

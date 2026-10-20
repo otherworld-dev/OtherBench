@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { containPath } from '@otherbench/core/domain/paths.js';
@@ -62,6 +62,7 @@ const GIT_STRIPPED_ENV = new Set([
   'GIT_INDEX_FILE',
   'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
 ]);
 
 /** The environment every git process gets: the server's, minus its secrets and repo-redirecting variables, plus the no-prompt settings. */
@@ -187,6 +188,15 @@ function pathspec(root: string, candidate: string): string {
   return rel === '' ? '.' : rel.split(sep).join('/');
 }
 
+function existsUnder(root: string, spec: string): boolean {
+  try {
+    lstatSync(resolve(root, spec));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function checkBranch(root: string, name: string): Promise<void> {
   if (name === '' || name.startsWith('-')) throw new GitError('bad-branch', `"${name}" is not a valid branch name.`);
   const r = await run(root, ['check-ref-format', '--branch', name], { okCodes: [1, 128] });
@@ -268,7 +278,14 @@ export const git = {
     } else {
       if (paths.length === 0) throw new GitError('git-failed', 'Choose at least one file to commit.');
       const specs = paths.map((p) => pathspec(root, p));
-      await run(root, ['add', '--', ...specs]);
+      // Only what is on disk is added: a staged deletion, or the old side of a
+      // staged rename (the git panel sends both sides), is gone from the index
+      // and the worktree, so `git add` exits 128 on it. `git commit -- <specs>`
+      // still gets every spec and records those deletions itself, against HEAD
+      // (spec 2026-10-20-code-tab-design, Goal 2: commit the checked files).
+      // lstat, so a link is judged by itself, not its target.
+      const onDisk = specs.filter((s) => existsUnder(root, s));
+      if (onDisk.length > 0) await run(root, ['add', '--', ...onDisk]);
       await run(root, ['commit', '-m', message, '--', ...specs]);
     }
     const head = await run(root, ['rev-parse', 'HEAD']);
