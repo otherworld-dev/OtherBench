@@ -40,6 +40,19 @@ describe('buildSidebar and apps (spec 2026-10-20-code-tab-design, "Chats live in
     expect(model.groups.find((g) => g.key === 'p')!.total).toBe(1);
     expect(model.archived).toEqual([]);
   });
+
+  it("while searching, lists Code mode's matching chats apart, newest activity first, archived ones included (I3)", () => {
+    const chats = [
+      chat('app-old', { appId: 'A', updatedAt: 1 }),
+      chat('app-new', { appId: 'gone', archivedAt: 5, updatedAt: 9 }),
+      chat('app-miss', { appId: 'A' }),
+      chat('plain'),
+    ];
+    expect(buildSidebar(chats, [], null).otherMode).toEqual([]);
+    const model = buildSidebar(chats, [], new Set(['app-old', 'app-new', 'plain']));
+    expect(ids(model.otherMode)).toEqual(['app-new', 'app-old']);
+    expect(model.groups.flatMap((g) => ids(g.chats))).toEqual(['plain']);
+  });
 });
 
 describe('buildCodeSidebar', () => {
@@ -96,6 +109,14 @@ describe('buildCodeSidebar', () => {
     expect(ids(model.groups[0]!.chats)).toEqual(['hit']);
     expect(model.groups[0]!.total).toBe(2);
     expect(ids(model.archived)).toEqual(['arch']);
+  });
+
+  it("while searching, lists Chat mode's matching chats apart, newest activity first, archived ones included (I3)", () => {
+    const chats = [chat('plain-old', { updatedAt: 1 }), chat('plain-new', { projectId: 'p', archivedAt: 5, updatedAt: 9 }), chat('plain-miss'), chat('hit', { appId: 'A' })];
+    expect(buildCodeSidebar(chats, [app('A', 'Alpha')], null).otherMode).toEqual([]);
+    const model = buildCodeSidebar(chats, [app('A', 'Alpha')], new Set(['plain-old', 'plain-new', 'hit']));
+    expect(ids(model.otherMode)).toEqual(['plain-new', 'plain-old']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['hit']);
   });
 });
 

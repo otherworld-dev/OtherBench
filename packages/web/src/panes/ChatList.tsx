@@ -112,7 +112,9 @@ function headingSelector(projectId: string): string {
  * A Chat | Code switch above the search picks the mode (spec
  * 2026-10-20-code-tab-design, Goal 1). Code mode lists each app with its chats
  * instead (`buildCodeSidebar`), and Chat mode never shows an app chat: a chat
- * lives in one mode only. Search and the chips work the same in both. An app's
+ * lives in one mode only. Search and the chips work the same in both, and
+ * while searching a trailing "In Code mode" / "In Chat mode" section lists the
+ * other mode's matches; opening one switches mode. An app's
  * heading opens its home, collapses from its arrow, and has a menu (Rename,
  * Edit…, Delete…); each app's list ends with a "+ New chat" row, and "+ New
  * app" takes the place of "+ New chat" at the bottom. In Code mode there is no
@@ -204,6 +206,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
   const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, matches), [chats, apps, matches]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
+  const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
   const deletingApp = deletingAppId ? (apps.find((a) => a.id === deletingAppId) ?? null) : null;
   const lookup = useMemo(() => projectLookup(projects), [projects]);
@@ -383,9 +386,13 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     return rest[rest.findIndex((c) => c.id === targetId) + 1]?.id ?? null;
   }
 
-  /** The section the sidebar shows `chat` in, or null when it isn't shown in one (archived). */
+  /**
+   * The section the sidebar shows `chat` in, or null when it isn't shown in one: archived, or an app chat. Code mode
+   * has no Pinned section and no ordering by hand (a pinned app chat leads its group), so an app chat is in none of
+   * Chat mode's sections and its menu offers no Move up / Move down (spec 2026-10-20-code-tab-design, Goal 1).
+   */
   function sectionOf(chat: Chat): Section | null {
-    if (chat.archivedAt !== null) return null;
+    if (chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
     if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
     for (const group of allGroups(sidebar)) {
       const projectId = group.project?.id ?? null;
@@ -1040,7 +1047,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           </div>
         )}
 
-        {searching && (codeMode ? codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) && archived.length === 0 && (
+        {searching && (codeMode ? codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) && archived.length === 0 && otherMode.length === 0 && (
           <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
         )}
 
@@ -1061,6 +1068,16 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               {showArchived ? 'Hide archived' : `Show archived (${archived.length})`}
             </button>
             {showArchived && <ul>{archived.map((c) => renderRow(c, null))}</ul>}
+          </div>
+        )}
+
+        {/* While searching, the other mode's matches, so a chat is found from either mode; opening one switches to
+            the mode it lives in (spec 2026-10-20-code-tab-design, "Decisions Adam made"). Dimmed and not draggable,
+            as rows outside a section are: they don't belong to this mode's groups. */}
+        {otherMode.length > 0 && (
+          <div className="mb-1.5" data-testid="other-mode-section">
+            <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">{codeMode ? 'In Chat mode' : 'In Code mode'}</h2>
+            <ul>{otherMode.map((c) => renderRow(c, null))}</ul>
           </div>
         )}
 

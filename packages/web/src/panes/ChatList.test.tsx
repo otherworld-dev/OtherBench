@@ -1644,6 +1644,43 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
     expect(rowIds('group-A')).toEqual(['ca']);
   });
 
+  it('a Chat mode search lists a matching app chat under "In Code mode", and clicking it switches to Code mode (I3)', async () => {
+    mockedSearch.mockResolvedValue([]);
+    const user = setup();
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
+    const section = await screen.findByTestId('other-mode-section');
+    expect(within(section).getByRole('heading', { name: 'In Code mode' })).toBeInTheDocument();
+    expect(rowIds('other-mode-section')).toEqual(['ca']);
+    expect(screen.queryByText('No chats match your search.')).toBeNull();
+    await user.click(within(section).getByRole('button', { name: 'Fix SSE' }));
+    expect(useOtherBenchStore.getState().mode).toBe('code');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('ca');
+  });
+
+  it('a Code mode search lists a matching plain chat under "In Chat mode"; nothing shows there when not searching (I3)', async () => {
+    mockedSearch.mockResolvedValue([]);
+    const user = setup({ mode: 'code' });
+    expect(screen.queryByTestId('other-mode-section')).toBeNull();
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'plain');
+    const section = await screen.findByTestId('other-mode-section');
+    expect(within(section).getByRole('heading', { name: 'In Chat mode' })).toBeInTheDocument();
+    expect(rowIds('other-mode-section')).toEqual(['cp']);
+    await user.click(within(section).getByRole('button', { name: 'Plain' }));
+    expect(useOtherBenchStore.getState().mode).toBe('chat');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('cp');
+  });
+
+  it("a pinned app chat's menu has no Move up / Move down: Code mode has no hand ordering (D1)", async () => {
+    setup({ mode: 'code', chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A', pinned: true }), makeChat({ id: 'cb', title: 'Other', appId: 'A' })] });
+    for (const name of ['Fix SSE', 'Other']) {
+      fireEvent.contextMenu(screen.getByRole('button', { name }));
+      expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Move up' })).toBeNull();
+      expect(screen.queryByRole('menuitem', { name: 'Move down' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('menu', { name: 'Chat actions' }), { key: 'Escape' });
+    }
+  });
+
   it('Move to app… sends PATCH {appId}, and the active chat is followed into Code mode', async () => {
     const user = setup({ activeChatId: 'cp' });
     mockedPatch.mockImplementation(

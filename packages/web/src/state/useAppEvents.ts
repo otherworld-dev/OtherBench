@@ -15,15 +15,22 @@ import { useOtherBenchStore } from './store.js';
  * In the desktop app it also raises notifications (desktop/notify.ts), and
  * opening OtherBench from the tray goes to the chat last notified about.
  */
-/** Another machine's changes were applied: chats, projects, profiles and connections may all have changed. */
-function refreshAfterSync(): void {
-  const { setChats, setProjects, setProfiles, setConnections } = useOtherBenchStore.getState();
-  Promise.all([api.chats.list(), api.projects.list(), api.profiles.list(), api.connections.list()])
-    .then(([chats, projects, profiles, connections]) => {
+/**
+ * Another machine's changes were applied: chats, projects, profiles,
+ * connections and apps may all have changed. Apps sync like the rest (spec
+ * 2026-10-20-code-tab-design, "Apps sync like projects"), so an app made,
+ * renamed or deleted on the other machine shows in the Code sidebar without a
+ * reload.
+ */
+export function refreshAfterSync(): void {
+  const { setChats, setProjects, setProfiles, setConnections, setApps } = useOtherBenchStore.getState();
+  Promise.all([api.chats.list(), api.projects.list(), api.profiles.list(), api.connections.list(), api.apps.list()])
+    .then(([chats, projects, profiles, connections, apps]) => {
       setChats(chats);
       setProjects(projects);
       setProfiles(profiles);
       setConnections(connections);
+      setApps(apps);
     })
     .catch((err: unknown) => console.error('[otherbench-web] failed to reload after a sync:', err));
 }

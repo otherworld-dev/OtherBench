@@ -49,6 +49,21 @@ export interface SidebarModel {
   groups: SidebarGroup[];
   /** Archived chats (newest activity first; only search matches while searching), for the "Show archived" section. */
   archived: Chat[];
+  /** While searching, Code mode's matching chats (see `otherModeMatches`); empty otherwise. */
+  otherMode: Chat[];
+}
+
+/**
+ * While searching, the matches that live in the other mode, archived ones
+ * included, newest activity first; empty when not searching. Search is
+ * scoped to the showing mode's lists, but opening an app chat "from anywhere,
+ * such as search" switches to Code mode, and an ordinary chat to Chat mode
+ * (spec 2026-10-20-code-tab-design, "Decisions Adam made"), so the sidebar
+ * lists these in a trailing "In Code mode" / "In Chat mode" section.
+ */
+function otherModeMatches(chats: Chat[], matches: ReadonlySet<string> | null, inOtherMode: (c: Chat) => boolean): Chat[] {
+  if (matches === null) return [];
+  return chats.filter((c) => inOtherMode(c) && matches.has(c.id)).sort(byActivity);
 }
 
 const byActivity = (a: Chat, b: Chat): number => b.updatedAt - a.updatedAt;
@@ -128,6 +143,7 @@ export function titleMatches(title: string, query: string): boolean {
  * "Calls I made"), and Code mode's `buildCodeSidebar` lists them. One whose
  * app isn't loaded stays out too, in Code mode's Unknown app group, since it
  * is still an app chat and `modeOfChat` would send it to Code mode anyway.
+ * While searching, the matching ones come back in `otherMode` only.
  */
 export function buildSidebar(
   chats: Chat[],
@@ -171,6 +187,7 @@ export function buildSidebar(
     pinned: live.filter((c) => c.pinned && shown(c)).sort(byOrder),
     groups: matches === null ? groups : groups.filter(hasMatch),
     archived: own.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    otherMode: otherModeMatches(chats, matches, (c) => c.appId !== null),
   };
 }
 
@@ -191,6 +208,8 @@ export interface CodeSidebarModel {
   groups: CodeSidebarGroup[];
   /** Archived app chats, newest activity first; only search matches while searching. */
   archived: Chat[];
+  /** While searching, Chat mode's matching chats (see `otherModeMatches`); empty otherwise. */
+  otherMode: Chat[];
 }
 
 /**
@@ -202,7 +221,8 @@ export interface CodeSidebarModel {
  * chat just leads its own group. Archived chats are kept out of the groups and
  * returned in `archived`. While searching (`matches` set) every list is
  * filtered to those ids and groups left with no match are dropped; otherwise
- * an app with no chats still shows, so it can be opened and given one.
+ * an app with no chats still shows, so it can be opened and given one. While
+ * searching, matching chats outside an app come back in `otherMode`.
  */
 export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySet<string> | null): CodeSidebarModel {
   const appChats = chats.filter((c) => c.appId !== null);
@@ -224,6 +244,7 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySe
     // Unknown app shows only with chats; while searching, any group only with a match.
     groups: groups.filter((g) => (matches === null ? g.app !== null || g.total > 0 : g.chats.length > 0)),
     archived: appChats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    otherMode: otherModeMatches(chats, matches, (c) => c.appId === null),
   };
 }
 
