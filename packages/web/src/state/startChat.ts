@@ -21,14 +21,16 @@ export class StartChatError extends Error {
 /**
  * Creates a chat (unless `chat` is given) and sends `text` as its first
  * message with the chat's own profile: the one path for a project page's
- * start box and quick chat (spec 2026-10-15-project-home-design §4). In a
- * project the server fills in the project's folder and default profile.
+ * start box, an app home's (spec 2026-10-20-code-tab-design) and quick chat
+ * (spec 2026-10-15-project-home-design §4). In a project or an app the server
+ * fills in its folder and default profile.
  */
-export async function startChat(opts: { projectId?: string; profileId?: string; chat?: Chat; text: string }): Promise<Chat> {
+export async function startChat(opts: { projectId?: string; appId?: string; profileId?: string; chat?: Chat; text: string }): Promise<Chat> {
   let chat = opts.chat;
   if (!chat) {
     chat = await api.chats.create({
       ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
+      ...(opts.appId !== undefined ? { appId: opts.appId } : {}),
       ...(opts.profileId !== undefined ? { profileId: opts.profileId } : {}),
     });
     useOtherBenchStore.getState().upsertChat(chat);

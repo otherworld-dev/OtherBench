@@ -70,7 +70,24 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   const [list, setList] = useState<{ repo: string; issues: IssueSummary[] } | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
+  const [starting, setStarting] = useState<number | null>(null);
+  const [startError, setStartError] = useState<unknown>(null);
   const repo = app.githubRepo;
+
+  // A row's Chat button: the issue's text is fetched, as the list carries only its title, then the chat starts as from the issue itself.
+  async function startOn(n: number): Promise<void> {
+    if (starting !== null) return;
+    setStarting(n);
+    setStartError(null);
+    try {
+      await startChatFromIssue(app, await api.apps.issues.get(app.id, n));
+    } catch (err) {
+      console.error(`[otherbench-web] failed to start a chat on issue #${n}:`, err);
+      setStartError(err);
+    } finally {
+      setStarting(null);
+    }
+  }
 
   // On focus and after a turn in one of the app's chats, as well as from ↻ (spec "Calls I made").
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
@@ -140,38 +157,52 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
       ) : issues.length === 0 ? (
         <p className={EMPTY}>{state === 'open' ? 'No open issues' : 'No closed issues'}</p>
       ) : (
-        <ul aria-label="Issues" className="space-y-0.5">
-          {issues.map((issue) => (
-            <li key={issue.number} data-issue={issue.number}>
-              <button
-                type="button"
-                data-testid={`issue-row-${issue.number}`}
-                onClick={() => onOpen(issue.number)}
-                className="flex w-full min-w-0 items-start gap-2 rounded-sm px-1.5 py-1 text-left text-sm hover:bg-[var(--bg-sunken)]"
-              >
-                <span className="shrink-0 tabular-nums text-[var(--text-faint)]">#{issue.number}</span>
-                <span className="min-w-0 flex-1">
-                  <span className="[overflow-wrap:anywhere]">{issue.title}</span>
-                  {issue.labels.length > 0 && (
-                    <span className="mt-0.5 flex flex-wrap gap-1">
-                      {issue.labels.map((l) => (
-                        <span key={l} className="rounded-full border border-[var(--border)] px-1.5 text-[0.65rem] text-[var(--text-muted)]">
-                          {l}
-                        </span>
-                      ))}
+        <>
+          {startError !== null && <CodeErrorLine error={startError} fallback="Couldn't start the chat." />}
+          <ul aria-label="Issues" className="space-y-0.5">
+            {issues.map((issue) => (
+              <li key={issue.number} data-issue={issue.number} className="flex items-start rounded-sm hover:bg-[var(--bg-sunken)]">
+                <button
+                  type="button"
+                  data-testid={`issue-row-${issue.number}`}
+                  onClick={() => onOpen(issue.number)}
+                  className="flex min-w-0 flex-1 items-start gap-2 px-1.5 py-1 text-left text-sm"
+                >
+                  <span className="shrink-0 tabular-nums text-[var(--text-faint)]">#{issue.number}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="[overflow-wrap:anywhere]">{issue.title}</span>
+                    {issue.labels.length > 0 && (
+                      <span className="mt-0.5 flex flex-wrap gap-1">
+                        {issue.labels.map((l) => (
+                          <span key={l} className="rounded-full border border-[var(--border)] px-1.5 text-[0.65rem] text-[var(--text-muted)]">
+                            {l}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </span>
+                  {issue.comments > 0 && (
+                    <span aria-label={`${issue.comments} ${issue.comments === 1 ? 'comment' : 'comments'}`} className="shrink-0 text-xs tabular-nums text-[var(--text-faint)]">
+                      <span aria-hidden="true">💬 {issue.comments}</span>
                     </span>
                   )}
-                </span>
-                {issue.comments > 0 && (
-                  <span aria-label={`${issue.comments} ${issue.comments === 1 ? 'comment' : 'comments'}`} className="shrink-0 text-xs tabular-nums text-[var(--text-faint)]">
-                    <span aria-hidden="true">💬 {issue.comments}</span>
-                  </span>
-                )}
-                <span className="shrink-0 text-xs text-[var(--text-faint)]">{age(issue.createdAt)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+                  <span className="shrink-0 text-xs text-[var(--text-faint)]">{age(issue.createdAt)}</span>
+                </button>
+                {/* Beside the row's button, not in it: a button can't hold another. */}
+                <button
+                  type="button"
+                  aria-label={`Start a chat on #${issue.number}`}
+                  title="Start a chat on this issue"
+                  disabled={starting !== null}
+                  onClick={() => void startOn(issue.number)}
+                  className="btn my-1 mr-1 shrink-0 px-1.5 py-0 text-xs disabled:opacity-50"
+                >
+                  {starting === issue.number ? 'Starting…' : 'Chat'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

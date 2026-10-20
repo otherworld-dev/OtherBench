@@ -10,6 +10,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     api: {
       ...actual.api,
       chats: { ...actual.api.chats, create: vi.fn() },
+      turns: { ...actual.api.turns, create: vi.fn() },
       apps: { ...actual.api.apps, issues: { list: vi.fn(), get: vi.fn(), comment: vi.fn(), close: vi.fn(), reopen: vi.fn() } },
     },
   };
@@ -69,6 +70,27 @@ describe('AppHome', () => {
     await waitFor(() => expect(api.chats.create).toHaveBeenCalledWith({ appId: 'a1' }));
     await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c9'));
     expect(useOtherBenchStore.getState().chats.map((c) => c.id)).toEqual(['c9']);
+  });
+
+  it('New chat sits in the Chats heading', () => {
+    useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
+    render(<AppHome appId="a1" />);
+    expect(within(screen.getByTestId('app-home-chats')).getByTestId('app-home-new-chat')).toBeInTheDocument();
+  });
+
+  it('the start box makes a chat in the app and sends the message', async () => {
+    useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
+    vi.mocked(api.chats.create).mockResolvedValue(chat('c7'));
+    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['m1'] } as Awaited<ReturnType<typeof api.turns.create>>);
+    render(<AppHome appId="a1" />);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Start a chat in OtherBench' }), 'Fix the receipt upload');
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(api.chats.create).toHaveBeenCalledWith({ appId: 'a1' }));
+    await waitFor(() =>
+      expect(api.turns.create).toHaveBeenCalledWith('c7', { parentId: null, parts: [{ type: 'text', text: 'Fix the receipt upload' }], profileIds: ['prof'] })
+    );
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c7'));
   });
 
   it('a failed New chat says why', async () => {

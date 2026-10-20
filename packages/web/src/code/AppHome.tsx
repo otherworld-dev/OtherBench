@@ -1,6 +1,7 @@
 import { useMemo, useState, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import type { App } from '@otherbench/core/ports/store.js';
+import { StartBox } from '../components/StartBox.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
@@ -19,8 +20,9 @@ const EMPTY = 'text-sm text-[var(--text-faint)]';
  * An app's home page, open as an `app:` tab in Code mode (spec
  * 2026-10-20-code-tab-design, "Code is a whole-window mode": an app with no
  * chats opens on its home, with its issues and a "New chat" button, like
- * `ProjectHome`). What the app is, its chats, and its open issues. Editing
- * stays in the app form.
+ * `ProjectHome`). What the app is, a box that starts a chat with its first
+ * message sent, its chats, and its open issues, each of which can start a
+ * chat too. Editing stays in the app form.
  */
 export function AppHome({ appId }: { appId: string }): JSX.Element {
   const app = useOtherBenchStore((s) => s.apps.find((a) => a.id === appId) ?? null);
@@ -50,26 +52,27 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
   const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
   const setOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
   const linked = app.linkedProjectId === null ? null : (projectDisplayNameById(projects, app.linkedProjectId) ?? (projectsLoaded ? 'Missing project' : 'Loading…'));
+  // One column, top down: what the app is, a box to start from, its chats, then its issues at full width.
   return (
-    <div data-testid="app-home" className="@container h-full min-h-0 overflow-y-auto bg-[var(--bg)]">
-      <div className="mx-auto max-w-4xl space-y-5 p-6">
+    <div data-testid="app-home" className="h-full min-h-0 overflow-y-auto bg-[var(--bg)]">
+      <div className="mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-medium">{app.name}</h2>
-            <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
-              <dt className="text-[var(--text-muted)]">Folder</dt>
-              <dd data-testid="app-home-folder" className="break-all font-mono">
+            {/* The details on one line, each its own item so a long folder wraps without pushing the rest off. */}
+            <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-[var(--text-muted)]">
+              <span data-testid="app-home-folder" className="break-all font-mono text-[var(--text)]">
                 {app.workspaceRoot ?? <span className="font-sans text-[var(--text-muted)]">This app&apos;s folder isn&apos;t on this machine</span>}
-              </dd>
-              <dt className="text-[var(--text-muted)]">GitHub</dt>
-              <dd data-testid="app-home-repo" className="break-all">
-                {app.githubRepo ?? <span className="text-[var(--text-muted)]">{NO_GITHUB_REPO}</span>}
-              </dd>
-              <dt className="text-[var(--text-muted)]">Chat project</dt>
-              <dd data-testid="app-home-project" className="[overflow-wrap:anywhere]">
-                {linked ?? <span className="text-[var(--text-muted)]">None</span>}
-              </dd>
-            </dl>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span data-testid="app-home-repo" className="break-all">
+                {app.githubRepo ?? NO_GITHUB_REPO}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span data-testid="app-home-project" className="[overflow-wrap:anywhere]">
+                {linked === null ? 'No chat project' : `Chat project: ${linked}`}
+              </span>
+            </p>
           </div>
           {isNarrow && (
             <button type="button" onClick={() => setOverlayOpen(!overlayOpen)} aria-expanded={overlayOpen} className="btn shrink-0 px-2.5 py-1">
@@ -80,16 +83,17 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
             Edit…
           </button>
         </div>
-        <NewChat app={app} />
-        {/* minmax(0, …) tracks and min-w-0 items: a long unbroken word wraps rather than widening the page. */}
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <AppChats app={app} />
-          <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
-            <h3 className={HEADING}>Issues</h3>
-            {/* Keyed: another app's home starts from its own open issues, not this one's filter or list. */}
-            <IssuesTab key={app.id} app={app} />
-          </section>
-        </div>
+        <StartBox
+          target={{ pendingKey: `app:${app.id}`, name: app.name, tabId: appTabId(app.id), owns: (c) => c.appId === app.id, create: { appId: app.id } }}
+          placeholder="What do you want to work on?"
+          submitLabel="Start"
+        />
+        <AppChats app={app} />
+        <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
+          <h3 className={HEADING}>Issues</h3>
+          {/* Keyed: another app's home starts from its own open issues, not this one's filter or list. */}
+          <IssuesTab key={app.id} app={app} />
+        </section>
       </div>
     </div>
   );
@@ -124,16 +128,16 @@ function NewChat({ app }: { app: App }): JSX.Element {
   }
 
   return (
-    <div>
-      <button type="button" data-testid="app-home-new-chat" disabled={creating} onClick={() => void create()} className="btn btn-primary px-3 py-1.5">
-        New chat
+    <>
+      <button type="button" data-testid="app-home-new-chat" disabled={creating} onClick={() => void create()} className="btn shrink-0 px-2 py-0.5 text-xs">
+        + New chat
       </button>
       {error && (
-        <p role="alert" className="mt-1 text-sm text-[var(--danger)]">
+        <p role="alert" className="basis-full text-sm text-[var(--danger)]">
           {error}
         </p>
       )}
-    </div>
+    </>
   );
 }
 
@@ -147,7 +151,10 @@ function AppChats({ app }: { app: App }): JSX.Element {
 
   return (
     <section data-testid="app-home-chats" aria-label="Chats" className="min-w-0">
-      <h3 className={HEADING}>Chats</h3>
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <h3 className="label-caps min-w-0 flex-1 text-[var(--text-muted)]">Chats</h3>
+        <NewChat app={app} />
+      </div>
       {listed.length === 0 ? (
         <p className={EMPTY}>No chats yet</p>
       ) : (
