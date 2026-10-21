@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,4 +54,31 @@ describe.skipIf(spawn === null)('a real terminal', () => {
     await manager.kill('live', t.id);
     await waitFor(() => !alive(pid), 5_000);
   }, 30_000);
+});
+
+/** How many conhost.exe processes this process has started (ConPTY's console hosts). */
+function conhosts(): number {
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', `@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${process.pid} AND Name='conhost.exe'").Count`], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  return Number(out.trim());
+}
+
+describe.skipIf(spawn === null || process.platform !== 'win32')('ConPTY clean-up', () => {
+  const manager = new TerminalManager({ loadSpawn: async () => spawn, shells: () => detectShells(realShellProbe()), emit: () => {}, killTree });
+  afterAll(() => manager.closeAll());
+
+  it('closing, exiting and restarting leave no console host behind', async () => {
+    const before = conhosts();
+    const closed = await manager.create('clean', dir, { cols: 80, rows: 24 });
+    const exits = await manager.create('clean', dir, { cols: 80, rows: 24 });
+    await waitFor(() => conhosts() >= before + 2, 10_000);
+    await manager.kill('clean', closed.id);
+    manager.input('clean', exits.id, 'exit\r');
+    await waitFor(() => manager.list('clean').find((t) => t.id === exits.id)?.exitCode !== null, 15_000);
+    await manager.restart('clean', exits.id, dir);
+    await manager.kill('clean', exits.id);
+    await waitFor(() => conhosts() <= before, 10_000);
+  }, 60_000);
 });

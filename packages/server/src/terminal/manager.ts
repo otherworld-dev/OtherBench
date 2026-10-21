@@ -23,7 +23,7 @@ export function killTerminalsOfGoneApps(
 /** About 1 MB of recent output per terminal, replayed when a page attaches. */
 export const TERMINAL_BUFFER_LIMIT = 1_000_000;
 
-export type TerminalErrorCode = 'terminal-limit' | 'unknown-shell' | 'no-terminal' | 'terminal-unavailable';
+export type TerminalErrorCode = 'terminal-limit' | 'unknown-shell' | 'no-terminal' | 'terminal-unavailable' | 'shell-failed';
 
 export class TerminalError extends Error {
   constructor(
@@ -52,8 +52,6 @@ export interface TerminalManagerOptions {
   bufferLimit?: number;
   perApp?: number;
   total?: number;
-  /** How long a kill waits for the shell to report its exit before closing the PTY itself (default 1500 ms). */
-  exitWaitMs?: number;
 }
 
 /** The server's environment without its secrets, as a terminal that draws in colour. */
@@ -66,10 +64,10 @@ interface Terminal {
   shell: ShellOption;
   pty: PtyProcess;
   buffer: string;
+  /** How much output this terminal has produced in all (UTF-16 units); the buffer is the last part of it. */
+  emitted: number;
   listeners: Set<TerminalListener>;
   size: [number, number];
-  /** Settles when the current process has exited. */
-  exited: Promise<void>;
 }
 
 /** The short name a new terminal gets from its shell. */
@@ -140,22 +138,31 @@ export class TerminalManager {
     for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`)) return `${base} (${n})`;
   }
 
-  /** Starts `t.shell` in `cwd` as `t`'s process; output and exit of an earlier process are ignored from then on. */
+  /**
+   * Starts `t.shell` in `cwd` as `t`'s process; output and exit of an earlier process are ignored from then on. A
+   * shell that won't start (its file gone, the folder gone) is a `shell-failed` error, with nothing changed.
+   */
   private start(t: Terminal, spawn: PtySpawn, cwd: string): void {
-    const pty = spawn(t.shell.file, t.shell.args, { cwd, env: this.env, cols: t.size[0], rows: t.size[1] });
+    let pty: PtyProcess;
+    try {
+      pty = spawn(t.shell.file, t.shell.args, { cwd, env: this.env, cols: t.size[0], rows: t.size[1] });
+    } catch (err) {
+      throw new TerminalError('shell-failed', `Couldn't start ${t.shell.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     t.pty = pty;
     t.info.exitCode = null;
-    let markExited: () => void = () => {};
-    t.exited = new Promise((resolve) => {
-      markExited = resolve;
-    });
     pty.onData((data) => {
       if (t.pty !== pty) return;
       this.append(t, data);
       for (const l of t.listeners) l.onOutput(data);
     });
     pty.onExit((code) => {
-      markExited();
+      // Closed straight away: on Windows an exited shell's ConPTY keeps its conhost.exe running until it is.
+      try {
+        pty.kill();
+      } catch {
+        // already gone
+      }
       if (t.pty !== pty || !this.terminals.has(t.info.id)) return;
       t.info.exitCode = code;
       for (const l of t.listeners) l.onExit(code);
@@ -163,12 +170,22 @@ export class TerminalManager {
     });
   }
 
+  /**
+   * Keeps the last `bufferLimit` of output. Trimmed only once it's a quarter over, so heavy output doesn't copy the
+   * whole buffer for every chunk; and from the first line start in what's kept, so a replay never opens inside an
+   * escape sequence (else never on the second half of a surrogate pair).
+   */
   private append(t: Terminal, data: string): void {
+    t.emitted += data.length;
     let buffer = t.buffer + data;
-    if (buffer.length > this.bufferLimit) {
+    if (buffer.length > Math.ceil(this.bufferLimit * 1.25)) {
       let from = buffer.length - this.bufferLimit;
-      const unit = buffer.charCodeAt(from);
-      if (unit >= 0xdc00 && unit <= 0xdfff) from++; // never start on the second half of a surrogate pair
+      const newline = buffer.indexOf('\n', from);
+      if (newline !== -1 && newline < buffer.length - 1) from = newline + 1;
+      else {
+        const unit = buffer.charCodeAt(from);
+        if (unit >= 0xdc00 && unit <= 0xdfff) from++;
+      }
       buffer = buffer.slice(from);
     }
     t.buffer = buffer;
@@ -183,7 +200,7 @@ export class TerminalManager {
     if (this.list(appId).length >= this.perApp) throw new TerminalError('terminal-limit', `An app can have at most ${this.perApp} terminals. Close one first.`);
     if (this.terminals.size >= this.total) throw new TerminalError('terminal-limit', `At most ${this.total} terminals can be open. Close one first.`);
     const info: TerminalInfo = { id: randomUUID(), appId, name: this.nameFor(appId, shortName(shell)), shellId: shell.id, exitCode: null, createdAt: Date.now() };
-    const t: Terminal = { info, shell, pty: null as unknown as PtyProcess, buffer: '', listeners: new Set(), exited: Promise.resolve(), size: [clamp(opts.cols, 2, 1000), clamp(opts.rows, 1, 500)] };
+    const t: Terminal = { info, shell, pty: null as unknown as PtyProcess, buffer: '', emitted: 0, listeners: new Set(), size: [clamp(opts.cols, 2, 1000), clamp(opts.rows, 1, 500)] };
     this.start(t, spawn, cwd);
     this.terminals.set(info.id, t);
     this.changed(appId);
@@ -197,15 +214,37 @@ export class TerminalManager {
     return { ...t.info };
   }
 
+  /** Ignored once the shell has gone, including the moment before its exit is reported. */
   input(appId: string, id: string, data: string): void {
     const t = this.get(appId, id);
-    if (t.info.exitCode === null) t.pty.write(data);
+    if (t.info.exitCode !== null) return;
+    try {
+      t.pty.write(data);
+    } catch {
+      // the shell has just gone; its exit follows
+    }
   }
 
   resize(appId: string, id: string, cols: number, rows: number): void {
     const t = this.get(appId, id);
     t.size = [clamp(cols, 2, 1000), clamp(rows, 1, 500)];
-    if (t.info.exitCode === null) t.pty.resize(t.size[0], t.size[1]);
+    if (t.info.exitCode !== null) return;
+    try {
+      t.pty.resize(t.size[0], t.size[1]);
+    } catch {
+      // node-pty refuses to resize a PTY whose shell has just exited
+    }
+  }
+
+  /**
+   * The output after offset `from` (of `emitted`), for a page that polls instead of streaming. `reset` when `from` is
+   * no longer in the buffer: `data` is then the whole buffer, and the screen starts again from it.
+   */
+  read(appId: string, id: string, from: number): { data: string; next: number; reset: boolean; exitCode: number | null } {
+    const t = this.get(appId, id);
+    const start = t.emitted - t.buffer.length;
+    const reset = from < start || from > t.emitted;
+    return { data: reset ? t.buffer : t.buffer.slice(from - start), next: t.emitted, reset, exitCode: t.info.exitCode };
   }
 
   attach(appId: string, id: string, listener: TerminalListener): { buffer: string; exitCode: number | null; detach(): void } {
@@ -218,30 +257,22 @@ export class TerminalManager {
     const t = this.get(appId, id);
     const spawn = this.closed ? null : await this.loadSpawn();
     if (!spawn || this.closed) throw new TerminalError('terminal-unavailable', "Terminals can't run on this machine.");
+    // Closed (or the server stopping) while this waited: start nothing, which nothing would track.
+    const gone = (): boolean => this.closed || this.terminals.get(id) !== t;
+    if (gone()) throw new TerminalError('no-terminal', 'That terminal has closed.');
     if (t.info.exitCode === null) await this.stop(t);
+    if (gone()) throw new TerminalError('no-terminal', 'That terminal has closed.');
     t.buffer = '';
     this.start(t, spawn, cwd);
     this.changed(appId);
     return { ...t.info };
   }
 
-  /**
-   * Ends a running process and everything it started, then closes the PTY. The PTY is closed only if the shell hasn't
-   * reported its exit after the tree kill: on Windows, closing a ConPTY whose shell is already gone makes node-pty's
-   * console agent print "AttachConsole failed".
-   */
+  /** Ends a running process and everything it started, then closes the PTY (an exited one was closed already). */
   private async stop(t: Terminal): Promise<void> {
     if (t.info.exitCode !== null) return;
     const pty = t.pty;
-    let exited = false;
-    const exit = t.exited.then(() => {
-      exited = true;
-    });
     await this.opts.killTree(pty.pid).catch(() => undefined);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([exit, new Promise<void>((r) => (timer = setTimeout(r, this.opts.exitWaitMs ?? 1500)))]);
-    clearTimeout(timer);
-    if (exited) return;
     try {
       pty.kill();
     } catch {

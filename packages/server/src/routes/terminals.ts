@@ -39,6 +39,7 @@ async function terminalCall<T>(fn: () => T | Promise<T>): Promise<T> {
     return await fn();
   } catch (err) {
     if (err instanceof TerminalError) {
+      // shell-failed is this machine's state (a shell or folder gone), like the limit: a 409.
       const status = err.code === 'unknown-shell' ? 400 : err.code === 'no-terminal' ? 404 : 409;
       throw new CodeRouteError(status, err.code, err.message);
     }
@@ -114,6 +115,18 @@ export function terminalsRoutes(container: Container): Hono {
     return c.body(null, 204);
   });
 
+  /**
+   * `?from=<offset>`: the output after an earlier answer's `next`, at once, for a page that has no connection to spare
+   * for a stream (spec "One terminal stream per page, at most"). `reset` means start the screen again from `data`.
+   */
+  app.get('/apps/:id/terminals/:tid/output', async (c) => {
+    const appId = appIdOf(c.req.param('id'));
+    const raw = c.req.query('from') ?? '0';
+    const from = /^\d{1,15}$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isSafeInteger(from)) throw new HTTPException(400, { message: '"from" must be an offset from an earlier answer.' });
+    return c.json(await terminalCall(() => managerOf().read(appId, c.req.param('tid'), from)));
+  });
+
   app.post('/apps/:id/terminals/:tid/restart', async (c) => {
     const target = getAppOrThrow(container, c.req.param('id'));
     const cwd = appRootOrThrow(container, target);
@@ -141,8 +154,9 @@ export function terminalsRoutes(container: Container): Hono {
         });
         sink.send('hello', { buffer: attached.buffer, exitCode: attached.exitCode });
       } catch {
-        // Closed between the check and now.
+        // Closed between the check and now: end the stream, with nothing set going.
         sink.close();
+        return () => {};
       }
       const keepalive = setInterval(() => sink.comment('keepalive'), keepaliveMs);
       return () => {

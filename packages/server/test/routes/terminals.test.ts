@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
@@ -79,7 +79,6 @@ beforeEach(() => {
     emit: (e) => bus.emit(e),
     killTree: async (p) => void treeKills.push(p),
     env: {},
-    exitWaitMs: 5,
   });
   container = {
     store: withChatEvents(store, bus),
@@ -297,4 +296,43 @@ describe('terminal routes', () => {
     const input = await api.request(`/apps/a1/terminals/${t.id}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"data":"x"}' }, { peerNodeId: 'node-laptop' });
     expect(input.status).toBe(404);
   });
+
+  it('output reads what came after an offset, for a page that polls', async () => {
+    newApp('a1', tmp());
+    const t = await create();
+    ptys[0]!.emit('hello');
+    const res = await send('GET', `/api/apps/a1/terminals/${t.id}/output?from=0`);
+    expect(await res.json()).toEqual({ data: 'hello', next: 5, reset: false, exitCode: null });
+    expect((await send('GET', `/api/apps/a1/terminals/${t.id}/output?from=-1`)).status).toBe(400);
+  });
+
+  it('a terminal closed as its stream starts ends the stream and leaves no timer behind', async () => {
+    newApp('a1', tmp());
+    const t = await create();
+    const real = container.terminals!;
+    let calls = 0;
+    container.terminals = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === 'attach') {
+          return (...args: Parameters<TerminalManager['attach']>) => {
+            calls++;
+            if (calls > 1) throw new Error('closed meanwhile');
+            return target.attach(...args);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      const res = await send('GET', `/api/apps/a1/terminals/${t.id}/stream`);
+      const reader = res.body!.getReader();
+      expect((await reader.read()).done).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

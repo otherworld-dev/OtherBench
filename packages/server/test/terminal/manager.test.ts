@@ -64,7 +64,6 @@ function setup(over: Partial<TerminalManagerOptions> = {}) {
       killed.push(pid);
     },
     env: { PATH: 'x', TERM: 'xterm-256color' },
-    exitWaitMs: 5,
     ...over,
   });
   return { manager, ptys, events, killed };
@@ -107,6 +106,17 @@ describe('TerminalManager', () => {
     for (let i = 0; i < 10; i++) await manager.create('a3', 'E:\\r', SIZE);
     await expect(manager.create('a4', 'E:\\r', SIZE)).rejects.toBeInstanceOf(TerminalError);
     await expect(manager.create('a4', 'E:\\r', SIZE)).rejects.toMatchObject({ code: 'terminal-limit' });
+  });
+
+  it("a shell that won't start is a shell-failed error, not a crash, and nothing is kept", async () => {
+    const { manager, events } = setup({
+      loadSpawn: async () => () => {
+        throw new Error('File not found: C:\pwsh.exe');
+      },
+    });
+    await expect(manager.create('a1', 'E:\r', SIZE)).rejects.toMatchObject({ code: 'shell-failed', message: expect.stringContaining('PowerShell 7') });
+    expect(manager.list('a1')).toEqual([]);
+    expect(events).toEqual([]);
   });
 
   it('no PTY here', async () => {
@@ -160,13 +170,14 @@ describe('TerminalManager', () => {
   it('trims the buffer without splitting a surrogate pair', async () => {
     const { manager, ptys } = setup({ bufferLimit: 5 });
     const t = await manager.create('a1', 'E:\\r', SIZE);
+    // Trimmed once a quarter over the limit (7 here), back to the limit: the cut would land on the emoji's second half.
     ptys[0]!.emit('ab😀cd');
-    ptys[0]!.emit('e');
+    ptys[0]!.emit('ef');
     const { buffer } = manager.attach('a1', t.id, { onOutput: () => {}, onExit: () => {} });
     expect(buffer.length).toBeLessThanOrEqual(5);
     const first = buffer.charCodeAt(0);
     expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
-    expect(buffer.endsWith('cde')).toBe(true);
+    expect(buffer).toBe('cdef');
   });
 
   it('exit keeps the terminal with its code', async () => {
@@ -216,17 +227,11 @@ describe('TerminalManager', () => {
     expect(events.at(-1)).toEqual({ type: 'terminals-changed', appId: 'a1' });
   });
 
-  it('a shell that exits from the tree kill is not closed a second time', async () => {
-    let ptys: FakePty[] = [];
-    const s = setup({
-      killTree: async () => {
-        ptys[0]!.exit(1);
-      },
-    });
-    ptys = s.ptys;
-    const t = await s.manager.create('a1', 'E:\\r', SIZE);
-    await s.manager.kill('a1', t.id);
-    expect(ptys[0]?.killed).toBe(false);
+  it('a shell that exits by itself has its PTY closed, so nothing of it is left running', async () => {
+    const { manager, ptys } = setup();
+    await manager.create('a1', 'E:\r', SIZE);
+    ptys[0]!.exit(0);
+    expect(ptys[0]?.killed).toBe(true);
   });
 
   it('killing an exited terminal skips the tree', async () => {
@@ -287,5 +292,60 @@ describe('TerminalManager', () => {
     expect(() => manager.input('a2', t.id, 'x')).toThrow(TerminalError);
     expect(() => manager.rename('a2', t.id, 'x')).toThrow(expect.objectContaining({ code: 'no-terminal' }));
     await expect(manager.kill('a2', t.id)).rejects.toMatchObject({ code: 'no-terminal' });
+  });
+
+  it('a restart that a close overtakes starts nothing', async () => {
+    const releases: (() => void)[] = [];
+    const { manager, ptys } = setup({ killTree: () => new Promise<void>((r) => releases.push(r)) });
+    const t = await manager.create('a1', 'E:\r', SIZE);
+    const restarting = manager.restart('a1', t.id, 'E:\r');
+    const killing = manager.kill('a1', t.id);
+    for (const r of releases) r();
+    await expect(restarting).rejects.toMatchObject({ code: 'no-terminal' });
+    await killing;
+    expect(ptys).toHaveLength(1);
+    expect(manager.list('a1')).toEqual([]);
+  });
+
+  it('typing or resizing in the moment after the shell has gone is ignored, not an error', async () => {
+    const { manager, ptys } = setup();
+    const t = await manager.create('a1', 'E:\r', SIZE);
+    ptys[0]!.resize = () => {
+      throw new Error('Cannot resize a pty that has already exited');
+    };
+    ptys[0]!.write = () => {
+      throw new Error('write EPIPE');
+    };
+    expect(() => manager.resize('a1', t.id, 100, 30)).not.toThrow();
+    expect(() => manager.input('a1', t.id, 'x')).not.toThrow();
+  });
+
+  it('trimming starts the replay at a line start, so it never opens mid escape sequence', async () => {
+    const { manager, ptys } = setup({ bufferLimit: 20 });
+    const t = await manager.create('a1', 'E:\r', SIZE);
+    ptys[0]!.emit('\x1b[31mred line one\r\nline two\r\n');
+    ptys[0]!.emit('line three\r\n');
+    const { buffer } = manager.attach('a1', t.id, { onOutput: () => {}, onExit: () => {} });
+    expect(buffer.length).toBeLessThanOrEqual(25);
+    expect(buffer.startsWith('line')).toBe(true);
+    expect(buffer.endsWith('line three\r\n')).toBe(true);
+  });
+
+  it('read gives the output after an offset, and the whole buffer when the offset is gone', async () => {
+    const { manager, ptys } = setup({ bufferLimit: 8 });
+    const t = await manager.create('a1', 'E:\r', SIZE);
+    expect(manager.read('a1', t.id, 0)).toEqual({ data: '', next: 0, reset: false, exitCode: null });
+    ptys[0]!.emit('abc');
+    const first = manager.read('a1', t.id, 0);
+    expect(first).toEqual({ data: 'abc', next: 3, reset: false, exitCode: null });
+    ptys[0]!.emit('de');
+    expect(manager.read('a1', t.id, first.next)).toEqual({ data: 'de', next: 5, reset: false, exitCode: null });
+    ptys[0]!.emit('fghijklmn');
+    const behind = manager.read('a1', t.id, 5);
+    expect(behind.reset).toBe(true);
+    expect(behind.next).toBe(14);
+    expect('abcdefghijklmn'.endsWith(behind.data)).toBe(true);
+    ptys[0]!.exit(1);
+    expect(manager.read('a1', t.id, 14)).toMatchObject({ data: '', exitCode: 1 });
   });
 });

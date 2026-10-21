@@ -64,7 +64,11 @@ console.log(`[smoke] up on ${port} (${health.platform})`);
 // cli.js, and a missing one only turns terminals off, so check here that the bundle really has them.
 const terminal = await api('GET', '/terminal/status');
 if (!terminal.available) fail(`the bundled server has no terminal (${terminal.reason})`);
-console.log(`[smoke] terminals available (${terminal.shells.map((s) => s.id).join(', ')})`);
+// Available on Windows only proves the binary loads, so start one: a shell in an app's folder, then close it.
+const terminalApp = await api('POST', '/apps', { name: 'Smoke', workspacePath: dir });
+const shell = await api('POST', `/apps/${terminalApp.id}/terminals`, { cols: 80, rows: 24 });
+await api('DELETE', `/apps/${terminalApp.id}/terminals/${shell.id}`);
+console.log(`[smoke] a terminal started and closed (${terminal.shells.map((s) => s.id).join(', ')})`);
 
 const connection = await api('POST', '/connections', { name: 'Mock', kind: 'mock' });
 const profile = await api('POST', '/profiles', { name: 'Mock', connectionId: connection.id, modelId: 'mock-standard', isDefault: true });
