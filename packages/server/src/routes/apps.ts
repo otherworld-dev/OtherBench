@@ -110,7 +110,7 @@ function sameFolder(a: Workspace | null, b: Workspace | null): boolean {
   return a === null || b === null ? a === b : sameWorkspace(a, b);
 }
 
-function getAppOrThrow(container: Container, id: string): App {
+export function getAppOrThrow(container: Container, id: string): App {
   const app = container.store.apps.get(id);
   if (!app) throw new HTTPException(404, { message: `App "${id}" not found.` });
   return app;
@@ -133,7 +133,7 @@ export function clearAppDefaultProfile(store: Store, profileId: string): void {
  * same resolver as every chat and project view, so "isn't on this machine"
  * here means exactly what the app's `workspaceStatus` already shows.
  */
-function appRootOrThrow(container: Container, app: App): string {
+export function appRootOrThrow(container: Container, app: App): string {
   const status = workspaceResolver(container)(app.workspace);
   if (status.status === 'ok') return status.root;
   let message = "This app's folder isn't on this machine.";
@@ -294,6 +294,8 @@ export function appsRoutes(container: Container): Hono {
     // chat repo, past the evented one, so announce each moved chat here (as projects.ts does).
     const moved = container.store.chats.list().filter((chat) => chat.appId === id).map((chat) => chat.id);
     container.store.apps.delete(id);
+    // Its terminals go with it (spec 2026-10-21-code-terminal-design); not awaited, the kills run on their own.
+    void container.terminals?.killApp(id);
     for (const chatId of moved) {
       const chat = container.store.chats.get(chatId);
       if (chat) container.events?.emit({ type: 'chat-updated', chat });

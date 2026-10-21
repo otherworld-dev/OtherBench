@@ -5,6 +5,21 @@ import { TERMINALS_PER_APP, TERMINALS_TOTAL, type ShellInfo, type TerminalInfo }
 import type { PtyProcess, PtySpawn } from './pty.js';
 import type { ShellOption } from './shells.js';
 
+/**
+ * Kills the terminals of apps that a sync removed (spec 2026-10-21-code-terminal-design, "When the app changes"):
+ * after every sync, any terminal whose app is gone goes. A delete through this machine's own route kills its
+ * terminals there. Returns the unsubscribe.
+ */
+export function killTerminalsOfGoneApps(
+  events: { subscribe(fn: (e: AppEvent) => void): () => void },
+  terminals: TerminalManager,
+  appExists: (appId: string) => boolean
+): () => void {
+  return events.subscribe((e) => {
+    if (e.type === 'sync-applied') void terminals.prune(appExists);
+  });
+}
+
 /** About 1 MB of recent output per terminal, replayed when a page attaches. */
 export const TERMINAL_BUFFER_LIMIT = 1_000_000;
 

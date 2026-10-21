@@ -30,6 +30,7 @@ import { schedulesRoutes } from './routes/schedules.js';
 import { settingsRoutes } from './routes/settings.js';
 import { mcpSignInRoutes, oauthRedirectUri } from './routes/mcp-sign-in.js';
 import { oauthCallbackRoutes } from './routes/oauth-callback.js';
+import { terminalsRoutes, terminalStatusRoutes } from './routes/terminals.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { notesRoutes } from './routes/notes.js';
@@ -87,6 +88,12 @@ export interface AppOptions {
    * the first public origin instead, and this port is not used.
    */
   oauthCallbackPort?: () => number;
+  /**
+   * Whether this server offers the Code tab's terminals (spec 2026-10-21-code-terminal-design): `cli.ts` sets it
+   * only in open or token mode on a loopback bind, never in sign-in mode or on a non-loopback host. Unset (most
+   * tests) mounts no terminal routes; `GET /api/terminal/status` then says `not-local`.
+   */
+  terminals?: boolean;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
@@ -128,6 +135,11 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // tools, so they never pass the PermissionBroker -- and for the same reason they are never on the peer listener
   // (peer/forward.ts): a paired machine must not be able to commit, push or comment from here.
   authed.route('/apps', appsRoutes(container));
+  // The Code tab's terminals (spec 2026-10-21-code-terminal-design): a shell with no approval card, so only on a local
+  // server, and like the app routes never on the peer listener. Full paths under /apps/:id/terminals; appsRoutes owns
+  // nothing there. The status route is always there so the web can say why there's no Terminal tab.
+  authed.route('/', terminalStatusRoutes(container, options.terminals === true));
+  if (options.terminals === true) authed.route('/', terminalsRoutes(container));
   authed.route('/settings', settingsRoutes(container));
   authed.route('/locations', locationsRoutes(container));
   authed.route('/node', nodeRoutes(container));

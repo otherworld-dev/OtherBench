@@ -188,6 +188,15 @@ export class NonLoopbackWithoutTokenError extends Error {
 
 export type ServeMode = 'open' | 'token' | 'login';
 
+/**
+ * Whether this server may offer the Code tab's terminals (spec 2026-10-21-code-terminal-design): a shell with no
+ * approval card, so only on a server nothing else can reach -- open or token mode, bound to loopback. Never in
+ * sign-in mode, never on a token server listening on the network.
+ */
+export function terminalsAllowed(mode: ServeMode, host: string): boolean {
+  return mode !== 'login' && isLoopbackHost(host);
+}
+
 type SecurityOptions = Pick<ServeOptions, 'host' | 'token'> &
   Partial<Pick<ServeOptions, 'announce' | 'desktopRpc' | 'publicUrls' | 'tls' | 'tlsCert' | 'tlsKey' | 'trustProxies'>>;
 
@@ -315,6 +324,8 @@ export interface ServerHandle {
   /** Lines to print after the listening line (certificate fingerprint, warnings). */
   notes: string[];
   close: () => void;
+  /** Ends every terminal's shell and what it started (Ctrl+C on `otherbench serve`). */
+  stopTerminals: () => Promise<void>;
 }
 
 /**
@@ -392,6 +403,7 @@ export async function runServe(
     hostCheckPort: isLoopbackHost(options.host) || remote ? () => boundPort : undefined,
     oauthCallbackPort: () => boundPort,
     remote,
+    terminals: terminalsAllowed(mode, options.host),
   });
 
   const tls = signIn?.tls ?? null;
@@ -465,6 +477,7 @@ export async function runServe(
     publicUrls: remote?.publicOrigins ?? [],
     notes: signIn?.notes ?? [],
     close,
+    stopTerminals: () => container.terminals?.closeAll() ?? Promise.resolve(),
   };
 }
 
@@ -472,6 +485,8 @@ export interface MainDeps extends Partial<ServeDeps> {
   env?: NodeJS.ProcessEnv;
   /** Whether stdin is a terminal, for `otherbench password`. Defaults to `process.stdin.isTTY`. */
   isTTY?: boolean;
+  /** Where Ctrl+C and SIGTERM are heard. Defaults to `process.once`. */
+  onSignal?: (signal: 'SIGINT' | 'SIGTERM', handler: () => void) => void;
 }
 
 const USAGE = [
@@ -520,6 +535,18 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
     const signIn = handle.publicUrls.length > 0 ? `; sign-in on ${handle.publicUrls.join(', ')}` : '';
     log(`OtherBench server listening on ${handle.scheme}://${handle.host}:${handle.port}${signIn}`);
     for (const note of handle.notes) log(note);
+    // Ctrl+C or SIGTERM: the terminals' shells and what they started go first (a dev server would keep its port),
+    // then the process exits as it always has, without the rest of the shutdown (spec "Which exits clean up"). A real
+    // exit: with a handler installed Node no longer exits by itself, and main's default `exit` only sets the code.
+    const onSignal = deps.onSignal ?? ((signal, handler) => void process.once(signal, handler));
+    for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+      onSignal(signal, () => {
+        void handle
+          .stopTerminals()
+          .catch(() => undefined)
+          .finally(() => (deps.exit ?? ((c: number) => process.exit(c)))(code));
+      });
+    }
   } catch (err) {
     if (
       err instanceof NonLoopbackWithoutTokenError ||
