@@ -10,6 +10,7 @@ import { PaneGrid } from './panes/PaneGrid.js';
 import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { PanelResizer } from './panes/PanelResizer.js';
 import { codePanelWidth } from './state/panelWidth.js';
+import { useTerminalShortcuts } from './code/terminal/useTerminalShortcuts.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useAuthStore } from './state/auth.js';
@@ -129,6 +130,7 @@ function MainApp(): JSX.Element {
   useDesktopShell();
   useTextSizeShortcuts();
   usePaneShortcuts(isNarrow);
+  useTerminalShortcuts();
   useMarkRead(isNarrow);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;

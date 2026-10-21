@@ -211,11 +211,12 @@ describe('terminal routes', () => {
       ptys[0]!.emit('hi');
       ptys[0]!.exit(0);
     }, 10);
-    const records = await readSse(res, (r) => r.some((x) => x.event === 'exit'));
+    const records = await readSse(res, (r) => r.some((x) => (x.data as { type?: string }).type === 'exit'));
+    // hello is named; the rest are unnamed with a type, as the web's SseClient reads a stream.
     expect(records).toEqual([
       { event: 'hello', data: { buffer: 'PS> ', exitCode: null } },
-      { event: 'output', data: { data: 'hi' } },
-      { event: 'exit', data: { exitCode: 0 } },
+      { event: null, data: { type: 'output', data: 'hi' } },
+      { event: null, data: { type: 'exit', exitCode: 0 } },
     ]);
   });
 

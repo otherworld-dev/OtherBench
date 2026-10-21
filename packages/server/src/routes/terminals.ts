@@ -121,8 +121,9 @@ export function terminalsRoutes(container: Container): Hono {
   });
 
   /**
-   * The one terminal on screen (spec "One terminal stream per page, at most"): `hello` with the replay buffer and
-   * whether it has exited, then `output` and `exit` as they happen. Restarting keeps the stream: new output follows.
+   * The one terminal on screen (spec "One terminal stream per page, at most"): a `hello` with the replay buffer and
+   * whether it has exited, then unnamed `{ type: 'output', data }` and `{ type: 'exit', exitCode }` records as they
+   * happen (unnamed, as the web's SseClient reads a stream). Restarting keeps the stream: new output follows.
    */
   app.get('/apps/:id/terminals/:tid/stream', async (c) => {
     const appId = appIdOf(c.req.param('id'));
@@ -135,8 +136,8 @@ export function terminalsRoutes(container: Container): Hono {
       let attached: ReturnType<TerminalManager['attach']> | null = null;
       try {
         attached = manager.attach(appId, id, {
-          onOutput: (data) => sink.send('output', { data }),
-          onExit: (exitCode) => sink.send('exit', { exitCode }),
+          onOutput: (data) => sink.send(null, { type: 'output', data }),
+          onExit: (exitCode) => sink.send(null, { type: 'exit', exitCode }),
         });
         sink.send('hello', { buffer: attached.buffer, exitCode: attached.exitCode });
       } catch {

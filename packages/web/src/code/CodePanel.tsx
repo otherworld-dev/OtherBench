@@ -7,12 +7,16 @@ import { useOtherBenchStore, type CodePanelTab } from '../state/store.js';
 import { isViewTab, parseViewTab } from '../viewer/items.js';
 import { FilesTab } from './FilesTab.js';
 import { IssuesTab } from './IssuesTab.js';
+import { useTerminalStatus } from './terminal/status.js';
+import { TerminalTab } from './terminal/TerminalTab.js';
 
-const TABS: { id: CodePanelTab; label: string }[] = [
+const BASE_TABS: { id: CodePanelTab; label: string }[] = [
   { id: 'issues', label: 'Issues' },
   { id: 'files', label: 'Files' },
   { id: 'chat', label: 'Chat' },
 ];
+/** Only where this server has terminals (spec 2026-10-21-code-terminal-design): a local server with a PTY. */
+const WITH_TERMINAL: { id: CodePanelTab; label: string }[] = [...BASE_TABS, { id: 'terminal', label: 'Terminal' }];
 
 /**
  * The chat the focused pane is about: the chat itself, or the chat a popped-out
@@ -40,8 +44,12 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
   const chats = useOtherBenchStore((s) => s.chats);
   const apps = useOtherBenchStore((s) => s.apps);
   const profiles = useOtherBenchStore((s) => s.profiles);
-  const tab = useOtherBenchStore((s) => s.codePanelTab);
+  const savedTab = useOtherBenchStore((s) => s.codePanelTab);
   const setTab = useOtherBenchStore((s) => s.setCodePanelTab);
+  const terminals = useTerminalStatus()?.available === true;
+  const TABS = terminals ? WITH_TERMINAL : BASE_TABS;
+  // A saved Terminal tab on a server without terminals (or before that's known) shows Issues.
+  const tab: CodePanelTab = savedTab === 'terminal' && !terminals ? 'issues' : savedTab;
   const tabRefs = useRef(new Map<CodePanelTab, HTMLButtonElement>());
   const baseId = useId();
 
@@ -82,6 +90,9 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
         {appId !== null ? "This chat's app isn't loaded." : 'Pick an app or a chat'}
       </p>
     );
+  } else if (tab === 'terminal') {
+    // Its own layout: the strip and a screen that fills the panel. Keyed by app, so each app's tab starts fresh.
+    body = <TerminalTab key={app.id} app={app} />;
   } else {
     body = (
       <div className="h-full min-h-0 overflow-y-auto p-3">
