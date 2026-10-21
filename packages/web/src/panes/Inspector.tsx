@@ -5,7 +5,7 @@ import { pathForCard } from '@otherbench/core/domain/computer-apps.js';
 import type { AuditEntry, Chat, Grant } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
-import { isDesktop, openTerminal, pickFolder } from '../desktop/bridge.js';
+import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { usePolled } from '../lib/usePolled.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
@@ -205,8 +205,6 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
   const machines = useOtherBenchStore((s) => s.machines);
   const chats = useOtherBenchStore((s) => s.chats);
   const activeElsewhere = alsoActive(machines, chats, chat);
-  // A terminal opens on this machine, so only for a folder that's on it.
-  const runsHere = !machines || chat.runsOn === machines.self.id;
   const serverPlatform = useServerPlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.workspaceRoot ?? '');
@@ -276,19 +274,6 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
           </p>
         ))}
         {displayedWorkspaceRoot && <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>}
-        {isDesktop() && runsHere && displayedWorkspaceRoot && (
-          <button
-            type="button"
-            title="A terminal window in this folder, for commands to run yourself"
-            onClick={() => {
-              setError(null);
-              openTerminal(displayedWorkspaceRoot).catch((err: unknown) => setError(`Couldn't open a terminal: ${err instanceof Error ? err.message : String(err)}`));
-            }}
-            className="btn px-2 py-1"
-          >
-            Open terminal
-          </button>
-        )}
         {error && (
           <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">
             {error}
@@ -465,21 +450,6 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
         <button type="button" onClick={openEdit} className="btn px-2 py-1">
           Change…
         </button>
-        {isDesktop() && runsHere && (
-          <button
-            type="button"
-            title="A terminal window in this folder, for commands to run yourself"
-            onClick={() => {
-              setError(null);
-              openTerminal(displayedWorkspaceRoot).catch((err: unknown) =>
-                setError(`Couldn't open a terminal: ${err instanceof Error ? err.message : String(err)}`)
-              );
-            }}
-            className="btn px-2 py-1"
-          >
-            Open terminal
-          </button>
-        )}
         <button
           type="button"
           onClick={() => void commit(null)}

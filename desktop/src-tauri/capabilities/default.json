@@ -18,7 +18,6 @@
     "allow-hide-quick",
     "allow-open-chat",
     "allow-show-notification",
-    "allow-save-download",
-    "allow-open-terminal"
+    "allow-save-download"
   ]
 }

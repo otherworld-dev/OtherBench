@@ -9,7 +9,6 @@ mod links;
 mod notify;
 mod rpc;
 mod sidecar;
-mod terminal;
 mod tray;
 
 use std::path::PathBuf;
@@ -111,12 +110,6 @@ async fn save_download(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) 
     download::save(&dir, &name, bytes).map(|p| p.display().to_string())
 }
 
-/// Opens a terminal window in a chat's workspace folder (terminal.rs).
-#[tauri::command]
-fn open_terminal(folder: String) -> Result<(), String> {
-    terminal::open(&folder)
-}
-
 /// Quick chat's Expand: the main window opens the chat and the quick window goes away.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle, chat_id: String) {
@@ -201,7 +194,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_terminal])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
