@@ -28,7 +28,12 @@ export function usePaneShortcuts(narrow: boolean): void {
 
       if (narrow) return;
 
+      // In a Code tab terminal, Alt+digit (readline's argument keys) and Ctrl+Shift+Enter belong to the shell
+      // (spec 2026-10-21-code-terminal-design, "Keys"); Ctrl+Tab and Ctrl+digit still work, as in VS Code.
+      const inTerminal = e.target instanceof Element && e.target.closest('[data-terminal]') !== null;
+
       if (ctrl && e.shiftKey && !e.altKey && e.key === 'Enter') {
+        if (inTerminal) return;
         if (paneState.panes.length < 2) return;
         e.preventDefault();
         toggleMaximised();
@@ -36,7 +41,7 @@ export function usePaneShortcuts(narrow: boolean): void {
       }
 
       const digit = /^Digit([1-9])$/.exec(e.code)?.[1];
-      if (digit && !e.shiftKey && (ctrl !== e.altKey)) {
+      if (digit && !e.shiftKey && (ctrl !== e.altKey) && !(e.altKey && inTerminal)) {
         const index = Number(digit) - 1;
         if (index >= paneState.panes.length || paneState.panes.length < 2) return;
         e.preventDefault();

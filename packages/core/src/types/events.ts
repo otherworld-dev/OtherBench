@@ -43,7 +43,9 @@ export type AppEvent =
   /** A chat started or stopped controlling this computer, or acted (computer use); `lastAction` is a one-line summary. */
   | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string }
   /** How many background tasks a chat's agent has running now (spec 2026-10-17-claude-background-helpers-design); 0 when none. */
-  | { type: 'background-tasks'; chatId: string; count: number };
+  | { type: 'background-tasks'; chatId: string; count: number }
+  /** An app's terminals were opened, renamed, ended or closed (spec 2026-10-21-code-terminal-design): re-read its list. */
+  | { type: 'terminals-changed'; appId: string };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {

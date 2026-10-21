@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
 
@@ -140,4 +140,53 @@ test('an app chat runs in Code mode with its git bar and files, and stays out of
   await expect(modes.getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId(`tab-${chatId}`).getByRole('tab')).toHaveAttribute('aria-selected', 'true');
   await expect(thread.getByText('Hello from the code tab')).toBeVisible();
+});
+
+test('the terminal tab runs a shell in the app folder, keeps it across a reload, and the panel widens', async ({ page, request }) => {
+  const status = await (await request.get(`${BASE_URL}/api/terminal/status`)).json();
+  test.skip(!status.available, `no terminals on this server (${status.reason})`);
+  const suffix = randomUUID().slice(0, 8);
+  const appName = `E2E Terminal ${suffix}`;
+  const created = await request.post(`${BASE_URL}/api/apps`, { data: { name: appName, workspacePath: repo, githubRepo: null } });
+  expect(created.ok()).toBeTruthy();
+  const { id: appId } = await created.json();
+
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  await nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' }).click();
+  await nav.getByTestId(`group-heading-${appId}`).getByRole('button', { name: new RegExp(`^${appName}`) }).click();
+  await expect(page.getByTestId('app-home').getByRole('heading', { name: appName })).toBeVisible();
+
+  // The panel's left edge widens it.
+  const panel = page.getByTestId('code-panel');
+  const before = (await panel.boundingBox())!.width;
+  const edge = page.getByRole('separator', { name: 'Resize code panel' });
+  const box = (await edge.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 200, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(before + 150);
+
+  // Opening the tab starts a shell; what's typed runs in the repo.
+  await panel.getByTestId('code-panel-tab-terminal').click();
+  const screen = panel.getByTestId('terminal-screen');
+  await expect(screen.locator('.xterm-rows')).toBeVisible();
+  await screen.locator('.xterm-helper-textarea').focus();
+  // The prompt (PowerShell's and bash's alike) names the folder the shell started in.
+  await expect(screen.locator('.xterm-rows')).toContainText(basename(repo), { timeout: 20_000 });
+  await page.keyboard.type('echo ob-e2e-hi');
+  await page.keyboard.press('Enter');
+  await expect(screen.locator('.xterm-rows')).toContainText(/ob-e2e-hi[\s\S]*ob-e2e-hi/, { timeout: 20_000 });
+
+  // A reload attaches to the same shell, its output replayed.
+  await page.reload();
+  await expect(page.getByTestId('code-panel').getByTestId('code-panel-tab-terminal')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('terminal-screen').locator('.xterm-rows')).toContainText('ob-e2e-hi', { timeout: 20_000 });
+  const terminals = await (await request.get(`${BASE_URL}/api/apps/${appId}/terminals`)).json();
+  expect(terminals).toHaveLength(1);
+
+  // Deleting the app ends its shell.
+  expect((await request.delete(`${BASE_URL}/api/apps/${appId}`)).ok()).toBeTruthy();
 });

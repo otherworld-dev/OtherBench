@@ -7,6 +7,7 @@ import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
 import { keepOtherBenchTitle } from './lib/otherBenchTitle.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
+import { codePanelWidth } from './state/panelWidth.js';
 import { initTextSize } from './state/textSize.js';
 import './index.css';
 
@@ -17,9 +18,10 @@ if (!rootEl) throw new Error('#root element missing from index.html');
 // browser showing this page can't be used to answer OtherBench's own cards.
 keepOtherBenchTitle();
 
-// Apply the saved text size and sidebar width before first paint.
+// Apply the saved text size, sidebar width and Code panel width before first paint.
 initTextSize();
 initSidebarWidth();
+codePanelWidth.init();
 
 const root = createRoot(rootEl);
 

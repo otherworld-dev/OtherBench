@@ -15,6 +15,7 @@ import type { PublicPeer } from '@otherbench/core/types/peer.js';
 import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
+import type { TerminalInfo, TerminalStatus } from '@otherbench/core/types/terminal.js';
 import { apiFetch, apiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
@@ -629,6 +630,31 @@ export const api = {
       request<{ path: string; entries: ViewEntry[] }>(`/apps/${encodeURIComponent(id)}/files${path !== undefined ? `?path=${encodeURIComponent(path)}` : ''}`),
     /** A file's text inside the app's folder, as `view.text` reads one for a chat. */
     text: (id: string, path: string) => request<ViewText>(`/apps/${encodeURIComponent(id)}/text?path=${encodeURIComponent(path)}`),
+  },
+
+  /**
+   * The Code tab's terminals (spec 2026-10-21-code-terminal-design; server `routes/terminals.ts`). Only a local server
+   * has them: `status()` says whether this one does, and why not.
+   */
+  terminals: {
+    status: () => request<TerminalStatus>('/terminal/status'),
+    list: (appId: string) => request<TerminalInfo[]>(`/apps/${encodeURIComponent(appId)}/terminals`),
+    /** The default shell without `shell`. A folder not on this machine is a 409 `not-on-this-machine`. */
+    create: (appId: string, body: { shell?: string; cols: number; rows: number }) => post<TerminalInfo>(`/apps/${encodeURIComponent(appId)}/terminals`, body),
+    rename: (appId: string, id: string, name: string) => patch<TerminalInfo>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}`, { name }),
+    kill: (appId: string, id: string) => del(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}`),
+    /** At most 64 KiB a call. */
+    input: (appId: string, id: string, data: string) => post<void>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/input`, { data }),
+    resize: (appId: string, id: string, cols: number, rows: number) =>
+      post<void>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/resize`, { cols, rows }),
+    restart: (appId: string, id: string) => post<TerminalInfo>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/restart`),
+    /** The output after offset `from` (an earlier answer's `next`), for a page that polls; `reset`: start the screen again from `data`. */
+    output: (appId: string, id: string, from: number) =>
+      request<{ data: string; next: number; reset: boolean; exitCode: number | null }>(
+        `/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/output?from=${from}`
+      ),
+    /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader, for the terminal on screen only. */
+    streamUrl: (appId: string, id: string) => apiUrl(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/stream`),
   },
 
   /** A project's shared memory note (spec 2026-10-03-project-memory-design §4). */

@@ -50,4 +50,23 @@ describe('usePaneShortcuts (#824)', () => {
     expect(press({ key: '2', code: 'Digit2', ctrlKey: true })).toBe(true);
     expect(press({ key: 'Enter', ctrlKey: true, shiftKey: true })).toBe(true);
   });
+
+  it('inside the terminal, Alt+digit and Ctrl+Shift+Enter are left to the shell; Ctrl+digit still focuses a pane', () => {
+    ({ unmount } = renderHook(() => usePaneShortcuts(false)));
+    useOtherBenchStore.getState().setLayout('columns-3');
+    const terminal = document.createElement('div');
+    terminal.setAttribute('data-terminal', '');
+    const input = document.createElement('textarea');
+    terminal.appendChild(input);
+    document.body.appendChild(terminal);
+    const pressIn = (init: KeyboardEventInit): boolean => input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+    expect(pressIn({ key: '3', code: 'Digit3', altKey: true })).toBe(true);
+    expect(useOtherBenchStore.getState().paneState.focusedPane).toBe(0);
+    expect(pressIn({ key: 'Enter', ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(useOtherBenchStore.getState().paneState.maximised).toBe(false);
+    expect(pressIn({ key: '2', code: 'Digit2', ctrlKey: true })).toBe(false);
+    expect(useOtherBenchStore.getState().paneState.focusedPane).toBe(1);
+    terminal.remove();
+  });
 });
+

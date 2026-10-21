@@ -22,10 +22,12 @@ const out = join(serverDir, 'dist-bundle', 'server');
  * Left out of the bundle and copied as packages: the Claude Agent SDK starts
  * its own Claude Code runtime (a per-platform native package), and unpdf
  * loads PDF.js from its own folder, and playwright-core reads its own files
- * at run time (the model's browser).
+ * at run time (the model's browser), and the Code tab's terminals run in
+ * node-pty, whose prebuilt binary sits in a per-platform package of its own.
  */
-const EXTERNAL = ['@anthropic-ai/claude-agent-sdk', 'unpdf', 'playwright-core'];
+const EXTERNAL = ['@anthropic-ai/claude-agent-sdk', 'unpdf', 'playwright-core', '@lydell/node-pty'];
 const NATIVE_CLAUDE = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+const NATIVE_PTY = `@lydell/node-pty-${process.platform}-${process.arch}`;
 
 async function exists(p) {
   try {
@@ -58,12 +60,16 @@ await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'cli.js')], outfi
 await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'office', 'render-worker.js')], outfile: join(out, 'render-worker.js') });
 await writeFile(join(out, 'package.json'), JSON.stringify({ name: 'otherbench-server', private: true, type: 'module' }, null, 2) + '\n');
 
-const copies = [...EXTERNAL, NATIVE_CLAUDE];
+const copies = [...EXTERNAL, NATIVE_CLAUDE, NATIVE_PTY];
 for (const pkg of copies) {
   const from = join(repoRoot, 'node_modules', ...pkg.split('/'));
   if (!(await exists(from))) {
     if (pkg === NATIVE_CLAUDE) {
       console.warn(`[bundle] ${pkg} isn't installed: Claude Code profiles won't run from this bundle.`);
+      continue;
+    }
+    if (pkg === NATIVE_PTY) {
+      console.warn(`[bundle] ${pkg} isn't installed: this bundle has no terminals.`);
       continue;
     }
     throw new Error(`[bundle] ${pkg} isn't installed in ${join(repoRoot, 'node_modules')}`);

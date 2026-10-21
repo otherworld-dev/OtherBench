@@ -1,0 +1,308 @@
+import { randomUUID } from 'node:crypto';
+import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { TERMINALS_PER_APP, TERMINALS_TOTAL, type ShellInfo, type TerminalInfo } from '@otherbench/core/types/terminal.js';
+import type { PtyProcess, PtySpawn } from './pty.js';
+import type { ShellOption } from './shells.js';
+
+/**
+ * Kills the terminals of apps that a sync removed (spec 2026-10-21-code-terminal-design, "When the app changes"):
+ * after every sync, any terminal whose app is gone goes. A delete through this machine's own route kills its
+ * terminals there. Returns the unsubscribe.
+ */
+export function killTerminalsOfGoneApps(
+  events: { subscribe(fn: (e: AppEvent) => void): () => void },
+  terminals: TerminalManager,
+  appExists: (appId: string) => boolean
+): () => void {
+  return events.subscribe((e) => {
+    if (e.type === 'sync-applied') void terminals.prune(appExists);
+  });
+}
+
+/** About 1 MB of recent output per terminal, replayed when a page attaches. */
+export const TERMINAL_BUFFER_LIMIT = 1_000_000;
+
+export type TerminalErrorCode = 'terminal-limit' | 'unknown-shell' | 'no-terminal' | 'terminal-unavailable' | 'shell-failed';
+
+export class TerminalError extends Error {
+  constructor(
+    readonly code: TerminalErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'TerminalError';
+  }
+}
+
+export interface TerminalListener {
+  onOutput(data: string): void;
+  onExit(exitCode: number): void;
+}
+
+export interface TerminalManagerOptions {
+  /** The PTY, loaded once on first use; null when it can't load on this machine. */
+  loadSpawn: () => Promise<PtySpawn | null>;
+  shells: () => ShellOption[];
+  emit: (e: AppEvent) => void;
+  /** Ends a process and everything it started (kill-tree.ts). */
+  killTree: (pid: number) => Promise<void>;
+  /** Defaults to `terminalEnv(process.env)`. */
+  env?: Record<string, string>;
+  bufferLimit?: number;
+  perApp?: number;
+  total?: number;
+}
+
+/** The server's environment without its secrets, as a terminal that draws in colour. */
+export function terminalEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return { ...withoutServerSecrets(env), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+}
+
+interface Terminal {
+  info: TerminalInfo;
+  shell: ShellOption;
+  pty: PtyProcess;
+  buffer: string;
+  /** How much output this terminal has produced in all (UTF-16 units); the buffer is the last part of it. */
+  emitted: number;
+  listeners: Set<TerminalListener>;
+  size: [number, number];
+}
+
+/** The short name a new terminal gets from its shell. */
+function shortName(shell: ShellOption): string {
+  if (shell.id === 'pwsh') return 'pwsh';
+  if (shell.id === 'git-bash') return 'bash';
+  if (shell.id === 'powershell' || shell.id === 'cmd' || shell.id === 'wsl') return shell.id;
+  return shell.label;
+}
+
+const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, Math.round(Number.isFinite(n) ? n : lo)));
+
+/**
+ * The Code tab's terminals (spec 2026-10-21-code-terminal-design): shells this
+ * server runs for an app, each with the last ~1 MB of its output so a page
+ * that attaches (a reload, another window) sees what it missed. Knows nothing
+ * of HTTP, so the routes are a thin layer over it and a paired machine's
+ * forwarding can call the same methods later. Everything is in memory: the
+ * terminals end with the server.
+ */
+export class TerminalManager {
+  private readonly terminals = new Map<string, Terminal>();
+  private spawn: Promise<PtySpawn | null> | null = null;
+  private closed = false;
+  private readonly env: Record<string, string>;
+  private readonly bufferLimit: number;
+  private readonly perApp: number;
+  private readonly total: number;
+
+  constructor(private readonly opts: TerminalManagerOptions) {
+    this.env = opts.env ?? terminalEnv(process.env);
+    this.bufferLimit = opts.bufferLimit ?? TERMINAL_BUFFER_LIMIT;
+    this.perApp = opts.perApp ?? TERMINALS_PER_APP;
+    this.total = opts.total ?? TERMINALS_TOTAL;
+  }
+
+  private loadSpawn(): Promise<PtySpawn | null> {
+    this.spawn ??= this.opts.loadSpawn().catch(() => null);
+    return this.spawn;
+  }
+
+  /** Whether a terminal can start here: the PTY loaded. */
+  async available(): Promise<boolean> {
+    return (await this.loadSpawn()) !== null;
+  }
+
+  shellInfos(): ShellInfo[] {
+    return this.opts.shells().map(({ id, label, default: isDefault }) => ({ id, label, default: isDefault }));
+  }
+
+  list(appId: string): TerminalInfo[] {
+    return [...this.terminals.values()].filter((t) => t.info.appId === appId).map((t) => ({ ...t.info }));
+  }
+
+  private get(appId: string, id: string): Terminal {
+    const t = this.terminals.get(id);
+    if (!t || t.info.appId !== appId) throw new TerminalError('no-terminal', 'That terminal has closed.');
+    return t;
+  }
+
+  private changed(appId: string): void {
+    this.opts.emit({ type: 'terminals-changed', appId });
+  }
+
+  private nameFor(appId: string, base: string): string {
+    const taken = new Set(this.list(appId).map((t) => t.name));
+    if (!taken.has(base)) return base;
+    for (let n = 2; ; n++) if (!taken.has(`${base} (${n})`)) return `${base} (${n})`;
+  }
+
+  /**
+   * Starts `t.shell` in `cwd` as `t`'s process; output and exit of an earlier process are ignored from then on. A
+   * shell that won't start (its file gone, the folder gone) is a `shell-failed` error, with nothing changed.
+   */
+  private start(t: Terminal, spawn: PtySpawn, cwd: string): void {
+    let pty: PtyProcess;
+    try {
+      pty = spawn(t.shell.file, t.shell.args, { cwd, env: this.env, cols: t.size[0], rows: t.size[1] });
+    } catch (err) {
+      throw new TerminalError('shell-failed', `Couldn't start ${t.shell.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    t.pty = pty;
+    t.info.exitCode = null;
+    pty.onData((data) => {
+      if (t.pty !== pty) return;
+      this.append(t, data);
+      for (const l of t.listeners) l.onOutput(data);
+    });
+    pty.onExit((code) => {
+      // Closed straight away: on Windows an exited shell's ConPTY keeps its conhost.exe running until it is.
+      try {
+        pty.kill();
+      } catch {
+        // already gone
+      }
+      if (t.pty !== pty || !this.terminals.has(t.info.id)) return;
+      t.info.exitCode = code;
+      for (const l of t.listeners) l.onExit(code);
+      this.changed(t.info.appId);
+    });
+  }
+
+  /**
+   * Keeps the last `bufferLimit` of output. Trimmed only once it's a quarter over, so heavy output doesn't copy the
+   * whole buffer for every chunk; and from the first line start in what's kept, so a replay never opens inside an
+   * escape sequence (else never on the second half of a surrogate pair).
+   */
+  private append(t: Terminal, data: string): void {
+    t.emitted += data.length;
+    let buffer = t.buffer + data;
+    if (buffer.length > Math.ceil(this.bufferLimit * 1.25)) {
+      let from = buffer.length - this.bufferLimit;
+      const newline = buffer.indexOf('\n', from);
+      if (newline !== -1 && newline < buffer.length - 1) from = newline + 1;
+      else {
+        const unit = buffer.charCodeAt(from);
+        if (unit >= 0xdc00 && unit <= 0xdfff) from++;
+      }
+      buffer = buffer.slice(from);
+    }
+    t.buffer = buffer;
+  }
+
+  async create(appId: string, cwd: string, opts: { shellId?: string; cols: number; rows: number }): Promise<TerminalInfo> {
+    const spawn = this.closed ? null : await this.loadSpawn();
+    if (!spawn || this.closed) throw new TerminalError('terminal-unavailable', "Terminals can't run on this machine.");
+    const shells = this.opts.shells();
+    const shell = opts.shellId === undefined ? (shells.find((s) => s.default) ?? shells[0]) : shells.find((s) => s.id === opts.shellId);
+    if (!shell) throw new TerminalError('unknown-shell', opts.shellId === undefined ? 'No shell was found on this machine.' : `There's no shell "${opts.shellId}" on this machine.`);
+    if (this.list(appId).length >= this.perApp) throw new TerminalError('terminal-limit', `An app can have at most ${this.perApp} terminals. Close one first.`);
+    if (this.terminals.size >= this.total) throw new TerminalError('terminal-limit', `At most ${this.total} terminals can be open. Close one first.`);
+    const info: TerminalInfo = { id: randomUUID(), appId, name: this.nameFor(appId, shortName(shell)), shellId: shell.id, exitCode: null, createdAt: Date.now() };
+    const t: Terminal = { info, shell, pty: null as unknown as PtyProcess, buffer: '', emitted: 0, listeners: new Set(), size: [clamp(opts.cols, 2, 1000), clamp(opts.rows, 1, 500)] };
+    this.start(t, spawn, cwd);
+    this.terminals.set(info.id, t);
+    this.changed(appId);
+    return { ...info };
+  }
+
+  rename(appId: string, id: string, name: string): TerminalInfo {
+    const t = this.get(appId, id);
+    t.info.name = name;
+    this.changed(appId);
+    return { ...t.info };
+  }
+
+  /** Ignored once the shell has gone, including the moment before its exit is reported. */
+  input(appId: string, id: string, data: string): void {
+    const t = this.get(appId, id);
+    if (t.info.exitCode !== null) return;
+    try {
+      t.pty.write(data);
+    } catch {
+      // the shell has just gone; its exit follows
+    }
+  }
+
+  resize(appId: string, id: string, cols: number, rows: number): void {
+    const t = this.get(appId, id);
+    t.size = [clamp(cols, 2, 1000), clamp(rows, 1, 500)];
+    if (t.info.exitCode !== null) return;
+    try {
+      t.pty.resize(t.size[0], t.size[1]);
+    } catch {
+      // node-pty refuses to resize a PTY whose shell has just exited
+    }
+  }
+
+  /**
+   * The output after offset `from` (of `emitted`), for a page that polls instead of streaming. `reset` when `from` is
+   * no longer in the buffer: `data` is then the whole buffer, and the screen starts again from it.
+   */
+  read(appId: string, id: string, from: number): { data: string; next: number; reset: boolean; exitCode: number | null } {
+    const t = this.get(appId, id);
+    const start = t.emitted - t.buffer.length;
+    const reset = from < start || from > t.emitted;
+    return { data: reset ? t.buffer : t.buffer.slice(from - start), next: t.emitted, reset, exitCode: t.info.exitCode };
+  }
+
+  attach(appId: string, id: string, listener: TerminalListener): { buffer: string; exitCode: number | null; detach(): void } {
+    const t = this.get(appId, id);
+    t.listeners.add(listener);
+    return { buffer: t.buffer, exitCode: t.info.exitCode, detach: () => t.listeners.delete(listener) };
+  }
+
+  async restart(appId: string, id: string, cwd: string): Promise<TerminalInfo> {
+    const t = this.get(appId, id);
+    const spawn = this.closed ? null : await this.loadSpawn();
+    if (!spawn || this.closed) throw new TerminalError('terminal-unavailable', "Terminals can't run on this machine.");
+    // Closed (or the server stopping) while this waited: start nothing, which nothing would track.
+    const gone = (): boolean => this.closed || this.terminals.get(id) !== t;
+    if (gone()) throw new TerminalError('no-terminal', 'That terminal has closed.');
+    if (t.info.exitCode === null) await this.stop(t);
+    if (gone()) throw new TerminalError('no-terminal', 'That terminal has closed.');
+    t.buffer = '';
+    this.start(t, spawn, cwd);
+    this.changed(appId);
+    return { ...t.info };
+  }
+
+  /** Ends a running process and everything it started, then closes the PTY (an exited one was closed already). */
+  private async stop(t: Terminal): Promise<void> {
+    if (t.info.exitCode !== null) return;
+    const pty = t.pty;
+    await this.opts.killTree(pty.pid).catch(() => undefined);
+    try {
+      pty.kill();
+    } catch {
+      // already gone
+    }
+  }
+
+  async kill(appId: string, id: string): Promise<void> {
+    const t = this.get(appId, id);
+    this.terminals.delete(id);
+    await this.stop(t);
+    this.changed(appId);
+  }
+
+  async killApp(appId: string): Promise<void> {
+    const ids = [...this.terminals.values()].filter((t) => t.info.appId === appId).map((t) => t.info.id);
+    await Promise.all(ids.map((id) => this.kill(appId, id)));
+  }
+
+  /** Kills the terminals of every app that no longer exists (deleted here or by a sync). */
+  async prune(appExists: (appId: string) => boolean): Promise<void> {
+    const gone = new Set([...this.terminals.values()].map((t) => t.info.appId).filter((id) => !appExists(id)));
+    await Promise.all([...gone].map((id) => this.killApp(id)));
+  }
+
+  /** Server shutdown: every terminal's tree at once, and no new ones after. */
+  async closeAll(): Promise<void> {
+    this.closed = true;
+    const all = [...this.terminals.values()];
+    this.terminals.clear();
+    await Promise.all(all.map((t) => this.stop(t)));
+  }
+}

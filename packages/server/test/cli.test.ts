@@ -24,6 +24,7 @@ import {
   runServe,
   sameScriptPath,
   SHUTDOWN_WAIT_MS,
+  terminalsAllowed,
 } from '../src/cli.js';
 import {
   InsecurePublicUrlError,
@@ -781,5 +782,51 @@ describe('main() with sign-in', () => {
     expect(exit).toHaveBeenCalledWith(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^Error: Refusing to start: --public-url/));
     errorSpy.mockRestore();
+  });
+});
+
+describe('the Code tab terminals (spec 2026-10-21-code-terminal-design)', () => {
+  it('terminalsAllowed: open and token modes on loopback only', () => {
+    expect(terminalsAllowed('open', '127.0.0.1')).toBe(true);
+    expect(terminalsAllowed('token', 'localhost')).toBe(true);
+    expect(terminalsAllowed('token', '0.0.0.0')).toBe(false);
+    expect(terminalsAllowed('login', '127.0.0.1')).toBe(false);
+    expect(terminalsAllowed('login', '0.0.0.0')).toBe(false);
+  });
+
+  it('the app gets terminals on a loopback server and not on a non-loopback token server', async () => {
+    const local = fakeDeps();
+    await runServe(['--port', '0'], { ...local, ...fakeStdio() }, {});
+    expect((local.createApp.mock.calls[0]![1] as { terminals?: boolean }).terminals).toBe(true);
+
+    const desktop = fakeDeps();
+    await runServe(['--port', '0', '--announce'], { ...desktop, ...fakeStdio() }, { OTHERBENCH_TOKEN: 'tok' });
+    expect((desktop.createApp.mock.calls[0]![1] as { terminals?: boolean }).terminals).toBe(true);
+
+    const lan = fakeDeps();
+    await runServe(['--host', '0.0.0.0', '--token', 'secret'], { ...lan, ...fakeStdio() }, {});
+    expect((lan.createApp.mock.calls[0]![1] as { terminals?: boolean }).terminals).toBe(false);
+  });
+
+  it('SIGINT stops the terminals, then exits 130; SIGTERM exits 143', async () => {
+    for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+      const deps = fakeDeps();
+      const container = await deps.createContainer();
+      let release: () => void = () => {};
+      const closeAll = vi.fn(() => new Promise<void>((r) => (release = r)));
+      container.terminals = { closeAll } as never;
+      const handlers = new Map<string, () => void>();
+      const io = fakeStdio();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await main(['serve', '--port', '0'], { ...deps, ...io, env: {}, onSignal: (sig, fn) => void handlers.set(sig, fn) });
+      logSpy.mockRestore();
+      handlers.get(signal)!();
+      expect(closeAll).toHaveBeenCalledTimes(1);
+      await tick();
+      expect(io.exit).not.toHaveBeenCalled();
+      release();
+      await tick();
+      expect(io.exit).toHaveBeenCalledWith(code);
+    }
   });
 });

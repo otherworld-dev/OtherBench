@@ -60,6 +60,10 @@ import { NotesService } from './notes/service.js';
 import { workspaceResolver } from './workspace-view.js';
 import type { GithubService } from './code/github.js';
 import { toolImageSaver } from './tool-images.js';
+import { killTree } from './terminal/kill-tree.js';
+import { killTerminalsOfGoneApps, TerminalManager } from './terminal/manager.js';
+import { loadNodePty } from './terminal/node-pty.js';
+import { detectShells, realShellProbe, type ShellOption } from './terminal/shells.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -155,6 +159,11 @@ export interface Container {
    * `computer` tool whatever it says.
    */
   computer?: ComputerSessions;
+  /**
+   * The Code tab's terminals (spec 2026-10-21-code-terminal-design). Always set by `createContainer`; whether the
+   * routes exist is app.ts's `terminals` option. Optional so route tests can leave it out or pass one with a fake PTY.
+   */
+  terminals?: TerminalManager;
   close(): void;
   /**
    * After close(): settles (never rejects) once the shutdown work close() starts without waiting has finished:
@@ -549,8 +558,19 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks') peers.announce('activity', peers.activity());
   });
 
+  // The Code tab's terminals: the PTY loads and the shells are looked for on first use.
+  let shells: ShellOption[] | null = null;
+  const terminals = new TerminalManager({
+    loadSpawn: loadNodePty,
+    shells: () => (shells ??= detectShells(realShellProbe())),
+    emit: (e) => events.emit(e),
+    killTree,
+  });
+  killTerminalsOfGoneApps(events, terminals, (id) => store.apps.get(id) !== null);
+
   // What close() set going without waiting, for settled().
   let sandboxClosed: Promise<void> = Promise.resolve();
+  let terminalsClosed: Promise<void> = Promise.resolve();
   const container: Container = {
     store,
     events,
@@ -571,8 +591,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     blobStore,
     memory,
     claudeImport,
+    terminals,
     close: () => {
       syncer.stop();
+      // Every terminal's shell and what it started. Not awaited (close is synchronous); settled() waits for it.
+      terminalsClosed = terminals.closeAll().catch((err: unknown) => console.error('[otherbench-server] error closing terminals:', err));
       // Not awaited (close is synchronous): stops accepting peers' calls.
       void peers.close().catch((err: unknown) => console.error('[otherbench-server] error stopping the peer listener:', err));
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
@@ -613,7 +636,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         void rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },
-    settled: () => sandboxClosed,
+    settled: () => Promise.all([sandboxClosed, terminalsClosed]).then(() => undefined),
   };
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).

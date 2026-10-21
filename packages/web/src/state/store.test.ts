@@ -997,6 +997,30 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(loadCodePanelTab()).toBe('issues');
   });
 
+  it("'terminal' is a remembered tab", () => {
+    s().setCodePanelTab('terminal');
+    expect(window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY)).toBe('terminal');
+    expect(loadCodePanelTab()).toBe('terminal');
+  });
+
+  it('terminals-changed sets terminalsChanged, a fresh object each time', () => {
+    expect(s().terminalsChanged).toBeNull();
+    s().applyAppEvent({ type: 'terminals-changed', appId: 'a1' });
+    const first = s().terminalsChanged;
+    expect(first).toMatchObject({ appId: 'a1' });
+    s().applyAppEvent({ type: 'terminals-changed', appId: 'a1' });
+    expect(s().terminalsChanged).not.toBe(first);
+  });
+
+  it('requestTerminal bumps a request the Terminal tab acts on', () => {
+    s().requestTerminal('focus');
+    const first = s().terminalRequest;
+    expect(first).toMatchObject({ kind: 'focus' });
+    s().requestTerminal('new');
+    expect(s().terminalRequest).toMatchObject({ kind: 'new' });
+    expect(s().terminalRequest?.n).toBeGreaterThan(first!.n);
+  });
+
   it('remembers the mode, and each pane state under its own key', () => {
     s().setActiveChatId('app-chat');
     expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('code');

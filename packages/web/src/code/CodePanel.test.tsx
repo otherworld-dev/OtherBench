@@ -7,6 +7,9 @@ vi.mock('../panes/Inspector.js', () => ({
   Inspector: ({ chat }: { chat: Chat | null }) => <div data-testid="inspector-stub">{chat?.id ?? 'none'}</div>,
 }));
 vi.mock('./IssuesTab.js', () => ({ IssuesTab: ({ app }: { app: App }) => <div data-testid="issues-stub">{app.id}</div> }));
+vi.mock('./terminal/TerminalTab.js', () => ({ TerminalTab: ({ app }: { app: App }) => <div data-testid="terminal-stub">{app.id}</div> }));
+const terminalStatus = vi.hoisted(() => ({ value: null as null | { available: boolean; shells: never[] } }));
+vi.mock('./terminal/status.js', () => ({ useTerminalStatus: () => terminalStatus.value }));
 vi.mock('./FilesTab.js', () => ({ FilesTab: ({ app, chatId }: { app: App; chatId: string | null }) => <div data-testid="files-stub">{`${app.id}:${chatId ?? 'none'}`}</div> }));
 
 import { appTabId } from '../state/appTab.js';
@@ -25,6 +28,7 @@ function focus(id: string | null): void {
 }
 
 beforeEach(() => {
+  terminalStatus.value = null;
   window.localStorage.clear();
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ mode: 'code', apps: [app('a1'), app('a2')], appsLoaded: true, chats: [chat('c1', 'a2')] });
@@ -77,5 +81,23 @@ describe('CodePanel', () => {
     rerender(<CodePanel collapsed={false} onToggleCollapsed={toggle} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Collapse code panel' }));
     expect(toggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('no Terminal tab when terminals are unavailable, and a saved Terminal tab shows Issues', () => {
+    terminalStatus.value = { available: false, shells: [] };
+    useOtherBenchStore.setState({ codePanelTab: 'terminal' });
+    focus(appTabId('a1'));
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.queryByRole('tab', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('issues-stub')).toHaveTextContent('a1');
+  });
+
+  it('a Terminal tab when terminals are available, holding the focused app', async () => {
+    terminalStatus.value = { available: true, shells: [] };
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Terminal' }));
+    expect(screen.getByTestId('terminal-stub')).toHaveTextContent('a2');
+    expect(useOtherBenchStore.getState().codePanelTab).toBe('terminal');
   });
 });

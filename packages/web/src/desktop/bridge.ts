@@ -162,17 +162,6 @@ export async function openInBrowser(url: string): Promise<void> {
   await openUrl(url);
 }
 
-/**
- * Opens a terminal window in `folder` through the shell (desktop/src-tauri/src/terminal.rs):
- * Windows Terminal, else PowerShell. Rejects with the reason it couldn't. No-op in a browser,
- * which has no way to start one -- and the server deliberately has no route for it either.
- */
-export async function openTerminal(folder: string): Promise<void> {
-  if (!isDesktop()) return;
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('open_terminal', { folder });
-}
-
 /** Shows a file selected in Explorer, never opening it. False in a browser, which can't. */
 export async function revealPath(path: string): Promise<boolean> {
   if (!isDesktop()) return false;

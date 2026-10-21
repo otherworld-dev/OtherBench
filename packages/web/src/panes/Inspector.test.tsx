@@ -15,7 +15,6 @@ vi.mock('../desktop/bridge.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../desktop/bridge.js')>()),
   isDesktop: vi.fn(() => false),
   pickFolder: vi.fn(),
-  openTerminal: vi.fn(),
 }));
 
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -55,7 +54,7 @@ vi.mock('./InspectorMemory.js', () => ({
   InspectorMemory: ({ project }: { project: { id: string } }) => <div data-testid="inspector-memory">memory for {project.id}</div>,
 }));
 
-import { isDesktop, openTerminal, pickFolder } from '../desktop/bridge.js';
+import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { ApiError, api } from '../state/api.js';
 
 const mockedUsageGet = vi.mocked(api.usage.get);
@@ -70,7 +69,6 @@ const mockedProjectsPatch = vi.mocked(api.projects.patch);
 const mockedProfilesPatch = vi.mocked(api.profiles.patch);
 const mockedIsDesktop = vi.mocked(isDesktop);
 const mockedPickFolder = vi.mocked(pickFolder);
-const mockedOpenTerminal = vi.mocked(openTerminal);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -389,53 +387,12 @@ describe('Inspector workspace root', () => {
     mockedIsDesktop.mockReturnValue(false);
   });
 
-  it('in the desktop app, Open terminal opens one in the folder; a browser has no such button', async () => {
-    const user = userEvent.setup();
-    const chat = makeChat({ workspaceRoot: 'E:\\Git\\OtherBench', workspaceStatus: { status: 'ok', root: 'E:\\Git\\OtherBench' } });
-    const { unmount } = render(<Inspector chat={chat} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    await within(workspaceSection()).findByTestId('workspace-root-value');
-    expect(within(workspaceSection()).queryByRole('button', { name: 'Open terminal' })).toBeNull();
-    unmount();
-
+  it('has no Open terminal button, even in the desktop app: the terminal is in the Code panel (spec 2026-10-21-code-terminal-design)', async () => {
     mockedIsDesktop.mockReturnValue(true);
-    mockedOpenTerminal.mockReset().mockResolvedValue(undefined);
+    const chat = makeChat({ workspaceRoot: 'E:\Git\OtherBench', workspaceStatus: { status: 'ok', root: 'E:\Git\OtherBench' } });
     render(<Inspector chat={chat} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    await user.click(await within(workspaceSection()).findByRole('button', { name: 'Open terminal' }));
-    expect(mockedOpenTerminal).toHaveBeenCalledWith('E:\\Git\\OtherBench');
-    mockedIsDesktop.mockReturnValue(false);
-  });
-
-  it("offers no terminal for a chat that runs on another machine, or whose folder isn't here", async () => {
-    mockedIsDesktop.mockReturnValue(true);
-    useOtherBenchStore.setState({ machines: { self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' }, listening: { running: true, addresses: [] }, peers: [] } });
-    const { unmount } = render(
-      <Inspector chat={makeChat({ runsOn: 'node-pc', workspaceRoot: 'D:\\Work' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />
-    );
     await within(workspaceSection()).findByTestId('workspace-root-value');
     expect(within(workspaceSection()).queryByRole('button', { name: 'Open terminal' })).toBeNull();
-    unmount();
-
-    render(
-      <Inspector
-        chat={makeChat({ workspaceRoot: null, workspaceStatus: { status: 'unresolved', reason: 'missing', hint: { nodeId: 'node-self', path: 'E:\\Gone' } } })}
-        profile={makeProfile()}
-        collapsed={false}
-        onToggleCollapsed={vi.fn()}
-      />
-    );
-    await within(workspaceSection()).findByTestId('workspace-unresolved');
-    expect(within(workspaceSection()).queryByRole('button', { name: 'Open terminal' })).toBeNull();
-    useOtherBenchStore.setState({ machines: null });
-    mockedIsDesktop.mockReturnValue(false);
-  });
-
-  it("says so when the terminal won't open", async () => {
-    mockedIsDesktop.mockReturnValue(true);
-    mockedOpenTerminal.mockReset().mockRejectedValue('No terminal found: tried wt.exe and powershell.exe.');
-    const user = userEvent.setup();
-    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\OtherBench' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    await user.click(await within(workspaceSection()).findByRole('button', { name: 'Open terminal' }));
-    expect(await within(workspaceSection()).findByTestId('workspace-root-error')).toHaveTextContent("Couldn't open a terminal: No terminal found: tried wt.exe and powershell.exe.");
     mockedIsDesktop.mockReturnValue(false);
   });
 

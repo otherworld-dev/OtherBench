@@ -8,6 +8,9 @@ import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
 import { PaneGrid } from './panes/PaneGrid.js';
 import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
+import { PanelResizer } from './panes/PanelResizer.js';
+import { codePanelWidth } from './state/panelWidth.js';
+import { useTerminalShortcuts } from './code/terminal/useTerminalShortcuts.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useAuthStore } from './state/auth.js';
@@ -127,6 +130,7 @@ function MainApp(): JSX.Element {
   useDesktopShell();
   useTextSizeShortcuts();
   usePaneShortcuts(isNarrow);
+  useTerminalShortcuts();
   useMarkRead(isNarrow);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
@@ -196,7 +200,9 @@ function MainApp(): JSX.Element {
             follow the focused pane's app, so it is useful with no chat open (an app home), and its Chat tab
             holds this same Inspector. It shares the Inspector's collapsed preference: one right column. */}
         {!isNarrow && mode === 'code' && (
-          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '24rem' }}>
+          // Its width is the user's (spec 2026-10-21-code-terminal-design): dragged on its left edge, at most 70% of the window.
+          <div className="relative h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : 'min(var(--code-panel-w, 24rem), 70vw)' }}>
+            {!inspectorCollapsed && <PanelResizer width={codePanelWidth} edge="left" label="Resize code panel" />}
             <CodePanel collapsed={inspectorCollapsed} onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)} />
           </div>
         )}

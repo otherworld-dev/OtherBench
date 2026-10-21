@@ -1,7 +1,7 @@
 // Smoke test for the bundled server (v2 plan, Task 40): starts
 // dist-bundle/server/cli.js the way the desktop app does (`--port 0
 // --announce`, token in OTHERBENCH_TOKEN) against a scratch database, then
-// checks health, a mock-provider turn, search, a .docx, an .xlsx and a .pptx
+// checks health, that terminals are available, a mock-provider turn, search, a .docx, an .xlsx and a .pptx
 // made by the bundled writers, and that the packages left out of the bundle load.
 // Exits non-zero on any failure.
 //
@@ -59,6 +59,16 @@ async function api(method, path, body) {
 
 const health = await api('GET', '/health');
 console.log(`[smoke] up on ${port} (${health.platform})`);
+
+// The Code tab's terminals (spec 2026-10-21-code-terminal-design): node-pty and its prebuilt binary are copied beside
+// cli.js, and a missing one only turns terminals off, so check here that the bundle really has them.
+const terminal = await api('GET', '/terminal/status');
+if (!terminal.available) fail(`the bundled server has no terminal (${terminal.reason})`);
+// Available on Windows only proves the binary loads, so start one: a shell in an app's folder, then close it.
+const terminalApp = await api('POST', '/apps', { name: 'Smoke', workspacePath: dir });
+const shell = await api('POST', `/apps/${terminalApp.id}/terminals`, { cols: 80, rows: 24 });
+await api('DELETE', `/apps/${terminalApp.id}/terminals/${shell.id}`);
+console.log(`[smoke] a terminal started and closed (${terminal.shells.map((s) => s.id).join(', ')})`);
 
 const connection = await api('POST', '/connections', { name: 'Mock', kind: 'mock' });
 const profile = await api('POST', '/profiles', { name: 'Mock', connectionId: connection.id, modelId: 'mock-standard', isDefault: true });

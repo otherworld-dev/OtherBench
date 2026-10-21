@@ -301,3 +301,23 @@ describe('SseClient', () => {
     expect(FakeEventSource.instances).toHaveLength(1); // never reconnected after close()
   });
 });
+
+describe('openStreamCount', () => {
+  it('counts the streams this page holds open, until each closes or fails', async () => {
+    const { createFetchSseConnect, openStreamCount } = await import('./sse.js');
+    const before = openStreamCount();
+    let fail: (err: Error) => void = () => {};
+    const connect = createFetchSseConnect(() => new Promise<Response>((_resolve, reject) => (fail = reject)));
+    const a = connect('/a', { onEvent: () => {}, onError: () => {} });
+    const b = connect('/b', { onEvent: () => {}, onError: () => {} });
+    expect(openStreamCount()).toBe(before + 2);
+    a.close();
+    a.close();
+    expect(openStreamCount()).toBe(before + 1);
+    fail(new Error('gone'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openStreamCount()).toBe(before);
+    b.close();
+    expect(openStreamCount()).toBe(before);
+  });
+});

@@ -61,8 +61,11 @@ export type SchedulesPageState = { prefill?: ScheduleTarget };
 /** A note on its way back to the box; `takenBack` when the user took it back, rather than it not being sent. */
 export type ReturnedNote = ReplyNote & { takenBack?: true };
 
-/** The Code mode right panel's tabs (spec 2026-10-20-code-tab-design: Issues, Files, and Chat holding the Inspector). */
-export type CodePanelTab = 'issues' | 'files' | 'chat';
+/**
+ * The Code mode right panel's tabs (spec 2026-10-20-code-tab-design: Issues, Files, and Chat holding the Inspector;
+ * spec 2026-10-21-code-terminal-design: Terminal).
+ */
+export type CodePanelTab = 'issues' | 'files' | 'chat' | 'terminal';
 
 export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -203,6 +206,13 @@ export interface OtherBenchState {
   /** The Code mode right panel's tab. Remembered per browser. */
   codePanelTab: CodePanelTab;
   setCodePanelTab(tab: CodePanelTab): void;
+  /** The app event stream's latest `terminals-changed`, a fresh object each time: the Terminal tab re-reads that app's list. */
+  terminalsChanged: { appId: string } | null;
+  /** Ctrl+` (focus) or Ctrl+Shift+` (new), for the Terminal tab to act on; `n` grows with each. */
+  terminalRequest: { kind: 'focus' | 'new'; n: number } | null;
+  requestTerminal(kind: 'focus' | 'new'): void;
+  /** The waiting request, which is then cleared: the Terminal tab acts on each once, even one made before it showed. */
+  takeTerminalRequest(): { kind: 'focus' | 'new'; n: number } | null;
   /**
    * Text handed to a chat's composer from outside it, by chat id, not yet
    * taken: "Start a chat on this" puts an issue's number, title, URL and body
@@ -485,11 +495,14 @@ function saveInspectorCollapsed(collapsed: boolean): void {
 /** localStorage key: the Code mode right panel's tab. Per browser. */
 export const CODE_PANEL_TAB_STORAGE_KEY = 'otherbench.codePanelTab';
 
+/** Counts Ctrl+` and Ctrl+Shift+` presses, so each request is a new one (`terminalRequest.n`). */
+let terminalRequests = 0;
+
 /** The stored tab; Issues for anything missing, unreadable or unknown. */
 export function loadCodePanelTab(): CodePanelTab {
   try {
     const raw = window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY);
-    return raw === 'files' || raw === 'chat' ? raw : 'issues';
+    return raw === 'files' || raw === 'chat' || raw === 'terminal' ? raw : 'issues';
   } catch {
     return 'issues';
   }
@@ -742,6 +755,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         }
         case 'sync-applied':
           return { syncRevision: state.syncRevision + 1 };
+        case 'terminals-changed':
+          return { terminalsChanged: { appId: event.appId } };
         case 'schedules-changed':
         case 'schedule-run-started':
         case 'schedule-run-finished':
@@ -835,6 +850,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     }),
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
+  terminalsChanged: null,
+  terminalRequest: null,
+  requestTerminal: (kind) => set({ terminalRequest: { kind, n: ++terminalRequests } }),
+  takeTerminalRequest: () => {
+    const request = get().terminalRequest;
+    if (request !== null) set({ terminalRequest: null });
+    return request;
+  },
   composerPrefills: {},
   prefillComposer: (chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
   takeComposerPrefill: (chatId) => {

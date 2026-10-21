@@ -129,3 +129,38 @@ describe('api.apps (spec 2026-10-20-code-tab-design)', () => {
     expect(sent(f).line).toBe('GET /api/apps/a1/text?path=a.ts');
   });
 });
+
+describe('api.terminals (spec 2026-10-21-code-terminal-design)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('hits the terminal routes', async () => {
+    let f = respond(200, { available: true, shells: [] });
+    await api.terminals.status();
+    expect(sent(f).line).toBe('GET /api/terminal/status');
+    f = respond(200, []);
+    await api.terminals.list('a 1');
+    expect(sent(f).line).toBe('GET /api/apps/a%201/terminals');
+    f = respond(201, {});
+    await api.terminals.create('a1', { shell: 'pwsh', cols: 80, rows: 24 });
+    expect(sent(f)).toEqual({ line: 'POST /api/apps/a1/terminals', body: { shell: 'pwsh', cols: 80, rows: 24 } });
+    f = respond(200, {});
+    await api.terminals.rename('a1', 't1', 'dev');
+    expect(sent(f)).toEqual({ line: 'PATCH /api/apps/a1/terminals/t1', body: { name: 'dev' } });
+    f = respond(204);
+    await api.terminals.kill('a1', 't1');
+    expect(sent(f).line).toBe('DELETE /api/apps/a1/terminals/t1');
+    f = respond(204);
+    await api.terminals.input('a1', 't1', 'ls\r');
+    expect(sent(f)).toEqual({ line: 'POST /api/apps/a1/terminals/t1/input', body: { data: 'ls\r' } });
+    f = respond(204);
+    await api.terminals.resize('a1', 't1', 100, 30);
+    expect(sent(f)).toEqual({ line: 'POST /api/apps/a1/terminals/t1/resize', body: { cols: 100, rows: 30 } });
+    f = respond(200, {});
+    await api.terminals.restart('a1', 't1');
+    expect(sent(f).line).toBe('POST /api/apps/a1/terminals/t1/restart');
+    expect(new URL(api.terminals.streamUrl('a1', 't1'), 'http://x').pathname).toBe('/api/apps/a1/terminals/t1/stream');
+    f = respond(200, { data: '', next: 7, reset: false, exitCode: null });
+    await api.terminals.output('a1', 't1', 7);
+    expect(sent(f).line).toBe('GET /api/apps/a1/terminals/t1/output?from=7');
+  });
+});

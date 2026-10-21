@@ -2,6 +2,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { GhErrorCode, GitErrorCode } from '@otherbench/core/types/code.js';
 import { GhError } from './github.js';
 import { GitError } from './git.js';
+import type { TerminalErrorCode } from '../terminal/manager.js';
 import { ExecutableMissingError } from './process.js';
 
 /**
@@ -16,11 +17,11 @@ import { ExecutableMissingError } from './process.js';
  * or gh failure, the tool's `stderr`) beside it, so the web client's existing error
  * reading still finds the message and no other route's response changes.
  */
-export type CodeRouteErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo';
+export type CodeRouteErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode;
 
 export class CodeRouteError extends HTTPException {
   constructor(
-    status: 400 | 409,
+    status: 400 | 404 | 409,
     readonly code: CodeRouteErrorCode,
     message: string,
     readonly stderr?: string
