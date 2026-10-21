@@ -211,6 +211,8 @@ export interface OtherBenchState {
   /** Ctrl+` (focus) or Ctrl+Shift+` (new), for the Terminal tab to act on; `n` grows with each. */
   terminalRequest: { kind: 'focus' | 'new'; n: number } | null;
   requestTerminal(kind: 'focus' | 'new'): void;
+  /** The waiting request, which is then cleared: the Terminal tab acts on each once, even one made before it showed. */
+  takeTerminalRequest(): { kind: 'focus' | 'new'; n: number } | null;
   /**
    * Text handed to a chat's composer from outside it, by chat id, not yet
    * taken: "Start a chat on this" puts an issue's number, title, URL and body
@@ -492,6 +494,9 @@ function saveInspectorCollapsed(collapsed: boolean): void {
 
 /** localStorage key: the Code mode right panel's tab. Per browser. */
 export const CODE_PANEL_TAB_STORAGE_KEY = 'otherbench.codePanelTab';
+
+/** Counts Ctrl+` and Ctrl+Shift+` presses, so each request is a new one (`terminalRequest.n`). */
+let terminalRequests = 0;
 
 /** The stored tab; Issues for anything missing, unreadable or unknown. */
 export function loadCodePanelTab(): CodePanelTab {
@@ -847,7 +852,12 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
   terminalsChanged: null,
   terminalRequest: null,
-  requestTerminal: (kind) => set((state) => ({ terminalRequest: { kind, n: (state.terminalRequest?.n ?? 0) + 1 } })),
+  requestTerminal: (kind) => set({ terminalRequest: { kind, n: ++terminalRequests } }),
+  takeTerminalRequest: () => {
+    const request = get().terminalRequest;
+    if (request !== null) set({ terminalRequest: null });
+    return request;
+  },
   composerPrefills: {},
   prefillComposer: (chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
   takeComposerPrefill: (chatId) => {

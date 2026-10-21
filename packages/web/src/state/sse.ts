@@ -63,11 +63,30 @@ export class SseParser {
  * shell's server requires one. Reconnection is deliberately not handled
  * here -- `SseClient` owns that.
  */
+let openStreams = 0;
+
+/**
+ * How many streams this page holds open right now. A browser keeps about 6 HTTP/1.1 connections to one server for
+ * all its requests, and each stream holds one for as long as it's open, so the terminal checks this before it adds
+ * one (code/terminal/feed.ts).
+ */
+export function openStreamCount(): number {
+  return openStreams;
+}
+
 export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fetch(...args)): SseConnect {
   return (url, handlers) => {
     const controller = new AbortController();
     let done = false;
+    let counted = true;
+    openStreams++;
+    const release = (): void => {
+      if (!counted) return;
+      counted = false;
+      openStreams--;
+    };
     const fail = () => {
+      release();
       if (done || controller.signal.aborted) return;
       done = true;
       handlers.onError();
@@ -105,6 +124,7 @@ export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fet
     return {
       close() {
         done = true;
+        release();
         controller.abort();
       },
     };

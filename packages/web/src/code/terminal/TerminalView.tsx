@@ -6,12 +6,10 @@ import '@xterm/xterm/css/xterm.css';
 import type { TerminalInfo } from '@otherbench/core/types/terminal.js';
 import { openInBrowser } from '../../desktop/bridge.js';
 import { api } from '../../state/api.js';
-import { SseClient } from '../../state/sse.js';
+import { openTerminalFeed } from './feed.js';
 
 /** The most one input POST carries (the server's limit is 64 KiB); a bigger paste goes in pieces, in order. */
 const INPUT_CHUNK = 60_000;
-
-type StreamEvent = { type: 'output'; data: string } | { type: 'exit'; exitCode: number };
 
 /** A colour token from the app's theme, or `fallback`. */
 function token(css: CSSStyleDeclaration, name: string, fallback: string): string {
@@ -20,7 +18,7 @@ function token(css: CSSStyleDeclaration, name: string, fallback: string): string
 
 /**
  * One terminal's screen (spec 2026-10-21-code-terminal-design): xterm.js over
- * the terminal's stream, which is open only while this is mounted. The only
+ * the terminal's output (feed.ts), which is followed only while this is mounted. The only
  * module that imports xterm, so tests replace it. Keys go to the shell except
  * the app's own shortcuts (Ctrl+Tab, Ctrl+1-9, Ctrl+`), paste (Ctrl+V, Ctrl+Shift+V)
  * and Ctrl+C with a selection, which copies, as in VS Code.
@@ -109,23 +107,18 @@ export function TerminalView({ appId, terminal, focusToken }: { appId: string; t
     observer?.observe(el);
     fitNow();
 
-    const client = new SseClient<{ buffer: string; exitCode: number | null }, StreamEvent>({
-      url: api.terminals.streamUrl(appId, terminal.id),
-      readHello: (payload) => payload as { buffer: string; exitCode: number | null },
-      onHello: (hello) => {
-        // A (re)connect carries the whole recent output: start the screen again from it.
+    // A stream, or polling when the page has no connection to spare (feed.ts).
+    const feed = openTerminalFeed(appId, terminal.id, {
+      onReset: (buffer) => {
         term.reset();
-        term.write(hello.buffer);
+        term.write(buffer);
       },
-      onEvent: (event) => {
-        if (event.type === 'output') term.write(event.data);
-      },
+      onOutput: (data) => term.write(data),
     });
-    client.connect();
     term.focus();
 
     return () => {
-      client.close();
+      feed.close();
       observer?.disconnect();
       clearTimeout(resizeTimer);
       if (frame !== 0) cancelAnimationFrame(frame);

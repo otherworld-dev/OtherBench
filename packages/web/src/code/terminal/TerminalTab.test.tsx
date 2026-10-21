@@ -175,4 +175,29 @@ describe('TerminalTab', () => {
     act(() => useOtherBenchStore.getState().requestTerminal('new'));
     await waitFor(() => expect(view()).toHaveTextContent('t2'));
   });
+
+  it('a Ctrl+Shift+` pressed before the tab was showing still opens a new terminal when it shows', async () => {
+    list = [term('t1')];
+    useOtherBenchStore.getState().requestTerminal('new');
+    render(<TerminalTab app={app} />);
+    await waitFor(() => expect(view()).toHaveTextContent('t2'));
+    expect(api.terminals.create).toHaveBeenCalledTimes(1);
+    expect(useOtherBenchStore.getState().terminalRequest).toBeNull();
+  });
+
+  it('a waiting request on an app with no terminals starts just one', async () => {
+    useOtherBenchStore.getState().requestTerminal('new');
+    render(<TerminalTab app={app} />);
+    await waitFor(() => expect(view()).toHaveTextContent('t1'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.terminals.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("the exited bar sits below the screen, so it doesn't cover the last lines", async () => {
+    list = [term('t1', { exitCode: 1 })];
+    render(<TerminalTab app={app} />);
+    const bar = await screen.findByTestId('terminal-exited');
+    expect(view().parentElement?.contains(bar)).toBe(false);
+  });
 });
+

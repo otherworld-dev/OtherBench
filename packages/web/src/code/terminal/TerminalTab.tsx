@@ -67,12 +67,16 @@ export function TerminalTab({ app }: { app: App }): JSX.Element {
     [app.id, select]
   );
 
+  // On showing: the list, then a Ctrl+` or Ctrl+Shift+` made before this tab showed (useTerminalShortcuts switched
+  // to it), and a first terminal for an app with none. One terminal at most comes of the two.
   useEffect(() => {
     void refresh().then((list) => {
-      if (list !== null && list.length === 0 && !startedOne.current) {
+      const waiting = useOtherBenchStore.getState().takeTerminalRequest();
+      if (list === null) return;
+      if (waiting?.kind === 'new' || (list.length === 0 && !startedOne.current)) {
         startedOne.current = true;
         void create();
-      }
+      } else if (waiting) setFocusToken((n) => n + 1);
     });
   }, [refresh, create]);
 
@@ -92,8 +96,11 @@ export function TerminalTab({ app }: { app: App }): JSX.Element {
   useEffect(
     () =>
       useOtherBenchStore.subscribe((state, prev) => {
-        const request = state.terminalRequest;
-        if (request === null || request === prev.terminalRequest) return;
+        if (state.terminalRequest === null || state.terminalRequest === prev.terminalRequest) return;
+        // Before the list has loaded, the mount above takes it.
+        if (latest.current.terminals === null) return;
+        const request = useOtherBenchStore.getState().takeTerminalRequest();
+        if (request === null) return;
         const { terminals: now, create: make } = latest.current;
         if (request.kind === 'new' || (now !== null && now.length === 0)) void make();
         else setFocusToken((n) => n + 1);
@@ -226,10 +233,13 @@ export function TerminalTab({ app }: { app: App }): JSX.Element {
         </div>
       )}
       {current && !notHere && (
-        <div className="relative min-h-0 flex-1">
-          <TerminalView key={`${current.id}:${epochs[current.id] ?? 0}`} appId={app.id} terminal={current} focusToken={focusToken} />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <TerminalView key={`${current.id}:${epochs[current.id] ?? 0}`} appId={app.id} terminal={current} focusToken={focusToken} />
+          </div>
+          {/* Below the screen, not over it: the last lines often say why the shell ended. */}
           {current.exitCode !== null && (
-            <div data-testid="terminal-exited" className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5 text-xs text-[var(--text-muted)]">
+            <div data-testid="terminal-exited" className="flex shrink-0 items-center gap-2 border-t border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5 text-xs text-[var(--text-muted)]">
               <span>Process exited with code {current.exitCode}</span>
               <button type="button" onClick={() => void restart(current)} className="btn px-2 py-0.5">
                 Restart

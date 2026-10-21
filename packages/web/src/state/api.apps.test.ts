@@ -159,5 +159,8 @@ describe('api.terminals (spec 2026-10-21-code-terminal-design)', () => {
     await api.terminals.restart('a1', 't1');
     expect(sent(f).line).toBe('POST /api/apps/a1/terminals/t1/restart');
     expect(new URL(api.terminals.streamUrl('a1', 't1'), 'http://x').pathname).toBe('/api/apps/a1/terminals/t1/stream');
+    f = respond(200, { data: '', next: 7, reset: false, exitCode: null });
+    await api.terminals.output('a1', 't1', 7);
+    expect(sent(f).line).toBe('GET /api/apps/a1/terminals/t1/output?from=7');
   });
 });

@@ -648,6 +648,11 @@ export const api = {
     resize: (appId: string, id: string, cols: number, rows: number) =>
       post<void>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/resize`, { cols, rows }),
     restart: (appId: string, id: string) => post<TerminalInfo>(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/restart`),
+    /** The output after offset `from` (an earlier answer's `next`), for a page that polls; `reset`: start the screen again from `data`. */
+    output: (appId: string, id: string, from: number) =>
+      request<{ data: string; next: number; reset: boolean; exitCode: number | null }>(
+        `/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/output?from=${from}`
+      ),
     /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader, for the terminal on screen only. */
     streamUrl: (appId: string, id: string) => apiUrl(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/stream`),
   },
