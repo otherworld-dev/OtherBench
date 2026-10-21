@@ -37,6 +37,8 @@ export interface TerminalManagerOptions {
   bufferLimit?: number;
   perApp?: number;
   total?: number;
+  /** How long a kill waits for the shell to report its exit before closing the PTY itself (default 1500 ms). */
+  exitWaitMs?: number;
 }
 
 /** The server's environment without its secrets, as a terminal that draws in colour. */
@@ -51,6 +53,8 @@ interface Terminal {
   buffer: string;
   listeners: Set<TerminalListener>;
   size: [number, number];
+  /** Settles when the current process has exited. */
+  exited: Promise<void>;
 }
 
 /** The short name a new terminal gets from its shell. */
@@ -126,12 +130,17 @@ export class TerminalManager {
     const pty = spawn(t.shell.file, t.shell.args, { cwd, env: this.env, cols: t.size[0], rows: t.size[1] });
     t.pty = pty;
     t.info.exitCode = null;
+    let markExited: () => void = () => {};
+    t.exited = new Promise((resolve) => {
+      markExited = resolve;
+    });
     pty.onData((data) => {
       if (t.pty !== pty) return;
       this.append(t, data);
       for (const l of t.listeners) l.onOutput(data);
     });
     pty.onExit((code) => {
+      markExited();
       if (t.pty !== pty || !this.terminals.has(t.info.id)) return;
       t.info.exitCode = code;
       for (const l of t.listeners) l.onExit(code);
@@ -159,7 +168,7 @@ export class TerminalManager {
     if (this.list(appId).length >= this.perApp) throw new TerminalError('terminal-limit', `An app can have at most ${this.perApp} terminals. Close one first.`);
     if (this.terminals.size >= this.total) throw new TerminalError('terminal-limit', `At most ${this.total} terminals can be open. Close one first.`);
     const info: TerminalInfo = { id: randomUUID(), appId, name: this.nameFor(appId, shortName(shell)), shellId: shell.id, exitCode: null, createdAt: Date.now() };
-    const t: Terminal = { info, shell, pty: null as unknown as PtyProcess, buffer: '', listeners: new Set(), size: [clamp(opts.cols, 2, 1000), clamp(opts.rows, 1, 500)] };
+    const t: Terminal = { info, shell, pty: null as unknown as PtyProcess, buffer: '', listeners: new Set(), exited: Promise.resolve(), size: [clamp(opts.cols, 2, 1000), clamp(opts.rows, 1, 500)] };
     this.start(t, spawn, cwd);
     this.terminals.set(info.id, t);
     this.changed(appId);
@@ -201,13 +210,25 @@ export class TerminalManager {
     return { ...t.info };
   }
 
-  /** Ends a running process and everything it started. */
+  /**
+   * Ends a running process and everything it started, then closes the PTY. The PTY is closed only if the shell hasn't
+   * reported its exit after the tree kill: on Windows, closing a ConPTY whose shell is already gone makes node-pty's
+   * console agent print "AttachConsole failed".
+   */
   private async stop(t: Terminal): Promise<void> {
-    if (t.info.exitCode === null) {
-      await this.opts.killTree(t.pty.pid).catch(() => undefined);
-    }
+    if (t.info.exitCode !== null) return;
+    const pty = t.pty;
+    let exited = false;
+    const exit = t.exited.then(() => {
+      exited = true;
+    });
+    await this.opts.killTree(pty.pid).catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([exit, new Promise<void>((r) => (timer = setTimeout(r, this.opts.exitWaitMs ?? 1500)))]);
+    clearTimeout(timer);
+    if (exited) return;
     try {
-      t.pty.kill();
+      pty.kill();
     } catch {
       // already gone
     }

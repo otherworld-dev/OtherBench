@@ -64,6 +64,7 @@ function setup(over: Partial<TerminalManagerOptions> = {}) {
       killed.push(pid);
     },
     env: { PATH: 'x', TERM: 'xterm-256color' },
+    exitWaitMs: 5,
     ...over,
   });
   return { manager, ptys, events, killed };
@@ -213,6 +214,19 @@ describe('TerminalManager', () => {
     expect(order).toEqual([`tree:${pty.pid}`, 'pty']);
     expect(manager.list('a1')).toEqual([]);
     expect(events.at(-1)).toEqual({ type: 'terminals-changed', appId: 'a1' });
+  });
+
+  it('a shell that exits from the tree kill is not closed a second time', async () => {
+    let ptys: FakePty[] = [];
+    const s = setup({
+      killTree: async () => {
+        ptys[0]!.exit(1);
+      },
+    });
+    ptys = s.ptys;
+    const t = await s.manager.create('a1', 'E:\\r', SIZE);
+    await s.manager.kill('a1', t.id);
+    expect(ptys[0]?.killed).toBe(false);
   });
 
   it('killing an exited terminal skips the tree', async () => {
