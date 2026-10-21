@@ -53,6 +53,25 @@ describe('detectShells', () => {
     expect(shells.filter((s) => s.default)).toHaveLength(1);
   });
 
+  it('a shell found by a relative path is left out', () => {
+    const shells = detectShells(probe('win32', { pwsh: 'pwsh.exe', powershell: '.\\powershell.exe', cmd: 'C:\\Windows\\System32\\cmd.exe' }, [], { ComSpec: 'cmd.exe' }));
+    expect(shells.map((s) => s.id)).toEqual(['cmd']);
+    expect(detectShells(probe('linux', { bash: 'bin/bash' }, ['./zsh'], { SHELL: './zsh' }))).toEqual([]);
+  });
+
+  it('windows: the system shells come from System32 before PATH', () => {
+    const sys = 'C:\\Windows\\System32';
+    const shells = detectShells(
+      probe(
+        'win32',
+        { powershell: 'C:\\planted\\powershell.exe', cmd: 'C:\\planted\\cmd.exe', wsl: 'C:\\planted\\wsl.exe' },
+        [`${sys}\\WindowsPowerShell\\v1.0\\powershell.exe`, `${sys}\\cmd.exe`, `${sys}\\wsl.exe`],
+        { SystemRoot: 'C:\\Windows' }
+      )
+    );
+    expect(shells.map((s) => s.file)).toEqual([`${sys}\\WindowsPowerShell\\v1.0\\powershell.exe`, `${sys}\\cmd.exe`, `${sys}\\wsl.exe`]);
+  });
+
   it('posix without $SHELL starts with the first shell found', () => {
     const shells = detectShells(probe('darwin', { sh: '/bin/sh' }));
     expect(shells).toEqual([{ id: 'sh', label: 'sh', default: true, file: '/bin/sh', args: ['-l'] }]);

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { delimiter, join, posix, win32 } from 'node:path';
+import { delimiter, isAbsolute, join, posix, win32 } from 'node:path';
 import type { ShellInfo } from '@otherbench/core/types/terminal.js';
 import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 
@@ -21,32 +21,44 @@ export interface ShellProbe {
   env: Record<string, string | undefined>;
 }
 
+/** The first candidate that is an absolute path: a shell found by a relative path could be a file planted in a folder. */
+function firstAbsolute(isAbsolutePath: (p: string) => boolean, ...candidates: (string | null | undefined)[]): string | null {
+  return candidates.find((c): c is string => typeof c === 'string' && c !== '' && isAbsolutePath(c)) ?? null;
+}
+
 function windowsShells(probe: ShellProbe): Omit<ShellOption, 'default'>[] {
   const out: Omit<ShellOption, 'default'>[] = [];
-  const pwsh = probe.resolve('pwsh');
+  const abs = (...c: (string | null | undefined)[]): string | null => firstAbsolute(win32.isAbsolute, ...c);
+  // Windows' own shells come from System32 first, so a same-named file earlier on PATH isn't the one that runs.
+  const system32 = win32.join(probe.env['SystemRoot'] || 'C:\\Windows', 'System32');
+  const inSystem = (rel: string): string | null => {
+    const p = win32.join(system32, rel);
+    return probe.exists(p) ? p : null;
+  };
+  const pwsh = abs(probe.resolve('pwsh'));
   if (pwsh) out.push({ id: 'pwsh', label: 'PowerShell 7', file: pwsh, args: [] });
-  const powershell = probe.resolve('powershell');
+  const powershell = abs(inSystem('WindowsPowerShell\\v1.0\\powershell.exe'), probe.resolve('powershell'));
   if (powershell) out.push({ id: 'powershell', label: 'Windows PowerShell', file: powershell, args: [] });
-  const cmd = probe.env['ComSpec'] || probe.resolve('cmd');
+  const cmd = abs(inSystem('cmd.exe'), probe.env['ComSpec'], probe.resolve('cmd'));
   if (cmd) out.push({ id: 'cmd', label: 'Command Prompt', file: cmd, args: [] });
   // Git for Windows keeps git.exe in cmd\ (or mingw64\bin\) and bash.exe in bin\ of its install folder.
-  const git = probe.resolve('git');
+  const git = abs(probe.resolve('git'));
   if (git) {
     const up = win32.dirname(win32.dirname(git));
     const bash = [win32.join(up, 'bin', 'bash.exe'), win32.join(win32.dirname(up), 'bin', 'bash.exe')].find((p) => probe.exists(p));
     if (bash) out.push({ id: 'git-bash', label: 'Git Bash', file: bash, args: ['--login', '-i'] });
   }
-  const wsl = probe.resolve('wsl');
+  const wsl = abs(inSystem('wsl.exe'), probe.resolve('wsl'));
   if (wsl) out.push({ id: 'wsl', label: 'WSL', file: wsl, args: [] });
   return out;
 }
 
 function posixShells(probe: ShellProbe): Omit<ShellOption, 'default'>[] {
   const out: Omit<ShellOption, 'default'>[] = [];
-  const login = probe.env['SHELL'];
+  const login = firstAbsolute(posix.isAbsolute, probe.env['SHELL']);
   if (login && probe.exists(login)) out.push({ id: 'default', label: posix.basename(login), file: login, args: ['-l'] });
   for (const name of ['bash', 'zsh', 'sh']) {
-    const file = probe.resolve(name);
+    const file = firstAbsolute(posix.isAbsolute, probe.resolve(name));
     if (!file || out.some((s) => s.file === file || s.label === name)) continue;
     out.push({ id: name, label: name, file, args: ['-l'] });
   }
@@ -59,18 +71,26 @@ export function detectShells(probe: ShellProbe): ShellOption[] {
   return found.map((s, i) => ({ ...s, default: i === 0 }));
 }
 
-/** A command on PATH: `where` on Windows (resolveExecutable), a PATH walk elsewhere. */
+/**
+ * A command on PATH: `where` on Windows (resolveExecutable), a PATH walk elsewhere. Only absolute PATH entries count,
+ * and on Windows a match in the server's own working folder is refused unless that folder is on PATH (`where` looks
+ * there first).
+ */
 function onPath(cmd: string): string | null {
+  const dirs = (process.env['PATH'] ?? '').split(delimiter).filter((d) => d !== '' && isAbsolute(d));
   if (process.platform === 'win32') {
+    let found: string;
     try {
-      return resolveExecutable(cmd);
+      found = resolveExecutable(cmd);
     } catch (err) {
       if (err instanceof ExecutableNotFoundError) return null;
       throw err;
     }
+    const inCwd = win32.dirname(found).toLowerCase() === process.cwd().toLowerCase();
+    const cwdOnPath = dirs.some((d) => win32.resolve(d).toLowerCase() === process.cwd().toLowerCase());
+    return inCwd && !cwdOnPath ? null : found;
   }
-  for (const dir of (process.env['PATH'] ?? '').split(delimiter)) {
-    if (dir === '') continue;
+  for (const dir of dirs) {
     const file = join(dir, cmd);
     if (existsSync(file)) return file;
   }
