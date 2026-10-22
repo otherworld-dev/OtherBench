@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EditDiff } from './EditDiff.js';
 import type { EditDiffInfo } from '../lib/editDiff.js';
@@ -45,6 +45,25 @@ describe('EditDiff', () => {
     render(<EditDiff info={info} />);
     expect(screen.getByText('removed')).toHaveClass('sr-only');
     expect(screen.getByText('added')).toHaveClass('sr-only');
+  });
+
+  it("clips its rows' sr-only labels in its own scroll box, so a long diff can't stretch the thread with empty space", () => {
+    render(<EditDiff info={info} defaultOpen />);
+    // An absolute label escapes an overflow box that isn't positioned; jsdom has no layout, so the class is what's checked.
+    expect(screen.getByText('added').parentElement!.parentElement).toHaveClass('relative', 'overflow-auto');
+  });
+
+  it('starts folded to its header, and expands when the header is clicked', () => {
+    render(<EditDiff info={info} />);
+    const diff = screen.getByTestId('edit-diff');
+    expect(diff).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('src/a.ts'));
+    expect(diff).toHaveAttribute('open');
+  });
+
+  it('starts open with defaultOpen', () => {
+    render(<EditDiff info={info} defaultOpen />);
+    expect(screen.getByTestId('edit-diff')).toHaveAttribute('open');
   });
 
   it('labels a Write as wrote, not new file, and shows a muted gap row', () => {
