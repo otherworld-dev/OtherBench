@@ -1,15 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import type { Chat } from '@otherbench/core/ports/store.js';
 import { Menu } from '../components/Menu.js';
 import { Inspector } from '../panes/Inspector.js';
-import { appTabId, parseAppTab } from '../state/appTab.js';
-import { isChatTab } from '../state/projectTab.js';
 import { useOtherBenchStore, type CodePanelTab } from '../state/store.js';
-import { isViewTab, parseViewTab } from '../viewer/items.js';
 import { DeckTab } from './DeckTab.js';
 import { FilesTab } from './FilesTab.js';
 import { IssuesTab } from './IssuesTab.js';
 import { LinksTab } from './LinksTab.js';
+import { panelApp, viewOwner } from './panelOwner.js';
 import { useTerminalStatus } from './terminal/status.js';
 import { TerminalTab } from './terminal/TerminalTab.js';
 import { visibleTabs } from './visibleTabs.js';
@@ -28,16 +25,6 @@ const WITH_TERMINAL: { id: CodePanelTab; label: string }[] = [...BASE_TABS.slice
 /** Width kept for the "»" button, and the gap between tabs, when working out how many tabs fit. */
 const OVERFLOW_BUTTON_PX = 32;
 const TAB_GAP_PX = 2;
-
-/**
- * The chat the focused pane is about: the chat itself, or the chat a popped-out
- * viewer tab belongs to (its file is that chat's), else none (an app home, an
- * empty pane).
- */
-function focusedChat(activeId: string | null, chats: Chat[]): Chat | null {
-  const id = isViewTab(activeId) ? (parseViewTab(activeId)?.chatId ?? null) : isChatTab(activeId) ? activeId : null;
-  return id === null ? null : (chats.find((c) => c.id === id) ?? null);
-}
 
 /**
  * Code mode's right column (spec 2026-10-20-code-tab-design, layout A and
@@ -99,9 +86,7 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
   // The menu is anchored to the button; close it if the strip changes under it.
   useEffect(() => setMorePos(null), [fits]);
 
-  const chat = focusedChat(activeChatId, chats);
-  const appId = chat?.appId ?? parseAppTab(activeChatId);
-  const app = appId === null ? null : (apps.find((a) => a.id === appId) ?? null);
+  const { chat, appId, app } = panelApp(activeChatId, chats, apps);
   const profile = chat ? (profiles.find((p) => p.id === chat.profileId) ?? null) : null;
 
   const { shown, overflow } = visibleTabs(TABS, tab, fits);
@@ -143,7 +128,7 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
     body = <TerminalTab key={app.id} app={app} />;
   } else {
     // Each chat keeps its own Issues view (an issue open while it's worked on); an app home has one too.
-    const issuesOwner = chat?.appId === app.id ? chat.id : appTabId(app.id);
+    const issuesOwner = viewOwner(app, chat);
     body = (
       <div className="h-full min-h-0 overflow-y-auto p-3">
         {tab === 'issues' ? (
