@@ -8,6 +8,9 @@ export const BASE_URL = `http://127.0.0.1:${PORT}`;
 /** The fixture site browser.spec.ts opens (e2e/fixtures/site-server.mjs). */
 export const SITE_PORT = Number(process.env.OTHERBENCH_E2E_SITE_PORT ?? 4797);
 export const SITE_URL = `http://127.0.0.1:${SITE_PORT}`;
+/** The fake Nextcloud nextcloud-tabs.spec.ts signs in to (e2e/fixtures/nextcloud-server.mjs). */
+export const NEXTCLOUD_PORT = Number(process.env.OTHERBENCH_E2E_NEXTCLOUD_PORT ?? 4798);
+export const NEXTCLOUD_URL = `http://127.0.0.1:${NEXTCLOUD_PORT}`;
 /** The one Cowork session the e2e server finds (claude-import.spec.ts imports it). */
 export const COWORK_SESSION = { id: 'local_e2e_cowork', title: 'Cowork e2e session' };
 
@@ -88,6 +91,12 @@ export default defineConfig({
     {
       command: `node e2e/fixtures/site-server.mjs ${SITE_PORT}`,
       url: `${SITE_URL}/`,
+      reuseExistingServer: false,
+      timeout: 10_000,
+    },
+    {
+      command: `node e2e/fixtures/nextcloud-server.mjs ${NEXTCLOUD_PORT}`,
+      url: `${NEXTCLOUD_URL}/status.php`,
       reuseExistingServer: false,
       timeout: 10_000,
     },

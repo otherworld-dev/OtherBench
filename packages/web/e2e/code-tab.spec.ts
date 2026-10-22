@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
+import { openPanelTab } from './code-panel.js';
 
 /**
  * The Code tab's happy path (spec docs/superpowers/specs/2026-10-20-code-tab-design.md):
@@ -112,10 +113,9 @@ test('an app chat runs in Code mode with its git bar and files, and stays out of
   // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
   await expect(page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab')).toHaveCount(0);
 
-  // Files lists the repo's file.
+  // Files lists the repo's file. The panel may be too narrow for its tab, which is then under More tabs.
   const panel = page.getByTestId('code-panel');
-  await panel.getByTestId('code-panel-tab-files').click();
-  await expect(panel.getByTestId('code-panel-tab-files')).toHaveAttribute('aria-selected', 'true');
+  await openPanelTab(page, 'files', 'Files');
   await expect(panel.getByRole('tree', { name: 'Files' }).getByRole('button', { name: FILE })).toBeVisible();
 
   // Chat mode has neither the app nor its chat, in the sidebar or the tabs.
@@ -167,7 +167,7 @@ test('the terminal tab runs a shell in the app folder, keeps it across a reload,
   await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(before + 150);
 
   // Opening the tab starts a shell; what's typed runs in the repo.
-  await panel.getByTestId('code-panel-tab-terminal').click();
+  await openPanelTab(page, 'terminal', 'Terminal');
   const screen = panel.getByTestId('terminal-screen');
   await expect(screen.locator('.xterm-rows')).toBeVisible();
   await screen.locator('.xterm-helper-textarea').focus();
