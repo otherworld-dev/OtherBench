@@ -31,6 +31,19 @@ describe('NextcloudPanel', () => {
     expect(screen.getByRole('checkbox', { name: 'Clear password' })).toBeInTheDocument();
   });
 
+  it('keeps what was typed before the saved values load', async () => {
+    let load!: (v: typeof SAVED) => void;
+    nc.get.mockReturnValue(new Promise((resolve) => (load = resolve)));
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await user.type(screen.getByLabelText('Server URL'), 'https://typed.example.com');
+    load({ baseUrl: 'https://cloud.example.com', user: 'adam', passwordSet: true });
+    expect(await screen.findByText('A password is currently set.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Server URL')).toHaveValue('https://typed.example.com');
+    // A field left alone still takes the saved value.
+    expect(screen.getByLabelText('User name')).toHaveValue('adam');
+  });
+
   it('Save leaves the password out unless typed', async () => {
     const user = userEvent.setup();
     render(<NextcloudPanel />);

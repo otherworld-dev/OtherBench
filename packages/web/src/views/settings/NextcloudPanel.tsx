@@ -33,8 +33,9 @@ export function NextcloudPanel(): JSX.Element {
       .get()
       .then((s) => {
         if (cancelled) return;
-        setBaseUrl(s.baseUrl ?? '');
-        setUser(s.user ?? '');
+        // Anything typed before the load answered stays.
+        setBaseUrl((typed) => typed || (s.baseUrl ?? ''));
+        setUser((typed) => typed || (s.user ?? ''));
         setPasswordSet(s.passwordSet);
       })
       .catch((err) => {
