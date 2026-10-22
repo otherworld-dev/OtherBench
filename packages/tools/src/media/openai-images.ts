@@ -46,7 +46,7 @@ export function createOpenAIImagesBackend(conn: MediaConnection): MediaBackend {
       if (typeof link === 'string' && link !== '') {
         // Only the server we were pointed at; a link elsewhere could reach the user's network.
         if (!sameOrigin(link, conn.baseUrl)) throw new Error('The server answered with a link to another site.');
-        const img = await mediaFetch(conn, link, { redirect: 'error' }, signal);
+        const img = await mediaFetch(conn, link, {}, signal);
         if (!img.ok) throw httpError(conn, img, 'Fetching the image');
         return [{ bytes: await readCapped(img) }];
       }

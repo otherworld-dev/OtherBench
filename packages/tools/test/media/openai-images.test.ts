@@ -93,6 +93,8 @@ describe('OpenAI-style images backend', () => {
     ac.abort();
     await expect(p).rejects.toMatchObject({ name: 'AbortError' });
 
+    server?.closeAllConnections();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
     const bad = await start((_r, res) => json(res, {}, 401));
     const err = await createOpenAIImagesBackend(bad).test(new AbortController().signal).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/refused the credentials/);
