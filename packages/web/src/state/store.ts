@@ -265,6 +265,8 @@ export interface OtherBenchState {
   linkLists: Record<string, { tag: string; bookmarks: Bookmark[] }>;
   cacheDeckBoard(appId: string, board: DeckBoardView): void;
   cacheDeckCard(card: DeckCardDetail): void;
+  /** Drops a card that's gone from Nextcloud (deleted here or elsewhere), so it isn't shown again from the cache. */
+  forgetDeckCard(cardId: number): void;
   cacheWikiTree(appId: string, tree: WikiTree): void;
   cacheWikiPage(appId: string, page: WikiPage): void;
   cacheLinkList(appId: string, list: { tag: string; bookmarks: Bookmark[] }): void;
@@ -1019,6 +1021,12 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   linkLists: {},
   cacheDeckBoard: (appId, board) => set((state) => ({ deckBoards: { ...state.deckBoards, [appId]: board } })),
   cacheDeckCard: (card) => set((state) => ({ deckCards: { ...state.deckCards, [card.id]: card } })),
+  forgetDeckCard: (cardId) =>
+    set((state) => {
+      if (!(cardId in state.deckCards)) return {};
+      const { [cardId]: _gone, ...deckCards } = state.deckCards;
+      return { deckCards };
+    }),
   cacheWikiTree: (appId, tree) => set((state) => ({ wikiTrees: { ...state.wikiTrees, [appId]: tree } })),
   cacheWikiPage: (appId, page) => set((state) => ({ wikiPages: { ...state.wikiPages, [`${appId}#${page.id}`]: page } })),
   cacheLinkList: (appId, list) => set((state) => ({ linkLists: { ...state.linkLists, [appId]: list } })),

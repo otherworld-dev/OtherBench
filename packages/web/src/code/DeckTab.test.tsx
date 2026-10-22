@@ -171,6 +171,54 @@ describe('DeckTab', () => {
     expect(within(view).getByText('On the Glados MCP board')).toBeInTheDocument();
   });
 
+  it("a card on another board is fetched and changed on its own board, so nothing rescans the app's", async () => {
+    vi.mocked(api.nextcloud.card).mockResolvedValue(detail({ boardId: 12, boardTitle: 'Glados MCP', stackTitle: 'To Do' }));
+    const { user, view } = await openTerminal();
+    expect(api.nextcloud.card).toHaveBeenLastCalledWith(966, 7);
+    await user.click(within(view).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(api.nextcloud.cardAction).toHaveBeenCalledWith(966, 'done', 12));
+    await waitFor(() => expect(api.nextcloud.card).toHaveBeenCalledTimes(2));
+    expect(api.nextcloud.card).toHaveBeenLastCalledWith(966, 12);
+  });
+
+  it('a card deleted elsewhere shows the error, drops the cached card and reloads the list', async () => {
+    await openTerminal();
+    expect(api.apps.deck.board).toHaveBeenCalledTimes(1);
+    vi.mocked(api.nextcloud.card).mockRejectedValue(
+      new ApiError(404, "Deck card #966 isn't on any board this account can see.", undefined, { code: 'nextcloud-not-found' })
+    );
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent("Deck card #966 isn't on any board this account can see.");
+    await waitFor(() => expect(useOtherBenchStore.getState().deckCards[966]).toBeUndefined());
+    // The focus refresh and the reload after the card went missing.
+    await waitFor(() => expect(api.apps.deck.board).toHaveBeenCalledTimes(3));
+    expect(screen.queryByTestId('card-detail')).not.toBeInTheDocument();
+  });
+
+  it('a refresh that fails for another reason shows the error above the cached card', async () => {
+    const { view } = await openTerminal();
+    vi.mocked(api.nextcloud.card).mockRejectedValue(new ApiError(409, "Couldn't reach Nextcloud at https://nc.example.", undefined, { code: 'nextcloud-unreachable' }));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(await within(view).findByRole('alert')).toHaveTextContent("Couldn't reach Nextcloud at https://nc.example.");
+    expect(within(view).getByRole('heading', { name: '#966 Terminal' })).toBeInTheDocument();
+    expect(useOtherBenchStore.getState().deckCards[966]).toBeDefined();
+  });
+
+  it('a failed action fetches the board and the card again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(api.nextcloud.cardAction).mockRejectedValue(new ApiError(409, 'Nextcloud answered HTTP 500.', undefined, { code: 'nextcloud-failed' }));
+    const { user, view } = await openTerminal();
+    expect(api.apps.deck.board).toHaveBeenCalledTimes(1);
+    await user.click(within(view).getByRole('button', { name: 'Archive' }));
+    expect(await within(view).findByRole('alert')).toHaveTextContent('Nextcloud answered HTTP 500.');
+    await waitFor(() => expect(api.apps.deck.board).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.nextcloud.card).toHaveBeenCalledTimes(2));
+  });
+
   it('Move to calls moveCard and refetches', async () => {
     const { user, view } = await openTerminal();
     expect(api.nextcloud.card).toHaveBeenCalledTimes(1);
@@ -224,6 +272,7 @@ describe('DeckTab', () => {
     expect(screen.queryByTestId('card-detail')).not.toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(api.nextcloud.card).toHaveBeenCalledTimes(1);
+    expect(useOtherBenchStore.getState().deckCards[966]).toBeUndefined();
   });
 
   it('Edit saves title, description and due date; a cleared due date sends null', async () => {

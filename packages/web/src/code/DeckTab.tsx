@@ -1,11 +1,11 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { DeckBoardView, DeckCardDetail, DeckCardSummary, DeckLabel } from '@otherbench/core/types/nextcloud.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { formatAge } from '../lib/relativeTime.js';
-import { api } from '../state/api.js';
+import { ApiError, api } from '../state/api.js';
 import { useOtherBenchStore, type DeckView } from '../state/store.js';
 import { CodeErrorLine, NO_DECK_BOARD } from './CodeError.js';
 import { startChatFromCard } from './startChatFromCard.js';
@@ -346,6 +346,7 @@ function CardView({
   // Nextcloud's last answer for the card, shown while it's fetched again.
   const card = useOtherBenchStore((s) => s.deckCards[cardId] ?? null);
   const cacheDeckCard = useOtherBenchStore((s) => s.cacheDeckCard);
+  const forgetDeckCard = useOtherBenchStore((s) => s.forgetDeckCard);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -353,25 +354,42 @@ function CardView({
   const [editing, setEditing] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const boardHint = app.deckBoardId;
+  // The board to look on first: the card's own once it's known, so a card on another board isn't searched for across every board each time.
+  const boardHint = card?.boardId ?? app.deckBoardId;
+  // Read when a fetch starts rather than being a dependency, so learning the card's board doesn't fetch it again.
+  const hintRef = useRef(boardHint);
+  hintRef.current = boardHint;
 
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
   useEffect(() => {
     let cancelled = false;
-    api.nextcloud.card(cardId, boardHint).then(
+    api.nextcloud.card(cardId, hintRef.current).then(
       (r) => {
         if (cancelled) return;
         cacheDeckCard(r);
         setLoadError(null);
       },
-      (err: unknown) => !cancelled && setLoadError(err)
+      (err: unknown) => {
+        if (cancelled) return;
+        setLoadError(err);
+        // Gone from Nextcloud (deleted elsewhere): stop showing it, and fetch the list it's no longer in.
+        if (err instanceof ApiError && err.code === 'nextcloud-not-found') {
+          forgetDeckCard(cardId);
+          onBoardChanged();
+        }
+      }
     );
     return () => {
       cancelled = true;
     };
-  }, [cardId, boardHint, reload, cacheDeckCard]);
+    // onBoardChanged is a fresh closure each render; only these say the card needs fetching again.
+  }, [cardId, reload, cacheDeckCard, forgetDeckCard]);
 
-  /** One user action on the card; the card (unless it's gone) and the board are fetched again after. */
+  /**
+   * One user action on the card; the card (unless it's gone) and the board are
+   * fetched again after. A failed one fetches both again too: the card may
+   * have changed or vanished elsewhere, and the list should say so.
+   */
   async function act(kind: string, run: () => Promise<unknown>, refetchCard = true): Promise<boolean> {
     if (busy) return false;
     setBusy(kind);
@@ -384,6 +402,8 @@ function CardView({
     } catch (err) {
       console.error(`[otherbench-web] Deck #${cardId} ${kind} failed:`, err);
       setActionError({ error: err, fallback: "Couldn't change the card." });
+      setReload((n) => n + 1);
+      onBoardChanged();
       return false;
     } finally {
       setBusy(null);
@@ -406,7 +426,10 @@ function CardView({
 
   async function remove(): Promise<void> {
     setConfirmDelete(false);
-    if (await act('delete', () => api.nextcloud.deleteCard(cardId, boardHint), false)) onBack();
+    if (await act('delete', () => api.nextcloud.deleteCard(cardId, boardHint), false)) {
+      forgetDeckCard(cardId);
+      onBack();
+    }
   }
 
   const back = (
@@ -429,6 +452,8 @@ function CardView({
   const due = dueDate(card.duedate);
   return (
     <div data-testid="card-detail" className="min-w-0 space-y-3">
+      {/* A refresh that failed: the card below is Nextcloud's last answer. */}
+      {loadError !== null && <CodeErrorLine error={loadError} fallback="Couldn't load the card." />}
       <div className="flex items-center gap-2">
         {back}
         <span className="flex-1" />
