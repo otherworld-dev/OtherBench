@@ -69,8 +69,15 @@ describe('LinksTab', () => {
     render(<LinksTab app={app()} />);
     const row = await screen.findByTestId('link-row-2');
     expect(row).toHaveTextContent('javascript:alert(1)');
-    await user.click(within(row).getByRole('link'));
+    const link = within(row).getByRole('link');
+    // No href, so a middle or Ctrl-click has nothing to follow; still reachable from the keyboard.
+    expect(link).not.toHaveAttribute('href');
+    expect(link).toHaveAttribute('tabindex', '0');
+    expect(link).toHaveAttribute('aria-disabled', 'true');
+    await user.click(link);
     expect(openInBrowser).not.toHaveBeenCalled();
+    const web = within(await screen.findByTestId('link-row-1')).getByRole('link');
+    expect(web).toHaveAttribute('href', 'https://example.com/page1');
   });
 
   it('Add sends url, title and extra tags', async () => {

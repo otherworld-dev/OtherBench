@@ -183,7 +183,9 @@ export function LinksTab({ app }: { app: App }): JSX.Element {
             ) : (
               <li key={b.id} data-link={b.id} data-testid={`link-row-${b.id}`} className="flex items-start rounded-sm hover:bg-[var(--bg-sunken)]">
                 <a
-                  href={b.url}
+                  // Only a web link gets an href: a middle or Ctrl-click follows it without the click handler.
+                  // Any other stays a focusable, disabled link, so the row reads and tabs the same.
+                  {...(isWebUrl(b.url) ? { href: b.url } : { role: 'link', tabIndex: 0, 'aria-disabled': true, title: 'Only http and https links open' })}
                   onClick={(e) => {
                     e.preventDefault();
                     if (isWebUrl(b.url)) void openInBrowser(b.url);
