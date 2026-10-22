@@ -375,6 +375,17 @@ export class PermissionBroker {
       if (isDevToolsTitle(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_DEVTOOLS_REASON };
     }
 
+    // Generation (media-generation plan, task 2). Needs no workspace. Never a
+    // sub-agent's, whatever grants exist. Under ask-on-changes the profile's
+    // choice (checked above) is the consent, so no card, unattended included;
+    // whether the prompt is shown first is the tool's own ask, not this
+    // branch's. Under always-ask it falls through to the grants and a card, and
+    // with nobody there and no grant it is refused (see below).
+    if (tool.source === 'media') {
+      if (ctx.subagent) return { kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL };
+      if (policy.approvalMode === 'ask_on_mutate') return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
     // user's OTHER chats, so text injected into this one could use it to
     // reach them. It falls through to the grants, and the card's "for this
@@ -406,6 +417,10 @@ export class PermissionBroker {
       if (grant.scope === 'once') this.store.grants.delete(grant.id);
       return { kind: 'allow', grantedBy: 'grant', grantId: grant.id };
     }
+
+    // A card nobody can answer: refused here, with the scheduled run's reason,
+    // rather than left for the provider to drop.
+    if (tool.source === 'media' && ctx.unattended === true) return { kind: 'deny', reason: UNATTENDED_REASON, unattended: true };
 
     const request: ApprovalRequest = {
       id: randomUUID(),
@@ -738,6 +753,12 @@ export class PermissionBroker {
 /** A computer call made from inside a sub-agent. */
 export const SUBAGENT_COMPUTER_REFUSAL = "A sub-agent can't use the computer. Say in your answer what needs doing on screen, and the reply that started you can do it.";
 
+/** A media call on a profile with no choice set for it, or under a tool name OtherBench doesn't know. */
+export const MEDIA_OFF_REASON = "Generation isn't set up for this profile.";
+
+/** A media call made from inside a sub-agent. */
+export const SUBAGENT_MEDIA_REFUSAL = "Sub-agents can't generate images or video.";
+
 export const SUBAGENT_THREAD_REFUSAL = "A sub-agent can't ask the user, propose a plan or keep the reply's checklist. Put what you need to say in your answer.";
 
 export const UNATTENDED_REASON =
@@ -857,6 +878,13 @@ function computerSummary(args: unknown): string {
   return `Use ${name === undefined ? '?' : cardLine(name, 80)}: ${actionSummary(args)}`;
 }
 
+/** The profile's choice a media tool needs: `generate_image` the image one, `generate_video` the video one, any other name none. */
+function mediaChoiceFor(name: string, policy: ToolPolicy): unknown {
+  if (name === 'generate_image') return policy.media?.image;
+  if (name === 'generate_video') return policy.media?.video;
+  return undefined;
+}
+
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
   switch (tool.source) {
     case 'fs':
@@ -903,9 +931,10 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.browser === true ? null : 'The browser is turned off for this profile.';
     case 'computer':
       return policy.computer === true ? null : COMPUTER_OFF_REASON;
-    // The broker branch for generation arrives with the media tools; until then it fails closed.
+    // Generation: the tool's name says which choice it needs; an unknown name
+    // under this source gets none, so it fails closed.
     case 'media':
-      return 'Image and video generation is not available yet.';
+      return mediaChoiceFor(tool.name, policy) ? null : MEDIA_OFF_REASON;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
@@ -1083,6 +1112,11 @@ function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint'])
       throw new Error(`Refusing an "always" grant for computer use that doesn't name the app the card asked about (${own}).`);
     }
     return { app: own };
+  }
+
+  // A media grant covers the tool and nothing narrower: no constraint to send.
+  if (tool.source === 'media' && keys.length > 0) {
+    throw new Error(`Refusing to create an "always" grant for the media tool "${tool.name}": it takes no constraint.`);
   }
 
   if (keys.some((k) => k !== 'pathPrefix')) {
