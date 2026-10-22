@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { httpNextcloudClient, NextcloudError, type RawCardPut } from '../../src/nextcloud/client.js';
 import {
   archiveCard, boardView, changeLabels, completeCard, createCard, deckCardUrl, deleteCard, findCard,
@@ -192,6 +192,22 @@ describe('createCard', () => {
     );
     expect(c.card(d.id).title).toBe(`#${d.id} Fresh`);
     expect(d).toMatchObject({ title: 'Fresh', description: 'why', stackId: 10, boardId: 1 });
+  });
+
+  it('returns the created card, unprefixed, when the prefix update fails, so nobody retries into a duplicate', async () => {
+    const c = new FakeNextcloudClient(seed());
+    c.failOn = { call: 'deckPutCard', error: new NextcloudError('nextcloud-failed', 'Nextcloud answered HTTP 500.') };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const d = await createCard(c, 1, 10, { title: 'Fresh' });
+      expect(d).toMatchObject({ title: 'Fresh', stackId: 10, boardId: 1 });
+      expect(c.card(d.id).title).toBe('Fresh');
+      expect(c.data.cards.filter((x) => x.title.endsWith('Fresh'))).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain(`#${d.id}`);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

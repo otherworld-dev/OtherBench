@@ -172,7 +172,14 @@ export async function createCard(
     ...(input.description ? { description: input.description } : {}),
   });
   // The id is the server's, so the "#<id> " prefix goes on in a follow-up update.
-  await putCard(client, boardId, stackId, created.id, (c) => ({ title: withCardPrefix(created.id, c.title) }));
+  // The card exists either way: if that update fails, hand back the card as it
+  // is rather than an error, which would invite a retry and so a duplicate.
+  try {
+    await putCard(client, boardId, stackId, created.id, (c) => ({ title: withCardPrefix(created.id, c.title) }));
+  } catch (err) {
+    if (!(err instanceof NextcloudError)) throw err;
+    console.warn(`[otherbench-server] Deck card #${created.id} was created, but adding its "#${created.id} " title prefix failed:`, err.message);
+  }
   return findCard(client, created.id, boardId);
 }
 
