@@ -171,12 +171,15 @@ export class SqliteSyncRepo implements SyncRepo {
 
   missingBlobs(): { id: string; sha256: string; size: number }[] {
     // Only a file bound to a message of its own chat is ever fetched or given a local blob.
-    const rows = this.db.prepare(`SELECT a.id, a.sha256, a.size FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string; size: unknown }[];
+    const rows = this.db
+      .prepare(`SELECT a.id, a.sha256, a.size, a.mime, hm.role AS role FROM attachment a JOIN message hm ON hm.id = a.message_id WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`)
+      .all() as { id: string; sha256: string; size: unknown; mime: unknown; role: unknown }[];
     // And only one whose row states a size a blob can be held to (what `attachmentRowOk` asks of a row on apply): an
     // older row may hold text or a fraction there, which no caller could cap a download by.
-    const sized = (r: { id: string; sha256: string; size: unknown }): r is { id: string; sha256: string; size: number } =>
-      typeof r.size === 'number' && Number.isInteger(r.size) && r.size >= 0 && r.size <= MAX_HISTORY_ATTACHMENT_BYTES;
-    return rows.filter(sized).filter((r) => isSha256(r.sha256));
+    // The cap is the one `attachmentRowOk` applied: a tool's video on a reply may be up to the video cap.
+    const sized = (r: { size: unknown; mime: unknown; role: unknown }): boolean =>
+      typeof r.size === 'number' && Number.isInteger(r.size) && r.size >= 0 && r.size <= (r.role === 'assistant' && isToolVideoMime(r.mime) ? MAX_TOOL_VIDEO_BYTES : MAX_HISTORY_ATTACHMENT_BYTES);
+    return rows.filter(sized).filter((r) => isSha256(r.sha256)).map((r) => ({ id: r.id, sha256: r.sha256, size: r.size as number }));
   }
 
   isSentBlob(sha256: string): boolean {

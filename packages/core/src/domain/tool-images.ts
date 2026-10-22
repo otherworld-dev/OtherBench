@@ -374,6 +374,51 @@ export function screenToolResult(result: unknown, budget: ToolImageBudget, limit
 }
 
 /**
+ * What differs between the two kinds of stored media, so the checks that keep
+ * and bind them are one body of code, not two copies that could drift.
+ */
+interface MediaKind {
+  type: 'image' | 'video';
+  isRef: (value: unknown) => boolean;
+  mimes: readonly string[];
+  bound: (row: ToolImageRow, chatId: string, messageId: string) => boolean;
+  notKept: string;
+  limitNote: string;
+  notBound: string;
+  max: number;
+  /** Gives back the place an inline item took in a budget, when it turns out not to be kept. */
+  release: (budget: ToolImageBudget) => void;
+}
+
+const IMAGE_KIND: MediaKind = {
+  type: 'image',
+  isRef: isToolImageRef,
+  mimes: TOOL_IMAGE_MIMES,
+  bound: toolImageBound,
+  notKept: IMAGE_NOT_KEPT,
+  limitNote: IMAGE_NOT_KEPT_LIMIT,
+  notBound: TOOL_IMAGE_NOT_BOUND,
+  max: MAX_TOOL_IMAGES_PER_MESSAGE,
+  release: (b) => {
+    b.images -= 1;
+  },
+};
+
+const VIDEO_KIND: MediaKind = {
+  type: 'video',
+  isRef: isToolVideoRef,
+  mimes: TOOL_VIDEO_MIMES,
+  bound: toolVideoBound,
+  notKept: VIDEO_NOT_KEPT,
+  limitNote: VIDEO_NOT_KEPT_LIMIT,
+  notBound: TOOL_VIDEO_NOT_BOUND,
+  max: MAX_TOOL_VIDEOS_PER_MESSAGE,
+  release: (b) => {
+    b.videos = (b.videos ?? 1) - 1;
+  },
+};
+
+/**
  * `result` screened (see `screenToolResult`, stored limits) with every image
  * that is let through stored through `save` and replaced by a reference. A
  * result with nothing to screen comes back as the same object. An image that
@@ -399,38 +444,24 @@ export async function keepToolImages(
   }
   const out: unknown[] = [];
   for (const item of screened.result) {
-    if (isInlineToolVideo(item)) {
-      if (!save) {
-        used.videos = (used.videos ?? 1) - 1;
-        out.push({ type: 'text', text: VIDEO_NOT_KEPT });
-        continue;
-      }
-      try {
-        const attachmentId = await save(chatId, messageId, Buffer.from(item.data, 'base64'), item.mimeType);
-        out.push({ type: 'video', attachmentId, mimeType: item.mimeType });
-      } catch (err) {
-        used.videos = (used.videos ?? 1) - 1;
-        console.error(`[TurnRunner] couldn't keep a tool video for message ${messageId}:`, err);
-        out.push({ type: 'text', text: VIDEO_NOT_KEPT });
-      }
-      continue;
-    }
-    if (!isInlineToolImage(item)) {
+    const kind = isInlineToolVideo(item) ? VIDEO_KIND : isInlineToolImage(item) ? IMAGE_KIND : null;
+    if (kind === null) {
       out.push(item);
       continue;
     }
+    const inline = item as InlineToolImage | InlineToolVideo;
     if (!save) {
-      used.images -= 1;
-      out.push({ type: 'text', text: IMAGE_NOT_KEPT });
+      kind.release(used);
+      out.push({ type: 'text', text: kind.notKept });
       continue;
     }
     try {
-      const attachmentId = await save(chatId, messageId, Buffer.from(item.data, 'base64'), item.mimeType);
-      out.push({ type: 'image', attachmentId, mimeType: item.mimeType });
+      const attachmentId = await save(chatId, messageId, Buffer.from(inline.data, 'base64'), inline.mimeType);
+      out.push({ type: kind.type, attachmentId, mimeType: inline.mimeType });
     } catch (err) {
-      used.images -= 1;
-      console.error(`[TurnRunner] couldn't keep a tool image for message ${messageId}:`, err);
-      out.push({ type: 'text', text: IMAGE_NOT_KEPT });
+      kind.release(used);
+      console.error(`[TurnRunner] couldn't keep a tool ${kind.type} for message ${messageId}:`, err);
+      out.push({ type: 'text', text: kind.notKept });
     }
   }
   budget.kept = used.images;
@@ -461,45 +492,21 @@ export async function keepToolImages(
  */
 export function bindToolImageParts(parts: Part[], chatId: string, messageId: string, lookup: ToolImageLookup, missing: 'hold' | 'drop'): Part[] {
   let changed = false;
-  let kept = 0;
-  let keptVideos = 0;
+  const kept = { image: 0, video: 0 };
   const note = (text: string): { type: 'text'; text: string } => ({ type: 'text', text });
   const next = parts.map((part): Part => {
     if (part.type !== 'tool-result' || !Array.isArray(part.result)) return part;
     const result = part.result.map((item): unknown => {
       const binary = binaryItemNote(item);
       if (binary !== null) return note(binary);
-      if (isVideoItem(item)) {
-        if (!isToolVideoRef(item)) return note(VIDEO_NOT_KEPT);
-        const vref = item as unknown as Record<string, unknown>;
-        if (!isAttachmentId(vref['attachmentId'])) return note(VIDEO_NOT_KEPT);
-        const vclaimed = baseMime(String(vref['mimeType']));
-        if (!TOOL_VIDEO_MIMES.includes(vclaimed)) return note(VIDEO_NOT_KEPT);
-        if (keptVideos >= MAX_TOOL_VIDEOS_PER_MESSAGE) return note(VIDEO_NOT_KEPT_LIMIT);
-        let vrow: ToolImageRow | null = null;
-        try {
-          vrow = lookup(vref['attachmentId']);
-        } catch {
-          vrow = null;
-        }
-        if (vrow === null || vrow === undefined) {
-          if (missing === 'drop') return note(TOOL_VIDEO_NOT_BOUND);
-          keptVideos += 1;
-          const held: ToolVideoRef = { type: 'video', attachmentId: vref['attachmentId'], mimeType: vclaimed, pending: true };
-          return held;
-        }
-        if (!toolVideoBound(vrow, chatId, messageId)) return note(TOOL_VIDEO_NOT_BOUND);
-        keptVideos += 1;
-        const verified: ToolVideoRef = { type: 'video', attachmentId: vref['attachmentId'], mimeType: baseMime(vrow.mime) };
-        return verified;
-      }
-      if (!isImageItem(item)) return item;
-      if (!isToolImageRef(item)) return note(IMAGE_NOT_KEPT);
+      const kind = isVideoItem(item) ? VIDEO_KIND : isImageItem(item) ? IMAGE_KIND : null;
+      if (kind === null) return item;
+      if (!kind.isRef(item)) return note(kind.notKept);
       const ref = item as unknown as Record<string, unknown>;
-      if (!isAttachmentId(ref['attachmentId'])) return note(IMAGE_NOT_KEPT);
+      if (!isAttachmentId(ref['attachmentId'])) return note(kind.notKept);
       const claimed = baseMime(String(ref['mimeType']));
-      if (!TOOL_IMAGE_MIMES.includes(claimed)) return note(IMAGE_NOT_KEPT);
-      if (kept >= MAX_TOOL_IMAGES_PER_MESSAGE) return note(IMAGE_NOT_KEPT_LIMIT);
+      if (!kind.mimes.includes(claimed)) return note(kind.notKept);
+      if (kept[kind.type] >= kind.max) return note(kind.limitNote);
       let row: ToolImageRow | null = null;
       try {
         row = lookup(ref['attachmentId']);
@@ -507,15 +514,13 @@ export function bindToolImageParts(parts: Part[], chatId: string, messageId: str
         row = null;
       }
       if (row === null || row === undefined) {
-        if (missing === 'drop') return note(TOOL_IMAGE_NOT_BOUND);
-        kept += 1;
-        const held: ToolImageRef = { type: 'image', attachmentId: ref['attachmentId'], mimeType: claimed, pending: true };
-        return held;
+        if (missing === 'drop') return note(kind.notBound);
+        kept[kind.type] += 1;
+        return { type: kind.type, attachmentId: ref['attachmentId'], mimeType: claimed, pending: true };
       }
-      if (!toolImageBound(row, chatId, messageId)) return note(TOOL_IMAGE_NOT_BOUND);
-      kept += 1;
-      const verified: ToolImageRef = { type: 'image', attachmentId: ref['attachmentId'], mimeType: baseMime(row.mime) };
-      return verified;
+      if (!kind.bound(row, chatId, messageId)) return note(kind.notBound);
+      kept[kind.type] += 1;
+      return { type: kind.type, attachmentId: ref['attachmentId'], mimeType: baseMime(row.mime) };
     });
     if (result.some((r, i) => r !== (part.result as unknown[])[i])) changed = true;
     return changed ? { ...part, result } : part;
