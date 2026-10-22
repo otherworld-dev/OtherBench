@@ -92,8 +92,12 @@ function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'>
   );
 }
 
-/** A viewed file's relative image comes from its own folder, through a `/view/` link; any other image is left as written. */
-function Image({ files, node: _node, src, alt, ...rest }: FromMarkdown<'img'> & { files: MarkdownFiles | undefined }): JSX.Element {
+/**
+ * A viewed file's relative image comes from its own folder, through a `/view/` link; any other image is left as written.
+ * Without `remote`, no image is loaded at all, only its alt text shown: text from elsewhere (a Deck card) must not reach the network.
+ */
+function Image({ files, remote, node: _node, src, alt, ...rest }: FromMarkdown<'img'> & { files: MarkdownFiles | undefined; remote: boolean }): JSX.Element {
+  if (!remote) return <span className="text-[var(--text-muted)]">[image: {alt}]</span>;
   if (files && typeof src === 'string' && isRelativePath(src)) return <ViewerImage chatId={files.chatId} path={joinPath(files.base, hrefToPath(src))} alt={alt ?? ''} />;
   return <img src={src} alt={alt} {...rest} />;
 }
@@ -117,8 +121,10 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
  * lists (remark-gfm) and syntax-highlighted code via rehype-highlight, whose
  * token colours are themed in index.css to track light/dark rather than a
  * fixed hljs stylesheet. Every code block gets a hover-revealed copy button.
+ * `remoteImages={false}` shows each image as its alt text instead, for
+ * untrusted text such as a Nextcloud card or page.
  */
-export function MarkdownBody({ text, files }: { text: string; files?: MarkdownFiles }): JSX.Element {
+export function MarkdownBody({ text, files, remoteImages = true }: { text: string; files?: MarkdownFiles; remoteImages?: boolean }): JSX.Element {
   // Stable component types: new ones each render would remount every link and
   // image as a reply streams (and refetch a viewed file's images).
   const chatId = files?.chatId;
@@ -128,10 +134,10 @@ export function MarkdownBody({ text, files }: { text: string; files?: MarkdownFi
     return {
       pre: CodeBlock,
       a: (props: FromMarkdown<'a'>) => <Link {...props} files={at} />,
-      img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} />,
+      img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} remote={remoteImages} />,
       code: InlineCode,
     };
-  }, [chatId, base]);
+  }, [chatId, base, remoteImages]);
   return (
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown

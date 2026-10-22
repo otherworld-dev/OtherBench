@@ -68,3 +68,11 @@ describe('MarkdownBody lists', () => {
     expect(body.querySelector('ul > li:not(.task-list-item)')?.textContent).toBe('one');
   });
 });
+
+describe('MarkdownBody without remote images', () => {
+  it('remoteImages false renders alt text, no img', () => {
+    const { container } = render(<MarkdownBody text={'See ![diagram](https://example.com/d.png) here.'} remoteImages={false} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('[image: diagram]')).toBeInTheDocument();
+  });
+});
