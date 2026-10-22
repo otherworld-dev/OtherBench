@@ -91,6 +91,7 @@ describe('nextcloud client', () => {
   describe('failures', () => {
     const cases: Array<[string, () => Response | Error, string]> = [
       ['401 is nextcloud-auth', () => new Response('s3cr3t-pw', { status: 401 }), 'nextcloud-auth'],
+      ['403 (a board or card this account cannot see) is nextcloud-not-found', () => new Response('s3cr3t-pw', { status: 403 }), 'nextcloud-not-found'],
       ['404 on an app base route is nextcloud-not-found', () => new Response('s3cr3t-pw', { status: 404 }), 'nextcloud-not-found'],
       ['500 is nextcloud-failed', () => new Response('s3cr3t-pw', { status: 500 }), 'nextcloud-failed'],
       ['fetch rejecting is nextcloud-unreachable', () => new Error('boom s3cr3t-pw'), 'nextcloud-unreachable'],
@@ -105,6 +106,13 @@ describe('nextcloud client', () => {
         expect(String((err as NextcloudError).message)).not.toContain('s3cr3t-pw');
       });
     }
+
+    it('says a 403 is out of reach, not a wrong password', async () => {
+      const { f } = fake([new Response('', { status: 403 })]);
+      const err = (await mk(f).deckStacks(4).catch((e: unknown) => e)) as NextcloudError;
+      expect(err.code).toBe('nextcloud-not-found');
+      expect(err.message).toBe("That isn't in Nextcloud any more, or this account can't see it.");
+    });
 
     it('a bookmarks status:error is nextcloud-failed', async () => {
       const { f } = fake([json({ status: 'error', data: ['s3cr3t-pw nope'] })]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NextcloudError, type RawCardPut } from '../../src/nextcloud/client.js';
+import { httpNextcloudClient, NextcloudError, type RawCardPut } from '../../src/nextcloud/client.js';
 import {
   archiveCard, boardView, changeLabels, completeCard, createCard, deckCardUrl, deleteCard, findCard,
   isDoingTitle, moveCard, reopenCard, stripCardPrefix, updateCard, withCardPrefix,
@@ -131,6 +131,22 @@ describe('findCard', () => {
   it('looks on the other boards when the preferred board is gone', async () => {
     const c = new FakeNextcloudClient(seed());
     expect(await findCard(c, 300, 99)).toMatchObject({ id: 300, boardId: 2, boardTitle: 'Other' });
+  });
+
+  it('looks on the other boards when Deck answers 403 for the preferred one (unshared or trashed)', async () => {
+    const deck = 'https://nc/index.php/apps/deck/api/v1.0';
+    const reply = (status: number, body?: unknown) =>
+      new Response(body === undefined ? '' : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const routes: Record<string, () => Response> = {
+      [`${deck}/boards/1/stacks`]: () => reply(403),
+      [`${deck}/boards/1/stacks/archived`]: () => reply(403),
+      [`${deck}/boards`]: () => reply(200, [{ id: 1, title: 'Unshared' }, { id: 2, title: 'Other' }]),
+      [`${deck}/boards/2/stacks`]: () => reply(200, [{ id: 20, title: 'Inbox', order: 0, cards: [{ id: 300, title: '#300 Elsewhere' }] }]),
+      [`${deck}/boards/2/stacks/20/cards/300`]: () => reply(200, { id: 300, title: '#300 Elsewhere', description: 'd' }),
+    };
+    const f = (async (url: string) => (routes[String(url)] ?? (() => reply(404)))()) as unknown as typeof fetch;
+    const client = httpNextcloudClient({ baseUrl: 'https://nc', user: 'adam', password: 'pw' }, f);
+    expect(await findCard(client, 300, 1)).toMatchObject({ id: 300, boardId: 2, boardTitle: 'Other', title: 'Elsewhere' });
   });
 
   it('still fails on a preferred-board error other than not-found', async () => {

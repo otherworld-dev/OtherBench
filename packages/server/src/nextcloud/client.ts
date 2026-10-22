@@ -70,7 +70,7 @@ export interface NextcloudClient {
   readonly baseUrl: string;
   readonly user: string;
   currentUser(): Promise<{ id: string; displayName: string }>;
-  /** Whether each app answers (any non-404 on its base route). */
+  /** Whether each app answers (anything but a 404, or a 403, on its base route). */
   appsAvailable(): Promise<{ deck: boolean; collectives: boolean; bookmarks: boolean }>;
   deckBoards(): Promise<RawBoard[]>;
   deckBoard(boardId: number): Promise<RawBoard>;
@@ -162,8 +162,13 @@ export function httpNextcloudClient(config: NextcloudConfig, fetchImpl: typeof f
     } catch {
       throw new NextcloudError('nextcloud-unreachable', `Couldn't reach Nextcloud at ${baseUrl}.`);
     }
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       throw new NextcloudError('nextcloud-auth', 'Nextcloud rejected the username or app password.');
+    }
+    // Deck answers 403 for a board or card this account can't see (unshared,
+    // trashed). The sign-in worked, so that's "not there", not a wrong password.
+    if (res.status === 403) {
+      throw new NextcloudError('nextcloud-not-found', "That isn't in Nextcloud any more, or this account can't see it.");
     }
     if (res.status === 404) throw new NextcloudError('nextcloud-not-found', 'Nextcloud answered HTTP 404.');
     if (res.status < 200 || res.status >= 300) {
