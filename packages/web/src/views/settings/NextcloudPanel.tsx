@@ -50,6 +50,9 @@ export function NextcloudPanel(): JSX.Element {
     setSaving(true);
     setError(null);
     setSaved(false);
+    // An earlier Test was of the settings this replaces.
+    setTestResult(null);
+    setTestError(null);
     try {
       const body: { baseUrl: string; user: string; password?: string | null } = { baseUrl: baseUrl.trim(), user: user.trim() };
       if (clearPassword) body.password = null;
@@ -143,6 +146,7 @@ export function NextcloudPanel(): JSX.Element {
           {testing ? 'Testing…' : 'Test'}
         </button>
       </div>
+      <p className="-mt-2 text-xs text-[var(--text-muted)]">Tests the saved settings.</p>
 
       {testResult && (
         <div data-testid="nextcloud-test-result" className={`text-sm ${testResult.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>

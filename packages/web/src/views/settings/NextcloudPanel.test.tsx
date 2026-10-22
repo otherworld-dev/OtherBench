@@ -75,6 +75,20 @@ describe('NextcloudPanel', () => {
     expect(screen.getByTestId('nextcloud-apps')).toHaveTextContent('Deck ✓ / Collectives ✓ / Bookmarks ✗');
   });
 
+  it('Save clears an earlier Test result, as Test tests the saved settings', async () => {
+    nc.test.mockResolvedValue({ ok: false, message: 'Nextcloud rejected the username or app password.', apps: { deck: false, collectives: false, bookmarks: false } });
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await screen.findByDisplayValue('adam');
+    expect(screen.getByText('Tests the saved settings.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByTestId('nextcloud-test-result')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('App password'), 'right-one');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(screen.queryByTestId('nextcloud-test-result')).not.toBeInTheDocument();
+  });
+
   it('a 400 for an http URL shows the server message', async () => {
     nc.put.mockRejectedValue(new ApiError(400, 'The server address must start with https://.'));
     const user = userEvent.setup();
