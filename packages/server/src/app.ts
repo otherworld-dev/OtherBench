@@ -22,6 +22,7 @@ import { forwardingRoutes } from './peer/forward.js';
 import { changesOnlyFromTheDesktopApp } from './computer/desktop-only.js';
 import { peersRoutes } from './routes/peers.js';
 import { modelsRoutes } from './routes/models.js';
+import { nextcloudRoutes } from './routes/nextcloud.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
@@ -141,6 +142,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', terminalStatusRoutes(container, options.terminals === true));
   if (options.terminals === true) authed.route('/', terminalsRoutes(container));
   authed.route('/settings', settingsRoutes(container));
+  // This machine's Nextcloud (Deck, Wiki and Links tabs): never on the peer listener (forwardedApi).
+  authed.route('/nextcloud', nextcloudRoutes(container));
   authed.route('/locations', locationsRoutes(container));
   authed.route('/node', nodeRoutes(container));
   authed.route('/peers', peersRoutes(container));

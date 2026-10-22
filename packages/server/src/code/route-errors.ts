@@ -1,5 +1,7 @@
 import { HTTPException } from 'hono/http-exception';
 import type { GhErrorCode, GitErrorCode } from '@otherbench/core/types/code.js';
+import type { NextcloudErrorCode } from '@otherbench/core/types/nextcloud.js';
+import { NextcloudError } from '../nextcloud/client.js';
 import { GhError } from './github.js';
 import { GitError } from './git.js';
 import type { TerminalErrorCode } from '../terminal/manager.js';
@@ -17,7 +19,8 @@ import { ExecutableMissingError } from './process.js';
  * or gh failure, the tool's `stderr`) beside it, so the web client's existing error
  * reading still finds the message and no other route's response changes.
  */
-export type CodeRouteErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode;
+export type CodeRouteErrorCode =
+  | GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode | NextcloudErrorCode;
 
 export class CodeRouteError extends HTTPException {
   constructor(
@@ -45,8 +48,10 @@ export class CodeRouteError extends HTTPException {
 const BAD_REQUEST: ReadonlySet<CodeRouteErrorCode> = new Set(['bad-path', 'bad-branch']);
 
 /**
- * Rethrows a git, gh or missing-executable failure as a CodeRouteError, and
- * anything else unchanged. `git-failed` and `gh-failed` carry the tool's
+ * Rethrows a git, gh, Nextcloud or missing-executable failure as a
+ * CodeRouteError, and anything else unchanged. A Nextcloud failure is a 404
+ * when Nextcloud said the thing isn't there and a 409 otherwise; its message
+ * is the client's fixed phrase, never a response body. `git-failed` and `gh-failed` carry the tool's
  * stderr as-is: both services already redacted credentials in URLs from it,
  * and the spec says to show a rejected push or a conflicting pull exactly as
  * git wrote it.
@@ -56,6 +61,7 @@ export function asCodeRouteError(err: unknown): never {
     const status = BAD_REQUEST.has(err.code) ? 400 : 409;
     throw new CodeRouteError(status, err.code, err.message, err.code === 'git-failed' ? (err.stderr ?? '') : undefined);
   }
+  if (err instanceof NextcloudError) throw new CodeRouteError(err.code === 'nextcloud-not-found' ? 404 : 409, err.code, err.message);
   if (err instanceof GhError) throw new CodeRouteError(409, err.code, err.message, err.code === 'gh-failed' ? (err.stderr ?? '') : undefined);
   if (err instanceof ExecutableMissingError) {
     throw err.command === 'gh'
@@ -65,7 +71,7 @@ export function asCodeRouteError(err: unknown): never {
   throw err;
 }
 
-/** Runs a git or gh call, turning its failures into CodeRouteErrors. */
+/** Runs a git, gh or Nextcloud call, turning its failures into CodeRouteErrors. */
 export async function codeCall<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
