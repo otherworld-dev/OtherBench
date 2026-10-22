@@ -6,6 +6,7 @@ import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
 import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
+import { appNextcloudRoutes } from './routes/app-nextcloud.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
@@ -135,6 +136,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // The Code tab's apps, and their git, issues and files (spec 2026-10-20-code-tab-design). User actions, not model
   // tools, so they never pass the PermissionBroker -- and for the same reason they are never on the peer listener
   // (peer/forward.ts): a paired machine must not be able to commit, push or comment from here.
+  // An app's Deck, wiki and links: same prefix, other paths; mounted first, authed only like the rest.
+  authed.route('/apps', appNextcloudRoutes(container));
   authed.route('/apps', appsRoutes(container));
   // The Code tab's terminals (spec 2026-10-21-code-terminal-design): a shell with no approval card, so only on a local
   // server, and like the app routes never on the peer listener. Full paths under /apps/:id/terminals; appsRoutes owns
