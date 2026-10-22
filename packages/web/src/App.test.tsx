@@ -18,6 +18,7 @@ vi.mock('./state/api.js', () => ({
     mcpServers: { list: vi.fn(), refresh: vi.fn() },
     grants: { list: vi.fn(), revoke: vi.fn() },
     audit: { list: vi.fn() },
+    nextcloud: { boards: vi.fn(async () => []), collectives: vi.fn(async () => []), detectLinks: vi.fn() },
     health: vi.fn(async () => ({ status: 'ok', time: '', platform: 'linux' })),
   },
 }));
@@ -103,7 +104,7 @@ describe('App bootstrap', () => {
     mockedProfiles.mockResolvedValue([]);
     mockedChats.mockResolvedValue([]);
     mockedApps.mockResolvedValue([
-      { id: 'a-1', name: 'OtherBench', workspace: null, githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
+      { id: 'a-1', name: 'OtherBench', workspace: null, githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
     ]);
 
     render(<App />);

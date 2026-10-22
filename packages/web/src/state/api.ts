@@ -15,6 +15,7 @@ import type { PublicPeer } from '@otherbench/core/types/peer.js';
 import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
+import type { Bookmark, DeckBoardView, DeckCardDetail, NextcloudErrorCode, NextcloudSettingsView, NextcloudTestResult, ProjectLinksSuggestion, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import type { TerminalInfo, TerminalStatus } from '@otherbench/core/types/terminal.js';
 import { apiFetch, apiUrl } from './transport.js';
 
@@ -37,7 +38,7 @@ export interface AuthStatus {
  * "Error states the panels must handle"; server `code/route-errors.ts`). The
  * panels pick their one-line copy by it.
  */
-export type CodeErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo';
+export type CodeErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | NextcloudErrorCode;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -133,6 +134,10 @@ function put<T>(path: string, body: unknown): Promise<T> {
 function patch<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 }
+function boardQuery(board: number | null | undefined): string {
+  return board === undefined || board === null ? '' : `?board=${board}`;
+}
+
 function del(path: string): Promise<void> {
   return request<void>(path, { method: 'DELETE' });
 }
@@ -267,6 +272,13 @@ export interface CreateAppBody {
   defaultProfileId?: string | null;
   /** Left out: the new app goes to the bottom. */
   sortOrder?: number;
+  /** A Nextcloud Deck board id; null for none. */
+  deckBoardId?: number | null;
+  /** The Collectives collective and page path holding the app's wiki; null for none. */
+  wikiCollective?: string | null;
+  wikiPagePath?: string | null;
+  /** The Nextcloud bookmark tag for the app's links; null for none. */
+  bookmarkTag?: string | null;
 }
 
 /** `PATCH /api/apps/:id`: any of these. The folder can't be cleared; a new one moves every chat in the app with it. */
@@ -584,6 +596,30 @@ export const api = {
   },
 
   /**
+   * Nextcloud settings and cards (spec 2026-10-22-nextcloud-tabs; server `routes/nextcloud.ts`). The password is only
+   * ever sent, never returned. `board` is optional on the card calls: without it the card is found on whichever board holds it.
+   */
+  nextcloud: {
+    get: () => request<NextcloudSettingsView>('/nextcloud'),
+    put: (body: { baseUrl: string; user: string; password?: string | null }) => put<NextcloudSettingsView>('/nextcloud', body),
+    test: () => post<NextcloudTestResult>('/nextcloud/test'),
+    boards: () => request<{ id: number; title: string }[]>('/nextcloud/boards'),
+    collectives: () => request<string[]>('/nextcloud/collectives'),
+    detectLinks: (path: string) => request<ProjectLinksSuggestion>(`/nextcloud/detect-links?path=${encodeURIComponent(path)}`),
+    card: (cardId: number, board?: number | null) => request<DeckCardDetail>(`/nextcloud/cards/${cardId}${boardQuery(board)}`),
+    updateCard: (cardId: number, change: { title?: string; description?: string; duedate?: string | null }, board?: number | null) =>
+      patch<DeckCardDetail>(`/nextcloud/cards/${cardId}${boardQuery(board)}`, change),
+    /** 204; refetch the card after. */
+    cardAction: (cardId: number, action: 'done' | 'reopen' | 'archive', board?: number | null) =>
+      post<void>(`/nextcloud/cards/${cardId}/${action}${boardQuery(board)}`),
+    /** Moves in place; a move Deck ignores is a 409 `deck-move-ignored`, never a delete and recreate. */
+    moveCard: (cardId: number, stackId: number, board?: number | null) => post<void>(`/nextcloud/cards/${cardId}/move${boardQuery(board)}`, { stackId }),
+    labels: (cardId: number, change: { add?: number[]; remove?: number[] }, board?: number | null) =>
+      post<void>(`/nextcloud/cards/${cardId}/labels${boardQuery(board)}`, change),
+    deleteCard: (cardId: number, board?: number | null) => del(`/nextcloud/cards/${cardId}${boardQuery(board)}`),
+  },
+
+  /**
    * Apps and their git, GitHub issues and files (spec 2026-10-20-code-tab-design; server `routes/apps.ts`).
    * Each failure's `code` (a `CodeErrorCode`) and, for git-failed/gh-failed, `stderr` are on the ApiError.
    * The git and files routes answer 409 `not-on-this-machine` when the app's folder isn't here; the issue routes
@@ -624,6 +660,27 @@ export const api = {
       comment: (id: string, n: number, body: string) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/comment`, { body }),
       close: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/close`),
       reopen: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/reopen`),
+    },
+    deck: {
+      /** The app's Deck board; 409 `no-deck-board` for an app with none. */
+      board: (id: string) => request<DeckBoardView>(`/apps/${encodeURIComponent(id)}/deck`),
+      create: (id: string, body: { stackId: number; title: string; description?: string }) =>
+        post<DeckCardDetail>(`/apps/${encodeURIComponent(id)}/deck/cards`, body),
+    },
+    wiki: {
+      /** The page tree under the app's wiki page; 409 `no-wiki-page` for an app with none. */
+      tree: (id: string) => request<WikiTree>(`/apps/${encodeURIComponent(id)}/wiki`),
+      page: (id: string, pageId: number) => request<WikiPage>(`/apps/${encodeURIComponent(id)}/wiki/pages/${pageId}`),
+    },
+    links: {
+      /** The bookmarks under the app's tag; 409 `no-bookmark-tag` for an app with none. */
+      list: (id: string) => request<{ tag: string; bookmarks: Bookmark[] }>(`/apps/${encodeURIComponent(id)}/links`),
+      add: (id: string, body: { url: string; title?: string; description?: string; tags?: string[] }) =>
+        post<Bookmark>(`/apps/${encodeURIComponent(id)}/links`, body),
+      /** `tags` replaces the tag set (the server keeps the app's own tag on it). */
+      update: (id: string, bookmarkId: number, body: { url?: string; title?: string; description?: string; tags?: string[] }) =>
+        patch<Bookmark>(`/apps/${encodeURIComponent(id)}/links/${bookmarkId}`, body),
+      remove: (id: string, bookmarkId: number) => del(`/apps/${encodeURIComponent(id)}/links/${bookmarkId}`),
     },
     /** A folder's entries; the app's root without `path`. A relative path is read inside the root. */
     files: (id: string, path?: string) =>

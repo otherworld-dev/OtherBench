@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -11,6 +10,7 @@ import type { Workspace } from '@otherbench/core/types/workspace.js';
 import type { Container } from '../container.js';
 import { git, GitError } from '../code/git.js';
 import { ghRunner, githubService, type GithubService } from '../code/github.js';
+import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { ambiguousOnWindows, viewFailure } from '../view/roots.js';
 import { optionalNullableString } from '../validation.js';
@@ -43,6 +43,10 @@ interface AppBody {
   workspacePath?: unknown;
   workspaceRoot?: unknown;
   githubRepo?: unknown;
+  deckBoardId?: unknown;
+  wikiCollective?: unknown;
+  wikiPagePath?: unknown;
+  bookmarkTag?: unknown;
   linkedProjectId?: unknown;
   defaultProfileId?: unknown;
   sortOrder?: unknown;
@@ -66,6 +70,44 @@ function optionalGithubRepo(value: unknown): string | null | undefined {
   if (trimmed === '') return null;
   if (!isGithubRepo(trimmed)) throw new HTTPException(400, { message: `"githubRepo" must be a GitHub repository as "owner/name"; got "${trimmed}".` });
   return trimmed;
+}
+
+/** A positive integer Deck board id, or null (cleared). */
+function optionalDeckBoardId(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new HTTPException(400, { message: '"deckBoardId" must be a positive whole number or null.' });
+  }
+  return value;
+}
+
+/** Trimmed; blank is none. */
+function optionalTrimmed(value: unknown, field: string): string | null | undefined {
+  const parsed = optionalNullableString(value, field);
+  if (parsed === undefined || parsed === null) return parsed;
+  const trimmed = parsed.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+interface NextcloudFields { deckBoardId?: number | null; wikiCollective?: string | null; wikiPagePath?: string | null; bookmarkTag?: string | null }
+
+/** The Nextcloud fields a body sets (left out = unchanged). A collective and a page path come as a pair; one without the other is a 400. */
+function nextcloudFields(current: App | null, body: AppBody): NextcloudFields {
+  const out: NextcloudFields = {};
+  const deckBoardId = optionalDeckBoardId(body.deckBoardId);
+  if (deckBoardId !== undefined) out.deckBoardId = deckBoardId;
+  const wikiCollective = optionalTrimmed(body.wikiCollective, 'wikiCollective');
+  if (wikiCollective !== undefined) out.wikiCollective = wikiCollective;
+  const wikiPagePath = optionalTrimmed(body.wikiPagePath, 'wikiPagePath');
+  if (wikiPagePath !== undefined) out.wikiPagePath = wikiPagePath;
+  const bookmarkTag = optionalTrimmed(body.bookmarkTag, 'bookmarkTag');
+  if (bookmarkTag !== undefined) out.bookmarkTag = bookmarkTag;
+  const collective = out.wikiCollective !== undefined ? out.wikiCollective : (current?.wikiCollective ?? null);
+  const pagePath = out.wikiPagePath !== undefined ? out.wikiPagePath : (current?.wikiPagePath ?? null);
+  if ((collective === null) !== (pagePath === null)) {
+    throw new HTTPException(400, { message: '"wikiCollective" and "wikiPagePath" must both be set or both be empty.' });
+  }
+  return out;
 }
 
 /** A linked project must exist here when it's set (spec "Data"); a synced row naming a missing one is read as none elsewhere. */
@@ -208,25 +250,12 @@ export function appsRoutes(container: Container): Hono {
   /**
    * `GET /detect-repo?path=<abs>`: whether a folder is a repository's top
    * level and which GitHub repo its remotes point at, for the New app form's
-   * auto-fill. The path is checked as `GET /api/fs/dirs` checks it (absolute,
-   * then resolved), and this route reads nothing but git's remote list.
+   * auto-fill. The path is checked by folderFromQuery (absolute, then
+   * resolved), and this route reads nothing but git's remote list.
    * Before `/:id`, which would otherwise take "detect-repo" as an id.
    */
   app.get('/detect-repo', async (c) => {
-    const raw = c.req.query('path');
-    if (raw === undefined || !isAbsolute(raw) || raw.includes('\0')) {
-      throw new HTTPException(400, { message: `"path" must be an absolute path; got "${raw ?? ''}".` });
-    }
-    const path = resolve(raw);
-    try {
-      if (!(await stat(path)).isDirectory()) throw new HTTPException(400, { message: `"${path}" is not a folder.` });
-    } catch (err) {
-      if (err instanceof HTTPException) throw err;
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') throw new HTTPException(404, { message: `No folder at "${path}".` });
-      if (code === 'EACCES' || code === 'EPERM') throw new HTTPException(403, { message: `OtherBench can't read "${path}".` });
-      throw err;
-    }
+    const path = await folderFromQuery(c.req.query('path'));
     const remotes = await codeCall(async () => {
       try {
         return await git.remotes(path);
@@ -245,11 +274,12 @@ export function appsRoutes(container: Container): Hono {
     const name = requireAppName(body.name);
     const workspace = requireAppFolder(container, body, true) ?? null;
     const githubRepo = optionalGithubRepo(body.githubRepo) ?? null;
+    const nextcloud = nextcloudFields(null, body);
     const linkedProjectId = optionalLinkedProjectId(container, body.linkedProjectId) ?? null;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
     // New apps go to the bottom of the sidebar unless the request places them.
     const sortOrder = optionalSortOrder(body.sortOrder) ?? container.store.apps.list().reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1;
-    const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, sortOrder });
+    const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, sortOrder, ...nextcloud });
     return c.json(appView(container, created), 201);
   });
 
@@ -267,6 +297,7 @@ export function appsRoutes(container: Container): Hono {
     if (workspace !== undefined) patch.workspace = workspace;
     const githubRepo = optionalGithubRepo(body.githubRepo);
     if (githubRepo !== undefined) patch.githubRepo = githubRepo;
+    Object.assign(patch, nextcloudFields(current, body));
     const linkedProjectId = optionalLinkedProjectId(container, body.linkedProjectId);
     if (linkedProjectId !== undefined) patch.linkedProjectId = linkedProjectId;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId);

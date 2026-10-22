@@ -12,6 +12,7 @@ import { CLIENT_ID } from '../lib/clientId.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
+import type { Bookmark, DeckBoardView, DeckCardDetail, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import { parseViewTab } from '../viewer/items.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
@@ -66,7 +67,17 @@ export type ReturnedNote = ReplyNote & { takenBack?: true };
  * The Code mode right panel's tabs (spec 2026-10-20-code-tab-design: Issues, Files, and Chat holding the Inspector;
  * spec 2026-10-21-code-terminal-design: Terminal).
  */
-export type CodePanelTab = 'issues' | 'files' | 'chat' | 'terminal';
+export type CodePanelTab = 'issues' | 'deck' | 'wiki' | 'links' | 'files' | 'chat' | 'terminal';
+/** Where one Deck view is: the column it lists (null: open on Doing) and the card it has open, if any. */
+export interface DeckView {
+  stackId: number | 'archived' | null;
+  selected: number | null;
+}
+/** Where one Wiki view is: the pages it has expanded and the page it has open, if any. */
+export interface WikiView {
+  expanded: number[];
+  selected: number | null;
+}
 export type IssueState = 'open' | 'closed';
 /** Where one Issues view is: which state it lists, and the issue it has open, if any. */
 export interface IssueView {
@@ -241,6 +252,24 @@ export interface OtherBenchState {
   setIssueView(owner: string, view: Partial<IssueView>): void;
   /** A half-written comment, by `${owner}#${number}`, so a chat switch doesn't lose it. Not persisted. */
   issueDrafts: Record<string, string>;
+  /** Each chat's (or app home's) Deck and Wiki views, like `issueViews`: per browser, and a chat's goes with the chat. */
+  deckViews: Record<string, DeckView>;
+  setDeckView(owner: string, view: Partial<DeckView>): void;
+  wikiViews: Record<string, WikiView>;
+  setWikiView(owner: string, view: Partial<WikiView>): void;
+  /** Nextcloud's last answers, shown at once while they're fetched again. Not persisted. Boards, trees and links by app id; cards by card id; pages by `${appId}#${pageId}`. */
+  deckBoards: Record<string, DeckBoardView>;
+  deckCards: Record<number, DeckCardDetail>;
+  wikiTrees: Record<string, WikiTree>;
+  wikiPages: Record<string, WikiPage>;
+  linkLists: Record<string, { tag: string; bookmarks: Bookmark[] }>;
+  cacheDeckBoard(appId: string, board: DeckBoardView): void;
+  cacheDeckCard(card: DeckCardDetail): void;
+  /** Drops a card that's gone from Nextcloud (deleted here or elsewhere), so it isn't shown again from the cache. */
+  forgetDeckCard(cardId: number): void;
+  cacheWikiTree(appId: string, tree: WikiTree): void;
+  cacheWikiPage(appId: string, page: WikiPage): void;
+  cacheLinkList(appId: string, list: { tag: string; bookmarks: Bookmark[] }): void;
   setIssueDraft(key: string, text: string): void;
   /**
    * gh's last answers, by `${appId}:${state}` for a list and `${appId}#${number}`
@@ -529,7 +558,7 @@ let terminalRequests = 0;
 export function loadCodePanelTab(): CodePanelTab {
   try {
     const raw = window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY);
-    return raw === 'files' || raw === 'chat' || raw === 'terminal' ? raw : 'issues';
+    return raw === 'deck' || raw === 'wiki' || raw === 'links' || raw === 'files' || raw === 'chat' || raw === 'terminal' ? raw : 'issues';
   } catch {
     return 'issues';
   }
@@ -566,6 +595,54 @@ export function loadIssueViews(): Record<string, IssueView> {
 function saveIssueViews(views: Record<string, IssueView>): void {
   try {
     window.localStorage.setItem(ISSUE_VIEWS_STORAGE_KEY, JSON.stringify(views));
+  } catch {
+    // storage blocked or full -- the views still apply for this session.
+  }
+}
+
+/** localStorage keys: each chat's (and app home's) Deck and Wiki views. Per browser. */
+export const DECK_VIEWS_STORAGE_KEY = 'otherbench.deckViews';
+export const WIKI_VIEWS_STORAGE_KEY = 'otherbench.wikiViews';
+
+function positiveIntOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function readViewRecord(key: string): [string, Record<string, unknown>][] {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(key) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.entries(parsed).filter((e): e is [string, Record<string, unknown>] => !!e[1] && typeof e[1] === 'object' && !Array.isArray(e[1]));
+  } catch {
+    return [];
+  }
+}
+
+/** The stored Deck views, keeping only well-formed ones. */
+export function loadDeckViews(): Record<string, DeckView> {
+  const views: Record<string, DeckView> = {};
+  for (const [owner, v] of readViewRecord(DECK_VIEWS_STORAGE_KEY)) {
+    const raw = v.stackId;
+    const stackId = raw === null || raw === 'archived' ? raw : typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+    if (stackId === undefined) continue;
+    views[owner] = { stackId, selected: positiveIntOrNull(v.selected) };
+  }
+  return views;
+}
+
+/** The stored Wiki views, keeping only well-formed ones. */
+export function loadWikiViews(): Record<string, WikiView> {
+  const views: Record<string, WikiView> = {};
+  for (const [owner, v] of readViewRecord(WIKI_VIEWS_STORAGE_KEY)) {
+    if (!Array.isArray(v.expanded)) continue;
+    views[owner] = { expanded: v.expanded.filter((n): n is number => positiveIntOrNull(n) !== null), selected: positiveIntOrNull(v.selected) };
+  }
+  return views;
+}
+
+function saveViews(key: string, views: unknown): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(views));
   } catch {
     // storage blocked or full -- the views still apply for this session.
   }
@@ -725,7 +802,15 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     set((state) => {
       // The chat's Issues view goes with it.
       const { [chatId]: view, ...issueViews } = state.issueViews;
-      return { chats: state.chats.filter((c) => c.id !== chatId), ...forgetInBoth(state, (p) => forgetChat(p, chatId)), ...(view ? { issueViews } : {}) };
+      const { [chatId]: deckView, ...deckViews } = state.deckViews;
+      const { [chatId]: wikiView, ...wikiViews } = state.wikiViews;
+      return {
+        chats: state.chats.filter((c) => c.id !== chatId),
+        ...forgetInBoth(state, (p) => forgetChat(p, chatId)),
+        ...(view ? { issueViews } : {}),
+        ...(deckView ? { deckViews } : {}),
+        ...(wikiView ? { wikiViews } : {}),
+      };
     }),
   // Fills the focused pane, or focuses the pane already showing the chat, in the chat's own mode.
   setActiveChatId: (chatId) =>
@@ -923,6 +1008,28 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   issueViews: loadIssueViews(),
   setIssueView: (owner, view) =>
     set((state) => ({ issueViews: { ...state.issueViews, [owner]: { state: 'open', selected: null, ...state.issueViews[owner], ...view } } })),
+  deckViews: loadDeckViews(),
+  setDeckView: (owner, view) =>
+    set((state) => ({ deckViews: { ...state.deckViews, [owner]: { stackId: null, selected: null, ...state.deckViews[owner], ...view } } })),
+  wikiViews: loadWikiViews(),
+  setWikiView: (owner, view) =>
+    set((state) => ({ wikiViews: { ...state.wikiViews, [owner]: { expanded: [], selected: null, ...state.wikiViews[owner], ...view } } })),
+  deckBoards: {},
+  deckCards: {},
+  wikiTrees: {},
+  wikiPages: {},
+  linkLists: {},
+  cacheDeckBoard: (appId, board) => set((state) => ({ deckBoards: { ...state.deckBoards, [appId]: board } })),
+  cacheDeckCard: (card) => set((state) => ({ deckCards: { ...state.deckCards, [card.id]: card } })),
+  forgetDeckCard: (cardId) =>
+    set((state) => {
+      if (!(cardId in state.deckCards)) return {};
+      const { [cardId]: _gone, ...deckCards } = state.deckCards;
+      return { deckCards };
+    }),
+  cacheWikiTree: (appId, tree) => set((state) => ({ wikiTrees: { ...state.wikiTrees, [appId]: tree } })),
+  cacheWikiPage: (appId, page) => set((state) => ({ wikiPages: { ...state.wikiPages, [`${appId}#${page.id}`]: page } })),
+  cacheLinkList: (appId, list) => set((state) => ({ linkLists: { ...state.linkLists, [appId]: list } })),
   issueDrafts: {},
   setIssueDraft: (key, text) =>
     set((state) => {
@@ -1194,6 +1301,8 @@ useOtherBenchStore.subscribe((state, previous) => {
   if (switched) saveMode(state.mode);
   if (state.codePanelTab !== previous.codePanelTab) saveCodePanelTab(state.codePanelTab);
   if (state.issueViews !== previous.issueViews) saveIssueViews(state.issueViews);
+  if (state.deckViews !== previous.deckViews) saveViews(DECK_VIEWS_STORAGE_KEY, state.deckViews);
+  if (state.wikiViews !== previous.wikiViews) saveViews(WIKI_VIEWS_STORAGE_KEY, state.wikiViews);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
   if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
 });

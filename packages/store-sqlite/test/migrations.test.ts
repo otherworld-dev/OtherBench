@@ -29,14 +29,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-8).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps']);
+    expect(MIGRATIONS.slice(-8).map((m) => m.name)).toEqual(['023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(29);
+      expect(SCHEMA_VERSION).toBe(30);
     } finally {
       db.close();
     }
@@ -214,6 +214,23 @@ describe('runMigrations', () => {
       db.exec(`UPDATE chat SET app_id = 'later' WHERE id = 'legacy'`);
       db.exec(`INSERT INTO app (id, name, linked_project_id, created_at, updated_at) VALUES ('a1', 'A', 'no-such-project', 1, 1)`);
       expect(db.prepare(`SELECT tbl, op FROM change_log WHERE tbl = 'app'`).all()).toEqual([{ tbl: 'app', op: 'upsert' }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('app-nextcloud adds four nullable columns to app; existing apps have none set', () => {
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < 30));
+      db.exec(`INSERT INTO app (id, name, created_at, updated_at) VALUES ('a1', 'A', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare('SELECT deck_board_id, wiki_collective, wiki_page_path, bookmark_tag FROM app WHERE id = ?').get('a1')).toEqual({
+        deck_board_id: null,
+        wiki_collective: null,
+        wiki_page_path: null,
+        bookmark_tag: null,
+      });
     } finally {
       db.close();
     }

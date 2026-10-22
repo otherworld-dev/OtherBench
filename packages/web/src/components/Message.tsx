@@ -70,7 +70,7 @@ function ContextSummaryBlock({ part }: { part: Extract<Part, { type: 'context-su
     <details className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <summary className="cursor-pointer font-medium text-[var(--text-muted)] select-none">{`Context compacted${counts}`}</summary>
       <div className="mt-1 text-sm">
-        <MarkdownBody text={part.text} />
+        <MarkdownBody text={part.text} deckLinks />
       </div>
     </details>
   );
@@ -318,7 +318,7 @@ function ToolResultBlock({ name, result, isError, scope }: { name: string; resul
 function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element | null {
   switch (part.type) {
     case 'text':
-      return <MarkdownBody key={key} text={part.text} />;
+      return <MarkdownBody key={key} text={part.text} deckLinks />;
     case 'reasoning':
       return <ReasoningBlock key={key} text={part.text} />;
     case 'tool-call':

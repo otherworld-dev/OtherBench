@@ -345,6 +345,13 @@ export function runStoreContract(
         expect(store.apps.get('does-not-exist')).toBeNull();
       });
 
+      it("keeps an app's Nextcloud links", () => {
+        const created = store.apps.create(makeAppInput({ id: 'a1', name: 'Alpha', deckBoardId: 12, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/Alpha', bookmarkTag: 'alpha' }));
+        expect(created).toMatchObject({ deckBoardId: 12, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/Alpha', bookmarkTag: 'alpha' });
+        expect(store.apps.update('a1', { deckBoardId: null, bookmarkTag: 'beta' })).toMatchObject({ deckBoardId: null, bookmarkTag: 'beta', wikiPagePath: 'Products/Alpha' });
+        expect(store.apps.create(makeAppInput({ id: 'a2', name: 'Beta' }))).toMatchObject({ deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null });
+      });
+
       it('update persists a patch (a bare workspaceRoot is a folder on this machine) and delete is idempotent', () => {
         store.apps.create(makeAppInput({ id: 'a1', githubRepo: 'o/n', linkedProjectId: 'not-here' }));
         const updated = store.apps.update('a1', { name: 'Renamed', workspaceRoot: '/ws', githubRepo: null, sortOrder: 3 });

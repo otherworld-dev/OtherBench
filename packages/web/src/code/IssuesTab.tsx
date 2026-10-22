@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type MouseEvent } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
@@ -8,6 +8,7 @@ import { api } from '../state/api.js';
 import { useOtherBenchStore, type IssueState } from '../state/store.js';
 import { CodeErrorLine, NO_GITHUB_REPO } from './CodeError.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
+import { stayInApp } from './stayInApp.js';
 import { useCodeRefresh } from './useCodeRefresh.js';
 
 const MUTED = 'text-xs text-[var(--text-muted)]';
@@ -22,22 +23,6 @@ function age(iso: string): string {
 function when(iso: string): string {
   const at = Date.parse(iso);
   return Number.isNaN(at) ? '' : formatRelativeTime(at);
-}
-
-/**
- * An issue's body and comments come from GitHub as written, and Markdown can
- * hold a relative link (`../pull/5`). Outside a chat `MarkdownBody` leaves
- * such a link as a plain anchor, and following it would take the OtherBench
- * window itself away. Websites still open in the default browser through
- * `MarkdownBody`'s own handler (which runs first and prevents the default);
- * anything else is simply not followed.
- */
-function stayInApp(e: MouseEvent<HTMLDivElement>): void {
-  const link = e.target instanceof Element ? e.target.closest('a') : null;
-  if (!link || e.defaultPrevented) return;
-  const href = link.getAttribute('href') ?? '';
-  if (/^https?:\/\//i.test(href) || href.startsWith('#') || /^mailto:/i.test(href)) return;
-  e.preventDefault();
 }
 
 /**

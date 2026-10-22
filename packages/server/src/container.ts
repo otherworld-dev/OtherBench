@@ -59,6 +59,7 @@ import { startTurn } from './turn-start.js';
 import { NotesService } from './notes/service.js';
 import { workspaceResolver } from './workspace-view.js';
 import type { GithubService } from './code/github.js';
+import type { NextcloudClient, NextcloudConfig } from './nextcloud/client.js';
 import { toolImageSaver } from './tool-images.js';
 import { killTree } from './terminal/kill-tree.js';
 import { killTerminalsOfGoneApps, TerminalManager } from './terminal/manager.js';
@@ -135,6 +136,13 @@ export interface Container {
    * real gh (routes/apps.ts); tests pass a fake so no test ever runs gh.
    */
   github?: GithubService;
+  /**
+   * Makes the client for the Deck, Wiki and Links tabs from this machine's
+   * Nextcloud settings (nextcloud/config.ts). Unset means
+   * `httpNextcloudClient(config)`, the real server; tests pass a fake so no
+   * test ever reaches a Nextcloud.
+   */
+  nextcloud?: (config: NextcloudConfig) => NextcloudClient;
   /** Replies and approvals running on paired machines, for the calls this machine forwards (Task 52). */
   remoteRuns?: RemoteRuns;
   /**

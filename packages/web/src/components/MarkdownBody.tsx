@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState, type ComponentPropsWithoutRef, type JSX } from 'react';
+import type { Link as LinkNode, Parent, PhrasingContent, Root, Text } from 'mdast';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+import { openDeckCard } from '../code/openDeckCard.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { isRelativePath, joinPath, looksLikePath } from '../viewer/paths.js';
 import { ViewerImage } from '../viewer/ViewerImage.js';
@@ -56,9 +58,56 @@ export interface MarkdownFiles {
   base: string;
 }
 
-/** react-markdown blanks file: URLs by default; OtherBench keeps them, since a click opens them only in the viewer, inside the chat's folders. */
+/** A card reference in a message: "Deck #967" or "Deck card #967" (spec 2026-10-22-nextcloud-tabs). A bare "#967" is left alone. */
+export const DECK_REF = /\bDeck(?: card)? #(\d{1,9})\b/gi;
+
+/** The href a Deck reference links to, and the card number in one. */
+const DECK_HREF = /^deck:(\d{1,9})$/;
+
+/** A text node's value split into text and `deck:N` links, or null when it has no Deck reference. */
+function splitDeckRefs(node: Text): PhrasingContent[] | null {
+  const out: PhrasingContent[] = [];
+  let last = 0;
+  for (const m of node.value.matchAll(DECK_REF)) {
+    const at = m.index;
+    if (at > last) out.push({ type: 'text', value: node.value.slice(last, at) });
+    const link: LinkNode = { type: 'link', url: `deck:${m[1]}`, title: null, children: [{ type: 'text', value: m[0] }] };
+    out.push(link);
+    last = at + m[0].length;
+  }
+  if (out.length === 0) return null;
+  if (last < node.value.length) out.push({ type: 'text', value: node.value.slice(last) });
+  return out;
+}
+
+/**
+ * A remark plugin: each "Deck #N" in the text becomes a link to `deck:N`,
+ * which `Link` opens with `openDeckCard`. Text in code and in links (an
+ * existing one, or a reference to one) is left as written.
+ */
+export function remarkDeckLinks(): (tree: Root) => void {
+  const walk = (parent: Parent): void => {
+    if (parent.type === 'link' || parent.type === 'linkReference') return;
+    const children: Parent['children'] = [];
+    for (const child of parent.children) {
+      const split = child.type === 'text' ? splitDeckRefs(child) : null;
+      if (split) children.push(...split);
+      else {
+        if ('children' in child) walk(child);
+        children.push(child);
+      }
+    }
+    parent.children = children;
+  };
+  return (tree) => walk(tree);
+}
+
+/**
+ * react-markdown blanks file: URLs by default; OtherBench keeps them, since a click opens them only in the viewer, inside the chat's folders.
+ * A `deck:N` link (from `remarkDeckLinks`) is kept too.
+ */
 function urlTransform(url: string): string {
-  return /^file:/i.test(url) ? url : defaultUrlTransform(url);
+  return /^file:/i.test(url) || DECK_HREF.test(url) ? url : defaultUrlTransform(url);
 }
 
 /** react-markdown hands every component its AST `node`; it must not reach the DOM. */
@@ -73,6 +122,22 @@ type FromMarkdown<T extends keyof JSX.IntrinsicElements> = ComponentPropsWithout
  */
 function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'> & { files: MarkdownFiles | undefined }): JSX.Element {
   const viewer = useViewer();
+  const deck = href === undefined ? null : DECK_HREF.exec(href);
+  if (deck) {
+    const cardId = Number(deck[1]);
+    return (
+      <a
+        href={href}
+        {...rest}
+        onClick={(e) => {
+          e.preventDefault();
+          void openDeckCard(cardId);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
   const web = href !== undefined && /^https?:\/\//i.test(href);
   if (!href || (!viewer && !web)) return <a href={href} {...rest}>{children}</a>;
   return (
@@ -92,8 +157,12 @@ function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'>
   );
 }
 
-/** A viewed file's relative image comes from its own folder, through a `/view/` link; any other image is left as written. */
-function Image({ files, node: _node, src, alt, ...rest }: FromMarkdown<'img'> & { files: MarkdownFiles | undefined }): JSX.Element {
+/**
+ * A viewed file's relative image comes from its own folder, through a `/view/` link; any other image is left as written.
+ * Without `remote`, no image is loaded at all, only its alt text shown: text from elsewhere (a Deck card) must not reach the network.
+ */
+function Image({ files, remote, node: _node, src, alt, ...rest }: FromMarkdown<'img'> & { files: MarkdownFiles | undefined; remote: boolean }): JSX.Element {
+  if (!remote) return <span className="text-[var(--text-muted)]">[image: {alt}]</span>;
   if (files && typeof src === 'string' && isRelativePath(src)) return <ViewerImage chatId={files.chatId} path={joinPath(files.base, hrefToPath(src))} alt={alt ?? ''} />;
   return <img src={src} alt={alt} {...rest} />;
 }
@@ -112,13 +181,30 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
   );
 }
 
+/** With `deckLinks`, "Deck #N" references become links too; plugin lists are module constants so react-markdown sees the same ones each render. */
+const REMARK_PLUGINS = [remarkGfm];
+const REMARK_PLUGINS_WITH_DECK = [remarkGfm, remarkDeckLinks];
+
 /**
  * Renders assistant (and user) message text as Markdown: GFM tables/strikethrough/task
  * lists (remark-gfm) and syntax-highlighted code via rehype-highlight, whose
  * token colours are themed in index.css to track light/dark rather than a
  * fixed hljs stylesheet. Every code block gets a hover-revealed copy button.
+ * `remoteImages={false}` shows each image as its alt text instead, for
+ * untrusted text such as a Nextcloud card or page. `deckLinks` makes each
+ * "Deck #N" a link that opens the card (`openDeckCard`), for message text.
  */
-export function MarkdownBody({ text, files }: { text: string; files?: MarkdownFiles }): JSX.Element {
+export function MarkdownBody({
+  text,
+  files,
+  remoteImages = true,
+  deckLinks = false,
+}: {
+  text: string;
+  files?: MarkdownFiles;
+  remoteImages?: boolean;
+  deckLinks?: boolean;
+}): JSX.Element {
   // Stable component types: new ones each render would remount every link and
   // image as a reply streams (and refetch a viewed file's images).
   const chatId = files?.chatId;
@@ -128,14 +214,14 @@ export function MarkdownBody({ text, files }: { text: string; files?: MarkdownFi
     return {
       pre: CodeBlock,
       a: (props: FromMarkdown<'a'>) => <Link {...props} files={at} />,
-      img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} />,
+      img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} remote={remoteImages} />,
       code: InlineCode,
     };
-  }, [chatId, base]);
+  }, [chatId, base, remoteImages]);
   return (
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={deckLinks ? REMARK_PLUGINS_WITH_DECK : REMARK_PLUGINS}
         rehypePlugins={[rehypeHighlight]}
         urlTransform={urlTransform}
         components={components}

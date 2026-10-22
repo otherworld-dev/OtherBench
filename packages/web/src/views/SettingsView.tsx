@@ -7,6 +7,7 @@ import { DesktopPanel } from './settings/DesktopPanel.js';
 import { LocationsPanel } from './settings/LocationsPanel.js';
 import { MachinesPanel } from './settings/MachinesPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
+import { NextcloudPanel } from './settings/NextcloudPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { MemoryPanel } from './settings/MemoryPanel.js';
@@ -14,7 +15,7 @@ import { ImportPanel } from './settings/ImportPanel.js';
 import { SandboxPanel } from './settings/SandboxPanel.js';
 import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -24,6 +25,7 @@ const TAB_LABEL: Record<Tab, string> = {
   locations: 'Locations',
   machines: 'Machines',
   mcpServers: 'MCP Servers',
+  nextcloud: 'Nextcloud',
   sandbox: 'Sandbox',
   import: 'Import',
   appearance: 'Appearance',
@@ -53,10 +55,11 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
 
   return (
     <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-        <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+        {/* The tabs wrap rather than push ✕ off the screen in a narrow window or at a large text size. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
           <h2 className="label-caps text-base">Settings</h2>
-          <div role="tablist" className="flex gap-1">
+          <div role="tablist" className="flex flex-wrap gap-1">
             {tabs.map((t) => (
               <button
                 key={t}
@@ -71,7 +74,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
             ))}
           </div>
         </div>
-        <button type="button" aria-label="Close settings" onClick={onClose} className="rounded border border-[var(--border)] px-2 py-1 text-xs">
+        <button type="button" aria-label="Close settings" onClick={onClose} className="shrink-0 rounded border border-[var(--border)] px-2 py-1 text-xs">
           ✕
         </button>
       </div>
@@ -84,6 +87,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'locations' && <LocationsPanel />}
         {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'nextcloud' && <NextcloudPanel />}
         {tab === 'sandbox' && <SandboxPanel />}
         {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}

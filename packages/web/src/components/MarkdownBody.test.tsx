@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}) }));
+vi.mock('../code/openDeckCard.js', () => ({ openDeckCard: vi.fn(async () => {}) }));
 
+import { openDeckCard } from '../code/openDeckCard.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { ViewerContext } from '../viewer/ViewerContext.js';
 import { MarkdownBody } from './MarkdownBody.js';
@@ -11,6 +13,7 @@ import { MarkdownBody } from './MarkdownBody.js';
 afterEach(() => {
   cleanup();
   vi.mocked(openInBrowser).mockClear();
+  vi.mocked(openDeckCard).mockClear();
 });
 
 const inChat = (text: string) => {
@@ -66,5 +69,46 @@ describe('MarkdownBody lists', () => {
     expect(tasks).toHaveLength(2);
     expect(tasks[0]?.querySelector('input[type="checkbox"]')).not.toBeNull();
     expect(body.querySelector('ul > li:not(.task-list-item)')?.textContent).toBe('one');
+  });
+});
+
+describe('MarkdownBody without remote images', () => {
+  it('remoteImages false renders alt text, no img', () => {
+    const { container } = render(<MarkdownBody text={'See ![diagram](https://example.com/d.png) here.'} remoteImages={false} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('[image: diagram]')).toBeInTheDocument();
+  });
+});
+
+describe('MarkdownBody deck links', () => {
+  it('turns Deck #967 and Deck card #12 into links', () => {
+    render(<MarkdownBody text={'Fixed in Deck #967, see also deck card #12.'} deckLinks />);
+    expect(screen.getByRole('link', { name: 'Deck #967' })).toHaveAttribute('href', 'deck:967');
+    expect(screen.getByRole('link', { name: 'deck card #12' })).toHaveAttribute('href', 'deck:12');
+  });
+
+  it('leaves Deck #N inside code alone', () => {
+    render(<MarkdownBody text={'Run `Deck #5` now.\n\n```\nDeck #6\n```\n'} deckLinks />);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.getByText('Deck #5')).toBeInTheDocument();
+    expect(screen.getByText('Deck #6')).toBeInTheDocument();
+  });
+
+  it('leaves a bare #965 alone', () => {
+    render(<MarkdownBody text={'Issue #965 and Decks #3.'} deckLinks />);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  it('without deckLinks nothing changes', () => {
+    render(<MarkdownBody text={'Fixed in Deck #967.'} />);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.getByText('Fixed in Deck #967.')).toBeInTheDocument();
+  });
+
+  it('clicking a deck link calls openDeckCard', async () => {
+    render(<MarkdownBody text={'See Deck #967.'} deckLinks />);
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Deck #967' }));
+    expect(openDeckCard).toHaveBeenCalledWith(967);
+    expect(openInBrowser).not.toHaveBeenCalled();
   });
 });

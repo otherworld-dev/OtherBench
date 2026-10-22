@@ -35,7 +35,8 @@ describe('SettingsView', () => {
   it('has a Sandbox tab after MCP Servers that shows the sandbox panel', () => {
     render(<SettingsView onClose={vi.fn()} />);
     const names = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(names.indexOf('Sandbox')).toBe(names.indexOf('MCP Servers') + 1);
+    expect(names.indexOf('Nextcloud')).toBe(names.indexOf('MCP Servers') + 1);
+    expect(names.indexOf('Sandbox')).toBe(names.indexOf('Nextcloud') + 1);
     fireEvent.click(screen.getByRole('tab', { name: 'Sandbox' }));
     expect(screen.getByText('sandbox panel')).toBeInTheDocument();
   });

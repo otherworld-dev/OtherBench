@@ -10,6 +10,9 @@ vi.mock('./IssuesTab.js', () => ({ IssuesTab: ({ app, owner }: { app: App; owner
 vi.mock('./terminal/TerminalTab.js', () => ({ TerminalTab: ({ app }: { app: App }) => <div data-testid="terminal-stub">{app.id}</div> }));
 const terminalStatus = vi.hoisted(() => ({ value: null as null | { available: boolean; shells: never[] } }));
 vi.mock('./terminal/status.js', () => ({ useTerminalStatus: () => terminalStatus.value }));
+vi.mock('./DeckTab.js', () => ({ DeckTab: ({ owner }: { app: App; owner: string }) => <div data-testid="deck-stub" data-owner={owner} /> }));
+vi.mock('./WikiTab.js', () => ({ WikiTab: ({ owner }: { app: App; owner: string }) => <div data-testid="wiki-stub" data-owner={owner} /> }));
+vi.mock('./LinksTab.js', () => ({ LinksTab: ({ app }: { app: App }) => <div data-testid="links-stub">{app.id}</div> }));
 vi.mock('./FilesTab.js', () => ({ FilesTab: ({ app, chatId }: { app: App; chatId: string | null }) => <div data-testid="files-stub">{`${app.id}:${chatId ?? 'none'}`}</div> }));
 
 import { appTabId } from '../state/appTab.js';
@@ -17,7 +20,7 @@ import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CodePanel } from './CodePanel.js';
 
-const app = (id: string): App => ({ id, name: `App ${id}`, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
+const app = (id: string): App => ({ id, name: `App ${id}`, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
 const chat = (id: string, appId: string | null): Chat => ({
   id, title: `Chat ${id}`, profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
   projectId: null, appId, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
@@ -57,6 +60,30 @@ describe('CodePanel', () => {
     await userEvent.setup().click(screen.getByRole('tab', { name: 'Chat' }));
     expect(screen.getByTestId('inspector-stub')).toHaveTextContent('c1');
     expect(useOtherBenchStore.getState().codePanelTab).toBe('chat');
+  });
+
+  it('shows Deck, Wiki and Links in order', () => {
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+  });
+
+  it("the strip clips its measuring row, and a long app name can't crowd the tabs", () => {
+    useOtherBenchStore.setState({ apps: [app('a1'), { ...app('a2'), name: 'A very long app name that would push every tab into More tabs' }] });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByRole('tablist').parentElement).toHaveClass('overflow-hidden');
+    const name = screen.getByTestId('code-panel-app-name');
+    expect(name).toHaveClass('max-w-[25%]', 'truncate');
+    expect(name).toHaveAttribute('title', 'A very long app name that would push every tab into More tabs');
+    for (const t of screen.getAllByRole('tab')) expect(t).toHaveClass('px-2');
+  });
+
+  it('a saved deck tab renders the Deck tab with the chat as owner', () => {
+    useOtherBenchStore.setState({ codePanelTab: 'deck' });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByTestId('deck-stub')).toHaveAttribute('data-owner', 'c1');
   });
 
   it('the Files tab gets the focused app chat', async () => {

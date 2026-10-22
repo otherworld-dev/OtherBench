@@ -191,6 +191,34 @@ describe('apps CRUD', () => {
     expect(list[0]?.workspaceRoot).toBe(root);
   });
 
+  it('stores and clears the Nextcloud fields', async () => {
+    const root = tmp();
+    const created = await send('POST', '/api/apps', {
+      name: 'A', workspacePath: root, deckBoardId: 5, wikiCollective: ' Otherworld Dev ', wikiPagePath: ' Products/A ', bookmarkTag: ' a ',
+    });
+    expect(created.status).toBe(201);
+    const app = await json<{ id: string }>(created);
+    expect(app).toMatchObject({ deckBoardId: 5, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/A', bookmarkTag: 'a' });
+    expect(store.apps.get(app.id)).toMatchObject({ deckBoardId: 5, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/A', bookmarkTag: 'a' });
+
+    const cleared = await send('PATCH', `/api/apps/${app.id}`, { deckBoardId: null, wikiCollective: '  ', wikiPagePath: null, bookmarkTag: '' });
+    expect(cleared.status).toBe(200);
+    expect(await json(cleared)).toMatchObject({ deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null });
+
+    expect((await send('PATCH', `/api/apps/${app.id}`, { deckBoardId: 0 })).status).toBe(400);
+    expect((await send('PATCH', `/api/apps/${app.id}`, { deckBoardId: 'x' })).status).toBe(400);
+  });
+
+  it('refuses a page path without a collective', async () => {
+    const root = tmp();
+    expect((await send('POST', '/api/apps', { name: 'A', workspacePath: root, wikiPagePath: 'Products/A' })).status).toBe(400);
+    expect((await send('POST', '/api/apps', { name: 'A', workspacePath: root, wikiCollective: 'Otherworld Dev' })).status).toBe(400);
+    const ok = await json<{ id: string }>(await send('POST', '/api/apps', { name: 'A', workspacePath: root, wikiCollective: 'C', wikiPagePath: 'P' }));
+    // Clearing one half of a stored pair is refused too.
+    expect((await send('PATCH', `/api/apps/${ok.id}`, { wikiCollective: null })).status).toBe(400);
+    expect(store.apps.get(ok.id)).toMatchObject({ wikiCollective: 'C', wikiPagePath: 'P' });
+  });
+
   it('treats a blank githubRepo as none', async () => {
     const res = await send('POST', '/api/apps', { name: 'A', workspacePath: tmp(), githubRepo: '  ' });
     expect(await json(res)).toMatchObject({ githubRepo: null });

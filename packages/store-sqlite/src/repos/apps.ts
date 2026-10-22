@@ -10,8 +10,8 @@ import { clockOf, type SyncClock } from './clock.js';
 function appMapping(selfId: () => string): CrudMapping<App> {
   return {
     table: 'app',
-    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'github_repo', 'linked_project_id', 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
-    toRow: (a) => [a.id, a.name, ...workspaceToRow(a.workspace), a.githubRepo, a.linkedProjectId, a.defaultProfileId, a.sortOrder, a.createdAt, a.updatedAt],
+    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'github_repo', 'linked_project_id', 'default_profile_id', 'deck_board_id', 'wiki_collective', 'wiki_page_path', 'bookmark_tag', 'sort_order', 'created_at', 'updated_at'],
+    toRow: (a) => [a.id, a.name, ...workspaceToRow(a.workspace), a.githubRepo, a.linkedProjectId, a.defaultProfileId, a.deckBoardId, a.wikiCollective, a.wikiPagePath, a.bookmarkTag, a.sortOrder, a.createdAt, a.updatedAt],
     fromRow: (row) => ({
       id: row.id as string,
       name: row.name as string,
@@ -19,6 +19,10 @@ function appMapping(selfId: () => string): CrudMapping<App> {
       githubRepo: (row.github_repo as string | null) ?? null,
       linkedProjectId: (row.linked_project_id as string | null) ?? null,
       defaultProfileId: (row.default_profile_id as string | null) ?? null,
+      deckBoardId: (row.deck_board_id as number | null) ?? null,
+      wikiCollective: (row.wiki_collective as string | null) ?? null,
+      wikiPagePath: (row.wiki_page_path as string | null) ?? null,
+      bookmarkTag: (row.bookmark_tag as string | null) ?? null,
       sortOrder: row.sort_order as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,
@@ -51,6 +55,10 @@ export class SqliteAppRepo implements AppRepo {
       githubRepo: a.githubRepo ?? null,
       linkedProjectId: a.linkedProjectId ?? null,
       defaultProfileId: a.defaultProfileId ?? null,
+      deckBoardId: a.deckBoardId ?? null,
+      wikiCollective: a.wikiCollective ?? null,
+      wikiPagePath: a.wikiPagePath ?? null,
+      bookmarkTag: a.bookmarkTag ?? null,
       sortOrder: a.sortOrder ?? 0,
       createdAt: a.createdAt ?? now,
       updatedAt: a.updatedAt ?? now,

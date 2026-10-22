@@ -22,7 +22,7 @@ import { ApiError, api } from '../state/api.js';
 import { GitPanel } from './GitPanel.js';
 
 const app: App = {
-  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1,
+  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1,
 };
 const status = (over: Partial<GitStatus> = {}): GitStatus => ({
   branch: 'dev', detached: false, upstream: 'origin/dev', ahead: 1, behind: 0,

@@ -98,7 +98,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
 }
 
 function makeApp(overrides: Partial<App> & { id: string }): App {
-  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */

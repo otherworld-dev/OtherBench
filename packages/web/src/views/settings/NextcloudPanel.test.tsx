@@ -1,0 +1,102 @@
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../state/api.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../state/api.js')>();
+  return { ...actual, api: { nextcloud: { get: vi.fn(), put: vi.fn(), test: vi.fn() } } };
+});
+
+import { ApiError, api } from '../../state/api.js';
+import { NextcloudPanel } from './NextcloudPanel.js';
+
+const nc = vi.mocked(api.nextcloud);
+const SAVED = { baseUrl: 'https://cloud.example.com', user: 'adam', passwordSet: true };
+
+beforeEach(() => {
+  for (const fn of Object.values(nc)) fn.mockReset();
+  nc.get.mockResolvedValue(SAVED);
+  nc.put.mockResolvedValue(SAVED);
+});
+afterEach(cleanup);
+
+describe('NextcloudPanel', () => {
+  it('shows saved values and never pre-fills the password', async () => {
+    render(<NextcloudPanel />);
+    expect(await screen.findByDisplayValue('https://cloud.example.com')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('adam')).toBeInTheDocument();
+    expect(screen.getByLabelText('App password')).toHaveValue('');
+    expect(screen.getByLabelText('App password')).toHaveAttribute('type', 'password');
+    expect(screen.getByText('A password is currently set.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Clear password' })).toBeInTheDocument();
+  });
+
+  it('keeps what was typed before the saved values load', async () => {
+    let load!: (v: typeof SAVED) => void;
+    nc.get.mockReturnValue(new Promise((resolve) => (load = resolve)));
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await user.type(screen.getByLabelText('Server URL'), 'https://typed.example.com');
+    load({ baseUrl: 'https://cloud.example.com', user: 'adam', passwordSet: true });
+    expect(await screen.findByText('A password is currently set.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Server URL')).toHaveValue('https://typed.example.com');
+    // A field left alone still takes the saved value.
+    expect(screen.getByLabelText('User name')).toHaveValue('adam');
+  });
+
+  it('Save leaves the password out unless typed', async () => {
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await screen.findByDisplayValue('adam');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(nc.put).toHaveBeenLastCalledWith({ baseUrl: 'https://cloud.example.com', user: 'adam' });
+    await user.type(screen.getByLabelText('App password'), 'abc-123');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(nc.put).toHaveBeenLastCalledWith({ baseUrl: 'https://cloud.example.com', user: 'adam', password: 'abc-123' });
+    expect(screen.getByLabelText('App password')).toHaveValue('');
+  });
+
+  it('Clear password sends null', async () => {
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await screen.findByDisplayValue('adam');
+    await user.click(screen.getByRole('checkbox', { name: 'Clear password' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(nc.put).toHaveBeenLastCalledWith({ baseUrl: 'https://cloud.example.com', user: 'adam', password: null });
+  });
+
+  it('Test shows the result per app', async () => {
+    nc.test.mockResolvedValue({ ok: true, message: 'Connected as adam.', apps: { deck: true, collectives: true, bookmarks: false } });
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await screen.findByDisplayValue('adam');
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByText('Connected as adam.')).toBeInTheDocument();
+    expect(screen.getByTestId('nextcloud-apps')).toHaveTextContent('Deck ✓ / Collectives ✓ / Bookmarks ✗');
+  });
+
+  it('Save clears an earlier Test result, as Test tests the saved settings', async () => {
+    nc.test.mockResolvedValue({ ok: false, message: 'Nextcloud rejected the username or app password.', apps: { deck: false, collectives: false, bookmarks: false } });
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    await screen.findByDisplayValue('adam');
+    expect(screen.getByText('Tests the saved settings.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByTestId('nextcloud-test-result')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('App password'), 'right-one');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(screen.queryByTestId('nextcloud-test-result')).not.toBeInTheDocument();
+  });
+
+  it('a 400 for an http URL shows the server message', async () => {
+    nc.put.mockRejectedValue(new ApiError(400, 'The server address must start with https://.'));
+    const user = userEvent.setup();
+    render(<NextcloudPanel />);
+    const url = await screen.findByDisplayValue('https://cloud.example.com');
+    await user.clear(url);
+    await user.type(url, 'http://cloud.example.com');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('The server address must start with https://.')).toBeInTheDocument();
+  });
+});
