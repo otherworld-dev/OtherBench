@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TOOL_IMAGE_BYTES, toolImageBound } from '@otherbench/core/domain/tool-images.js';
+import { MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, toolImageBound, toolVideoBound } from '@otherbench/core/domain/tool-images.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Store } from '@otherbench/core/ports/store.js';
@@ -27,6 +27,8 @@ import { toolImageSaver } from '../src/tool-images.js';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
 const GIF = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.from([1, 0, 1, 0, 0, 0, 0])]);
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'latin1'), Buffer.alloc(16)]);
+const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84]), Buffer.from('webm', 'latin1'), Buffer.alloc(8)]);
 const WEBP = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP', 'latin1')]);
 
 let dir: string;
@@ -138,6 +140,25 @@ describe('toolImageSaver', () => {
     // Exactly at the cap is kept.
     const atCap = Buffer.concat([FAKE_PNG, Buffer.alloc(MAX_TOOL_IMAGE_BYTES - FAKE_PNG.length)]);
     expect(store.attachments.get(await save('chat-1', 'm1', atCap, 'image/png'))?.size).toBe(MAX_TOOL_IMAGE_BYTES);
+  });
+
+  it('stores an mp4 or webm under a fixed name, up to the video cap, and refuses one byte over', async () => {
+    const save = toolImageSaver(store, blobStore);
+    const mp4 = store.attachments.get(await save('chat-1', 'm1', MP4, 'video/mp4'))!;
+    expect(mp4).toMatchObject({ filename: 'tool-video.mp4', mime: 'video/mp4', size: MP4.length });
+    expect(toolVideoBound(mp4, 'chat-1', 'm1')).toBe(true);
+    expect(toolImageBound(mp4, 'chat-1', 'm1')).toBe(false);
+    expect(store.attachments.get(await save('chat-1', 'm1', WEBM, 'video/webm'))).toMatchObject({ filename: 'tool-video.webm', mime: 'video/webm' });
+    const atCap = Buffer.concat([WEBM, Buffer.alloc(MAX_TOOL_VIDEO_BYTES - WEBM.length)]);
+    expect(store.attachments.get(await save('chat-1', 'm1', atCap, 'video/webm'))?.size).toBe(MAX_TOOL_VIDEO_BYTES);
+    const before = store.attachments.list('chat-1').length;
+    await expect(save('chat-1', 'm1', Buffer.concat([atCap, Buffer.alloc(1)]), 'video/webm')).rejects.toThrow();
+    // The wrong type for the bytes (an image said to be a video, and the other way round) is refused.
+    await expect(save('chat-1', 'm1', FAKE_PNG, 'video/mp4')).rejects.toThrow();
+    await expect(save('chat-1', 'm1', MP4, 'image/png')).rejects.toThrow();
+    await expect(save('chat-1', 'm1', MP4, 'video/webm')).rejects.toThrow();
+    await expect(save('chat-1', 'm1', Buffer.from('<html>'), 'video/mp4')).rejects.toThrow();
+    expect(store.attachments.list('chat-1').length).toBe(before);
   });
 
   it('leaves no row behind when the blob cannot be written', async () => {

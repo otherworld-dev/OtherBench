@@ -9,6 +9,16 @@ import {
   IMAGE_NOT_KEPT,
   IMAGE_NOT_KEPT_LIMIT,
   isToolImageRef,
+  isToolVideoRef,
+  LIVE_IMAGE_LIMITS,
+  MAX_TOOL_VIDEO_BYTES,
+  MAX_TOOL_VIDEOS_PER_MESSAGE,
+  sniffToolMediaMime,
+  sniffToolVideoMime,
+  TOOL_VIDEO_NOT_BOUND,
+  TOOL_VIDEO_REF_REMOVED,
+  VIDEO_NOT_KEPT,
+  VIDEO_NOT_KEPT_LIMIT,
   keepToolImages,
   sniffToolImageMime,
   toolImageBound,
@@ -661,5 +671,124 @@ describe('sniffToolImageMime and toolImageBound', () => {
     for (const bad of [{ chatId: 'x' }, { messageId: 'x' }, { messageId: null }, { mime: 'text/html' }, { size: MAX_TOOL_IMAGE_BYTES + 1 }, { size: -1 }]) {
       expect(toolImageBound({ ...row, ...bad }, 'c', 'm'), JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Video in tool results
+
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'latin1'), Buffer.alloc(16)]);
+const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84]), Buffer.from('webm', 'latin1'), Buffer.alloc(8)]);
+const clip = (bytes: Buffer = MP4, mimeType = 'video/mp4') => ({ type: 'video', data: bytes.toString('base64'), mimeType });
+const videoRef = (attachmentId: string, mimeType = 'video/mp4') => ({ type: 'video', attachmentId, mimeType });
+
+describe('sniffToolVideoMime and sniffToolMediaMime', () => {
+  it('names mp4 (ftyp at offset 4) and webm (EBML with a webm DocType), and nothing else', () => {
+    expect(sniffToolVideoMime(MP4)).toBe('video/mp4');
+    expect(sniffToolVideoMime(WEBM)).toBe('video/webm');
+    const mkv = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01]), Buffer.from('matroska', 'latin1')]);
+    for (const bad of [FAKE_PNG, mkv, Buffer.from('<html>'), Buffer.from('ftyp'), Buffer.alloc(0), Buffer.from('<svg xmlns="x"/>')]) expect(sniffToolVideoMime(bad)).toBeNull();
+    expect(sniffToolMediaMime(MP4)).toBe('video/mp4');
+    expect(sniffToolMediaMime(FAKE_PNG)).toBe('image/png');
+    expect(sniffToolMediaMime(Buffer.from('<html>'))).toBeNull();
+  });
+});
+
+describe('video in keepToolImages', () => {
+  it('stores a valid mp4 through save and leaves a video reference, typed from the bytes', async () => {
+    const save = vi.fn(async () => 'att-v');
+    const out = await keepToolImages([{ type: 'text', text: 'made' }, clip(MP4, 'video/webm')], save, 'c', 'm', { kept: 0 });
+    expect(out).toEqual([{ type: 'text', text: 'made' }, { type: 'video', attachmentId: 'att-v', mimeType: 'video/mp4' }]);
+    expect(save).toHaveBeenCalledWith('c', 'm', MP4, 'video/mp4');
+    expect(isToolVideoRef((out as unknown[])[1])).toBe(true);
+  });
+
+  it('refuses html disguised as png, svg, and html or a png sent as a video', async () => {
+    const save = vi.fn(async () => 'att');
+    const html = Buffer.from('<!doctype html><script>alert(1)</script>');
+    expect(await keepToolImages([shot('image/png', html.toString('base64'))], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT }]);
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    expect(await keepToolImages([shot('image/svg+xml', svg.toString('base64'))], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT }]);
+    expect(await keepToolImages([clip(html)], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT }]);
+    expect(await keepToolImages([clip(FAKE_PNG, 'video/mp4')], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT }]);
+    expect(await keepToolImages([{ type: 'video', data: '!!!!', mimeType: 'video/mp4' }], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT }]);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('keeps at most four videos per reply, counted apart from images, and none over the byte cap', async () => {
+    const save = vi.fn(async () => 'att');
+    const budget = { kept: MAX_TOOL_IMAGES_PER_MESSAGE, keptVideos: 0 };
+    const out = (await keepToolImages([clip(), clip(), clip(), clip(), clip()], save, 'c', 'm', budget)) as unknown[];
+    expect(out.slice(0, 4).every(isToolVideoRef)).toBe(true);
+    expect(out[4]).toEqual({ type: 'text', text: VIDEO_NOT_KEPT_LIMIT });
+    expect(budget.keptVideos).toBe(MAX_TOOL_VIDEOS_PER_MESSAGE);
+    expect(save).toHaveBeenCalledTimes(4);
+    // One byte over the cap is never decoded or stored.
+    const over = { type: 'video', data: 'A'.repeat(Math.ceil((MAX_TOOL_VIDEO_BYTES + 1) / 3) * 4), mimeType: 'video/mp4' };
+    expect(await keepToolImages([over], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT_LIMIT }]);
+    expect(save).toHaveBeenCalledTimes(4);
+  });
+
+  it('shows a note when a video cannot be stored, and frees its place', async () => {
+    const budget = { kept: 0, keptVideos: 0 };
+    expect(await keepToolImages([clip()], undefined, 'c', 'm', budget)).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT }]);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = vi.fn(async () => {
+      throw new Error('disk full');
+    });
+    expect(await keepToolImages([clip()], failing, 'c', 'm', budget)).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT }]);
+    errors.mockRestore();
+    expect(budget.keptVideos).toBe(0);
+  });
+
+  it('removes a video reference a tool supplies itself', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await keepToolImages([videoRef('00000000-0000-4000-8000-000000000000')], vi.fn(), 'c', 'm', { kept: 0 }, 'sneaky');
+    expect(out).toEqual([{ type: 'text', text: TOOL_VIDEO_REF_REMOVED }]);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+});
+
+describe('screenToolResult and video', () => {
+  it('lets a 64 MB video through the live image limits intact, without touching the image budget', () => {
+    const big = Buffer.concat([MP4, Buffer.alloc(MAX_TOOL_VIDEO_BYTES - MP4.length)]);
+    const budget: ToolImageBudget = { images: 0, bytes: 0 };
+    const screened = screenToolResult([clip(big)], budget, LIVE_IMAGE_LIMITS);
+    expect(screened.result).toEqual([{ type: 'video', data: big.toString('base64'), mimeType: 'video/mp4' }]);
+    expect(budget).toMatchObject({ images: 0, bytes: 0 });
+    expect(budget.videos).toBe(1);
+  });
+
+  it('turns a video reference into the removed note and flags the result as forged', () => {
+    const screened = screenToolResult([videoRef('a')], { images: 0, bytes: 0 }, STORED_IMAGE_LIMITS);
+    expect(screened).toEqual({ result: [{ type: 'text', text: TOOL_VIDEO_REF_REMOVED }], forged: true });
+  });
+});
+
+describe('bindToolImageParts and video references', () => {
+  const row = (over: Partial<ToolImageRow> = {}): ToolImageRow => ({ chatId: 'chat-a', messageId: 'msg-a', mime: 'video/mp4', ...over });
+  const resultPart = (result: unknown): Part => ({ type: 'tool-result', id: 'call-1', name: 'media', result, isError: false });
+  const only = (rows: Record<string, ToolImageRow>): ToolImageLookup => (id) => rows[id] ?? null;
+
+  it('keeps a video reference bound to this chat and message, with the row mime, and notes the rest', () => {
+    const lookup = only({ ok: row({ mime: 'video/webm' }), other: row({ chatId: 'chat-b' }), big: row({ size: MAX_TOOL_VIDEO_BYTES + 1 }), img: row({ mime: 'image/png' }) });
+    const out = bindToolImageParts([resultPart([videoRef('ok', 'video/mp4'), videoRef('other'), videoRef('big'), videoRef('img'), videoRef('gone')])], 'chat-a', 'msg-a', lookup, 'drop');
+    const note = { type: 'text', text: TOOL_VIDEO_NOT_BOUND };
+    expect(out).toEqual([resultPart([videoRef('ok', 'video/webm'), note, note, note, note])]);
+  });
+
+  it('holds a video reference whose row is not here yet, and replaces an inline video', () => {
+    const held = bindToolImageParts([resultPart([videoRef('late')])], 'chat-a', 'msg-a', only({}), 'hold');
+    expect(held).toEqual([resultPart([{ ...videoRef('late'), pending: true }])]);
+    const inline = bindToolImageParts([resultPart([clip()])], 'chat-a', 'msg-a', only({}), 'drop');
+    expect(inline).toEqual([resultPart([{ type: 'text', text: VIDEO_NOT_KEPT }])]);
+    expect(JSON.stringify(inline)).not.toContain(MP4.toString('base64'));
+  });
+
+  it('keeps at most four video references in one message', () => {
+    const rows = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map((id) => [id, row()]));
+    const out = bindToolImageParts([resultPart(['a', 'b', 'c', 'd', 'e'].map((id) => videoRef(id)))], 'chat-a', 'msg-a', only(rows), 'drop');
+    expect((out[0] as unknown as { result: unknown[] }).result.slice(4)).toEqual([{ type: 'text', text: VIDEO_NOT_KEPT_LIMIT }]);
   });
 });

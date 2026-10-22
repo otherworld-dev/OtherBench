@@ -5,7 +5,7 @@ import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@otherbench/core/ports/store.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
-import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, MAX_TOOL_IMAGE_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
+import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, isToolVideoMime, MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
@@ -436,12 +436,17 @@ export class SqliteSyncRepo implements SyncRepo {
    * An attachment row as OtherBench itself makes one (modelled on `artifactRowOk` and
    * `artifactVersionRowOk` above): the shape core checks for every file, a size
    * within the upload cap, and, for a file on an assistant reply (a tool's image),
-   * a raster type within the per-image cap. A user's upload keeps its own rules.
+   * a raster type within the per-image cap, or a video type within the per-video cap. A user's upload keeps its own rules.
    */
   private attachmentRowOk(row: SyncRow): boolean {
-    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, MAX_HISTORY_ATTACHMENT_BYTES)) return false;
     const holder = this.db.prepare('SELECT role FROM message WHERE id = ?').get(row['message_id'] as string) as { role: string } | undefined;
-    if (holder?.role === 'assistant') return isToolImageMime(row['mime']) && (row['size'] as number) <= MAX_TOOL_IMAGE_BYTES;
+    const onReply = holder?.role === 'assistant';
+    // A tool's video may be larger than an upload; the per-type caps below hold a reply's file to its own.
+    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, onReply ? MAX_TOOL_VIDEO_BYTES : MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    if (onReply) {
+      const size = row['size'] as number;
+      return (isToolImageMime(row['mime']) && size <= MAX_TOOL_IMAGE_BYTES) || (isToolVideoMime(row['mime']) && size <= MAX_TOOL_VIDEO_BYTES);
+    }
     return true;
   }
 

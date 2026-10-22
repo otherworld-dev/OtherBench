@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
-import { sniffToolImageMime, toolImageBound } from '@otherbench/core/domain/tool-images.js';
+import { sniffToolImageMime, sniffToolVideoMime, toolImageBound, toolVideoBound } from '@otherbench/core/domain/tool-images.js';
 import type { Attachment, PublicAttachment } from '@otherbench/core/ports/store.js';
 import { gcBlobIfOrphaned, withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
 import { sha256Of } from '@otherbench/store-sqlite/blob-store.js';
@@ -65,6 +65,31 @@ function getShownAttachmentOrThrow(container: Container, id: string): Attachment
 }
 
 const TOOL_IMAGE_EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const TOOL_VIDEO_EXTENSIONS: Record<string, string> = { 'video/mp4': 'mp4', 'video/webm': 'webm' };
+
+/**
+ * A single byte range of a `size`-byte file from a Range header: `bytes=a-b`,
+ * `bytes=a-` or `bytes=-n`. `'unsatisfiable'` when it starts past the end (or
+ * asks for the last 0 bytes); null for anything else, a malformed or multiple
+ * range included, which the caller serves as the whole file.
+ */
+function singleRange(header: string | undefined, size: number): { start: number; end: number } | 'unsatisfiable' | null {
+  const m = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (m === null || (m[1] === '' && m[2] === '')) return null;
+  const first = m[1] ?? '';
+  const last = m[2] ?? '';
+  if (first === '') {
+    const n = Number(last);
+    if (!Number.isSafeInteger(n)) return null;
+    return n === 0 || size === 0 ? 'unsatisfiable' : { start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(first);
+  if (!Number.isSafeInteger(start)) return null;
+  if (last === '') return start >= size ? 'unsatisfiable' : { start, end: size - 1 };
+  const end = Number(last);
+  if (!Number.isSafeInteger(end) || end < start) return null;
+  return start >= size ? 'unsatisfiable' : { start, end: Math.min(end, size - 1) };
+}
 
 /**
  * Strips `storagePath` -- a raw SERVER filesystem path -- before an
@@ -396,8 +421,11 @@ export function attachmentsRoutes(container: Container): Hono {
    * An image a tool returned (a screenshot), by the chat and the reply that hold
    * it. The bytes are served only if the file was stored for exactly this chat and
    * this message (`toolImageBound`, the test the model's own replay uses), the
-   * message is in the chat, and the bytes really are a png, jpeg, gif or webp: the
-   * type is read from them, never from the stored row. Anything else, whatever
+   * message is in the chat, and the bytes really are a png, jpeg, gif or webp (or,
+   * for a stored video, an mp4 or webm): the type is read from them, never from
+   * the stored row, and must be of the kind the row is. A single byte range is
+   * honoured (video needs it to seek); a malformed or multiple one gets the
+   * whole file, one past the end a 416. Anything else, whatever
    * the reason (no such chat, message or file, another chat's file, another
    * reply's, a type that isn't an image), is the same 404, so the answer says
    * nothing about what exists.
@@ -407,19 +435,26 @@ export function attachmentsRoutes(container: Container): Hono {
     const notFound = (): HTTPException => new HTTPException(404, { message: 'Image not found.' });
     const message = container.store.messages.get(messageId);
     const row = container.store.attachments.get(attachmentId);
-    if (!message || message.chatId !== chatId || !row || !toolImageBound(row, chatId, messageId)) throw notFound();
+    if (!message || message.chatId !== chatId || !row) throw notFound();
+    const isVideo = toolVideoBound(row, chatId, messageId);
+    if (!isVideo && !toolImageBound(row, chatId, messageId)) throw notFound();
     const data = await container.blobStore.get(row.sha256).catch(() => null);
-    const type = data === null ? null : sniffToolImageMime(data);
+    const type = data === null ? null : isVideo ? sniffToolVideoMime(data) : sniffToolImageMime(data);
     if (data === null || type === null) throw notFound();
-    return new Response(new Uint8Array(data), {
-      status: 200,
-      headers: {
-        'Content-Type': type,
-        'Content-Disposition': contentDisposition('inline', `image.${TOOL_IMAGE_EXTENSIONS[type] ?? 'bin'}`),
-        'Content-Length': String(data.length),
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "default-src 'none'; sandbox",
-      },
+    const headers: Record<string, string> = {
+      'Content-Type': type,
+      'Content-Disposition': contentDisposition('inline', isVideo ? `video.${TOOL_VIDEO_EXTENSIONS[type] ?? 'bin'}` : `image.${TOOL_IMAGE_EXTENSIONS[type] ?? 'bin'}`),
+      'Accept-Ranges': 'bytes',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    };
+    const range = singleRange(c.req.header('Range'), data.length);
+    if (range === 'unsatisfiable') return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${data.length}` } });
+    if (range === null) return new Response(new Uint8Array(data), { status: 200, headers: { ...headers, 'Content-Length': String(data.length) } });
+    const part = data.subarray(range.start, range.end + 1);
+    return new Response(new Uint8Array(part), {
+      status: 206,
+      headers: { ...headers, 'Content-Range': `bytes ${range.start}-${range.end}/${data.length}`, 'Content-Length': String(part.length) },
     });
   });
 
