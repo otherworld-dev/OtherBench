@@ -10,6 +10,9 @@ vi.mock('./IssuesTab.js', () => ({ IssuesTab: ({ app, owner }: { app: App; owner
 vi.mock('./terminal/TerminalTab.js', () => ({ TerminalTab: ({ app }: { app: App }) => <div data-testid="terminal-stub">{app.id}</div> }));
 const terminalStatus = vi.hoisted(() => ({ value: null as null | { available: boolean; shells: never[] } }));
 vi.mock('./terminal/status.js', () => ({ useTerminalStatus: () => terminalStatus.value }));
+vi.mock('./DeckTab.js', () => ({ DeckTab: ({ owner }: { app: App; owner: string }) => <div data-testid="deck-stub" data-owner={owner} /> }));
+vi.mock('./WikiTab.js', () => ({ WikiTab: ({ owner }: { app: App; owner: string }) => <div data-testid="wiki-stub" data-owner={owner} /> }));
+vi.mock('./LinksTab.js', () => ({ LinksTab: ({ app }: { app: App }) => <div data-testid="links-stub">{app.id}</div> }));
 vi.mock('./FilesTab.js', () => ({ FilesTab: ({ app, chatId }: { app: App; chatId: string | null }) => <div data-testid="files-stub">{`${app.id}:${chatId ?? 'none'}`}</div> }));
 
 import { appTabId } from '../state/appTab.js';
@@ -57,6 +60,19 @@ describe('CodePanel', () => {
     await userEvent.setup().click(screen.getByRole('tab', { name: 'Chat' }));
     expect(screen.getByTestId('inspector-stub')).toHaveTextContent('c1');
     expect(useOtherBenchStore.getState().codePanelTab).toBe('chat');
+  });
+
+  it('shows Deck, Wiki and Links in order', () => {
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+  });
+
+  it('a saved deck tab renders the Deck tab with the chat as owner', () => {
+    useOtherBenchStore.setState({ codePanelTab: 'deck' });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByTestId('deck-stub')).toHaveAttribute('data-owner', 'c1');
   });
 
   it('the Files tab gets the focused app chat', async () => {
