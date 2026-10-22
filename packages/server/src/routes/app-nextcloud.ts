@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
-import type { NextcloudClient } from '../nextcloud/client.js';
+import { NextcloudError, type NextcloudClient } from '../nextcloud/client.js';
 import { nextcloudOrThrow } from '../nextcloud/config.js';
 import { addBookmark, editBookmark, listBookmarks, removeBookmark } from '../nextcloud/bookmarks.js';
 import { boardView, createCard } from '../nextcloud/deck.js';
@@ -71,6 +71,21 @@ function optionalHttpUrl(value: unknown): string | undefined {
   return url;
 }
 
+/** Rethrows Nextcloud's not-found from `fn` as `replacement`, so the tab says what's gone instead of "HTTP 404". */
+async function notFoundAs<T>(fn: () => Promise<T>, replacement: () => CodeRouteError): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof NextcloudError && err.code === 'nextcloud-not-found') throw replacement();
+    throw err;
+  }
+}
+
+/** The app's board; one Nextcloud no longer has, or this account can't see any more, says so. */
+const appBoardView = (client: NextcloudClient, boardId: number) =>
+  notFoundAs(() => boardView(client, boardId), () =>
+    new CodeRouteError(404, 'nextcloud-not-found', "This app's Deck board isn't in Nextcloud any more. Pick another in the app's settings."));
+
 export function appNextcloudRoutes(container: Container): Hono {
   const app = new Hono();
   const appOf = (c: { req: { param(name: string): string } }): App => getAppOrThrow(container, c.req.param('id'));
@@ -82,7 +97,7 @@ export function appNextcloudRoutes(container: Container): Hono {
 
   app.get('/:id/deck', async (c) => {
     const boardId = boardOrThrow(appOf(c));
-    return c.json(await withClient((client) => boardView(client, boardId)));
+    return c.json(await withClient((client) => appBoardView(client, boardId)));
   });
 
   app.post('/:id/deck/cards', async (c) => {
@@ -94,7 +109,7 @@ export function appNextcloudRoutes(container: Container): Hono {
     const stackId = body.stackId as number;
     const title = body.title.trim();
     const card = await withClient(async (client) => {
-      const view = await boardView(client, boardId);
+      const view = await appBoardView(client, boardId);
       if (!view.stacks.some((s) => s.id === stackId)) throw new HTTPException(400, { message: `Column ${stackId} isn't on this app's Deck board.` });
       return createCard(client, boardId, stackId, { title, ...(description === undefined ? {} : { description }) });
     });
@@ -114,7 +129,11 @@ export function appNextcloudRoutes(container: Container): Hono {
 
   app.get('/:id/links', async (c) => {
     const tag = tagOrThrow(appOf(c));
-    return c.json({ tag, bookmarks: await withClient((client) => listBookmarks(client, tag)) });
+    // The tag list is a plain query, so a 404 on it means the Bookmarks app itself isn't there.
+    const bookmarks = await withClient((client) =>
+      notFoundAs(() => listBookmarks(client, tag), () =>
+        new CodeRouteError(409, 'nextcloud-app-missing', "Nextcloud's Bookmarks app didn't answer. Check it's installed.")));
+    return c.json({ tag, bookmarks });
   });
 
   app.post('/:id/links', async (c) => {

@@ -8,6 +8,7 @@ import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { NextcloudError } from '../../src/nextcloud/client.js';
 import { FakeNextcloudClient } from '../nextcloud/fake-client.js';
 
 const made: string[] = [];
@@ -115,6 +116,18 @@ describe('app deck routes', () => {
     expect(fake.data.cards).toHaveLength(1);
   });
 
+  it("GET /deck and POST /deck/cards say the app's board is gone when Nextcloud no longer has it", async () => {
+    makeApp({ deckBoardId: 99 });
+    const gone = { code: 'nextcloud-not-found', error: "This app's Deck board isn't in Nextcloud any more. Pick another in the app's settings." };
+    const res = await send('GET', '/api/apps/a1/deck');
+    expect(res.status).toBe(404);
+    expect(await json(res)).toEqual(gone);
+    const post = await send('POST', '/api/apps/a1/deck/cards', { stackId: 50, title: 'x' });
+    expect(post.status).toBe(404);
+    expect(await json(post)).toEqual(gone);
+    expect(fake.data.cards).toHaveLength(1);
+  });
+
   it("works when the app's folder isn't on this machine", async () => {
     makeApp({ deckBoardId: 5, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/OtherBench', bookmarkTag: 'otherbench' });
     for (const path of ['/api/apps/a1/deck', '/api/apps/a1/wiki', '/api/apps/a1/links']) {
@@ -187,6 +200,14 @@ describe('app links routes', () => {
     expect((await send('PATCH', '/api/apps/a1/links/2', { title: 'x' })).status).toBe(404);
     expect((await send('DELETE', '/api/apps/a1/links/2')).status).toBe(404);
     expect(fake.data.bookmarks.some((b) => b.id === 2)).toBe(true);
+  });
+
+  it("GET /links is 409 nextcloud-app-missing when the Bookmarks app doesn't answer", async () => {
+    makeApp({ bookmarkTag: 'otherbench' });
+    fake.failOn = { call: 'bookmarks', error: new NextcloudError('nextcloud-not-found', 'Nextcloud answered HTTP 404.') };
+    const res = await send('GET', '/api/apps/a1/links');
+    expect(res.status).toBe(409);
+    expect(await json(res)).toEqual({ code: 'nextcloud-app-missing', error: "Nextcloud's Bookmarks app didn't answer. Check it's installed." });
   });
 
   it('POST /links refuses a javascript: URL', async () => {
