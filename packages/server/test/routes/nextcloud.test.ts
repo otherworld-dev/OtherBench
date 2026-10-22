@@ -119,8 +119,8 @@ describe('Nextcloud settings', () => {
 
   it("PUT keeps the password when it's left out and deletes it on null", async () => {
     await setUp();
-    const kept = await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc2.example', user: 'adam' });
-    expect(await json(kept)).toEqual({ baseUrl: 'https://nc2.example', user: 'adam', passwordSet: true });
+    const kept = await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc.example/cloud', user: 'adam2' });
+    expect(await json(kept)).toEqual({ baseUrl: 'https://nc.example/cloud', user: 'adam2', passwordSet: true });
     expect(await secrets.get('nextcloud:password')).toBe('s3cr3t-pw');
 
     const changed = await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc2.example', user: 'adam', password: 'other-pw' });
@@ -130,6 +130,31 @@ describe('Nextcloud settings', () => {
     const deleted = await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc2.example', user: 'adam', password: null });
     expect(await json(deleted)).toEqual({ baseUrl: 'https://nc2.example', user: 'adam', passwordSet: false });
     expect(await secrets.get('nextcloud:password')).toBeNull();
+  });
+
+  it('PUT to another host without a password drops the stored one, so it never goes to the new host', async () => {
+    await setUp();
+    const moved = await send('PUT', '/api/nextcloud', { baseUrl: 'https://evil.example', user: 'adam' });
+    expect(moved.status).toBe(200);
+    expect(await json(moved)).toEqual({ baseUrl: 'https://evil.example', user: 'adam', passwordSet: false });
+    expect(await secrets.get('nextcloud:password')).toBeNull();
+    expect((await send('GET', '/api/nextcloud/boards')).status).toBe(409);
+    expect(configs).toEqual([]);
+  });
+
+  it('PUT to another host after the URL was cleared drops the kept password too', async () => {
+    await setUp();
+    await send('PUT', '/api/nextcloud', { baseUrl: '', user: '' });
+    expect(await secrets.get('nextcloud:password')).toBe('s3cr3t-pw');
+    const res = await send('PUT', '/api/nextcloud', { baseUrl: 'https://evil.example', user: 'adam' });
+    expect(await json(res)).toEqual({ baseUrl: 'https://evil.example', user: 'adam', passwordSet: false });
+  });
+
+  it('PUT to another host with a new password keeps the new one', async () => {
+    await setUp();
+    const res = await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc2.example', user: 'adam', password: 'new-pw' });
+    expect(await json(res)).toEqual({ baseUrl: 'https://nc2.example', user: 'adam', passwordSet: true });
+    expect(await secrets.get('nextcloud:password')).toBe('new-pw');
   });
 
   it('PUT with a blank URL and user and a null password clears everything', async () => {

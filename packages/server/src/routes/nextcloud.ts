@@ -8,7 +8,7 @@ import type { Container } from '../container.js';
 import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { normaliseBaseUrl, NextcloudError, type NextcloudClient, type RawBoard } from '../nextcloud/client.js';
-import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings } from '../nextcloud/config.js';
+import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings, storedNextcloudSettings } from '../nextcloud/config.js';
 import { archiveCard, changeLabels, completeCard, deleteCard, findCard, moveCard, reopenCard, updateCard } from '../nextcloud/deck.js';
 
 /**
@@ -87,6 +87,15 @@ async function boardIdByTitle(container: Container, title: string): Promise<numb
   }
 }
 
+/** The URL's origin, or null for one that doesn't parse (which then never matches). */
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 const NO_APPS: NextcloudTestResult['apps'] = { deck: false, collectives: false, bookmarks: false };
 
 export function nextcloudRoutes(container: Container): Hono {
@@ -102,8 +111,11 @@ export function nextcloudRoutes(container: Container): Hono {
   /**
    * `PUT /`: `{ baseUrl, user, password? }`. A blank URL and user together
    * clear the stored URL and user. `password` follows the connections
-   * pattern: a string sets it, null deletes it, leaving it out keeps it.
-   * Everything is checked before anything is written.
+   * pattern: a string sets it, null deletes it, leaving it out keeps it --
+   * but only on the same origin: a URL on another host (or a URL set again
+   * after it was cleared) with no password drops the stored one, so it's
+   * never sent to a host it wasn't typed for. Everything is checked before
+   * anything is written.
    */
   app.put('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as SettingsBody;
@@ -125,8 +137,10 @@ export function nextcloudRoutes(container: Container): Hono {
       throw new HTTPException(400, { message: '"password" must be a non-empty string, null, or omitted.' });
     }
 
+    const before = storedNextcloudSettings(container);
+    const newHost = !clearing && (before === null || originOf(before.baseUrl) !== originOf(baseUrl));
     container.store.settings.setValue(NEXTCLOUD_SETTING_KEY, clearing ? null : { baseUrl, user });
-    if (body.password === null) await container.secrets.delete(NEXTCLOUD_SECRET_REF);
+    if (body.password === null || (body.password === undefined && newHost)) await container.secrets.delete(NEXTCLOUD_SECRET_REF);
     else if (typeof body.password === 'string') await container.secrets.set(NEXTCLOUD_SECRET_REF, body.password);
     return c.json(await nextcloudSettings(container));
   });
