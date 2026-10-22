@@ -111,9 +111,21 @@ describe('WikiTab', () => {
     expect(within(view).getByText('it').tagName).toBe('STRONG');
     await user.click(within(view).getByRole('link', { name: /Open in Nextcloud/ }));
     expect(openInBrowser).toHaveBeenCalledWith('https://nc.example/apps/collectives/p/12');
-    await user.click(screen.getByRole('button', { name: 'Back to the pages' }));
+    await user.click(screen.getByRole('button', { name: 'Back to Wiki' }));
     expect(await screen.findByTestId('wiki-row-13')).toBeInTheDocument();
     expect(useOtherBenchStore.getState().wikiViews['c1']?.selected).toBeNull();
+  });
+
+  it('going back keeps the Find query and the filtered tree', async () => {
+    const user = userEvent.setup();
+    render(<WikiTab app={app()} owner="c1" />);
+    await screen.findByTestId('wiki-row-10');
+    await user.type(screen.getByRole('searchbox', { name: 'Find' }), 'spec');
+    await user.click(screen.getByTestId('wiki-row-13'));
+    await screen.findByTestId('wiki-page');
+    await user.click(screen.getByRole('button', { name: 'Back to Wiki' }));
+    expect(await screen.findByRole('searchbox', { name: 'Find' })).toHaveValue('spec');
+    expect(screen.getAllByTestId(/^wiki-row-/).map((r) => r.textContent)).toEqual(['OtherBench', 'Design', 'Specs']);
   });
 
   it('a fileId link to a page in the tree opens it in the tab', async () => {

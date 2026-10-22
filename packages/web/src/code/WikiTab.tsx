@@ -39,13 +39,16 @@ export function WikiTab({ app, owner }: { app: App; owner: string }): JSX.Elemen
   const cacheWikiTree = useOtherBenchStore((s) => s.cacheWikiTree);
   const [error, setError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
+  // Kept here, not in the list, so it survives opening a page and coming back.
+  const [query, setQuery] = useState('');
   const pagePath = app.wikiPagePath;
   // A tree cached before the app was pointed at another page isn't shown.
-  const tree = cachedTree && cachedTree.pagePath === pagePath ?cachedTree : null;
+  const tree = cachedTree && cachedTree.pagePath === pagePath ? cachedTree : null;
   const refresh = (): void => setReload((n) => n + 1);
 
   useCodeRefresh(app.id, refresh);
   useEffect(() => setError(null), [app.id, pagePath]);
+  useEffect(() => setQuery(''), [owner]);
   useEffect(() => {
     // Nothing to ask for: the server would only answer no-wiki-page.
     if (pagePath === null) return;
@@ -76,6 +79,8 @@ export function WikiTab({ app, owner }: { app: App; owner: string }): JSX.Elemen
       ) : selected === null ? (
         <WikiList
           tree={tree}
+          query={query}
+          onQuery={setQuery}
           error={error}
           expanded={expanded}
           onExpanded={(ids) => setWikiView(owner, { expanded: ids })}
@@ -91,6 +96,8 @@ export function WikiTab({ app, owner }: { app: App; owner: string }): JSX.Elemen
 
 function WikiList({
   tree,
+  query,
+  onQuery,
   error,
   expanded,
   onExpanded,
@@ -98,13 +105,14 @@ function WikiList({
   onRefresh,
 }: {
   tree: WikiTree | null;
+  query: string;
+  onQuery: (q: string) => void;
   error: unknown;
   expanded: number[];
   onExpanded: (ids: number[]) => void;
   onOpen: (id: number) => void;
   onRefresh: () => void;
 }): JSX.Element {
-  const [query, setQuery] = useState('');
   const kids = useMemo(() => (tree ? childrenOf(tree.pages) : new Map<number, WikiPageNode[]>()), [tree]);
   const byId = useMemo(() => new Map((tree?.pages ?? []).map((p) => [p.id, p])), [tree]);
   const q = query.trim().toLowerCase();
@@ -163,7 +171,7 @@ function WikiList({
           aria-label="Find"
           placeholder="Find"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQuery(e.target.value)}
           className="min-w-0 flex-1 rounded border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1 text-sm focus:border-[var(--accent)] focus:outline-none"
         />
         <button
@@ -239,7 +247,7 @@ function PageView({
   }
 
   const back = (
-    <button type="button" onClick={onBack} aria-label="Back to the pages" className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
+    <button type="button" onClick={onBack} aria-label="Back to Wiki" className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]">
       <span aria-hidden="true">← Wiki</span>
     </button>
   );
