@@ -124,8 +124,14 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const linksSeq = useRef(0);
   const [boards, setBoards] = useState<{ id: number; title: string }[] | null>(null);
   const [boardsFailed, setBoardsFailed] = useState(false);
-  const [collectives, setCollectives] = useState<string[]>([]);
+  // Null until Nextcloud has answered (and when it couldn't): a suggested collective can only be checked against a list.
+  const [collectives, setCollectives] = useState<string[] | null>(null);
+  const collectivesRef = useRef<string[] | null>(null);
+  // A collective (and page path) CLAUDE.md suggested before the list had loaded, checked once it has.
+  const unverifiedCollective = useRef<{ collective: string; pagePath: string | undefined } | null>(null);
   const [boardNotFound, setBoardNotFound] = useState<string | null>(null);
+  const [collectiveNotFound, setCollectiveNotFound] = useState<string | null>(null);
+  const [linksFailed, setLinksFailed] = useState(false);
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const beforeQuestion = useRef<HTMLElement | null>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -147,9 +153,24 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
       () => live && setBoardsFailed(true)
     );
     api.nextcloud.collectives().then(
-      (c) => live && setCollectives(c),
+      (c) => {
+        if (!live) return;
+        collectivesRef.current = c;
+        setCollectives(c);
+        // A suggestion that landed first is taken back out if Nextcloud hasn't got that collective, unless it's been changed since.
+        const u = unverifiedCollective.current;
+        unverifiedCollective.current = null;
+        if (u && !c.includes(u.collective)) {
+          setCollectiveNotFound(u.collective);
+          setDraft((d) =>
+            d.wikiCollective !== u.collective
+              ? d
+              : { ...d, wikiCollective: '', wikiPagePath: u.pagePath !== undefined && d.wikiPagePath === u.pagePath ? '' : d.wikiPagePath }
+          );
+        }
+      },
       () => {
-        // The select keeps the stored collective as its only option.
+        // The select keeps the stored collective as its only option, and a suggested one can't be checked.
       }
     );
     return () => {
@@ -171,12 +192,29 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
       try {
         const suggestion = await api.nextcloud.detectLinks(path);
         if (seq !== linksSeq.current) return undefined;
+        setLinksFailed(false);
         const patch = linksPatch(suggestion, (f) => !overwrite && typed.current[f]);
         setBoardNotFound(suggestion.deckBoard !== null && suggestion.deckBoardId === null ? suggestion.deckBoard : null);
+        // A collective is only a suggestion until Nextcloud's list has it (spec: never saved as if it were right).
+        setCollectiveNotFound(null);
+        unverifiedCollective.current = null;
+        const collective = patch.wikiCollective;
+        if (collective !== undefined) {
+          const known = collectivesRef.current;
+          if (known === null) {
+            unverifiedCollective.current = { collective, pagePath: patch.wikiPagePath };
+          } else if (!known.includes(collective)) {
+            setCollectiveNotFound(collective);
+            delete patch.wikiCollective;
+            delete patch.wikiPagePath;
+          }
+        }
         setDraft((d) => ({ ...d, ...patch }));
         return patch;
       } catch (err) {
         console.error('[otherbench-web] failed to read the Nextcloud links for', path, err);
+        // Said only when asked for with the button; creating just leaves the fields as they are.
+        if (seq === linksSeq.current && overwrite) setLinksFailed(true);
         return undefined;
       }
     })();
@@ -450,7 +488,8 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
               ))}
             </select>
             {boardsFailed && <p className={HINT}>Set up Nextcloud in Settings to pick a board.</p>}
-            {boardNotFound !== null && (
+            {/* Without Nextcloud no board could be looked up, so a name that didn't resolve isn't "not found". */}
+            {boardNotFound !== null && !boardsFailed && (
               <p data-testid="app-board-not-found" className="mt-1 text-xs text-[var(--warn)]">
                 CLAUDE.md names the board "{boardNotFound}", which wasn't found.
               </p>
@@ -467,13 +506,14 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
                 value={draft.wikiCollective}
                 onChange={(e) => {
                   typed.current.wikiCollective = true;
+                  setCollectiveNotFound(null);
                   set('wikiCollective', e.target.value);
                 }}
                 className={`${FIELD} w-auto shrink-0`}
               >
                 <option value="">None</option>
-                {draft.wikiCollective !== '' && !collectives.includes(draft.wikiCollective) && <option value={draft.wikiCollective}>{draft.wikiCollective}</option>}
-                {collectives.map((c) => (
+                {draft.wikiCollective !== '' && !(collectives ?? []).includes(draft.wikiCollective) && <option value={draft.wikiCollective}>{draft.wikiCollective}</option>}
+                {(collectives ?? []).map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -490,6 +530,11 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
                 className={FIELD}
               />
             </div>
+            {collectiveNotFound !== null && (
+              <p data-testid="app-collective-not-found" className="mt-1 text-xs text-[var(--warn)]">
+                CLAUDE.md names the collective "{collectiveNotFound}", which wasn't found.
+              </p>
+            )}
           </div>
 
           <div>
@@ -514,6 +559,11 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
               >
                 Fill from CLAUDE.md
               </button>
+            )}
+            {linksFailed && (
+              <p role="alert" className="mt-1 text-xs text-[var(--warn)]">
+                Couldn't read CLAUDE.md from this folder.
+              </p>
             )}
           </div>
 
