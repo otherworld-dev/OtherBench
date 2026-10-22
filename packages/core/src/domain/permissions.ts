@@ -903,6 +903,9 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.browser === true ? null : 'The browser is turned off for this profile.';
     case 'computer':
       return policy.computer === true ? null : COMPUTER_OFF_REASON;
+    // The broker branch for generation arrives with the media tools; until then it fails closed.
+    case 'media':
+      return 'Image and video generation is not available yet.';
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

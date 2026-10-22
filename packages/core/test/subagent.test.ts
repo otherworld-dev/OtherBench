@@ -176,12 +176,14 @@ describe('subagentPolicy and the sandbox', () => {
   });
 
   it('writes out every ToolPolicy field, with a rule for each', () => {
-    const fields = ['agentMcp', 'agentUserSettings', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    const fields = ['agentMcp', 'agentUserSettings', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'media', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
     expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
     for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
       const got = narrowed(parent, chosen);
       expect(Object.keys(got).sort()).toEqual(fields);
-      for (const value of Object.values(got)) expect(value).not.toBeUndefined();
+      // Every field is named; `media` is named as absent (a sub-agent never has it).
+      for (const [field, value] of Object.entries(got)) if (field !== 'media') expect(value).not.toBeUndefined();
+      expect(got.media).toBeUndefined();
     }
   });
 

@@ -212,6 +212,9 @@ export interface SubagentNarrowing {
   mcpServerIds: string[];
 }
 
+/** A sub-agent's policy: every field named, except `media`, which is absent (it never has it). */
+export type SubagentToolPolicy = Required<Omit<ToolPolicy, 'media'>> & Pick<ToolPolicy, 'media'>;
+
 /**
  * One rule per `ToolPolicy` field: what a sub-agent gets for it. This is the
  * whole of a sub-agent's policy, so it is the place where a sub-agent could
@@ -227,7 +230,7 @@ export interface SubagentNarrowing {
  * from a newer peer never went through this build's routes): an unknown file
  * mode is no files, an unknown approval mode asks always.
  */
-export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]: (n: SubagentNarrowing) => Required<ToolPolicy>[K] } = {
+export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]: (n: SubagentNarrowing) => SubagentToolPolicy[K] } = {
   // The lowest of the parent's, the chosen profile's and the call's.
   fs: ({ parent, chosen, ask }) => {
     const ranks = [parent.fs, chosen.fs, ask.files ?? 'readwrite'].map((m) => FS_RANK[m] ?? 0);
@@ -273,6 +276,8 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   // dialog (the one local consent) in front of the user for a job they never
   // asked to watch. Its parent may use the computer itself.
   computer: () => false,
+  // Image and video generation: never. It spends the user's GPU, and a sub-agent's calls sit inside its card.
+  media: () => undefined,
 };
 
 /**
@@ -294,7 +299,7 @@ export function subagentPolicy(
   chosen: ToolPolicy,
   ask: SubagentToolsAsk = {},
   serverNames: ReadonlyMap<string, string> = new Map()
-): { ok: true; policy: Required<ToolPolicy> } | { ok: false; message: string } {
+): { ok: true; policy: SubagentToolPolicy } | { ok: false; message: string } {
   const chosenIds = idsOf(chosen);
   const shared = idsOf(parent).filter((id, i, all) => chosenIds.includes(id) && all.indexOf(id) === i);
   let mcpServerIds = shared;
@@ -323,7 +328,7 @@ export function subagentPolicy(
   const narrowing: SubagentNarrowing = { parent, chosen, ask, mcpServerIds };
   const policy: Partial<Record<keyof ToolPolicy, unknown>> = {};
   for (const field of Object.keys(SUBAGENT_POLICY_RULES) as (keyof ToolPolicy)[]) policy[field] = SUBAGENT_POLICY_RULES[field](narrowing);
-  return { ok: true, policy: policy as Required<ToolPolicy> };
+  return { ok: true, policy: policy as SubagentToolPolicy };
 }
 
 // --- profiles and the tool --------------------------------------------------

@@ -1,5 +1,7 @@
 export type ConnectionKind =
-  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'claude_code' | 'mock';
+  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'claude_code' | 'mock'
+  // Generation connections (images and video): never a chat model, see domain/media.ts.
+  | 'comfyui' | 'a1111' | 'openai_images';
 
 export interface Connection {
   id: string;
@@ -61,6 +63,8 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * 2026-10-12-model-browser-design).
  * `'computer'` is the desktop shell's computer use (spec
  * 2026-10-12-computer-use-design).
+ * `'media'` is image and video generation through a generation connection
+ * (ComfyUI, A1111, an OpenAI-style images API).
  */
 export type ToolSource =
   | 'fs'
@@ -74,7 +78,8 @@ export type ToolSource =
   | 'thread'
   | 'subagent'
   | 'browser'
-  | 'computer';
+  | 'computer'
+  | 'media';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -123,6 +128,26 @@ export interface ToolPolicy {
   browserBlockedHosts?: string[];
   /** Computer use (spec 2026-10-12-computer-use-design): the `computer` tool, desktop app on Windows only. Absent = off. */
   computer?: boolean;
+  /** Image and video generation (the `media` tools), for the API engine. Absent = off. */
+  media?: MediaPolicy;
+}
+
+/**
+ * One generation backend and what to run on it. For ComfyUI `model` is a
+ * workflow id (`builtin:sdxl-txt2img`, `builtin:wan22-5b-t2v` or an imported
+ * workflow's id; the checkpoint is a workflow binding). For A1111 it is the
+ * `sd-models` title, for `openai_images` the model id.
+ */
+export interface MediaChoice {
+  connectionId: string;
+  model: string;
+}
+
+export interface MediaPolicy {
+  image?: MediaChoice;
+  video?: MediaChoice;
+  /** Show the prompt in the ask and refuse unattended runs. Absent = true. */
+  confirmPrompts?: boolean;
 }
 
 /**

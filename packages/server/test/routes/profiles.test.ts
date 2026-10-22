@@ -534,3 +534,51 @@ describe('toolPolicy: the sandboxed shell', () => {
     expect(await res.json()).toEqual({ error: message });
   });
 });
+
+describe('media policy and generation connections', () => {
+  function addConn(id: string, kind: 'comfyui' | 'mock' | 'a1111'): void {
+    container.store.connections.create({ id, name: id, kind, baseUrl: kind === 'mock' ? null : 'http://127.0.0.1:8188', secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  }
+  async function makeProfile(): Promise<string> {
+    const res = await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(basicProfileBody) });
+    return ((await res.json()) as { id: string }).id;
+  }
+  function patch(id: string, body: unknown): Promise<Response> {
+    return app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  it("refuses a generation connection as a profile's chat model", async () => {
+    addConn('gen-1', 'comfyui');
+    const res = await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, connectionId: 'gen-1' }) });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("A generation connection can't be a profile's chat model.");
+    const id = await makeProfile();
+    expect((await patch(id, { connectionId: 'gen-1' })).status).toBe(400);
+  });
+
+  it('stores and reads back toolPolicy.media, and keeps it on a later partial patch', async () => {
+    addConn('gen-1', 'comfyui');
+    const id = await makeProfile();
+    const media = { image: { connectionId: 'gen-1', model: 'builtin:sdxl-txt2img' } };
+    const res = await patch(id, { toolPolicy: { media } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { toolPolicy: { media: unknown } }).toolPolicy.media).toEqual(media);
+    await patch(id, { toolPolicy: { fs: 'read' } });
+    const got = (await (await app().request(`/api/profiles/${id}`)).json()) as { toolPolicy: { media: unknown } };
+    expect(got.toolPolicy.media).toEqual(media);
+  });
+
+  it('rejects a media choice naming a chat connection, and video on a non-comfyui connection', async () => {
+    addConn('mock', 'mock');
+    addConn('a1', 'a1111');
+    const id = await makeProfile();
+    expect((await patch(id, { toolPolicy: { media: { image: { connectionId: 'mock', model: 'm' } } } })).status).toBe(400);
+    expect((await patch(id, { toolPolicy: { media: { video: { connectionId: 'a1', model: 'm' } } } })).status).toBe(400);
+    expect((await patch(id, { toolPolicy: { media: { image: { connectionId: 'a1', model: '' } } } })).status).toBe(400);
+  });
+
+  it('rejects a non-boolean confirmPrompts', async () => {
+    const id = await makeProfile();
+    expect((await patch(id, { toolPolicy: { media: { confirmPrompts: 'yes' } } })).status).toBe(400);
+  });
+});

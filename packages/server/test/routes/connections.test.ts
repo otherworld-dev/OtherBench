@@ -645,3 +645,30 @@ describe('POST /api/connections/:id/discover-models', () => {
     expect(typeof body['message']).toBe('string');
   });
 });
+
+describe('generation connection kinds', () => {
+  async function post(body: Record<string, unknown>): Promise<Response> {
+    return app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  it('creates a comfyui connection with a baseUrl', async () => {
+    const res = await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' });
+    expect(res.status).toBe(201);
+  });
+
+  it.each(['comfyui', 'a1111', 'openai_images'])('requires a baseUrl for %s', async (kind) => {
+    const res = await post({ name: 'Gen', kind });
+    expect(res.status).toBe(400);
+    expect(String((await json(res))['error'])).toContain('baseUrl');
+  });
+
+  it('refuses discover-models and answers test without throwing', async () => {
+    const created = await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
+    const id = created['id'] as string;
+    const discover = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+    expect(discover.status).toBe(400);
+    const test = await app().request(`/api/connections/${id}/test`, { method: 'POST' });
+    expect(test.status).toBe(200);
+    expect((await json(test))['ok']).toBe(false);
+  });
+});

@@ -1,4 +1,5 @@
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
@@ -8,6 +9,7 @@ export class RoutingChatEngine implements ChatEngine {
   constructor(private readonly aisdk: ChatEngine, private readonly claudeCode: ChatEngine) {}
 
   private pick(kind: Connection['kind']): ChatEngine {
+    if (isGenerationKind(kind)) throw new Error(`"${kind}" is a generation connection, not a chat model.`);
     return kind === 'claude_code' ? this.claudeCode : this.aisdk;
   }
 

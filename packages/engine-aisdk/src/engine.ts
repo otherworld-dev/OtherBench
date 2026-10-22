@@ -377,6 +377,11 @@ export class AiSdkChatEngine implements ChatEngine {
         // that skips that branch fails loudly instead of returning nothing.
         throw new Error('listRealModels() was called for a mock connection; this is a bug in AiSdkChatEngine.');
 
+      case 'comfyui':
+      case 'a1111':
+      case 'openai_images':
+        throw new Error(`"${conn.kind}" is a generation connection, not a chat model.`);
+
       default: {
         const exhaustive: never = conn.kind;
         throw new Error(`Unknown connection kind: ${String(exhaustive)}`);

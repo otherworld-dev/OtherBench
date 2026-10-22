@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@otherbench/core/domain/availability.js';
+import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
 import type { DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@otherbench/core/types/config.js';
@@ -11,7 +12,7 @@ import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
 
 interface ConnectionBody {
   name?: unknown;
@@ -62,6 +63,10 @@ function getConnectionOrThrow(container: Container, id: string): Connection {
  * of throwing (see `AiSdkChatEngine.testConnection`).
  */
 function requireBaseUrlIfOpenaiCompatible(kind: ConnectionKind, baseUrl: string | null | undefined): void {
+  // Generation connections have no default host either, and nothing to auto-detect.
+  if (isGenerationKind(kind) && !baseUrl) {
+    throw new HTTPException(400, { message: `"baseUrl" is required for a "${kind}" connection: it has no default host to talk to.` });
+  }
   if (kind === 'openai_compatible' && !baseUrl) {
     throw new HTTPException(400, {
       message: '"baseUrl" is required for an "openai_compatible" connection: it has no default host to talk to.',
@@ -264,6 +269,8 @@ export function connectionsRoutes(container: Container): Hono {
   app.post('/:id/test', async (c) => {
     const id = c.req.param('id');
     const conn = getConnectionOrThrow(container, id);
+    // Generation connections aren't tested through a chat engine; their test arrives with the media backends.
+    if (isGenerationKind(conn.kind)) return c.json({ ok: false, message: 'Testing a generation connection is not available yet.' });
     const apiKey = conn.secretRef ? await container.secrets.get(conn.secretRef) : null;
     const result = await container.engine.testConnection(conn, apiKey);
     container.store.connections.update(id, {
@@ -277,6 +284,7 @@ export function connectionsRoutes(container: Container): Hono {
   app.post('/:id/discover-models', async (c) => {
     const id = c.req.param('id');
     const conn = getConnectionOrThrow(container, id);
+    if (isGenerationKind(conn.kind)) throw new HTTPException(400, { message: 'A generation connection has no chat models to discover.' });
     const apiKey = conn.secretRef ? await container.secrets.get(conn.secretRef) : null;
 
     let discovered: DiscoveredModel[];

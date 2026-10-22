@@ -3,7 +3,7 @@ import type { Connection, ConnectionKind } from '@otherbench/core/types/config.j
 import { ApiError, api, type CreateConnectionBody } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
 
 const STATUS_COLOR: Record<Connection['status'], string> = {
   ok: 'bg-[var(--success)]',

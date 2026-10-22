@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PermissionBroker, type Decision } from '../src/domain/permissions.js';
-import { SUBAGENT_POLICY_RULES, subagentPolicy, type SubagentToolsAsk } from '../src/domain/subagent.js';
+import { SUBAGENT_POLICY_RULES, subagentPolicy, type SubagentToolPolicy, type SubagentToolsAsk } from '../src/domain/subagent.js';
 import { createPlanGate } from '../src/domain/thread-tools.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
 import type { EngineRequest } from '../src/ports/chat-engine.js';
@@ -190,13 +190,15 @@ const siteKey = (h: string): string => h.trim().toLowerCase().replace(/\.$/, '')
  * field, keyed like the rules table, so a field with a rule and no check
  * here fails the test below.
  */
-const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: Required<ToolPolicy>, other: ToolPolicy) => boolean> = {
+const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: SubagentToolPolicy, other: ToolPolicy) => boolean> = {
   fs: (sub, other) => FS[sub.fs] <= FS[other.fs],
   shell: (sub, other) => !sub.shell || other.shell,
   // Never on this machine unless the other is; a sandboxed shell only where the other's is sandboxed too.
   shellRuns: (sub, other) => (sub.shellRuns === 'host' ? onHost(other) : true),
   sandboxHosts: (sub, other) => sub.sandboxHosts.every((h) => hostsOf(other).includes(h.trim().toLowerCase())),
   mcpServerIds: (sub, other) => sub.mcpServerIds.every((id) => other.mcpServerIds.includes(id)),
+  // A sub-agent has no media tools at all.
+  media: (sub) => sub.media === undefined,
   approvalMode: (sub, other) => sub.approvalMode === 'always_ask' || other.approvalMode === 'ask_on_mutate',
   agentWeb: (sub, other) => !sub.agentWeb || other.agentWeb !== false,
   agentMcp: (sub, other) => !sub.agentMcp || other.agentMcp !== false,
