@@ -5,8 +5,9 @@ import { ApiError, type CodeErrorCode } from '../state/api.js';
  * The one line each Code tab failure shows, picked by the server's `code`
  * (spec 2026-10-20-code-tab-design, "Error states the panels must handle":
  * say what's missing and the command that fixes it). A code with no line
- * here (repo-not-found, gh-failed, git-failed, one this build doesn't know)
- * shows the server's own one-line message instead. The git bar's three
+ * here (repo-not-found, gh-failed, git-failed, nextcloud-app-missing, whose
+ * server line names the app, one this build doesn't know) shows the server's
+ * own one-line message instead. The git bar's three
  * states (not a repo, folder elsewhere, no git) come from here too, so the
  * bar and the panels say them the same way.
  */
@@ -19,7 +20,6 @@ const COPY: Partial<Record<CodeErrorCode, string>> = {
   'no-github-repo': 'No GitHub repo set for this app',
   'nextcloud-not-configured': "Nextcloud isn't set up on this machine. Add it in Settings → Nextcloud",
   'nextcloud-auth': 'Nextcloud refused the user name or app password. Check them in Settings → Nextcloud',
-  'nextcloud-app-missing': "That Nextcloud app isn't installed on the server",
   'no-deck-board': 'No Deck board set for this app',
   'no-wiki-page': 'No Collectives page set for this app',
   'no-bookmark-tag': 'No bookmark tag set for this app',

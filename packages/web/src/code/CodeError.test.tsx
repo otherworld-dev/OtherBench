@@ -15,4 +15,9 @@ describe('codeErrorText', () => {
     expect(NO_WIKI_PAGE).toBe('No Collectives page set for this app');
     expect(NO_BOOKMARK_TAG).toBe('No bookmark tag set for this app');
   });
+
+  it("shows the server's line for nextcloud-app-missing, which names the app", () => {
+    const err = new ApiError(409, "Nextcloud's Bookmarks app didn't answer. Check it's installed.", undefined, { code: 'nextcloud-app-missing' });
+    expect(codeErrorText(err, 'fallback').message).toBe("Nextcloud's Bookmarks app didn't answer. Check it's installed.");
+  });
 });
