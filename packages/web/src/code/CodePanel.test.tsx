@@ -68,6 +68,17 @@ describe('CodePanel', () => {
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Files', 'Chat']);
   });
 
+  it("the strip clips its measuring row, and a long app name can't crowd the tabs", () => {
+    useOtherBenchStore.setState({ apps: [app('a1'), { ...app('a2'), name: 'A very long app name that would push every tab into More tabs' }] });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByRole('tablist').parentElement).toHaveClass('overflow-hidden');
+    const name = screen.getByTestId('code-panel-app-name');
+    expect(name).toHaveClass('max-w-[25%]', 'truncate');
+    expect(name).toHaveAttribute('title', 'A very long app name that would push every tab into More tabs');
+    for (const t of screen.getAllByRole('tab')) expect(t).toHaveClass('px-2');
+  });
+
   it('a saved deck tab renders the Deck tab with the chat as owner', () => {
     useOtherBenchStore.setState({ codePanelTab: 'deck' });
     focus('c1');

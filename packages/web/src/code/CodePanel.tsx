@@ -149,10 +149,11 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
   return (
     <aside aria-label="Code panel" data-testid="code-panel" className="flex h-full w-full min-w-0 flex-col border-l border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="flex items-center gap-2 border-b border-[var(--border)] px-2 pt-1.5">
-        <div ref={stripRef} className="relative flex min-w-0 flex-1 items-end gap-0.5">
+        {/* overflow-hidden: the invisible measuring row below is as wide as every tab, and must never make the strip scroll. */}
+        <div ref={stripRef} className="relative flex min-w-0 flex-1 items-end gap-0.5 overflow-hidden">
           <div ref={measureRef} aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 flex gap-0.5 whitespace-nowrap">
             {TABS.map((t) => (
-              <span key={t.id} className="border px-2.5 py-1 text-xs">
+              <span key={t.id} className="border px-2 py-1 text-xs">
                 {t.label}
               </span>
             ))}
@@ -174,7 +175,7 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
               tabIndex={tab === t.id ? 0 : -1}
               onClick={() => setTab(t.id)}
               onKeyDown={(e) => onKeyDown(e, i)}
-              className={`rounded-t border border-b-0 px-2.5 py-1 text-xs ${tab === t.id ? 'border-[var(--border)] bg-[var(--bg)] text-[var(--text)]' : 'border-transparent text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
+              className={`rounded-t border border-b-0 px-2 py-1 text-xs ${tab === t.id ? 'border-[var(--border)] bg-[var(--bg)] text-[var(--text)]' : 'border-transparent text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
             >
               {t.label}
             </button>
@@ -197,7 +198,12 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
             </button>
           )}
         </div>
-        {app && <span className="mb-1 min-w-0 truncate text-xs text-[var(--text-muted)]" title={app.name}>{app.name}</span>}
+        {/* At most a quarter of the header, so a long name can't push the tabs into More tabs; the full name is its title. */}
+        {app && (
+          <span data-testid="code-panel-app-name" className="mb-1 min-w-0 max-w-[25%] truncate text-xs text-[var(--text-muted)]" title={app.name}>
+            {app.name}
+          </span>
+        )}
         <button
           type="button"
           onClick={onToggleCollapsed}
