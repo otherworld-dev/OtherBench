@@ -17,9 +17,18 @@ const COPY: Partial<Record<CodeErrorCode, string>> = {
   'gh-missing': "gh isn't installed on this machine",
   'gh-signed-out': "gh isn't signed in. Run `gh auth login`",
   'no-github-repo': 'No GitHub repo set for this app',
+  'nextcloud-not-configured': "Nextcloud isn't set up on this machine. Add it in Settings → Nextcloud",
+  'nextcloud-auth': 'Nextcloud refused the user name or app password. Check them in Settings → Nextcloud',
+  'nextcloud-app-missing': "That Nextcloud app isn't installed on the server",
+  'no-deck-board': 'No Deck board set for this app',
+  'no-wiki-page': 'No Collectives page set for this app',
+  'no-bookmark-tag': 'No bookmark tag set for this app',
 };
 
 export const NO_GITHUB_REPO = COPY['no-github-repo']!;
+export const NO_DECK_BOARD = COPY['no-deck-board']!;
+export const NO_WIKI_PAGE = COPY['no-wiki-page']!;
+export const NO_BOOKMARK_TAG = COPY['no-bookmark-tag']!;
 
 /** What a failure says: its line, and git's or gh's stderr as-is when it carried some (never recovered from, only shown). */
 export function codeErrorText(err: unknown, fallback: string): { message: string; stderr: string | null } {

@@ -12,10 +12,14 @@ import { projectTabId } from './projectTab.js';
 import {
   CODE_PANEL_TAB_STORAGE_KEY,
   INSPECTOR_COLLAPSED_STORAGE_KEY,
+  DECK_VIEWS_STORAGE_KEY,
   ISSUE_VIEWS_STORAGE_KEY,
+  WIKI_VIEWS_STORAGE_KEY,
   loadCodePanelTab,
+  loadDeckViews,
   loadInspectorCollapsed,
   loadIssueViews,
+  loadWikiViews,
   selectPendingApprovalCount,
   useOtherBenchStore,
 } from './store.js';
@@ -1010,6 +1014,42 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(loadIssueViews()).toEqual({ a: { state: 'open', selected: 3 }, c: { state: 'closed', selected: null } });
     window.localStorage.setItem(ISSUE_VIEWS_STORAGE_KEY, 'not json');
     expect(loadIssueViews()).toEqual({});
+  });
+
+  it('codePanelTab persists deck, wiki and links', () => {
+    for (const tab of ['deck', 'wiki', 'links'] as const) {
+      s().setCodePanelTab(tab);
+      expect(window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY)).toBe(tab);
+      expect(loadCodePanelTab()).toBe(tab);
+    }
+  });
+
+  it('deckViews and wikiViews persist and drop malformed entries', () => {
+    s().setDeckView('app-chat', { selected: 12 });
+    s().setDeckView('plain-1', { stackId: 'archived' });
+    s().setWikiView('app-chat', { expanded: [4, 5], selected: 5 });
+    expect(s().deckViews).toEqual({ 'app-chat': { stackId: null, selected: 12 }, 'plain-1': { stackId: 'archived', selected: null } });
+    expect(loadDeckViews()).toEqual(s().deckViews);
+    expect(loadWikiViews()).toEqual({ 'app-chat': { expanded: [4, 5], selected: 5 } });
+    window.localStorage.setItem(DECK_VIEWS_STORAGE_KEY, JSON.stringify({ a: { stackId: 3, selected: 9 }, b: { stackId: 'x' }, c: { stackId: null, selected: 'y' }, d: null }));
+    expect(loadDeckViews()).toEqual({ a: { stackId: 3, selected: 9 }, c: { stackId: null, selected: null } });
+    window.localStorage.setItem(WIKI_VIEWS_STORAGE_KEY, JSON.stringify({ a: { expanded: [1, 'x', -2], selected: 2 }, b: { selected: 1 }, c: 7 }));
+    expect(loadWikiViews()).toEqual({ a: { expanded: [1], selected: 2 } });
+    window.localStorage.setItem(DECK_VIEWS_STORAGE_KEY, 'not json');
+    window.localStorage.setItem(WIKI_VIEWS_STORAGE_KEY, 'not json');
+    expect(loadDeckViews()).toEqual({});
+    expect(loadWikiViews()).toEqual({});
+  });
+
+  it('removeChat forgets its deck and wiki views', () => {
+    s().setDeckView('app-chat', { selected: 12 });
+    s().setDeckView('plain-1', { selected: 13 });
+    s().setWikiView('app-chat', { selected: 5 });
+    s().removeChat('app-chat');
+    expect(s().deckViews).toEqual({ 'plain-1': { stackId: null, selected: 13 } });
+    expect(s().wikiViews).toEqual({});
+    expect(loadDeckViews()).toEqual({ 'plain-1': { stackId: null, selected: 13 } });
+    expect(loadWikiViews()).toEqual({});
   });
 
   it("'terminal' is a remembered tab", () => {
