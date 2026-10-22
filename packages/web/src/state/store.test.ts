@@ -789,7 +789,7 @@ describe('notes (messages sent while a reply runs)', () => {
 });
 
 function makeApp(overrides: Partial<App> = {}): App {
-  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-design)', () => {

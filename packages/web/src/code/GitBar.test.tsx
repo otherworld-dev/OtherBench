@@ -30,7 +30,7 @@ import { viewerActionsFor } from '../viewer/ViewerContext.js';
 import { GitBar } from './GitBar.js';
 
 const app: App = {
-  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:\\Git\\OtherBench', githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1,
+  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:\\Git\\OtherBench', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1,
 };
 const chat = (over: Partial<Chat> = {}): Chat => ({
   id: 'c1', title: 'Fix it', profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,

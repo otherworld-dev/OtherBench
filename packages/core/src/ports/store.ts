@@ -265,6 +265,14 @@ export interface App {
   linkedProjectId: string | null;
   /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
+  /** The app's Nextcloud Deck board (numeric id), or null. */
+  deckBoardId: number | null;
+  /** The Collectives collective holding the app's wiki page, or null. */
+  wikiCollective: string | null;
+  /** Slash-separated page path within that collective, or null. */
+  wikiPagePath: string | null;
+  /** The Nextcloud Bookmarks tag that marks the app's links, or null. */
+  bookmarkTag: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareApps`. */
   sortOrder: number;
   createdAt: number;
@@ -274,13 +282,17 @@ export interface App {
 /** What `AppRepo.create` takes: timestamps default to now, `sortOrder` to 0, the links to null; `workspace` and a bare `workspaceRoot` as on `NewProject`. */
 export type NewApp = Omit<
   App,
-  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId'
+  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId' | 'deckBoardId' | 'wikiCollective' | 'wikiPagePath' | 'bookmarkTag'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
   githubRepo?: string | null;
   linkedProjectId?: string | null;
   defaultProfileId?: string | null;
+  deckBoardId?: number | null;
+  wikiCollective?: string | null;
+  wikiPagePath?: string | null;
+  bookmarkTag?: string | null;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;

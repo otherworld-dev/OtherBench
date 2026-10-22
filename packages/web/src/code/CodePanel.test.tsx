@@ -17,7 +17,7 @@ import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CodePanel } from './CodePanel.js';
 
-const app = (id: string): App => ({ id, name: `App ${id}`, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
+const app = (id: string): App => ({ id, name: `App ${id}`, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
 const chat = (id: string, appId: string | null): Chat => ({
   id, title: `Chat ${id}`, profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
   projectId: null, appId, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,

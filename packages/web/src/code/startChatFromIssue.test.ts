@@ -14,7 +14,7 @@ import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
 
-const app: App = { id: 'a1', name: 'OtherBench', workspace: null, githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const app: App = { id: 'a1', name: 'OtherBench', workspace: null, githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 const issue: IssueDetail = {
   number: 48, title: 'MCP tools vanish on reconnect', state: 'open', author: 'adam', labels: [], comments: 0, createdAt: '2026-10-10T10:00:00Z', updatedAt: '2026-10-10T10:00:00Z',
   url: 'https://github.com/otherworld-dev/OtherBench/issues/48', body: 'After a reconnect the tools are gone.', commentList: [],

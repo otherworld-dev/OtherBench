@@ -25,7 +25,7 @@ import { api, ApiError } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { TerminalTab } from './TerminalTab.js';
 
-const app: App = { id: 'a1', name: 'App', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const app: App = { id: 'a1', name: 'App', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 const term = (id: string, over: Partial<TerminalInfo> = {}): TerminalInfo => ({ id, appId: 'a1', name: id, shellId: 'pwsh', exitCode: null, createdAt: 1, ...over });
 
 let list: TerminalInfo[];

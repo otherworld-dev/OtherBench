@@ -103,7 +103,7 @@ describe('App bootstrap', () => {
     mockedProfiles.mockResolvedValue([]);
     mockedChats.mockResolvedValue([]);
     mockedApps.mockResolvedValue([
-      { id: 'a-1', name: 'OtherBench', workspace: null, githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
+      { id: 'a-1', name: 'OtherBench', workspace: null, githubRepo: 'o/r', linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
     ]);
 
     render(<App />);

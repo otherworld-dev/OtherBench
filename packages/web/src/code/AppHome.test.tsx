@@ -23,7 +23,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { AppHome } from './AppHome.js';
 
 const app = (over: Partial<App> = {}): App => ({
-  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:/Git/OtherBench', githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: 'p1', defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:/Git/OtherBench', githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: 'p1', defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const project: Project = { id: 'p1', name: 'Planning', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 const chat = (id: string, over: Partial<Chat> = {}): Chat => ({

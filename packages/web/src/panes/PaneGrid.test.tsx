@@ -173,7 +173,7 @@ describe('PaneGrid (#824)', () => {
     const tab = appTabId('a1');
     useOtherBenchStore.setState({
       mode: 'code',
-      apps: [{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+      apps: [{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
       appsLoaded: true,
       paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [tab, 'a'], panes: [tab, 'a'], focusedPane: 0 },
       activeChatId: tab,

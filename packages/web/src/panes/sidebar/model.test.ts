@@ -12,7 +12,7 @@ function project(id: string, name: string, sortOrder = 0): Project {
 }
 
 function app(id: string, name: string, sortOrder = 0): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);

@@ -46,7 +46,7 @@ function project(over: Partial<Project> & { id: string }): Project {
 }
 
 function app(over: Partial<App> & { id: string }): App {
-  return { name: over.id, workspace: null, workspaceRoot: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { name: over.id, workspace: null, workspaceRoot: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 beforeEach(() => {
