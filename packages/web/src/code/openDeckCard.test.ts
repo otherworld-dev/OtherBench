@@ -10,6 +10,7 @@ vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}) })
 
 import { openInBrowser } from '../desktop/bridge.js';
 import { useToasts } from '../lib/toasts.js';
+import { NARROW_BREAKPOINT } from '../lib/useMediaQuery.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { openDeckCard } from './openDeckCard.js';
@@ -45,6 +46,33 @@ describe('openDeckCard', () => {
     expect(state.deckViews['c1']).toEqual({ stackId: null, selected: 967 });
     expect(api.nextcloud.card).not.toHaveBeenCalled();
     expect(openInBrowser).not.toHaveBeenCalled();
+  });
+
+  it('in code mode expands a collapsed panel so the card shows', async () => {
+    useOtherBenchStore.setState({ mode: 'code', inspectorCollapsed: true });
+    await openDeckCard(967);
+    const state = useOtherBenchStore.getState();
+    expect(state.inspectorCollapsed).toBe(false);
+    expect(state.inspectorOverlayOpen).toBe(false);
+    expect(state.deckViews['c1']?.selected).toBe(967);
+  });
+
+  it('in code mode on a narrow window opens the panel overlay', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === NARROW_BREAKPOINT, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+    try {
+      useOtherBenchStore.setState({ mode: 'code', inspectorCollapsed: true, inspectorOverlayOpen: false });
+      await openDeckCard(967);
+      const state = useOtherBenchStore.getState();
+      expect(state.inspectorOverlayOpen).toBe(true);
+      // The docked preference is the wide layout's; a narrow window leaves it alone.
+      expect(state.inspectorCollapsed).toBe(true);
+      expect(state.codePanelTab).toBe('deck');
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it("in chat mode opens the card's URL in the browser", async () => {
