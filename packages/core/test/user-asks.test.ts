@@ -60,6 +60,13 @@ describe('UserAsks', () => {
     expect(asks.pendingCount).toBe(0);
   });
 
+  it('answers an unattended generation ask at once, raising nothing', async () => {
+    const { asks, events } = setup();
+    const generation: AskInput = { kind: 'generation', toolName: 'generate_image', media: 'image', prompt: 'a cat', negativePrompt: null, settings: '1024×1024' };
+    expect(await asks.ask(ctx({ unattended: true }), generation)).toEqual({ unattended: true });
+    expect(events).toEqual([]);
+  });
+
   it(`keeps at most ${MAX_PENDING_ASKS} asks, settling the oldest as cancelled and saying so`, async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { asks } = setup();

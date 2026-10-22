@@ -226,8 +226,8 @@ export function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {
 /** A question's or plan's answer, as `POST /asks/:id/answer` takes it: exactly one of the four shapes. */
 export function parseAskReply(body: unknown): AskReply {
   const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
-  const given = ['answers', 'declined', 'approve', 'changes'].filter((k) => b[k] !== undefined);
-  if (given.length !== 1) throw new HTTPException(400, { message: 'Send exactly one of "answers", "declined", "approve" or "changes".' });
+  const given = ['answers', 'declined', 'approve', 'changes', 'generate'].filter((k) => b[k] !== undefined);
+  if (given.length !== 1) throw new HTTPException(400, { message: 'Send exactly one of "answers", "declined", "approve", "changes" or "generate".' });
   if (b['answers'] !== undefined) {
     const answers = b['answers'];
     if (!Array.isArray(answers) || !answers.every((a) => typeof a === 'string')) throw new HTTPException(400, { message: '"answers" must be a list of strings.' });
@@ -240,6 +240,15 @@ export function parseAskReply(body: unknown): AskReply {
   if (b['approve'] !== undefined) {
     if (b['approve'] !== true) throw new HTTPException(400, { message: '"approve" must be true.' });
     return { approve: true };
+  }
+  if (b['generate'] !== undefined) {
+    const g = b['generate'];
+    const o = (typeof g === 'object' && g !== null && !Array.isArray(g) ? g : {}) as Record<string, unknown>;
+    const negative = o['negativePrompt'] ?? null;
+    if (typeof o['prompt'] !== 'string' || (negative !== null && typeof negative !== 'string')) {
+      throw new HTTPException(400, { message: '"generate" must be { prompt: string, negativePrompt: string | null }.' });
+    }
+    return { generate: { prompt: o['prompt'], negativePrompt: negative } };
   }
   if (typeof b['changes'] !== 'string') throw new HTTPException(400, { message: '"changes" must be a string.' });
   return { changes: b['changes'] };

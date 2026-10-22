@@ -870,7 +870,7 @@ export function Message({
           {pendingAsks.map((ask) =>
             ask.kind === 'question' ? (
               <QuestionCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
-            ) : (
+            ) : ask.kind === 'generation' ? null /* GenerationCard comes with the media UI */ : (
               <PlanCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             )
           )}

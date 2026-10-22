@@ -37,13 +37,20 @@ export interface PlanGate {
 /** What a tool asks the user: questions, or a plan to approve. `toolName` is the tool that asked. */
 export type AskInput =
   | { kind: 'question'; toolName: string; questions: Question[] }
-  | { kind: 'plan'; toolName: string; plan: string };
+  | { kind: 'plan'; toolName: string; plan: string }
+  /** A media tool's prompt, shown to edit or cancel before anything reaches the backend. `settings` is one line, e.g. "1024×1024 · seed 42 · SDXL (ComfyUI)". */
+  | { kind: 'generation'; toolName: string; media: 'image' | 'video'; prompt: string; negativePrompt: string | null; settings: string };
 
 /** An ask waiting in the thread, tied to the reply that raised it. */
 export type UserAsk = AskInput & { id: string; chatId: string; messageId: string };
 
-/** The user's answer: one answer per question (multi-select joined with ", "), a skip, an approval, or changes. */
-export type AskReply = { answers: string[] } | { declined: true } | { approve: true } | { changes: string };
+/** The user's answer: one answer per question (multi-select joined with ", "), a skip or cancel, an approval, changes, or the prompt to generate. */
+export type AskReply =
+  | { answers: string[] }
+  | { declined: true }
+  | { approve: true }
+  | { changes: string }
+  | { generate: { prompt: string; negativePrompt: string | null } };
 
 /** How an ask ended: answered, nobody watching (no card was raised), or the turn stopped. */
 export type AskOutcome = { reply: AskReply } | { unattended: true } | { cancelled: true };

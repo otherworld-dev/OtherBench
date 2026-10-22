@@ -41,9 +41,11 @@ describe('Notifier', () => {
     const { notifier, show } = setup();
     await notifier.handle({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
     await notifier.handle({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a2', toolName: 'propose_plan', kind: 'plan' });
+    await notifier.handle({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a3', toolName: 'generate_image', kind: 'generation' });
     expect(show.mock.calls).toEqual([
       ['Trip plans', 'Waiting for your answer', 'c1'],
       ['Trip plans', 'Plan waiting for your approval', 'c1'],
+      ['Trip plans', 'Prompt waiting for you to generate', 'c1'],
     ]);
   });
 
