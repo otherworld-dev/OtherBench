@@ -33,9 +33,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('TabBar (#824)', () => {
-  it('is hidden with no tabs and one pane; opening a tab shows it and opens the chat', () => {
-    const { rerender } = render(<TabBar narrow={false} />);
+  it('with no tabs it still shows, for the layout picker and as a drop target, but not on a narrow screen; opening a tab opens the chat', () => {
+    const { rerender } = render(<TabBar narrow={true} />);
     expect(screen.queryByTestId('tab-bar')).not.toBeInTheDocument();
+    rerender(<TabBar narrow={false} />);
+    expect(screen.getByRole('button', { name: 'Layout: One chat' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
     useOtherBenchStore.getState().openTab('b');
     rerender(<TabBar narrow={false} />);
     expect(tabNames()).toEqual(['Chat b']);

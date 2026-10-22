@@ -240,14 +240,14 @@ describe('ChatList groups', () => {
     expect(screen.getByRole('button', { name: 'Expand Alpha' })).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it("opens a project's page as a tab from its name, leaving the group as it was", async () => {
+  it("opens a project's page in the pane from its name, not as a tab, leaving the group as it was", async () => {
     const user = userEvent.setup();
     useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
     render(<ChatList />);
 
     await user.click(screen.getByRole('button', { name: /^Alpha/ }));
 
-    expect(useOtherBenchStore.getState().paneState.tabs).toContain('project:p-a');
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
     expect(useOtherBenchStore.getState().activeChatId).toBe('project:p-a');
     expect(screen.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
@@ -280,17 +280,17 @@ describe('ChatList groups', () => {
     await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c-new']));
   });
 
-  it('a new chat opens as a tab, from + New chat or a project\'s +', async () => {
+  it('a new chat opens in the pane, not as a tab, from + New chat or a project\'s +', async () => {
     const user = userEvent.setup();
     useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })] });
     mockedCreate.mockResolvedValueOnce(makeChat({ id: 'c-new' })).mockResolvedValueOnce(makeChat({ id: 'c-proj', projectId: 'p-a' }));
     render(<ChatList />);
 
     await user.click(screen.getByRole('button', { name: '+ New chat' }));
-    await waitFor(() => expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c-new']));
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c-new'));
     await user.click(screen.getByRole('button', { name: 'New chat in Alpha' }));
-    await waitFor(() => expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c-new', 'c-proj']));
-    expect(useOtherBenchStore.getState().activeChatId).toBe('c-proj');
+    await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c-proj'));
+    expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
   });
 
   it('searching filters every group, hides groups without a match, and shows collapsed groups expanded', async () => {

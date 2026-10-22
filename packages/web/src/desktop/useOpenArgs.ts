@@ -14,7 +14,7 @@ import { parseOpenArgs } from './openArgs.js';
 export async function handleOpenArgs(argv: string[]): Promise<void> {
   const { openFolder, send } = parseOpenArgs(argv);
   if (openFolder === null && send.length === 0) return;
-  const { profiles, upsertChat, openTab } = useOtherBenchStore.getState();
+  const { profiles, upsertChat, setActiveChatId } = useOtherBenchStore.getState();
   const profile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null);
   if (!profile) {
     console.error('[otherbench-web] no profile to open a chat with; set one up in Settings first.');
@@ -23,7 +23,7 @@ export async function handleOpenArgs(argv: string[]): Promise<void> {
   if (openFolder !== null) {
     const chat = await api.chats.create({ profileId: profile.id, workspaceRoot: openFolder });
     upsertChat(chat);
-    openTab(chat.id);
+    setActiveChatId(chat.id);
   }
   if (send.length > 0) {
     const chat = await api.chats.create({ profileId: profile.id });
@@ -36,7 +36,7 @@ export async function handleOpenArgs(argv: string[]): Promise<void> {
       }
     }
     // Opened after the files are attached, so the composer loads them with the chat.
-    openTab(chat.id);
+    setActiveChatId(chat.id);
   }
 }
 

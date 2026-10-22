@@ -144,16 +144,17 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   const nav = page.getByRole('navigation', { name: 'Chats' });
   // A sidebar click shows a chat without opening a tab.
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click();
-  await expect(page.getByTestId('tab-bar')).toHaveCount(0);
+  await expect(page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab')).toHaveCount(0);
 
-  // Opening another chat in a new tab keeps the one on show as a tab too, rather than replacing it.
+  // Opening another chat in a new tab makes only that one a tab: the one on show isn't made a tab too.
   await nav.getByTestId(`chat-row-${inProject.id}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
   const tabs = page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
-  await expect(tabs).toHaveCount(2);
-  await expect(tabs.nth(0)).toContainText(`Admin ${run}`);
+  await expect(tabs).toHaveCount(1);
+  await expect(tabs.nth(0)).toContainText(`Planning ${run}`);
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click({ button: 'right' });
-  await page.getByRole('menuitem', { name: 'Go to tab' }).click();
+  await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
+  await expect(tabs).toHaveCount(2);
 
   await chooseLayout(page, 'Two side by side');
   const main = page.getByRole('main');

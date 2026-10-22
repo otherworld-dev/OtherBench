@@ -6,7 +6,7 @@ import type { App, Chat } from '@otherbench/core/ports/store.js';
 vi.mock('../panes/Inspector.js', () => ({
   Inspector: ({ chat }: { chat: Chat | null }) => <div data-testid="inspector-stub">{chat?.id ?? 'none'}</div>,
 }));
-vi.mock('./IssuesTab.js', () => ({ IssuesTab: ({ app }: { app: App }) => <div data-testid="issues-stub">{app.id}</div> }));
+vi.mock('./IssuesTab.js', () => ({ IssuesTab: ({ app, owner }: { app: App; owner: string }) => <div data-testid="issues-stub" data-owner={owner}>{app.id}</div> }));
 vi.mock('./terminal/TerminalTab.js', () => ({ TerminalTab: ({ app }: { app: App }) => <div data-testid="terminal-stub">{app.id}</div> }));
 const terminalStatus = vi.hoisted(() => ({ value: null as null | { available: boolean; shells: never[] } }));
 vi.mock('./terminal/status.js', () => ({ useTerminalStatus: () => terminalStatus.value }));
@@ -52,6 +52,8 @@ describe('CodePanel', () => {
     focus('c1');
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
     expect(screen.getByTestId('issues-stub')).toHaveTextContent('a2');
+    // The chat's own Issues view.
+    expect(screen.getByTestId('issues-stub')).toHaveAttribute('data-owner', 'c1');
     await userEvent.setup().click(screen.getByRole('tab', { name: 'Chat' }));
     expect(screen.getByTestId('inspector-stub')).toHaveTextContent('c1');
     expect(useOtherBenchStore.getState().codePanelTab).toBe('chat');
@@ -90,6 +92,7 @@ describe('CodePanel', () => {
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
     expect(screen.queryByRole('tab', { name: 'Terminal' })).not.toBeInTheDocument();
     expect(screen.getByTestId('issues-stub')).toHaveTextContent('a1');
+    expect(screen.getByTestId('issues-stub')).toHaveAttribute('data-owner', appTabId('a1'));
   });
 
   it('a Terminal tab when terminals are available, holding the focused app', async () => {

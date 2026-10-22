@@ -1,7 +1,7 @@
 import { useId, useRef, type JSX, type KeyboardEvent } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { Inspector } from '../panes/Inspector.js';
-import { parseAppTab } from '../state/appTab.js';
+import { appTabId, parseAppTab } from '../state/appTab.js';
 import { isChatTab } from '../state/projectTab.js';
 import { useOtherBenchStore, type CodePanelTab } from '../state/store.js';
 import { isViewTab, parseViewTab } from '../viewer/items.js';
@@ -34,7 +34,8 @@ function focusedChat(activeId: string | null, chats: Chat[]): Chat | null {
  * Inspector so nothing it shows is lost ("Calls I made"). It follows the
  * focused pane's app: the app chat's `appId`, or the app tab's id, so with two
  * app chats side by side the focused one wins. With neither (an empty pane)
- * there is no app to show. The tab is remembered per browser
+ * there is no app to show. The Issues tab is the focused chat's own
+ * (`IssuesTab`'s `owner`). The tab is remembered per browser
  * (`codePanelTab`). App.tsx renders this in place of the Inspector in Code
  * mode, docked or as the narrow overlay, and it collapses to a strip the same
  * way.
@@ -94,9 +95,11 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
     // Its own layout: the strip and a screen that fills the panel. Keyed by app, so each app's tab starts fresh.
     body = <TerminalTab key={app.id} app={app} />;
   } else {
+    // Each chat keeps its own Issues view (an issue open while it's worked on); an app home has one too.
+    const issuesOwner = chat?.appId === app.id ? chat.id : appTabId(app.id);
     body = (
       <div className="h-full min-h-0 overflow-y-auto p-3">
-        {tab === 'issues' ? <IssuesTab key={app.id} app={app} /> : <FilesTab key={app.id} app={app} chatId={chat?.appId === app.id ? chat.id : null} />}
+        {tab === 'issues' ? <IssuesTab key={issuesOwner} app={app} owner={issuesOwner} /> : <FilesTab key={app.id} app={app} chatId={chat?.appId === app.id ? chat.id : null} />}
       </div>
     );
   }

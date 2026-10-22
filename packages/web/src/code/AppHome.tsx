@@ -91,8 +91,8 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
         <AppChats app={app} />
         <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
           <h3 className={HEADING}>Issues</h3>
-          {/* Keyed: another app's home starts from its own open issues, not this one's filter or list. */}
-          <IssuesTab key={app.id} app={app} />
+          {/* Its own view, apart from the Code panel's Issues beside it; keyed, so another app's home starts from its own. */}
+          <IssuesTab key={app.id} app={app} owner={`${appTabId(app.id)}#home`} />
         </section>
       </div>
     </div>
@@ -107,7 +107,7 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
  */
 function NewChat({ app }: { app: App }): JSX.Element {
   const upsertChat = useOtherBenchStore((s) => s.upsertChat);
-  const openTab = useOtherBenchStore((s) => s.openTab);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,7 +118,7 @@ function NewChat({ app }: { app: App }): JSX.Element {
     try {
       const chat = await api.chats.create({ appId: app.id });
       upsertChat(chat);
-      openTab(chat.id);
+      setActiveChatId(chat.id);
     } catch (err) {
       console.error(`[otherbench-web] failed to create a chat in app ${app.id}:`, err);
       setError(err instanceof ApiError ? err.message : "Couldn't create the chat. Please try again.");

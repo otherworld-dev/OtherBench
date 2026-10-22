@@ -47,7 +47,7 @@ export function ProjectHome({ projectId }: { projectId: string }): JSX.Element {
 
 function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
   const openProjectPage = useOtherBenchStore((s) => s.openProjectPage);
-  const openTab = useOtherBenchStore((s) => s.openTab);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const projects = useOtherBenchStore((s) => s.projects);
   const parent = projectParentOf(project, projectLookup(projects));
   return (
@@ -59,7 +59,7 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
             {parent && (
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 In{' '}
-                <button type="button" data-testid="home-parent" onClick={() => openTab(projectTabId(parent.id))} className="underline hover:text-[var(--text)]">
+                <button type="button" data-testid="home-parent" onClick={() => setActiveChatId(projectTabId(parent.id))} className="underline hover:text-[var(--text)]">
                   {parent.name}
                 </button>
               </p>
@@ -88,7 +88,7 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
 function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
   const projects = useOtherBenchStore((s) => s.projects);
   const chats = useOtherBenchStore((s) => s.chats);
-  const openTab = useOtherBenchStore((s) => s.openTab);
+  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const lookup = projectLookup(projects);
   const subs = [...projects].sort(compareProjects).filter((p) => projectParentOf(p, lookup)?.id === projectId);
   if (subs.length === 0) return null;
@@ -102,7 +102,7 @@ function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
             <li key={p.id}>
               <button
                 type="button"
-                onClick={() => openTab(projectTabId(p.id))}
+                onClick={() => setActiveChatId(projectTabId(p.id))}
                 className="flex items-center gap-2 rounded-sm border border-[var(--border)] bg-[var(--bg-raised)] px-2.5 py-1.5 text-sm hover:bg-[var(--bg-sunken)]"
               >
                 <span className="truncate">{p.name}</span>

@@ -50,6 +50,13 @@ describe('startChatFromIssue', () => {
     expect(api.notes.send).not.toHaveBeenCalled();
   });
 
+  it("opens the new chat's Issues view on the issue, already loaded", async () => {
+    await startChatFromIssue(app, issue);
+    const state = useOtherBenchStore.getState();
+    expect(state.issueViews['c9']).toEqual({ state: 'open', selected: 48 });
+    expect(state.issueDetails['a1#48']).toEqual(issue);
+  });
+
   it('an issue with no body leaves just the number, title and URL', async () => {
     await startChatFromIssue(app, { ...issue, body: '   ' });
     expect(useOtherBenchStore.getState().composerPrefills['c9']).toBe('#48 MCP tools vanish on reconnect\nhttps://github.com/otherworld-dev/OtherBench/issues/48');
@@ -60,5 +67,6 @@ describe('startChatFromIssue', () => {
     await expect(startChatFromIssue(app, issue)).rejects.toThrow('nope');
     expect(useOtherBenchStore.getState().chats).toEqual([]);
     expect(useOtherBenchStore.getState().composerPrefills).toEqual({});
+    expect(useOtherBenchStore.getState().issueViews).toEqual({});
   });
 });

@@ -11,6 +11,7 @@ import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
+import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { parseViewTab } from '../viewer/items.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
@@ -66,6 +67,12 @@ export type ReturnedNote = ReplyNote & { takenBack?: true };
  * spec 2026-10-21-code-terminal-design: Terminal).
  */
 export type CodePanelTab = 'issues' | 'files' | 'chat' | 'terminal';
+export type IssueState = 'open' | 'closed';
+/** Where one Issues view is: which state it lists, and the issue it has open, if any. */
+export interface IssueView {
+  state: IssueState;
+  selected: number | null;
+}
 
 export interface OtherBenchState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -201,7 +208,7 @@ export interface OtherBenchState {
   otherPaneState: PaneState;
   /** Switches mode: the showing pane state is put away as it is, and the other mode's comes back with its own active chat. */
   setMode(mode: Mode): void;
-  /** Opens the app's home (`appTabId`) as a tab in Code mode, switching to Code mode first. */
+  /** Shows the app's home (`appTabId`) in the focused pane in Code mode, switching to Code mode first. Not as a tab. */
   openAppHome(appId: string): void;
   /** The Code mode right panel's tab. Remembered per browser. */
   codePanelTab: CodePanelTab;
@@ -224,6 +231,26 @@ export interface OtherBenchState {
    * as it drops a draft.
    */
   composerPrefills: Record<string, string>;
+  /**
+   * Each Issues view's own place, by its owner: a chat id, or an app tab's id
+   * for an app home. So every chat keeps its own issue open while another chat
+   * shows its own, and switching back finds it where it was. Remembered per
+   * browser; a chat's goes with the chat.
+   */
+  issueViews: Record<string, IssueView>;
+  setIssueView(owner: string, view: Partial<IssueView>): void;
+  /** A half-written comment, by `${owner}#${number}`, so a chat switch doesn't lose it. Not persisted. */
+  issueDrafts: Record<string, string>;
+  setIssueDraft(key: string, text: string): void;
+  /**
+   * gh's last answers, by `${appId}:${state}` for a list and `${appId}#${number}`
+   * for an issue, shown at once while they're fetched again: switching chats
+   * shows the other chat's issue without a Loading… wait. Not persisted.
+   */
+  issueLists: Record<string, { repo: string; issues: IssueSummary[] }>;
+  issueDetails: Record<string, IssueDetail>;
+  cacheIssueList(appId: string, state: IssueState, list: { repo: string; issues: IssueSummary[] }): void;
+  cacheIssue(appId: string, issue: IssueDetail): void;
   prefillComposer(chatId: string, text: string): void;
   /** The chat's handed-over text, removed from the store, or null when there is none. */
   takeComposerPrefill(chatId: string): string | null;
@@ -516,6 +543,34 @@ function saveCodePanelTab(tab: CodePanelTab): void {
   }
 }
 
+/** localStorage key: each chat's (and app home's) Issues view. Per browser. */
+export const ISSUE_VIEWS_STORAGE_KEY = 'otherbench.issueViews';
+
+/** The stored views, keeping only well-formed ones. */
+export function loadIssueViews(): Record<string, IssueView> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(ISSUE_VIEWS_STORAGE_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const views: Record<string, IssueView> = {};
+    for (const [owner, v] of Object.entries(parsed as Record<string, Partial<IssueView> | null>)) {
+      if (!v || (v.state !== 'open' && v.state !== 'closed')) continue;
+      const selected = typeof v.selected === 'number' && Number.isInteger(v.selected) && v.selected > 0 ? v.selected : null;
+      views[owner] = { state: v.state, selected };
+    }
+    return views;
+  } catch {
+    return {};
+  }
+}
+
+function saveIssueViews(views: Record<string, IssueView>): void {
+  try {
+    window.localStorage.setItem(ISSUE_VIEWS_STORAGE_KEY, JSON.stringify(views));
+  } catch {
+    // storage blocked or full -- the views still apply for this session.
+  }
+}
+
 /** sessionStorage key: the notes this tab sent that aren't resolved yet. Per tab, so a reload keeps them. */
 export const SENT_NOTES_STORAGE_KEY = 'otherbench.sentNotes';
 
@@ -666,7 +721,12 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       next[idx] = chat;
       return { chats: next, ...refiled(state, movedModes(state.chats[idx], chat)) };
     }),
-  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((c) => c.id !== chatId), ...forgetInBoth(state, (p) => forgetChat(p, chatId)) })),
+  removeChat: (chatId) =>
+    set((state) => {
+      // The chat's Issues view goes with it.
+      const { [chatId]: view, ...issueViews } = state.issueViews;
+      return { chats: state.chats.filter((c) => c.id !== chatId), ...forgetInBoth(state, (p) => forgetChat(p, chatId)), ...(view ? { issueViews } : {}) };
+    }),
   // Fills the focused pane, or focuses the pane already showing the chat, in the chat's own mode.
   setActiveChatId: (chatId) =>
     set((state) => {
@@ -846,7 +906,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   openAppHome: (appId) =>
     set((state) => {
       const view = inMode(state, 'code');
-      return { ...view, ...withPanes(openPaneTab(synced(view), appTabId(appId))) };
+      // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
+      return { ...view, ...withPanes(showChat(synced(view), appTabId(appId))) };
     }),
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
@@ -859,7 +920,20 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     return request;
   },
   composerPrefills: {},
-  prefillComposer: (chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
+  issueViews: loadIssueViews(),
+  setIssueView: (owner, view) =>
+    set((state) => ({ issueViews: { ...state.issueViews, [owner]: { state: 'open', selected: null, ...state.issueViews[owner], ...view } } })),
+  issueDrafts: {},
+  setIssueDraft: (key, text) =>
+    set((state) => {
+      const { [key]: _old, ...rest } = state.issueDrafts;
+      return { issueDrafts: text === '' ? rest : { ...rest, [key]: text } };
+    }),
+  issueLists: {},
+  issueDetails: {},
+  cacheIssueList: (appId, issueState, list) => set((state) => ({ issueLists: { ...state.issueLists, [`${appId}:${issueState}`]: list } })),
+  cacheIssue: (appId, issue) => set((state) => ({ issueDetails: { ...state.issueDetails, [`${appId}#${issue.number}`]: issue } })),
+  prefillComposer:(chatId, text) => set((state) => ({ composerPrefills: { ...state.composerPrefills, [chatId]: text } })),
   takeComposerPrefill: (chatId) => {
     const text = get().composerPrefills[chatId];
     if (text === undefined) return null;
@@ -1119,6 +1193,7 @@ useOtherBenchStore.subscribe((state, previous) => {
   if (switched || state.otherPaneState !== previous.otherPaneState) savePaneState(state.otherPaneState, paneStateKey(otherMode(state.mode)));
   if (switched) saveMode(state.mode);
   if (state.codePanelTab !== previous.codePanelTab) saveCodePanelTab(state.codePanelTab);
+  if (state.issueViews !== previous.issueViews) saveIssueViews(state.issueViews);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
   if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
 });

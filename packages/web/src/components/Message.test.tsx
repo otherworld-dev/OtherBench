@@ -298,7 +298,7 @@ describe('Message', () => {
       render(<Message message={base({ parts: [call('1', 'Read'), result('1', 'Read'), edit, result('e', 'Edit')] })} />);
       expect(screen.getByText('Used 2 tools: Read, Edit').closest('details')).not.toHaveAttribute('open');
       const diff = screen.getByTestId('edit-diff');
-      expect(diff.closest('details')).toBeNull();
+      expect(diff.parentElement!.closest('details')).toBeNull();
       expect(within(diff).getByText('two')).toBeInTheDocument();
     });
 
@@ -312,7 +312,7 @@ describe('Message', () => {
       render(<Message message={base({ parts })} />);
       expect(screen.getAllByTestId('activity-fold')).toHaveLength(1);
       const diff = screen.getByTestId('edit-diff');
-      expect(diff.closest('details')).toBeNull();
+      expect(diff.parentElement!.closest('details')).toBeNull();
       expect(screen.getByText('failed')).toBeInTheDocument();
     });
 

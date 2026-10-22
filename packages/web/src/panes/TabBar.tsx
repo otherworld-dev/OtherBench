@@ -42,8 +42,9 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  * layout picker. A tab shows its chat in the focused pane, or focuses the
  * pane already showing it; in a multi-pane layout each visible tab is
  * numbered with its pane. ✕ only closes the tab. A dot marks a chat that is
- * replying or waiting for an approval, a question or a plan. Hidden while there are no tabs and
- * one pane.
+ * replying or waiting for an approval, a question or a plan. Shown even with no tabs, as it holds
+ * the layout picker and is where a chat is dragged to become a tab; hidden only on a narrow
+ * screen with no tabs, where there is no picker.
  */
 export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const chats = useOtherBenchStore((s) => s.chats);
@@ -85,7 +86,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const multi = !narrow && paneState.panes.length > 1;
   const paneOf = (chatId: string): number => (paneState.focusedPane >= 0 && chatId === activeChatId ? paneState.focusedPane : paneState.panes.indexOf(chatId));
 
-  if (tabs.length === 0 && (narrow || paneState.layout === 'single')) return null;
+  if (tabs.length === 0 && narrow) return null;
 
   function select(id: string): void {
     setActiveChatId(id);

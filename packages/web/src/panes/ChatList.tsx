@@ -279,8 +279,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     try {
       const chat = await api.chats.create(body);
       upsertChat(chat);
-      // A new chat is one to keep at hand, so it gets a tab rather than just taking over the pane.
-      openTab(chat.id);
+      // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
+      setActiveChatId(chat.id);
     } catch (err) {
       console.error('[otherbench-web] failed to create chat:', err);
       setError(errorText(err, "Couldn't create the chat"));
@@ -655,7 +655,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         },
       },
       onNewChat: () => void createChat({ projectId: project.id }),
-      onOpen: () => openTab(projectTabId(project.id)),
+      onOpen: () => setActiveChatId(projectTabId(project.id)),
       active: activeChatId === projectTabId(project.id),
       newChatDisabled: creating || profiles.length === 0,
       menuOpen: projectMenu?.projectId === project.id,

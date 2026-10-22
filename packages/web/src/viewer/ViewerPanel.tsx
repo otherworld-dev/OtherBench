@@ -71,8 +71,7 @@ export function ViewerPanel({ chat, browserUsed = false }: { chat: Chat; browser
             aria-label="Open as tab"
             title="Open this in its own tab"
             onClick={() => {
-              // Popped out, not in both places: the chat's panel closes.
-              openTab(chat.id);
+              // Popped out, not in both places: the chat's panel closes. Only the viewer becomes a tab; closing it hands its pane back to the chat.
               openTab(viewTabId(chat.id, current));
               setOpen(chat.id, false);
             }}

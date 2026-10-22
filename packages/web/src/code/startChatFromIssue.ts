@@ -19,13 +19,16 @@ export function issueDraft(issue: IssueDetail): string {
  * The chat is put in the store before it is opened, so the pane never shows
  * an id it doesn't know, and the box's text is handed over before that too,
  * so the composer finds it when it mounts. A failed create opens nothing and
- * rejects, for the caller to show.
+ * rejects, for the caller to show. The new chat's Issues view opens on the
+ * issue, so the issue is at hand while the chat works on it.
  */
 export async function startChatFromIssue(app: App, issue: IssueDetail): Promise<void> {
   const chat = await api.chats.create({ appId: app.id, title: `#${issue.number} ${issue.title}` });
-  const { upsertChat, prefillComposer, openTab } = useOtherBenchStore.getState();
+  const { upsertChat, prefillComposer, setActiveChatId, cacheIssue, setIssueView } = useOtherBenchStore.getState();
   upsertChat(chat);
+  cacheIssue(app.id, issue);
+  setIssueView(chat.id, { state: issue.state, selected: issue.number });
   prefillComposer(chat.id, issueDraft(issue));
-  // A new chat is one to keep at hand, so it gets a tab, as the sidebar's "+ New chat" does.
-  openTab(chat.id);
+  // Shown in the pane, not made a tab, as the sidebar's "+ New chat" does.
+  setActiveChatId(chat.id);
 }

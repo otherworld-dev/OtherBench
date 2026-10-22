@@ -46,10 +46,9 @@ describe('pane state (#824)', () => {
     expect(closeTab(waiting, 'c')).toMatchObject({ tabs: ['a', 'b'], panes: ['a', 'b'] });
   });
 
-  it('opening a tab keeps the chat the focused pane was showing as a tab too, so it is not replaced and lost', () => {
-    expect(openTab(state({ tabs: [], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'], panes: ['new'] });
-    expect(openTab(state({ tabs: ['x'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['x', 'open', 'new'], panes: ['new'] });
-    // Already a tab, the same chat, or an empty pane: nothing extra to keep.
+  it('opening a tab makes only that chat a tab: the chat it replaces in the focused pane stays out of the tabs', () => {
+    expect(openTab(state({ tabs: [], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['new'], panes: ['new'] });
+    expect(openTab(state({ tabs: ['x'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['x', 'new'], panes: ['new'] });
     expect(openTab(state({ tabs: ['open'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'] });
     expect(openTab(state({ tabs: [], panes: ['a'] }), 'a')).toMatchObject({ tabs: ['a'] });
     expect(openTab(state({ tabs: [], panes: [null] }), 'new')).toMatchObject({ tabs: ['new'] });

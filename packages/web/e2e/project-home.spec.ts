@@ -4,8 +4,9 @@ import { BASE_URL } from '../playwright.config.js';
 
 /**
  * Project home (spec docs/superpowers/specs/2026-10-15-project-home-design.md
- * §5): a project's name opens its page as a tab, and a chat started from the
- * page's box opens in the pane with the mock reply, the page's tab staying.
+ * §5): a project's name opens its page in the pane (not as a tab), and a chat
+ * started from the page's box opens in the pane with the mock reply, still
+ * with no tab: only what the user asks to be a tab becomes one.
  */
 test.beforeEach(async ({ request }) => {
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
@@ -51,7 +52,8 @@ test("a project's name opens its page, and a chat started there opens in the pan
   await group.getByRole('button', { name: new RegExp(`^${projectName}`) }).click();
   const home = page.getByTestId('project-home');
   await expect(home.getByRole('heading', { name: projectName })).toBeVisible();
-  await expect(page.getByTestId('tab-bar').getByRole('tab', { name: new RegExp(projectName) })).toBeVisible();
+  const tabs = page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
+  await expect(tabs).toHaveCount(0);
   await expect(home.getByText('No chats yet')).toBeVisible();
 
   const box = home.getByRole('textbox', { name: `Start a chat in ${projectName}` });
@@ -60,6 +62,6 @@ test("a project's name opens its page, and a chat started there opens in the pan
 
   await expect(page.getByTestId('thread-scroll').getByText('Hello from the project page')).toBeVisible();
   await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
-  await expect(page.getByTestId('tab-bar').getByRole('tab', { name: new RegExp(projectName) })).toBeVisible();
+  await expect(tabs).toHaveCount(0);
   await expect(group.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
 });

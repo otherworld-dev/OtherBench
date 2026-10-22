@@ -10,8 +10,8 @@ import { BASE_URL } from '../playwright.config.js';
  * The Code tab's happy path (spec docs/superpowers/specs/2026-10-20-code-tab-design.md):
  * an app over a real git repo shows in Code mode's sidebar, its home opens, a
  * chat started there gets the mock reply and a git bar with the repo's branch,
- * Files lists the repo, and the chat lives only in Code mode, its tab coming
- * back when Code mode does.
+ * Files lists the repo, and the chat lives only in Code mode, showing again
+ * when Code mode comes back. Neither the home nor the chat becomes a tab.
  *
  * The app is created through the API, as the native folder picker can't be
  * driven; everything after that goes through the UI. Issues aren't covered:
@@ -109,7 +109,8 @@ test('an app chat runs in Code mode with its git bar and files, and stays out of
   const rows = group.locator('li[data-testid^="chat-row-"]');
   await expect(rows).toHaveCount(1);
   const chatId = (await rows.first().getAttribute('data-testid'))!.replace(/^chat-row-/, '');
-  await expect(page.getByTestId(`tab-${chatId}`)).toBeVisible();
+  // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
+  await expect(page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab')).toHaveCount(0);
 
   // Files lists the repo's file.
   const panel = page.getByTestId('code-panel');
@@ -126,19 +127,15 @@ test('an app chat runs in Code mode with its git bar and files, and stays out of
   await expect(page.getByTestId('git-bar')).toHaveCount(0);
   await expect(page.getByTestId('code-panel')).toHaveCount(0);
 
-  // Code mode comes back with its tabs: the app's home and the chat, which is still the one showing.
+  // Code mode comes back as it was: the chat is still the one showing.
   await modes.getByRole('button', { name: 'Code' }).click();
-  await expect(page.getByTestId(`tab-${chatId}`)).toBeVisible();
-  await expect(page.getByTestId(`tab-${chatId}`).getByRole('tab')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByTestId(`tab-app:${appId}`)).toBeVisible();
   await expect(thread.getByText('Hello from the code tab')).toBeVisible();
   await expect(page.getByTestId('git-bar').getByTestId('git-branch')).toContainText(BRANCH);
   await expect(page.getByTestId('code-panel-tab-files')).toHaveAttribute('aria-selected', 'true');
 
-  // And so does a reload: the mode and its tabs are remembered per browser.
+  // And so does a reload: the mode and what its pane shows are remembered per browser.
   await page.reload();
   await expect(modes.getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId(`tab-${chatId}`).getByRole('tab')).toHaveAttribute('aria-selected', 'true');
   await expect(thread.getByText('Hello from the code tab')).toBeVisible();
 });
 

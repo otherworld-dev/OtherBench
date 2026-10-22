@@ -153,15 +153,13 @@ export function resizeSplit(sizes: number[], index: number, delta: number): numb
 }
 
 /**
- * Adds `chatId` as a tab (if it isn't one) and shows it. Showing it replaces
- * the focused pane's chat, so that chat becomes a tab too when it wasn't one
- * (opened from the sidebar, say); otherwise it would simply be lost from view.
+ * Adds `chatId` as a tab (if it isn't one) and shows it. Only what the user
+ * asks to be a tab becomes one: the chat it replaces in the focused pane
+ * (opened from the sidebar, say) is not made a tab, as it's still in the
+ * sidebar.
  */
 export function openTab(state: PaneState, chatId: string): PaneState {
-  const shown = state.panes[state.focusedPane] ?? null;
-  const replaced = shown !== null && shown !== chatId && !state.panes.includes(chatId) && !state.tabs.includes(shown);
-  const kept = replaced ? [...state.tabs, shown] : state.tabs;
-  const tabs = kept.includes(chatId) ? kept : [...kept, chatId];
+  const tabs = state.tabs.includes(chatId) ? state.tabs : [...state.tabs, chatId];
   return showChat({ ...state, tabs }, chatId);
 }
 

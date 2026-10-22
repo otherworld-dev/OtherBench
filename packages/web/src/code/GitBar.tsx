@@ -247,7 +247,7 @@ function ChangedList({ files, onOpen, onClose }: { files: ChangedFile[]; onOpen:
             </button>
           </div>
           {file.edits.map((e, i) => (
-            <EditDiff key={i} info={e} />
+            <EditDiff key={i} info={e} defaultOpen />
           ))}
         </>
       )}

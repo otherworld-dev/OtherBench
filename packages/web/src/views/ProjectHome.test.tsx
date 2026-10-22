@@ -314,7 +314,9 @@ describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6
     expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
 
     await userEvent.setup().click(within(list).getByRole('button', { name: /Desktop/ }));
-    expect(useOtherBenchStore.getState().paneState.tabs).toContain(projectTabId('p-sub'));
+    // Shown in the pane, not made a tab.
+    expect(useOtherBenchStore.getState().activeChatId).toBe(projectTabId('p-sub'));
+    expect(useOtherBenchStore.getState().paneState.tabs).not.toContain(projectTabId('p-sub'));
   });
 
   it("a sub-project's page lists its own chats and links to its parent; a project without sub-projects has no list", async () => {
@@ -326,6 +328,6 @@ describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6
     expect(screen.queryByRole('region', { name: 'Sub-projects' })).toBeNull();
     expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
     await userEvent.setup().click(screen.getByTestId('home-parent'));
-    expect(useOtherBenchStore.getState().paneState.tabs).toContain(projectTabId('p1'));
+    expect(useOtherBenchStore.getState().activeChatId).toBe(projectTabId('p1'));
   });
 });

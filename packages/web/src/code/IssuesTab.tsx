@@ -1,16 +1,14 @@
 import { useEffect, useState, type JSX, type MouseEvent } from 'react';
 import { ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { App } from '@otherbench/core/ports/store.js';
-import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { formatAge, formatRelativeTime } from '../lib/relativeTime.js';
 import { api } from '../state/api.js';
+import { useOtherBenchStore, type IssueState } from '../state/store.js';
 import { CodeErrorLine, NO_GITHUB_REPO } from './CodeError.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
 import { useCodeRefresh } from './useCodeRefresh.js';
-
-type IssueState = 'open' | 'closed';
 
 const MUTED = 'text-xs text-[var(--text-muted)]';
 const EMPTY = 'text-sm text-[var(--text-faint)]';
@@ -49,25 +47,32 @@ function stayInApp(e: MouseEvent<HTMLDivElement>): void {
  * reopened, or have a chat started on it (Goal 7). Each mutation answers 204,
  * so the issue is fetched again after it. Also the open-issues list on the
  * app home (`AppHome`), so the two always look and behave the same.
+ *
+ * Where it is (the state listed, the issue open) belongs to its `owner`, a
+ * chat or an app home, and is kept in the store (`issueViews`): each chat has
+ * its own, so an issue stays open in the chat working on it while another
+ * chat shows its own.
  */
-export function IssuesTab({ app }: { app: App }): JSX.Element {
-  const [state, setState] = useState<IssueState>('open');
-  const [selected, setSelected] = useState<number | null>(null);
-  // Another app's issues start from its list, not from the number this one had open.
-  useEffect(() => setSelected(null), [app.id]);
+export function IssuesTab({ app, owner }: { app: App; owner: string }): JSX.Element {
+  const view = useOtherBenchStore((s) => s.issueViews[owner]);
+  const setIssueView = useOtherBenchStore((s) => s.setIssueView);
+  const state = view?.state ?? 'open';
+  const selected = view?.selected ?? null;
   return (
     <div data-testid="issues-tab" className="min-w-0">
       {selected === null ? (
-        <IssueList app={app} state={state} onState={setState} onOpen={setSelected} />
+        <IssueList app={app} state={state} onState={(s) => setIssueView(owner, { state: s })} onOpen={(n) => setIssueView(owner, { selected: n })} />
       ) : (
-        <IssueView app={app} number={selected} onBack={() => setSelected(null)} />
+        <IssueView app={app} owner={owner} number={selected} onBack={() => setIssueView(owner, { selected: null })} />
       )}
     </div>
   );
 }
 
 function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueState; onState: (s: IssueState) => void; onOpen: (n: number) => void }): JSX.Element {
-  const [list, setList] = useState<{ repo: string; issues: IssueSummary[] } | null>(null);
+  // gh's last answer for this list, shown while it's fetched again.
+  const list = useOtherBenchStore((s) => s.issueLists[`${app.id}:${state}`] ?? null);
+  const cacheIssueList = useOtherBenchStore((s) => s.cacheIssueList);
   const [error, setError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
   const [starting, setStarting] = useState<number | null>(null);
@@ -91,11 +96,8 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
 
   // On focus and after a turn in one of the app's chats, as well as from ↻ (spec "Calls I made").
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
-  // Another app or state starts from Loading…; a refresh keeps the list showing until the new one arrives.
-  useEffect(() => {
-    setList(null);
-    setError(null);
-  }, [app.id, repo, state]);
+  // Another app or state starts from its last list, or Loading…; a refresh keeps the list showing until the new one arrives.
+  useEffect(() => setError(null), [app.id, repo, state]);
   useEffect(() => {
     // Nothing to ask gh about: the server would only answer no-github-repo.
     if (!repo) return;
@@ -103,7 +105,7 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
     api.apps.issues.list(app.id, state).then(
       (r) => {
         if (cancelled) return;
-        setList(r);
+        cacheIssueList(app.id, state, r);
         setError(null);
       },
       (err: unknown) => !cancelled && setError(err)
@@ -111,7 +113,7 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
     return () => {
       cancelled = true;
     };
-  }, [app.id, repo, state, reload]);
+  }, [app.id, repo, state, reload, cacheIssueList]);
 
   // gh lists newest first already; sorted here too so the order never depends on it.
   const issues = list ? [...list.issues].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number) : null;
@@ -208,11 +210,15 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   );
 }
 
-function IssueView({ app, number, onBack }: { app: App; number: number; onBack: () => void }): JSX.Element {
-  const [issue, setIssue] = useState<IssueDetail | null>(null);
+function IssueView({ app, owner, number, onBack }: { app: App; owner: string; number: number; onBack: () => void }): JSX.Element {
+  // gh's last answer for the issue, shown while it's fetched again, and this view's half-written comment.
+  const issue = useOtherBenchStore((s) => s.issueDetails[`${app.id}#${number}`] ?? null);
+  const cacheIssue = useOtherBenchStore((s) => s.cacheIssue);
+  const comment = useOtherBenchStore((s) => s.issueDrafts[`${owner}#${number}`] ?? '');
+  const setIssueDraft = useOtherBenchStore((s) => s.setIssueDraft);
+  const setComment = (text: string): void => setIssueDraft(`${owner}#${number}`, text);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [reload, setReload] = useState(0);
-  const [comment, setComment] = useState('');
   const [busy, setBusy] = useState<'comment' | 'state' | 'chat' | null>(null);
   const [actionError, setActionError] = useState<{ error: unknown; fallback: string } | null>(null);
 
@@ -222,7 +228,7 @@ function IssueView({ app, number, onBack }: { app: App; number: number; onBack: 
     api.apps.issues.get(app.id, number).then(
       (r) => {
         if (cancelled) return;
-        setIssue(r);
+        cacheIssue(app.id, r);
         setLoadError(null);
       },
       (err: unknown) => !cancelled && setLoadError(err)
@@ -230,7 +236,7 @@ function IssueView({ app, number, onBack }: { app: App; number: number; onBack: 
     return () => {
       cancelled = true;
     };
-  }, [app.id, number, reload]);
+  }, [app.id, number, reload, cacheIssue]);
 
   /** One user action on the issue; the route answers 204, so the issue is fetched again after. */
   async function act(kind: 'comment' | 'state', run: () => Promise<void>): Promise<boolean> {

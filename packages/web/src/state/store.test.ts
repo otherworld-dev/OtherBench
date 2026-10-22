@@ -12,8 +12,10 @@ import { projectTabId } from './projectTab.js';
 import {
   CODE_PANEL_TAB_STORAGE_KEY,
   INSPECTOR_COLLAPSED_STORAGE_KEY,
+  ISSUE_VIEWS_STORAGE_KEY,
   loadCodePanelTab,
   loadInspectorCollapsed,
+  loadIssueViews,
   selectPendingApprovalCount,
   useOtherBenchStore,
 } from './store.js';
@@ -874,14 +876,13 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(s().otherPaneState).toEqual(chatPanes);
   });
 
-  it("openAppHome opens the app's home as a tab in Code mode", () => {
+  it("openAppHome shows the app's home in Code mode's focused pane, without making it a tab", () => {
     s().openAppHome('a');
     expect(s().mode).toBe('code');
     expect(s().activeChatId).toBe('app:a');
-    expect(s().paneState.tabs).toEqual(['app:a']);
+    expect(s().paneState.panes).toEqual(['app:a']);
+    expect(s().paneState.tabs).toEqual([]);
     expect(s().otherPaneState).toEqual(chatPanes);
-    s().openAppHome('a');
-    expect(s().paneState.tabs).toEqual(['app:a']);
   });
 
   it('setApps, upsertApp and appsLoaded', () => {
@@ -895,8 +896,8 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
 
   it("an app deleted elsewhere arrives as a list without it: its home tab closes, in whichever mode's pane state holds it", () => {
     s().setApps([makeApp({ id: 'a' }), makeApp({ id: 'b' })]);
-    s().openAppHome('a');
-    s().openAppHome('b');
+    s().openTab('app:a');
+    s().openTab('app:b');
     s().setMode('chat');
     s().setApps([makeApp({ id: 'b' })]);
     expect(s().otherPaneState.tabs).toEqual(['app:b']);
@@ -995,6 +996,20 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(loadCodePanelTab()).toBe('files');
     window.localStorage.setItem(CODE_PANEL_TAB_STORAGE_KEY, 'nonsense');
     expect(loadCodePanelTab()).toBe('issues');
+  });
+
+  it("each chat's Issues view is remembered per browser, keeping only well-formed ones, and goes with its chat", () => {
+    s().setIssueView('app-chat', { selected: 48 });
+    s().setIssueView('plain-1', { state: 'closed' });
+    expect(s().issueViews).toEqual({ 'app-chat': { state: 'open', selected: 48 }, 'plain-1': { state: 'closed', selected: null } });
+    expect(loadIssueViews()).toEqual(s().issueViews);
+    s().removeChat('app-chat');
+    expect(s().issueViews).toEqual({ 'plain-1': { state: 'closed', selected: null } });
+    expect(loadIssueViews()).toEqual({ 'plain-1': { state: 'closed', selected: null } });
+    window.localStorage.setItem(ISSUE_VIEWS_STORAGE_KEY, JSON.stringify({ a: { state: 'open', selected: 3 }, b: { state: 'shut' }, c: { state: 'closed', selected: 'x' }, d: null }));
+    expect(loadIssueViews()).toEqual({ a: { state: 'open', selected: 3 }, c: { state: 'closed', selected: null } });
+    window.localStorage.setItem(ISSUE_VIEWS_STORAGE_KEY, 'not json');
+    expect(loadIssueViews()).toEqual({});
   });
 
   it("'terminal' is a remembered tab", () => {
