@@ -107,6 +107,12 @@ export function normaliseBaseUrl(raw: string): string {
   } catch {
     throw new NextcloudError('nextcloud-failed', 'The Nextcloud URL is not a valid URL.');
   }
+  if (url.username || url.password) {
+    throw new NextcloudError('nextcloud-failed', 'The Nextcloud URL must not contain a username or password.');
+  }
+  if (url.search || url.hash || trimmed.includes('?') || trimmed.includes('#')) {
+    throw new NextcloudError('nextcloud-failed', 'The Nextcloud URL must not contain a query or fragment.');
+  }
   const ok = url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname));
   if (!ok) throw new NextcloudError('nextcloud-failed', 'The Nextcloud URL must start with https://.');
   return trimmed;
@@ -259,7 +265,7 @@ export function httpNextcloudClient(config: NextcloudConfig, fetchImpl: typeof f
         .map((p) => (p ?? '').replace(/^\/+|\/+$/g, ''))
         .filter(Boolean)
         .join('/');
-      const url = `${baseUrl}/remote.php/dav/files/${encodeURIComponent(config.user)}/${encodeURI(rel)}`;
+      const url = `${baseUrl}/remote.php/dav/files/${encodeURIComponent(config.user)}/${rel.split('/').map(encodeURIComponent).join('/')}`;
       return (await call('GET', url, { parse: 'text', headers: { Accept: '*/*' } })) as string;
     },
 

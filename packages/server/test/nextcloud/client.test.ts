@@ -38,6 +38,22 @@ describe('nextcloud client', () => {
     }
   });
 
+  it('refuses a URL with embedded credentials, a query or a fragment', () => {
+    for (const raw of ['https://adam:app-pw@cloud.example.com', 'https://adam@cloud.example.com', 'https://cloud.example.com/?a=1', 'https://cloud.example.com/#x']) {
+      const err = (() => { try { normaliseBaseUrl(raw); } catch (e) { return e; } })();
+      expect(err).toBeInstanceOf(NextcloudError);
+      expect((err as NextcloudError).code).toBe('nextcloud-failed');
+      expect((err as NextcloudError).message).not.toContain('app-pw');
+    }
+    expect(() => httpNextcloudClient({ baseUrl: 'https://adam:app-pw@nc', user: 'adam', password: 'x' })).toThrow(NextcloudError);
+  });
+
+  it('escapes # and ? in WebDAV page names', async () => {
+    const { f, calls } = fake([new Response('x')]);
+    await mk(f).pageText({ id: 1, title: 'C#', parentId: 0, collectivePath: '.Collectives/A', filePath: 'What?/C#', fileName: 'Readme.md' });
+    expect(calls[0]!.url).toBe('https://nc/remote.php/dav/files/adam/.Collectives/A/What%3F/C%23/Readme.md');
+  });
+
   it('builds the deck, collectives, bookmarks and WebDAV URLs', async () => {
     const { f, calls } = fake([json([]), json({ ocs: { data: { pages: [] } } }), json({ data: [] }), new Response('# hi')]);
     const c = mk(f);
