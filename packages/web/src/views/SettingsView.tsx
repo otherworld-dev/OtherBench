@@ -7,6 +7,7 @@ import { DesktopPanel } from './settings/DesktopPanel.js';
 import { LocationsPanel } from './settings/LocationsPanel.js';
 import { MachinesPanel } from './settings/MachinesPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
+import { NextcloudPanel } from './settings/NextcloudPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { MemoryPanel } from './settings/MemoryPanel.js';
@@ -14,7 +15,7 @@ import { ImportPanel } from './settings/ImportPanel.js';
 import { SandboxPanel } from './settings/SandboxPanel.js';
 import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -24,6 +25,7 @@ const TAB_LABEL: Record<Tab, string> = {
   locations: 'Locations',
   machines: 'Machines',
   mcpServers: 'MCP Servers',
+  nextcloud: 'Nextcloud',
   sandbox: 'Sandbox',
   import: 'Import',
   appearance: 'Appearance',
@@ -84,6 +86,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'locations' && <LocationsPanel />}
         {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'nextcloud' && <NextcloudPanel />}
         {tab === 'sandbox' && <SandboxPanel />}
         {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}
