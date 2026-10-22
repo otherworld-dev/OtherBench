@@ -347,6 +347,22 @@ describe('card routes', () => {
     expect((await send('GET', '/api/nextcloud/cards/abc?board=5')).status).toBe(400);
   });
 
+  it('finds a card by id alone, without ?board', async () => {
+    await setUp();
+    const res = await send('GET', '/api/nextcloud/cards/202');
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ id: 202, boardId: 6, boardTitle: 'Other' });
+    expect((await send('POST', '/api/nextcloud/cards/202/archive')).status).toBe(204);
+    expect(fake.card(202).archived).toBe(true);
+  });
+
+  it('finds a card when ?board names a board that is gone', async () => {
+    await setUp();
+    const res = await send('GET', '/api/nextcloud/cards/202?board=99');
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ id: 202, boardId: 6 });
+  });
+
   it('done, reopen, archive and labels answer 204', async () => {
     await setUp();
     expect((await send('POST', '/api/nextcloud/cards/101/labels?board=5', { add: [1] })).status).toBe(204);
@@ -364,8 +380,8 @@ describe('card routes', () => {
 
   it('refuses bad ids and bodies with a 400', async () => {
     await setUp();
-    expect((await send('GET', '/api/nextcloud/cards/101')).status).toBe(400);
     expect((await send('GET', '/api/nextcloud/cards/101?board=x')).status).toBe(400);
+    expect((await send('GET', '/api/nextcloud/cards/101?board=')).status).toBe(400);
     expect((await send('GET', '/api/nextcloud/cards/1234567890?board=5')).status).toBe(400);
     expect((await send('PATCH', '/api/nextcloud/cards/101?board=5', { title: '   ' })).status).toBe(400);
     expect((await send('PATCH', '/api/nextcloud/cards/101?board=5', { duedate: 5 })).status).toBe(400);

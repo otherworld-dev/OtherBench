@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -11,6 +10,7 @@ import type { Workspace } from '@otherbench/core/types/workspace.js';
 import type { Container } from '../container.js';
 import { git, GitError } from '../code/git.js';
 import { ghRunner, githubService, type GithubService } from '../code/github.js';
+import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { ambiguousOnWindows, viewFailure } from '../view/roots.js';
 import { optionalNullableString } from '../validation.js';
@@ -208,25 +208,12 @@ export function appsRoutes(container: Container): Hono {
   /**
    * `GET /detect-repo?path=<abs>`: whether a folder is a repository's top
    * level and which GitHub repo its remotes point at, for the New app form's
-   * auto-fill. The path is checked as `GET /api/fs/dirs` checks it (absolute,
-   * then resolved), and this route reads nothing but git's remote list.
+   * auto-fill. The path is checked by folderFromQuery (absolute, then
+   * resolved), and this route reads nothing but git's remote list.
    * Before `/:id`, which would otherwise take "detect-repo" as an id.
    */
   app.get('/detect-repo', async (c) => {
-    const raw = c.req.query('path');
-    if (raw === undefined || !isAbsolute(raw) || raw.includes('\0')) {
-      throw new HTTPException(400, { message: `"path" must be an absolute path; got "${raw ?? ''}".` });
-    }
-    const path = resolve(raw);
-    try {
-      if (!(await stat(path)).isDirectory()) throw new HTTPException(400, { message: `"${path}" is not a folder.` });
-    } catch (err) {
-      if (err instanceof HTTPException) throw err;
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') throw new HTTPException(404, { message: `No folder at "${path}".` });
-      if (code === 'EACCES' || code === 'EPERM') throw new HTTPException(403, { message: `OtherBench can't read "${path}".` });
-      throw err;
-    }
+    const path = await folderFromQuery(c.req.query('path'));
     const remotes = await codeCall(async () => {
       try {
         return await git.remotes(path);

@@ -1,11 +1,11 @@
-import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { containPath, PathEscapeError } from '@otherbench/core/domain/paths.js';
 import { parseProjectLinks } from '@otherbench/core/domain/project-links.js';
 import type { NextcloudTestResult, ProjectLinksSuggestion } from '@otherbench/core/types/nextcloud.js';
 import type { Container } from '../container.js';
+import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { normaliseBaseUrl, NextcloudError, type NextcloudClient, type RawBoard } from '../nextcloud/client.js';
 import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings } from '../nextcloud/config.js';
@@ -32,9 +32,14 @@ function parseId(raw: string | undefined, field: string): number {
   return Number(raw);
 }
 
-/** The card id from the path and the board from `?board=`. */
-function cardRef(c: Context): { cardId: number; boardId: number } {
-  return { cardId: parseId(c.req.param('cardId'), 'cardId'), boardId: parseId(c.req.query('board'), 'board') };
+/**
+ * The card id from the path and the board to look on first from `?board=`.
+ * The board is optional: a "Deck #N" link in a chat has only the card id, and
+ * the card is then found on whichever board holds it.
+ */
+function cardRef(c: Context): { cardId: number; boardId: number | undefined } {
+  const board = c.req.query('board');
+  return { cardId: parseId(c.req.param('cardId'), 'cardId'), boardId: board === undefined ? undefined : parseId(board, 'board') };
 }
 
 function requireIdList(value: unknown, field: string): number[] {
@@ -47,24 +52,6 @@ function requireIdList(value: unknown, field: string): number[] {
 
 const openBoards = (boards: RawBoard[]): RawBoard[] =>
   boards.filter((b) => !b.archived && !(typeof b.deletedAt === 'number' && b.deletedAt > 0));
-
-/** The folder `GET /detect-links` reads, checked exactly as `/api/apps/detect-repo` checks its path. */
-async function folderFromQuery(raw: string | undefined): Promise<string> {
-  if (raw === undefined || !isAbsolute(raw) || raw.includes('\0')) {
-    throw new HTTPException(400, { message: `"path" must be an absolute path; got "${raw ?? ''}".` });
-  }
-  const path = resolve(raw);
-  try {
-    if (!(await stat(path)).isDirectory()) throw new HTTPException(400, { message: `"${path}" is not a folder.` });
-  } catch (err) {
-    if (err instanceof HTTPException) throw err;
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') throw new HTTPException(404, { message: `No folder at "${path}".` });
-    if (code === 'EACCES' || code === 'EPERM') throw new HTTPException(403, { message: `OtherBench can't read "${path}".` });
-    throw err;
-  }
-  return path;
-}
 
 /** `<folder>/.claude/CLAUDE.md`, else `<folder>/CLAUDE.md`, else null. A file that resolves outside the folder counts as missing. */
 async function readClaudeMd(folder: string): Promise<string | null> {

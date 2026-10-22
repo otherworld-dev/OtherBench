@@ -96,10 +96,20 @@ async function onBoard(client: NextcloudClient, boardId: number, cardId: number)
   return null;
 }
 
-/** Deck has no "card by id" route: try the preferred board (active, then archived), then every other board. */
+/**
+ * Deck has no "card by id" route: try the preferred board (active, then
+ * archived), then every other board. A preferred board that's gone (deleted,
+ * or no longer shared) is a miss, not a failure, so an app linked to a stale
+ * board can still open its cards.
+ */
 async function locate(client: NextcloudClient, cardId: number, preferBoardId?: number | null): Promise<Located> {
   if (preferBoardId != null) {
-    const hit = await onBoard(client, preferBoardId, cardId);
+    let hit: Awaited<ReturnType<typeof onBoard>> = null;
+    try {
+      hit = await onBoard(client, preferBoardId, cardId);
+    } catch (e) {
+      if (!(e instanceof NextcloudError) || e.code !== 'nextcloud-not-found') throw e;
+    }
     if (hit) return { ...hit, boardTitle: null };
   }
   for (const board of await client.deckBoards()) {

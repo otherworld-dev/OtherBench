@@ -127,6 +127,17 @@ describe('findCard', () => {
     const c = new FakeNextcloudClient(seed());
     expect(await findCard(c, 300)).toMatchObject({ boardId: 2 });
   });
+
+  it('looks on the other boards when the preferred board is gone', async () => {
+    const c = new FakeNextcloudClient(seed());
+    expect(await findCard(c, 300, 99)).toMatchObject({ id: 300, boardId: 2, boardTitle: 'Other' });
+  });
+
+  it('still fails on a preferred-board error other than not-found', async () => {
+    const c = new FakeNextcloudClient(seed());
+    c.fail = new NextcloudError('nextcloud-auth', 'Nextcloud rejected the username or app password.');
+    await rejectsWith(findCard(c, 300, 1), 'nextcloud-auth');
+  });
 });
 
 describe('updateCard', () => {
