@@ -91,8 +91,9 @@ export interface ToolContext {
   /**
    * The helper an engine's own agent started that made this call (Claude
    * Code's Task or Agent tool), shown on its approval card. Unlike
-   * `subagent`, it changes no decision: the call is the reply's own as far
-   * as policy and grants go.
+   * `subagent`, it changes no decision for most tools: the call is the
+   * reply's own as far as policy and grants go. Media generation is the
+   * exception: a helper's generate call is refused.
    */
   shownSubagent?: SubagentTag;
 }

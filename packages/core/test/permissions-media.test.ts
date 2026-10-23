@@ -56,8 +56,8 @@ describe('PermissionBroker and media generation', () => {
     expect(broker.decide(VIDEO, {}, video, ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
   });
 
-  it('asks under always_ask, and a chat grant covers the tool by name and source', () => {
-    const p = policy({ approvalMode: 'always_ask' });
+  it('asks under always_ask with confirmPrompts off, and a chat grant covers the tool by name and source', () => {
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
     const asked = broker.decide(IMAGE, { prompt: 'a cat' }, p, ctx());
     expect(asked).toMatchObject({ kind: 'ask', request: { toolName: 'generate_image', source: 'media', risk: 'execute' } });
     grant();
@@ -65,11 +65,11 @@ describe('PermissionBroker and media generation', () => {
     // Another chat, another profile and another tool are not covered.
     expect(broker.decide(IMAGE, {}, p, ctx({ chatId: 'chat-2' })).kind).toBe('ask');
     expect(broker.decide(IMAGE, {}, p, ctx({ profileId: 'profile-2' })).kind).toBe('ask');
-    expect(broker.decide(VIDEO, {}, policy({ approvalMode: 'always_ask', media: { video: { connectionId: 'c2' } } }), ctx()).kind).toBe('ask');
+    expect(broker.decide(VIDEO, {}, policy({ approvalMode: 'always_ask', media: { video: { connectionId: 'c2' }, confirmPrompts: false } }), ctx()).kind).toBe('ask');
   });
 
   it('mints a chat and an always grant from a card answer, and later calls match it', () => {
-    const p = policy({ approvalMode: 'always_ask' });
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
     for (const choice of ['chat', 'always'] as const) {
       store = new InMemoryStore();
       broker = new PermissionBroker(store);
@@ -83,9 +83,21 @@ describe('PermissionBroker and media generation', () => {
   });
 
   it('refuses an always grant that carries a constraint', () => {
-    const asked = broker.decide(IMAGE, {}, policy({ approvalMode: 'always_ask' }), ctx());
+    const asked = broker.decide(IMAGE, {}, policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } }), ctx());
     if (asked.kind !== 'ask') throw new Error('expected ask');
     expect(() => broker.resolve(asked.request.id, { choice: 'always', constraint: { pathPrefix: '.' } })).toThrow(/media/);
+  });
+
+  it('allows by policy under always_ask when the generation ask is the confirmation (confirmPrompts on or absent, attended)', () => {
+    for (const p of [policy({ approvalMode: 'always_ask' }), policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: true } })]) {
+      expect(broker.decide(IMAGE, { prompt: 'a cat' }, p, ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    }
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it('still asks under always_ask with confirmPrompts off', () => {
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
+    expect(broker.decide(IMAGE, {}, p, ctx()).kind).toBe('ask');
   });
 
   it('refuses unattended under always_ask without a grant, and allows it with one', () => {
@@ -101,6 +113,13 @@ describe('PermissionBroker and media generation', () => {
     expect(broker.decide(IMAGE, {}, policy(), ctx({ subagent }))).toEqual({ kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL });
     grant({ chatId: null, scope: 'always' });
     expect(broker.decide(IMAGE, {}, policy({ approvalMode: 'always_ask' }), ctx({ subagent }))).toEqual({ kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL });
+  });
+
+  it("is never a Claude Code helper's, under either approval mode", () => {
+    const shownSubagent = { callId: 'c1', label: 'x', parentProfileId: 'profile-1' } as unknown as ToolContext['shownSubagent'];
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      expect(broker.decide(IMAGE, {}, policy({ approvalMode }), ctx({ shownSubagent }))).toEqual({ kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL });
+    }
   });
 
   it('is refused while the reply plan waits, and allowed once it is approved', () => {

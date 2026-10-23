@@ -1,5 +1,5 @@
 import type { JSONValue, ToolResultPart } from 'ai';
-import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@otherbench/core/domain/tool-images.js';
+import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, VIDEO_FOR_USER_NOTE, type InlineToolImage, type ValidatedToolImage } from '@otherbench/core/domain/tool-images.js';
 import type { ToolImageLoader, ToolImageSizer } from '@otherbench/core/ports/chat-engine.js';
 import { IMAGE_UNSUPPORTED_NOTE, selectWithinBudget, withinAfterLoad } from '@otherbench/core/domain/request-budget.js';
 import type { ConnectionKind } from '@otherbench/core/types/config.js';
@@ -30,8 +30,8 @@ export const IMAGE_UNAVAILABLE_NOTE = '[image not available]';
 export const IMAGE_NOT_YOURS_NOTE = "[image omitted: it doesn't belong to this chat]";
 export const IMAGE_TOO_LARGE_NOTE = '[image omitted: too large to send]';
 export const IMAGE_NOT_SHOWN_NOTE = '[image omitted]';
-/** What a model gets in place of a video a tool made: the person sees it, a model never receives one. */
-export const VIDEO_FOR_USER_NOTE = "[video shown to the user; you can't watch it]";
+/** Core's wording, shared with the Claude Code engine; exported from here as before. */
+export { VIDEO_FOR_USER_NOTE };
 /** Core's wording, shared with the Claude Code engine; exported from here as before. */
 export { IMAGE_UNSUPPORTED_NOTE };
 export const REPLAYED_TOOL_IMAGES = 3;

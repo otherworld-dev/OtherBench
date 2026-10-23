@@ -24,6 +24,7 @@ import {
   showsOtherBenchUi,
 } from './computer-apps.js';
 import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
+import { confirmPromptsOf } from './media.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, LiveCallRef, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -376,14 +377,17 @@ export class PermissionBroker {
     }
 
     // Generation (media-generation plan, task 2). Needs no workspace. Never a
-    // sub-agent's, whatever grants exist. Under ask-on-changes the profile's
-    // choice (checked above) is the consent, so no card, unattended included;
-    // whether the prompt is shown first is the tool's own ask, not this
-    // branch's. Under always-ask it falls through to the grants and a card, and
-    // with nobody there and no grant it is refused (see below).
+    // sub-agent's, nor a helper Claude Code's own Task/Agent tool started
+    // (`shownSubagent`), whatever grants exist. Under ask-on-changes the
+    // profile's choice (checked above) is the consent, so no card, unattended
+    // included. Under always-ask with the generation ask on (`confirmPrompts`)
+    // and someone there, that ask is the confirmation, so no second card: one
+    // card per generation. With it off, always-ask falls through to the grants
+    // and a card, and with nobody there and no grant it is refused (see below).
     if (tool.source === 'media') {
-      if (ctx.subagent) return { kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL };
+      if (ctx.subagent || ctx.shownSubagent) return { kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL };
       if (policy.approvalMode === 'ask_on_mutate') return { kind: 'allow', grantedBy: 'policy' };
+      if (confirmPromptsOf(policy) && ctx.unattended !== true) return { kind: 'allow', grantedBy: 'policy' };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
@@ -756,7 +760,7 @@ export const SUBAGENT_COMPUTER_REFUSAL = "A sub-agent can't use the computer. Sa
 /** A media call on a profile with no choice set for it, or under a tool name OtherBench doesn't know. */
 export const MEDIA_OFF_REASON = "Generation isn't set up for this profile.";
 
-/** A media call made from inside a sub-agent. */
+/** A media call made from inside a sub-agent, or a helper Claude Code's own agent started. */
 export const SUBAGENT_MEDIA_REFUSAL = "Sub-agents can't generate images or video.";
 
 export const SUBAGENT_THREAD_REFUSAL = "A sub-agent can't ask the user, propose a plan or keep the reply's checklist. Put what you need to say in your answer.";
