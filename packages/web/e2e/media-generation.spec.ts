@@ -145,6 +145,9 @@ test('#image: the prompt ask shows the prompt, the edited prompt is what is sent
   const card = page.locator('[data-testid^="ask-card-"][data-kind="generation"]');
   await expect(card).toHaveCount(1);
   await expect(card).toContainText('a red cube');
+  // An OpenAI-style images API takes no seed or negative prompt, so the card names neither.
+  await expect(card).not.toContainText('Negative prompt');
+  await expect(card).not.toContainText('seed');
   // Nothing has reached the generator while the ask is open.
   expect(imagePrompts).toEqual([]);
 
@@ -154,6 +157,7 @@ test('#image: the prompt ask shows the prompt, the edited prompt is what is sent
 
   await expect(page.getByTestId('generated-image')).toBeVisible();
   await expect(page.getByTestId('generated-media')).toContainText('"a blue cube"');
+  await expect(page.getByTestId('generated-media')).not.toContainText(/seed|negative/);
   expect(imagePrompts).toEqual(['a blue cube']);
   await expect(page.locator('article[data-role="assistant"] .markdown-body')).toContainText('Done.');
 
@@ -172,16 +176,21 @@ test('#video: the same flow through ComfyUI gives a playing video that stays aft
   const card = page.locator('[data-testid^="ask-card-"][data-kind="generation"]');
   await expect(card).toHaveCount(1);
   await expect(card).toContainText('a wave');
+  // The workflow's own negative prompt is shown, to keep or edit, and so is the seed.
+  await expect(card).toContainText('Negative prompt');
+  await expect(card).toContainText('seed');
   expect(comfyPrompts).toEqual([]);
 
   await card.getByRole('button', { name: 'Edit' }).click();
-  await card.getByRole('textbox', { name: 'Prompt' }).fill('a big wave');
+  await card.getByRole('textbox', { name: 'Prompt', exact: true }).fill('a big wave');
   await card.getByRole('button', { name: 'Generate' }).click();
 
   await expect(page.getByTestId('generated-video')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('generated-media')).toContainText('"a big wave"');
   expect(comfyPrompts).toHaveLength(1);
   expect(comfyPrompts[0]).toContain('a big wave');
+  // The negative prompt shown is the one sent: the workflow's own, left as it was.
+  expect(comfyPrompts[0]).toContain('色调艳丽');
 
   await page.reload();
   await openChat(page, chatId);
