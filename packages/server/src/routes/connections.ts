@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@otherbench/core/domain/availability.js';
-import { isGenerationKind } from '@otherbench/core/domain/media.js';
+import { hasUserinfo, isGenerationKind, withoutUserinfo } from '@otherbench/core/domain/media.js';
 import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
@@ -69,6 +69,12 @@ function requireBaseUrlIfOpenaiCompatible(kind: ConnectionKind, baseUrl: string 
   // Generation connections have no default host either, and nothing to auto-detect.
   if (isGenerationKind(kind) && !baseUrl) {
     throw new HTTPException(400, { message: `"baseUrl" is required for a "${kind}" connection: it has no default host to talk to.` });
+  }
+  // fetch refuses such a URL, and every message naming it would show the password.
+  if (isGenerationKind(kind) && baseUrl && hasUserinfo(baseUrl)) {
+    throw new HTTPException(400, {
+      message: '"baseUrl" can\'t hold a user name or password. Put "user:pass" in the API key field instead: an A1111 started with --api-auth takes it from there.',
+    });
   }
   if (kind === 'openai_compatible' && !baseUrl) {
     throw new HTTPException(400, {
@@ -165,7 +171,7 @@ function mediaCall(conn: Connection, request: AbortSignal): { signal: AbortSigna
   return {
     signal: AbortSignal.any([request, timeout]),
     failure: (err) =>
-      timeout.aborted ? `${conn.baseUrl ?? conn.name} didn't answer within ${MEDIA_TIMEOUT_MS / 1000} seconds.` : (err instanceof Error ? err.message : String(err)).slice(0, 500),
+      timeout.aborted ? `${conn.baseUrl ? withoutUserinfo(conn.baseUrl) : conn.name} didn't answer within ${MEDIA_TIMEOUT_MS / 1000} seconds.` : (err instanceof Error ? err.message : String(err)).slice(0, 500),
   };
 }
 
@@ -230,6 +236,14 @@ export function connectionsRoutes(container: Container): Hono {
     const patch: Partial<Omit<Connection, 'id'>> = {};
     if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');
     if (body.kind !== undefined) patch.kind = parseKind(body.kind);
+    // Profiles and media choices point at a connection for what it is: one that makes images can't become a chat model, nor the other way.
+    if (patch.kind !== undefined && isGenerationKind(patch.kind) !== isGenerationKind(existing.kind)) {
+      throw new HTTPException(400, {
+        message: isGenerationKind(existing.kind)
+          ? "A generation connection can't become a chat connection. Add a new connection instead."
+          : "A chat connection can't become a generation connection. Add a new connection instead.",
+      });
+    }
     if (body.baseUrl !== undefined) patch.baseUrl = optionalNullableString(body.baseUrl, 'baseUrl') ?? null;
     if (body.extraHeaders !== undefined) patch.extraHeaders = optionalStringHeadersRecord(body.extraHeaders, 'extraHeaders');
 

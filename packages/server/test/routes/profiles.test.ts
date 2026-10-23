@@ -577,6 +577,23 @@ describe('media policy and generation connections', () => {
     expect((await patch(id, { toolPolicy: { media: { image: { connectionId: 'a1', model: '' } } } })).status).toBe(400);
   });
 
+  it('stores a ComfyUI choice\'s model file, and refuses a bad one or one on another kind', async () => {
+    addConn('gen-1', 'comfyui');
+    addConn('a1', 'a1111');
+    const id = await makeProfile();
+    const image = { connectionId: 'gen-1', model: 'builtin:sdxl-txt2img', checkpoint: 'juggernaut.safetensors' };
+    const res = await patch(id, { toolPolicy: { media: { image } } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { toolPolicy: { media: { image: unknown } } }).toolPolicy.media.image).toEqual(image);
+    for (const checkpoint of ['', 7, 'x'.repeat(513)]) {
+      expect((await patch(id, { toolPolicy: { media: { image: { ...image, checkpoint } } } })).status).toBe(400);
+    }
+    const other = await patch(id, { toolPolicy: { media: { image: { connectionId: 'a1', model: 'sd15', checkpoint: 'x.safetensors' } } } });
+    expect(other.status).toBe(400);
+    expect(JSON.stringify(await other.json())).toContain('ComfyUI');
+    expect((await patch(id, { toolPolicy: { media: { image: { ...image, checkpoint: 'x'.repeat(512) } } } })).status).toBe(200);
+  });
+
   it('rejects a non-boolean confirmPrompts', async () => {
     const id = await makeProfile();
     expect((await patch(id, { toolPolicy: { media: { confirmPrompts: 'yes' } } })).status).toBe(400);

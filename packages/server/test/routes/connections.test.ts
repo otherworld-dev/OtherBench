@@ -664,6 +664,35 @@ describe('generation connection kinds', () => {
     expect(String((await json(res))['error'])).toContain('baseUrl');
   });
 
+  it('refuses a user and password in a generation base URL, on create and on PATCH', async () => {
+    const res = await post({ name: 'A', kind: 'a1111', baseUrl: 'http://user:pass@127.0.0.1:7860' });
+    expect(res.status).toBe(400);
+    const message = String((await json(res))['error']);
+    expect(message).toContain('API key');
+    expect(message).not.toContain('pass@');
+    const created = await json(await post({ name: 'A', kind: 'a1111', baseUrl: 'http://127.0.0.1:7860' }));
+    const patched = await app().request(`/api/connections/${created['id'] as string}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: 'http://admin@127.0.0.1:7860' }),
+    });
+    expect(patched.status).toBe(400);
+    // A chat connection's URL is left as it was.
+    expect((await post({ name: 'C', kind: 'openai_compatible', baseUrl: 'http://user:pass@127.0.0.1:1234/v1' })).status).toBe(201);
+  });
+
+  it('refuses a PATCH that moves a connection between chat and generation kinds', async () => {
+    const gen = await json(await post({ name: 'G', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
+    const chat = await json(await post({ name: 'C', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1' }));
+    const kind = (id: unknown, k: string) =>
+      app().request(`/api/connections/${id as string}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: k }) });
+    expect((await kind(gen['id'], 'openai_compatible')).status).toBe(400);
+    expect((await kind(chat['id'], 'comfyui')).status).toBe(400);
+    // Within a side it is allowed, as before.
+    expect((await kind(gen['id'], 'a1111')).status).toBe(200);
+    expect((await kind(chat['id'], 'openai')).status).toBe(200);
+  });
+
   it('refuses discover-models for a generation connection', async () => {
     const created = await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
     const discover = await app().request(`/api/connections/${created['id'] as string}/discover-models`, { method: 'POST' });

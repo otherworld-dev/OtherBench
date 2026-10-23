@@ -421,7 +421,7 @@ export function attachmentsRoutes(container: Container): Hono {
    * An image a tool returned (a screenshot), by the chat and the reply that hold
    * it. The bytes are served only if the file was stored for exactly this chat and
    * this message (`toolImageBound`, the test the model's own replay uses), the
-   * message is in the chat, and the bytes really are a png, jpeg, gif or webp (or,
+   * message is an assistant reply in the chat, and the bytes really are a png, jpeg, gif or webp (or,
    * for a stored video, an mp4 or webm): the type is read from them, never from
    * the stored row, and must be of the kind the row is. A single byte range is
    * honoured (video needs it to seek); a malformed or multiple one gets the
@@ -435,7 +435,8 @@ export function attachmentsRoutes(container: Container): Hono {
     const notFound = (): HTTPException => new HTTPException(404, { message: 'Image not found.' });
     const message = container.store.messages.get(messageId);
     const row = container.store.attachments.get(attachmentId);
-    if (!message || message.chatId !== chatId || !row) throw notFound();
+    // Only a model's reply holds what a tool made.
+    if (!message || message.chatId !== chatId || message.role !== 'assistant' || !row) throw notFound();
     const isVideo = toolVideoBound(row, chatId, messageId);
     if (!isVideo && !toolImageBound(row, chatId, messageId)) throw notFound();
     const data = await container.blobStore.get(row.sha256).catch(() => null);

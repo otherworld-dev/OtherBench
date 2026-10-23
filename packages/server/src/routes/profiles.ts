@@ -75,7 +75,10 @@ function requireChatConnection(container: Container, connectionId: string): void
   if (conn && isGenerationKind(conn.kind)) throw new HTTPException(400, { message: "A generation connection can't be a profile's chat model." });
 }
 
-/** One image or video choice: a generation connection (video: ComfyUI only) and a non-empty model. */
+/** The longest model file name a ComfyUI choice may name. */
+const MAX_CHECKPOINT = 512;
+
+/** One image or video choice: a generation connection (video: ComfyUI only), a non-empty model and, for ComfyUI, an optional model file. */
 function parseMediaChoice(container: Container, value: unknown, key: 'image' | 'video'): MediaChoice {
   const field = `toolPolicy.media.${key}`;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HTTPException(400, { message: `"${field}" must be an object.` });
@@ -87,7 +90,13 @@ function parseMediaChoice(container: Container, value: unknown, key: 'image' | '
     throw new HTTPException(400, { message: `"${field}.connectionId" must name a generation connection (ComfyUI, A1111 or an OpenAI images API).` });
   }
   if (key === 'video' && conn.kind !== 'comfyui') throw new HTTPException(400, { message: `"${field}.connectionId" must name a ComfyUI connection: video needs ComfyUI.` });
-  return { connectionId, model };
+  const checkpoint = v['checkpoint'];
+  if (checkpoint === undefined) return { connectionId, model };
+  if (conn.kind !== 'comfyui') throw new HTTPException(400, { message: `"${field}.checkpoint" is only for a ComfyUI connection.` });
+  if (typeof checkpoint !== 'string' || checkpoint === '' || checkpoint.length > MAX_CHECKPOINT) {
+    throw new HTTPException(400, { message: `"${field}.checkpoint" must be a model file name of 1 to ${MAX_CHECKPOINT} characters.` });
+  }
+  return { connectionId, model, checkpoint };
 }
 
 function parseMediaPolicy(container: Container, value: unknown): MediaPolicy {

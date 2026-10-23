@@ -115,6 +115,14 @@ describe('video on the tool-images route', () => {
   const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'latin1'), Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz', 'latin1')]);
   const video = (id: string, over: Partial<Attachment> = {}, bytes: Buffer = MP4) => file(id, { mime: 'video/mp4', filename: 'tool-video.mp4', ...over }, bytes);
 
+  it('is the same 404 when the message holding the file is not an assistant reply', async () => {
+    container.store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    await file('on-user', { messageId: 'u1' });
+    const res = await app().request(url('chat-1', 'u1', 'on-user'));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual(await (await app().request(url('chat-1', 'm1', 'nothing'))).json());
+  });
+
   it('serves a stored mp4 typed from its bytes, with Accept-Ranges and the inert headers', async () => {
     await video('clip', { mime: 'video/mp4; evil=1' });
     const res = await app().request(url('chat-1', 'm1', 'clip'));

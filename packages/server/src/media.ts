@@ -1,7 +1,7 @@
 import { availableOn } from '@otherbench/core/domain/availability.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
-import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
-import type { MediaBackend, MediaConnection } from '@otherbench/core/ports/media.js';
+import { workflowApplies, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import type { MediaApplies, MediaBackend, MediaConnection } from '@otherbench/core/ports/media.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import { createA1111Backend } from '@otherbench/tools/media/a1111.js';
@@ -13,6 +13,13 @@ import type { Container } from './container.js';
 type Deps = Pick<Container, 'store' | 'secrets'>;
 
 const KIND_LABELS: Record<MediaConnection['kind'], string> = { comfyui: 'ComfyUI', a1111: 'A1111', openai_images: 'OpenAI-style' };
+
+/** What A1111's txt2img and an OpenAI-style images API take of a request (ComfyUI's comes from the workflow's bindings). */
+const APPLIES: Record<'a1111' | 'openai_images', MediaApplies> = {
+  a1111: { negativePrompt: true, seed: true, size: true, frames: true },
+  // `/images/generations` has no seed or negative prompt.
+  openai_images: { negativePrompt: false, seed: false, size: true, frames: false },
+};
 
 /** The workflows a ComfyUI connection runs: the built-in ones, then the imported ones, read at use time. */
 export function comfyWorkflows(store: Store): ComfyWorkflows {
@@ -66,16 +73,15 @@ export function createMediaHost(deps: Deps): MediaHost {
         throw new Error(`"${conn.name}" only works on ${machine}, so it can't make ${making} here.`);
       }
       const media = await mediaConnectionOf(deps, conn);
-      let label: string;
+      const backend = backendOf(deps.store, media);
       if (media.kind === 'comfyui') {
         const wf: MediaWorkflow | null = comfyWorkflows(deps.store).get(use.model);
         if (!wf) throw new Error('The workflow this profile uses was deleted.');
         if (wf.media !== use.media) throw new Error(`"${wf.name}" makes ${wf.media}s, not ${making}.`);
-        label = `${wf.name} (${KIND_LABELS.comfyui})`;
-      } else {
-        label = `${use.model || conn.name} (${KIND_LABELS[media.kind]})`;
+        // A setting the workflow has no binding for runs at the workflow's own value.
+        return { backend, label: `${wf.name} (${KIND_LABELS.comfyui})`, ...workflowApplies(wf), workflowDefaults: true };
       }
-      return { backend: backendOf(deps.store, media), label };
+      return { backend, label: `${use.model || conn.name} (${KIND_LABELS[media.kind]})`, applies: APPLIES[media.kind], defaultNegativePrompt: null, workflowDefaults: false };
     },
   };
 }

@@ -41,6 +41,22 @@ describe('createMediaHost', () => {
     expect((await host.backendFor('gen', { media: 'image', model: 'sdxl.safetensors' })).label).toBe('sdxl.safetensors (A1111)');
   });
 
+  it('says what each kind applies, and a ComfyUI workflow its own negative prompt', async () => {
+    const takes = async (kind: Connection['kind'], model: string) => {
+      const { backend: _b, label: _l, ...rest } = await setup(connection({ kind })).host.backendFor('gen', { media: 'image', model });
+      return rest;
+    };
+    expect(await takes('a1111', 'sd15')).toEqual({ applies: { negativePrompt: true, seed: true, size: true, frames: true }, defaultNegativePrompt: null, workflowDefaults: false });
+    expect(await takes('openai_images', 'gpt-image-1')).toEqual({ applies: { negativePrompt: false, seed: false, size: true, frames: false }, defaultNegativePrompt: null, workflowDefaults: false });
+    const sdxl = await takes('comfyui', 'builtin:sdxl-txt2img');
+    expect(sdxl).toMatchObject({ applies: { negativePrompt: true, seed: true, size: true, frames: false }, workflowDefaults: true });
+    expect(sdxl.defaultNegativePrompt).toMatch(/watermark/);
+    const { store, host } = setup(connection());
+    store.mediaWorkflows.create({ id: 'wf1', name: 'Mine', media: 'image', graph: { '1': { class_type: 'CLIPTextEncode', inputs: { text: '' } } }, bindings: { prompt: { nodeId: '1', input: 'text' } }, builtin: false });
+    const { backend: _b, label: _l, ...mine } = await host.backendFor('gen', { media: 'image', model: 'wf1' });
+    expect(mine).toEqual({ applies: { negativePrompt: false, seed: false, size: false, frames: false }, defaultNegativePrompt: null, workflowDefaults: true });
+  });
+
   it('refuses a missing connection, a chat connection, video off ComfyUI and a workflow of the other media', async () => {
     await expect(setup(null).host.backendFor('gen', { media: 'image', model: 'x' })).rejects.toThrow('That generation connection no longer exists.');
     // A connection PATCHed to a chat kind after the profile chose it.
