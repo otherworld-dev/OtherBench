@@ -15,7 +15,7 @@ import { AttachmentChip } from './AttachmentChip.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { EditDiff } from './EditDiff.js';
-import { GeneratedMedia, GenerationProgress, hasGeneratedMedia, isGenerationTool } from './GeneratedMedia.js';
+import { GeneratedMedia, GenerationFailure, generationFailure, GenerationProgress, hasGeneratedMedia, isGenerationTool } from './GeneratedMedia.js';
 import { GenerationCard } from './GenerationCard.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
@@ -472,6 +472,8 @@ interface RenderContext {
   replyStreaming: boolean;
   /** The latest progress of each generation call still running, by tool call id. */
   progress?: Record<string, MediaProgress>;
+  /** Tools whose prompt card is still waiting for an answer: their calls have not started, so they show no progress yet. */
+  askingTools?: ReadonlySet<string>;
   /** The reply the parts belong to: a tool's images (a sub-agent's included) are served only for it. */
   scope: ToolImageScope;
 }
@@ -548,6 +550,11 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
         if (p.type === 'tool-result') addCard(<GeneratedMedia key={`media-${p.id}`} result={p.result} scope={scope} />);
         return;
       }
+      if (p.type === 'tool-result' && isGenerationTool(p.name) && p.isError) {
+        // The reason stays visible outside the fold; the full result stays inside it.
+        const failure = generationFailure(p.result);
+        if (failure) addCard(<GenerationFailure key={`failure-${p.id}`} failure={failure} />);
+      }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
         if (p.type === 'tool-result') addCard(<ArtifactCard key={i} result={p.result} />);
@@ -556,7 +563,7 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       if (run.length === 0) runStart = i;
       run.push(p);
       // A generation that is still running shows where it has got to, outside the fold.
-      if (p.type === 'tool-call' && isGenerationTool(p.name) && ctx.replyStreaming && !results.has(p.id)) {
+      if (p.type === 'tool-call' && isGenerationTool(p.name) && ctx.replyStreaming && !results.has(p.id) && !ctx.askingTools?.has(p.name)) {
         addCard(<GenerationProgress key={`progress-${p.id}`} progress={ctx.progress?.[p.id]} />);
       }
       const diff = p.type === 'tool-call' ? editDiffOf(p.name, p.args) : null;
@@ -857,7 +864,7 @@ export function Message({
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
         {isUser
           ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')
-          : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), scope: { chatId: message.chatId, messageId: message.id } })}
+          : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), askingTools: new Set(pendingAsks.flatMap((a) => (a.kind === 'generation' ? [a.toolName] : []))), scope: { chatId: message.chatId, messageId: message.id } })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
       )}

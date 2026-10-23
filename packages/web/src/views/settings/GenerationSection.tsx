@@ -33,8 +33,10 @@ function Choice({ media, connections, connectionId, model, onChange }: ChoicePro
     latest.current = { model, onChange };
   });
 
+  // A connection that was deleted (or is not one of these) has nothing to ask.
+  const known = conn !== undefined;
   useEffect(() => {
-    if (!connectionId) return;
+    if (!connectionId || !known) return;
     let cancelled = false;
     api.connections
       .mediaModels(connectionId, media)
@@ -54,7 +56,7 @@ function Choice({ media, connections, connectionId, model, onChange }: ChoicePro
     };
     // Only a different connection asks again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, media]);
+  }, [connectionId, media, known]);
 
   const current = loaded && loaded.id === connectionId ? loaded : null;
   const models = current && 'result' in current ? current.result.models : [];
@@ -67,6 +69,7 @@ function Choice({ media, connections, connectionId, model, onChange }: ChoicePro
         {title} connection
         <select aria-label={`${title} connection`} value={connectionId} onChange={(e) => onChange(e.target.value, '')} className={select}>
           <option value="">None</option>
+          {connectionId && !known && <option value={connectionId}>(missing connection)</option>}
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -74,7 +77,8 @@ function Choice({ media, connections, connectionId, model, onChange }: ChoicePro
           ))}
         </select>
       </label>
-      {connectionId && (
+      {connectionId && !known && <p role="alert" className="self-end text-xs text-[var(--danger)]">This connection is missing. Choose another, or None.</p>}
+      {connectionId && known && (
         <div>
           <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
             {title} {thing}
@@ -96,6 +100,14 @@ function Choice({ media, connections, connectionId, model, onChange }: ChoicePro
 }
 
 /** The Generation part of a profile: which connection makes its images and its video, and whether it asks first. Not shown for Claude Code profiles. */
+/** What stops a save: a choice that names a connection the profile can no longer use, or null. */
+export function generationProblem(connections: Connection[], value: GenerationState): string | null {
+  const usable = (id: string, comfyOnly: boolean): boolean => connections.some((c) => c.id === id && isGenerationKind(c.kind) && (!comfyOnly || c.kind === 'comfyui'));
+  if (value.imageConnectionId && !usable(value.imageConnectionId, false)) return 'The image connection is missing. Choose another, or set it to None.';
+  if (value.videoConnectionId && !usable(value.videoConnectionId, true)) return 'The video connection is missing, or is not ComfyUI. Choose another, or set it to None.';
+  return null;
+}
+
 export function GenerationSection({ connections, value, onChange }: { connections: Connection[]; value: GenerationState; onChange: (next: GenerationState) => void }): JSX.Element {
   const generation = connections.filter((c) => isGenerationKind(c.kind));
   const video = generation.filter((c) => c.kind === 'comfyui');

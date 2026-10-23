@@ -934,6 +934,27 @@ describe('ProfilesPanel generation', () => {
     expect(sent).not.toHaveProperty('image');
   });
 
+  it('shows a deleted connection as missing and refuses to save until it is changed', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection(), comfy]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', media: { image: { connectionId: 'gone', model: 'x' }, confirmPrompts: true } } }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByRole('option', { name: '(missing connection)' })).toBeInTheDocument();
+    expect(mockedMediaModels).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText('The image connection is missing. Choose another, or set it to None.')).toBeInTheDocument();
+    expect(mockedPatch).not.toHaveBeenCalled();
+    await user.selectOptions(screen.getByLabelText('Image connection'), '');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalled());
+    expect(mockedPatch.mock.calls[0]?.[1]?.toolPolicy?.media).toEqual({ confirmPrompts: true });
+  });
+
   it('leaves a profile that never used generation without a media policy', async () => {
     arrange();
     mockedCreate.mockResolvedValue(makeProfile());

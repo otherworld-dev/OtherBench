@@ -21,6 +21,23 @@ export function hasGeneratedMedia(result: unknown): boolean {
   return Array.isArray(result) && result.some((item) => isToolImageRef(item) || isToolVideoRef(item));
 }
 
+/** The `{ error: true, code, message }` a failed generation returns, or null for any other result. */
+export function generationFailure(result: unknown): { code: string; message: string } | null {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return null;
+  const r = result as Record<string, unknown>;
+  return r['error'] === true && typeof r['message'] === 'string' ? { code: typeof r['code'] === 'string' ? r['code'] : '', message: r['message'] } : null;
+}
+
+/** Why a generation gave nothing, as a short line where the media would have been. A stop is muted: nothing went wrong. */
+export function GenerationFailure({ failure }: { failure: { code: string; message: string } }): JSX.Element {
+  const stopped = failure.code === 'generation_cancelled' || failure.code === 'cancelled';
+  return (
+    <p data-testid="generation-failure" className={`my-1 text-xs ${stopped ? 'text-[var(--text-muted)]' : 'text-[var(--danger)]'}`}>
+      {failure.message}
+    </p>
+  );
+}
+
 function extensionOf(mime: string): string {
   const sub = (mime.split('/')[1] ?? '').split(';')[0]?.replace(/[^a-z0-9]/gi, '') ?? '';
   return sub === 'jpeg' ? 'jpg' : sub || 'bin';

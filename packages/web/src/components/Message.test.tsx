@@ -899,7 +899,44 @@ describe('Message user notes', () => {
       const parts: Part[] = [call, { type: 'tool-result', id: 't1', name: 'generate_image', isError: true, result: { error: true, code: 'backend', message: 'ComfyUI is down' } }];
       render(<Message message={base({ parts })} />);
       expect(screen.queryByTestId('generated-image')).toBeNull();
-      expect(screen.getByText(/ComfyUI is down/)).toBeInTheDocument();
+      // Once on the line outside the fold, once in the folded result.
+      expect(screen.getAllByText(/ComfyUI is down/)).toHaveLength(2);
+    });
+
+    it('shows no progress while the prompt card is still waiting', () => {
+      const ask = { kind: 'generation' as const, toolName: 'generate_image', media: 'image' as const, prompt: 'a barn', negativePrompt: null, settings: '1024×1024', id: 'g1', chatId: 'c1', messageId: 'm1' };
+      const { rerender } = render(<Message message={base({ status: 'streaming', parts: [call] })} pendingAsks={[ask]} onAnswerAsk={vi.fn(async () => {})} />);
+      expect(screen.queryByTestId('generation-progress')).toBeNull();
+      rerender(<Message message={base({ status: 'streaming', parts: [call] })} pendingAsks={[]} />);
+      expect(screen.getByTestId('generation-progress')).toBeInTheDocument();
+    });
+
+    it('starts the elapsed time when the progress line first appears, not when the call began', () => {
+      vi.useFakeTimers();
+      try {
+        const ask = { kind: 'generation' as const, toolName: 'generate_image', media: 'image' as const, prompt: 'a barn', negativePrompt: null, settings: '1024×1024', id: 'g1', chatId: 'c1', messageId: 'm1' };
+        const { rerender } = render(<Message message={base({ status: 'streaming', parts: [call] })} pendingAsks={[ask]} onAnswerAsk={vi.fn(async () => {})} />);
+        act(() => {
+          vi.advanceTimersByTime(30_000);
+        });
+        rerender(<Message message={base({ status: 'streaming', parts: [call] })} pendingAsks={[]} />);
+        expect(screen.getByText('Generating… 0:00')).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      ['backend', 'ComfyUI is down', 'text-[var(--danger)]'],
+      ['generation_cancelled', 'Generation was stopped.', 'text-[var(--text-muted)]'],
+      ['cancelled', 'Stopped.', 'text-[var(--text-muted)]'],
+    ])('shows a failed generation (%s) as a line outside the fold', (code, message, tone) => {
+      const parts: Part[] = [call, { type: 'tool-result', id: 't1', name: 'generate_image', isError: true, result: { error: true, code, message } }];
+      render(<Message message={base({ parts })} />);
+      const line = screen.getByTestId('generation-failure');
+      expect(line).toHaveTextContent(message);
+      expect(line.className).toContain(tone);
+      expect(line.closest('details')).toBeNull();
     });
 
     it('shows progress on a running generation call', () => {

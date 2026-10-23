@@ -6,7 +6,7 @@ import { useOtherBenchStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
 import { useComputerUseAvailable } from '../../lib/computerUse.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
-import { GenerationSection, type GenerationState } from './GenerationSection.js';
+import { GenerationSection, generationProblem, type GenerationState } from './GenerationSection.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -177,6 +177,11 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
+    const stale = isClaudeCode ? null : generationProblem(allConnections, generation);
+    if (stale) {
+      setError(stale);
+      return;
+    }
     if (!isClaudeCode && generation.imageConnectionId && !generation.imageModel) {
       setError('Choose an image model, or set the image connection to None.');
       return;
