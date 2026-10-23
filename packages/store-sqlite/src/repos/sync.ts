@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@otherbench/core/domain/artifacts.js';
 import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
+import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@otherbench/core/ports/store.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
@@ -55,6 +56,23 @@ function keyWhere(tbl: SyncTable): string {
 function rowKey(tbl: SyncTable, row: SyncRow): string | null {
   const parts = keyColumns(tbl).map((c) => row[c]);
   return parts.every((p) => typeof p === 'string' && p.length > 0) ? (parts as string[]).join(':') : null;
+}
+
+/** A workflow row as an import makes one: the same size cap and `workflowProblem` checks, and never a built-in's id. */
+function mediaWorkflowRowOk(row: SyncRow): boolean {
+  const { id, name, media, graph, bindings, checkpoint } = row;
+  if (typeof id !== 'string' || id.startsWith('builtin:')) return false;
+  if (typeof name !== 'string' || name.length === 0 || name.length > 200) return false;
+  if (media !== 'image' && media !== 'video') return false;
+  if (checkpoint != null && typeof checkpoint !== 'string') return false;
+  if (typeof graph !== 'string' || typeof bindings !== 'string') return false;
+  // The cap is on the text as stored, before anything is parsed.
+  if (new TextEncoder().encode(graph).length > MAX_WORKFLOW_GRAPH_BYTES) return false;
+  try {
+    return workflowImportProblem(JSON.parse(graph), JSON.parse(bindings)) === null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -415,6 +433,8 @@ export class SqliteSyncRepo implements SyncRepo {
       // Delete wins for good: an id that was removed is never made again with a new binding.
       if (this.tombstone('attachment', u.id) !== null) return false;
     }
+    // A workflow is sent to a generation backend: only what an import would have accepted.
+    if (u.tbl === 'media_workflow' && !mediaWorkflowRowOk(row)) return false;
     // Artifact rows reach the model's prompt and the viewer: only what OtherBench itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
     if (u.tbl === 'artifact_version') {

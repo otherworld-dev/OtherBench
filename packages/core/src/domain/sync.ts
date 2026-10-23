@@ -22,6 +22,7 @@ export const SYNC_TABLES = [
   'usage',
   'artifact',
   'artifact_version',
+  'media_workflow',
 ] as const;
 export type SyncTable = (typeof SYNC_TABLES)[number];
 

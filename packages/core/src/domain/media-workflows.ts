@@ -168,3 +168,41 @@ export function workflowProblem(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): 
   if (!wf.bindings.prompt) return 'No input is marked as the prompt.';
   return null;
 }
+
+/** The most graph JSON an import (or a synced row) may carry. */
+export const MAX_WORKFLOW_GRAPH_BYTES = 1024 * 1024;
+
+export const UI_FORMAT_MESSAGE = "That's the UI format. In ComfyUI use Workflow → Export (API).";
+
+const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** What's wrong with the shape or size of a graph that arrived from outside, or null. */
+export function workflowGraphProblem(graph: unknown): string | null {
+  if (!isPlain(graph)) return '"graph" must be an object.';
+  if (Array.isArray(graph['nodes'])) return UI_FORMAT_MESSAGE;
+  if (new TextEncoder().encode(JSON.stringify(graph)).length > MAX_WORKFLOW_GRAPH_BYTES) return 'That workflow is too large (the limit is 1 MB).';
+  for (const [id, node] of Object.entries(graph)) {
+    if (!isPlain(node) || typeof node['class_type'] !== 'string' || !isPlain(node['inputs'])) {
+      return `Node ${id} isn't a ComfyUI API-format node. In ComfyUI use Workflow → Export (API).`;
+    }
+  }
+  return null;
+}
+
+/**
+ * What's wrong with a graph and bindings that arrived from outside (an import,
+ * a patch, or a row from another machine), or null. Checks the shape and size
+ * before `workflowProblem` reads them, so nothing here trusts what it is given.
+ */
+export function workflowImportProblem(graph: unknown, bindings: unknown): string | null {
+  const shape = workflowGraphProblem(graph);
+  if (shape) return shape;
+  if (!isPlain(bindings)) return '"bindings" must be an object.';
+  for (const [role, b] of Object.entries(bindings)) {
+    if (!Object.hasOwn(ROLES, role)) return `"${role}" isn't a role a workflow can bind.`;
+    if (!isPlain(b) || typeof b['nodeId'] !== 'string' || typeof b['input'] !== 'string') {
+      return `The binding for "${role}" must have a nodeId and an input.`;
+    }
+  }
+  return workflowProblem({ graph: graph as Graph, bindings: bindings as Bindings });
+}

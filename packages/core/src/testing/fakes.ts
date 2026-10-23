@@ -50,6 +50,7 @@ import type {
   ProfileRepo,
   App,
   AppRepo,
+  MediaWorkflowRepo,
   Project,
   ProjectMemory,
   ProjectMemoryRepo,
@@ -78,6 +79,7 @@ import { UserAsks } from '../domain/user-asks.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
+import type { MediaWorkflow } from '../domain/media-workflows.js';
 import { compareApps } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
@@ -869,6 +871,25 @@ class InMemoryAppRepo implements AppRepo {
   }
 }
 
+class InMemoryMediaWorkflowRepo implements MediaWorkflowRepo {
+  private readonly repo = new InMemoryCrudRepo<MediaWorkflow>();
+  list(): MediaWorkflow[] {
+    return this.repo.list();
+  }
+  get(id: string): MediaWorkflow | null {
+    return this.repo.get(id);
+  }
+  create(wf: MediaWorkflow): MediaWorkflow {
+    return this.repo.create({ ...wf, builtin: false });
+  }
+  update(id: string, patch: Partial<Omit<MediaWorkflow, 'id' | 'builtin'>>): MediaWorkflow {
+    return this.repo.update(id, patch);
+  }
+  delete(id: string): void {
+    this.repo.delete(id);
+  }
+}
+
 /** Versions newest first; ties on `createdAt` break by save order (SQLite: rowid). */
 function newestFirst<T extends { createdAt: number }>(versions: T[]): T[] {
   return versions
@@ -1416,6 +1437,7 @@ export class InMemoryStore implements Store {
   readonly globalMemory: GlobalMemoryRepo = new InMemoryGlobalMemoryRepo();
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
+  readonly mediaWorkflows: MediaWorkflowRepo = new InMemoryMediaWorkflowRepo();
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
   readonly messages: MessageRepo;
