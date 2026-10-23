@@ -140,12 +140,30 @@ export function detectBindings(graph: Graph): Bindings {
   return out;
 }
 
+// What each role writes, and what its bound input must already hold.
+const ROLES: Record<WorkflowRole, { label: string; kind: 'text' | 'number' }> = {
+  prompt: { label: 'prompt', kind: 'text' },
+  negativePrompt: { label: 'negative prompt', kind: 'text' },
+  seed: { label: 'seed', kind: 'number' },
+  width: { label: 'width', kind: 'number' },
+  height: { label: 'height', kind: 'number' },
+  frames: { label: 'frame count', kind: 'number' },
+  checkpoint: { label: 'checkpoint', kind: 'text' },
+};
+
 /** What's wrong with a workflow's bindings, or null when it can be run. */
 export function workflowProblem(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): string | null {
-  for (const b of Object.values(wf.bindings)) {
+  for (const [role, b] of Object.entries(wf.bindings) as [WorkflowRole, WorkflowBinding | undefined][]) {
     if (!b) continue;
     const inputs = inputsOf(wf.graph, b.nodeId);
-    if (!inputs || !Object.hasOwn(inputs, b.input)) return `Input "${b.input}" on node ${b.nodeId} isn't in this workflow.`;
+    const where = `Input "${b.input}" on node ${b.nodeId}`;
+    if (!inputs || !Object.hasOwn(inputs, b.input)) return `${where} isn't in this workflow.`;
+    const value = inputs[b.input];
+    // Filling a link in would cut the wire and break the graph.
+    if (Array.isArray(value)) return `${where} is wired to another node, so it can't be filled in.`;
+    const spec = Object.hasOwn(ROLES, role) ? ROLES[role] : undefined;
+    if (spec?.kind === 'text' && typeof value !== 'string') return `${where} isn't text, so it can't be the ${spec.label}.`;
+    if (spec?.kind === 'number' && typeof value !== 'number') return `${where} isn't a number, so it can't be the ${spec.label}.`;
   }
   if (!wf.bindings.prompt) return 'No input is marked as the prompt.';
   return null;

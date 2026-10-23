@@ -331,6 +331,58 @@ describe('ComfyUI backend', () => {
     ).rejects.toThrow('ComfyUI refused the workflow: Cannot execute because node Foo does not exist. (Node ID #5)');
   });
 
+  it('rejects with the error when onProgress throws on a socket message, and nothing escapes the socket', async () => {
+    const conn = await start(comfy(() => IMAGE_HISTORY));
+    const ws = sockets();
+    const boom = new Error('listener broke');
+    const p = createComfyBackend(conn, registry, ws.open).generate(
+      req,
+      (e) => {
+        if (e.stage === 'generating') throw boom;
+      },
+      new AbortController().signal,
+    );
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(() => ws.made[0]!.send('progress', { value: 1, max: 2, prompt_id: 'p1' })).not.toThrow();
+    await expect(p).rejects.toBe(boom);
+    expect(ws.made[0]!.closed).toBe(true);
+  });
+
+  it('clips long, multi-line error text from the server', async () => {
+    const conn = await start(comfy(() => IMAGE_HISTORY));
+    const ws = sockets();
+    const p = createComfyBackend(conn, registry, ws.open).generate(req, () => {}, new AbortController().signal);
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    ws.made[0]!.send('execution_error', {
+      prompt_id: 'p1', node_type: 'KSampler', exception_message: `line one\nline two\r\n${'x'.repeat(5000)}`,
+    });
+    const err = await p.catch((e: Error) => e);
+    expect(err.message.startsWith('ComfyUI failed in KSampler: line one line two x')).toBe(true);
+    expect(err.message).not.toMatch(/[\r\n]/);
+    expect(err.message.length).toBeLessThan(400);
+  });
+
+  it('clips a refusal that names many nodes and says how many more there were', async () => {
+    const nodeErrors = Object.fromEntries(
+      Array.from({ length: 50 }, (_, i) => [
+        String(i),
+        { class_type: 'CLIPTextEncode', errors: [{ type: 'bad', message: 'Bad\ninput', details: 'd'.repeat(2000) }] },
+      ]),
+    );
+    const conn = await start((_r, res) =>
+      json(res, { error: { type: 'x', message: 'failed', details: 'y'.repeat(5000) }, node_errors: nodeErrors }, 400),
+    );
+    const err = await createComfyBackend(conn, registry, sockets().open)
+      .generate(req, () => {}, new AbortController().signal)
+      .catch((e: Error) => e);
+    expect(err.message.startsWith('ComfyUI refused the workflow: CLIPTextEncode: Bad input (ddd')).toBe(true);
+    expect(err.message).not.toMatch(/[\r\n]/);
+    expect(err.message.length).toBeLessThan(1200);
+    expect(err.message).toMatch(/; and \d+ more$/);
+  });
+
   it('rejects on execution_error and fetches nothing', async () => {
     const conn = await start(comfy(() => IMAGE_HISTORY));
     const ws = sockets();

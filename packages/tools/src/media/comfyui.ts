@@ -15,6 +15,9 @@ const SUBMIT_TIMEOUT_MS = 30_000;
 const CANCEL_TIMEOUT_MS = 5000;
 /** The tool keeps one; a big batch shouldn't download dozens. */
 const MAX_OUTPUTS = 4;
+/** Caps on error text taken from the server. */
+const MAX_PIECE = 300;
+const MAX_REFUSAL = 1000;
 
 /** The part of the WHATWG WebSocket this client uses. */
 export interface WebSocketLike {
@@ -52,34 +55,48 @@ function socketUrl(baseUrl: string, clientId: string): string {
   return u.toString();
 }
 
+/** Server text on one line and at most `max` characters; it reaches the user and the model. */
+function clip(v: unknown, max = MAX_PIECE): string {
+  const t = (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v)).replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
 function failure(data: Record<string, unknown>): Error {
-  const type = typeof data['node_type'] === 'string' && data['node_type'] ? data['node_type'] : 'a node';
-  const msg = typeof data['exception_message'] === 'string' ? data['exception_message'].trim() : '';
-  return new Error(`ComfyUI failed in ${type}: ${msg || 'an unknown error'}`);
+  const type = clip(data['node_type']) || 'a node';
+  return new Error(`ComfyUI failed in ${type}: ${clip(data['exception_message']) || 'an unknown error'}`);
 }
 
 const interrupted = () => new Error('The job was cancelled in ComfyUI.');
 
-/** One line per refused node, from a `/prompt` 400. */
+const withDetails = (message: string, details: unknown) => {
+  const d = clip(details);
+  return d ? `${message} (${d})` : message;
+};
+
+/** One entry per refused input, from a `/prompt` 400, clipped to `MAX_REFUSAL` with a count of the rest. */
 function refusal(body: Record<string, unknown>): string | null {
-  const parts: string[] = [];
+  const items: string[] = [];
   for (const node of Object.values(obj(body['node_errors']))) {
     const n = obj(node);
-    const errors = Array.isArray(n['errors']) ? n['errors'].map(obj) : [];
-    const lines = errors.map((e) => {
+    const cls = clip(n['class_type']) || 'A node';
+    for (const e of Array.isArray(n['errors']) ? n['errors'].map(obj) : []) {
       const extra = obj(e['extra_info']);
       if (e['type'] === 'value_not_in_list' && typeof extra['input_name'] === 'string') {
-        return `${extra['input_name']} "${String(extra['received_value'])}" not in list`;
+        items.push(`${cls}: ${clip(extra['input_name'])} "${clip(extra['received_value'])}" not in list`);
+      } else {
+        items.push(`${cls}: ${withDetails(clip(e['message']) || 'invalid input', e['details'])}`);
       }
-      const message = typeof e['message'] === 'string' ? e['message'] : 'invalid input';
-      return typeof e['details'] === 'string' && e['details'] ? `${message} (${e['details']})` : message;
-    });
-    if (lines.length) parts.push(`${typeof n['class_type'] === 'string' ? n['class_type'] : 'A node'}: ${lines.join('; ')}`);
+    }
   }
-  if (parts.length) return parts.join('; ');
-  const err = obj(body['error']);
-  if (typeof err['message'] !== 'string' || !err['message']) return null;
-  return typeof err['details'] === 'string' && err['details'] ? `${err['message']} (${err['details']})` : err['message'];
+  if (!items.length) {
+    const err = obj(body['error']);
+    const message = clip(err['message']);
+    return message ? withDetails(message, err['details']) : null;
+  }
+  let out = clip(items[0], MAX_REFUSAL);
+  let used = 1;
+  while (used < items.length && out.length + 2 + items[used]!.length <= MAX_REFUSAL) out += `; ${items[used++]}`;
+  return used < items.length ? `${out}; and ${items.length - used} more` : out;
 }
 
 /** Every saved file in a history entry's outputs, under whichever key the save node used. */
@@ -184,6 +201,7 @@ export function createComfyBackend(
       if (wf.media !== req.media) throw new Error(`"${wf.name}" makes ${wf.media}s, not ${req.media}s.`);
       const graph = fillWorkflow(wf, req);
       const clientId = randomUUID();
+      onProgress({ stage: 'queued' });
 
       return new Promise<MediaOutput[]>((resolve, reject) => {
         let settled = false;
@@ -282,7 +300,6 @@ export function createComfyBackend(
         }
 
         signal.addEventListener('abort', onAbort, { once: true });
-        onProgress({ stage: 'queued' });
 
         // Listen before queueing so no early progress is lost. A socket carries no
         // custom headers, so with a key or extra headers it may be refused: then poll.
@@ -308,7 +325,12 @@ export function createComfyBackend(
             } catch {
               return; // not a message we know
             }
-            handle(obj(msg));
+            // A throw here would be an uncaught exception from the socket's EventTarget.
+            try {
+              handle(obj(msg));
+            } catch (e) {
+              finish(e);
+            }
           };
           sock.onerror = sock.onclose = dropSocket;
         });

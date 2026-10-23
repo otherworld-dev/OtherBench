@@ -129,6 +129,30 @@ describe('workflowProblem', () => {
     );
   });
 
+  it('refuses a binding to an input that is wired to another node', () => {
+    expect(workflowProblem({ graph: GRAPH, bindings: { ...WF.bindings, prompt: { nodeId: '6', input: 'clip' } } })).toBe(
+      'Input "clip" on node 6 is wired to another node, so it can\'t be filled in.',
+    );
+    expect(() => fillWorkflow({ ...WF, bindings: { ...WF.bindings, seed: { nodeId: '3', input: 'model' } } }, REQ)).toThrow(
+      'Input "model" on node 3 is wired to another node, so it can\'t be filled in.',
+    );
+  });
+
+  it('refuses a text role bound to a number and a number role bound to text', () => {
+    expect(workflowProblem({ graph: GRAPH, bindings: { ...WF.bindings, negativePrompt: { nodeId: '3', input: 'steps' } } })).toBe(
+      'Input "steps" on node 3 isn\'t text, so it can\'t be the negative prompt.',
+    );
+    expect(workflowProblem({ graph: GRAPH, bindings: { ...WF.bindings, width: { nodeId: '6', input: 'text' } } })).toBe(
+      'Input "text" on node 6 isn\'t a number, so it can\'t be the width.',
+    );
+    expect(workflowProblem({ graph: GRAPH, bindings: { ...WF.bindings, frames: { nodeId: '3', input: 'sampler_name' } } })).toBe(
+      'Input "sampler_name" on node 3 isn\'t a number, so it can\'t be the frame count.',
+    );
+    expect(workflowProblem({ graph: GRAPH, bindings: { ...WF.bindings, checkpoint: { nodeId: '3', input: 'cfg' } } })).toBe(
+      'Input "cfg" on node 3 isn\'t text, so it can\'t be the checkpoint.',
+    );
+  });
+
   it('says when nothing is bound as the prompt', () => {
     expect(workflowProblem({ graph: GRAPH, bindings: { seed: { nodeId: '3', input: 'seed' } } })).toBe(
       'No input is marked as the prompt.',
