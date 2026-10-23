@@ -408,6 +408,17 @@ describe('Thread auto-scroll', () => {
     expect(scroller.scrollTop).toBe(1000);
   });
 
+  it('shows the backend step count on a running generation in an ordinary reply', () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const reply = variantMessage('reply', 'root', { status: 'streaming', parts: [{ type: 'tool-call', id: 'g1', name: 'generate_image', args: { prompt: 'a barn' } }] });
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
+    act(() => {
+      useOtherBenchStore.getState().applyTurnEvent({ messageId: 'reply', type: 'tool-progress', callId: 'g1', progress: { stage: 'generating', step: 12, steps: 30 } });
+    });
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+    expect(screen.getByText('Generating… step 12 of 30')).toBeInTheDocument();
+  });
+
   it('opens a chat at the bottom', () => {
     const scrollHeight = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
     const tops = new WeakMap<Element, number>();

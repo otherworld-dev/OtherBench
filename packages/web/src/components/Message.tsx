@@ -2,6 +2,7 @@ import { useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
+import type { MediaProgress } from '@otherbench/core/ports/media.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import { editDiffOf } from '../lib/editDiff.js';
 import { formatStamp } from '../lib/relativeTime.js';
@@ -14,6 +15,8 @@ import { AttachmentChip } from './AttachmentChip.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { EditDiff } from './EditDiff.js';
+import { GeneratedMedia, GenerationFailure, generationFailure, GenerationProgress, hasGeneratedMedia, isGenerationTool } from './GeneratedMedia.js';
+import { GenerationCard } from './GenerationCard.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
@@ -467,6 +470,10 @@ interface RenderContext {
   /** The reply's approval cards still waiting, to mark the sub-agent that raised one. */
   pendingApprovals: ApprovalRequest[];
   replyStreaming: boolean;
+  /** The latest progress of each generation call still running, by tool call id. */
+  progress?: Record<string, MediaProgress>;
+  /** Tools whose prompt card is still waiting for an answer: their calls have not started, so they show no progress yet. */
+  askingTools?: ReadonlySet<string>;
   /** The reply the parts belong to: a tool's images (a sub-agent's included) are served only for it. */
   scope: ToolImageScope;
 }
@@ -508,6 +515,8 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   // Todo calls are shown as the checklist, never as tools. Question and plan
   // calls show as their record once answered; while waiting, only the card shows.
   const results = new Map(parts.flatMap((p) => (p.type === 'tool-result' ? [[p.id, p] as const] : [])));
+  // A finished generation shows as its media outside the fold; a failed one folds with the other tools, so its error stays visible.
+  const generated = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isGenerationTool(p.name) && !p.isError && hasGeneratedMedia(p.result) ? [p.id] : [])));
   const recorded = new Set(parts.flatMap((p) => (p.type === 'tool-call' && (isAskTool(p.name) || isPlanTool(p.name)) ? [p.id] : [])));
   // A sub-agent shows as its card; the parent's own call and result that
   // started it (the API `subagent` tool, or Claude Code's Task or Agent) are
@@ -537,6 +546,15 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
         if (p.type === 'tool-call' && result) addCard(<ThreadRecord key={i} call={p} result={result} />);
         return;
       }
+      if (generated.has(p.id)) {
+        if (p.type === 'tool-result') addCard(<GeneratedMedia key={`media-${p.id}`} result={p.result} scope={scope} />);
+        return;
+      }
+      if (p.type === 'tool-result' && isGenerationTool(p.name) && p.isError) {
+        // The reason stays visible outside the fold; the full result stays inside it.
+        const failure = generationFailure(p.result);
+        if (failure) addCard(<GenerationFailure key={`failure-${p.id}`} failure={failure} />);
+      }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
         if (p.type === 'tool-result') addCard(<ArtifactCard key={i} result={p.result} />);
@@ -544,6 +562,12 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       }
       if (run.length === 0) runStart = i;
       run.push(p);
+      // A generation that is still running shows where it has got to, outside the fold. One whose
+      // prompt card or approval card is still waiting hasn't started, so it shows none yet.
+      const waiting = ctx.askingTools?.has(p.name) || ctx.pendingApprovals.some((r) => r.toolName === p.name && !r.subagent);
+      if (p.type === 'tool-call' && isGenerationTool(p.name) && ctx.replyStreaming && !results.has(p.id) && !waiting) {
+        addCard(<GenerationProgress key={`progress-${p.id}`} progress={ctx.progress?.[p.id]} />);
+      }
       const diff = p.type === 'tool-call' ? editDiffOf(p.name, p.args) : null;
       if (p.type === 'tool-call' && diff) {
         const result = results.get(p.id);
@@ -718,6 +742,8 @@ export interface MessageProps {
   pendingAsks?: UserAsk[];
   /** Required whenever `pendingAsks` is non-empty. */
   onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
+  /** The latest progress of each generation call still running, by tool call id. */
+  progressByCall?: Record<string, MediaProgress>;
   /** Shows the `‹ 2 / 3 ›` switcher: this message has non-compare siblings (a regenerated reply, an edited prompt). */
   branch?: BranchInfo;
   /** Offers "Regenerate" (assistant messages). Omit where it doesn't apply, e.g. a compare turn's variants. */
@@ -756,6 +782,7 @@ export function Message({
   onResolveApproval,
   pendingAsks = [],
   onAnswerAsk,
+  progressByCall,
   branch,
   onRegenerate,
   onEdit,
@@ -839,7 +866,7 @@ export function Message({
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
         {isUser
           ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')
-          : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', scope: { chatId: message.chatId, messageId: message.id } })}
+          : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), askingTools: new Set(pendingAsks.flatMap((a) => (a.kind === 'generation' ? [a.toolName] : []))), scope: { chatId: message.chatId, messageId: message.id } })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
       )}
@@ -870,6 +897,8 @@ export function Message({
           {pendingAsks.map((ask) =>
             ask.kind === 'question' ? (
               <QuestionCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            ) : ask.kind === 'generation' ? (
+              <GenerationCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             ) : (
               <PlanCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             )

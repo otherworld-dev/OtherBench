@@ -13,9 +13,11 @@ import {
   IMAGE_UNSUPPORTED_NOTE,
   REPLAYED_IMAGE_MAX_BYTES,
   REPLAYED_IMAGES_MAX_TOTAL_BYTES,
+  VIDEO_FOR_USER_NOTE,
   loadReplayImages,
   liveToolOutput,
   replayCandidates,
+  replayToolOutput,
   replayedImageIds,
   toolImagesSupported,
 } from '../src/tool-images.js';
@@ -26,6 +28,44 @@ const text = (t: string) => ({ type: 'text', text: t });
 const png = (size = FAKE_PNG.length) => Buffer.concat([FAKE_PNG, Buffer.alloc(Math.max(0, size - FAKE_PNG.length))]);
 
 const shot = [text('Screenshot, 2×1.'), { type: 'image', data: PNG_B64, mimeType: 'image/png' }];
+
+describe('video for the model', () => {
+  const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'latin1'), Buffer.alloc(16)]);
+  const clip = { type: 'video', data: MP4.toString('base64'), mimeType: 'video/mp4' };
+  const stored = { type: 'video', attachmentId: '00000000-0000-4000-8000-000000000000', mimeType: 'video/mp4' };
+
+  it('gives the model the note and no media for a live video, whether or not it takes images', () => {
+    for (const imagesOk of [true, false]) {
+      const out = liveToolOutput([text('made it'), clip], imagesOk);
+      expect(out, String(imagesOk)).toEqual({ type: 'text', value: `made it\n${VIDEO_FOR_USER_NOTE}` });
+      expect(JSON.stringify(out)).not.toContain(clip.data);
+    }
+    expect(liveToolOutput([clip], true)).toEqual({ type: 'text', value: VIDEO_FOR_USER_NOTE });
+  });
+
+  it('keeps an image beside a video as image content, and the video as the note', () => {
+    const out = liveToolOutput([shot[1], clip], true) as { type: string; value: { type: string }[] };
+    expect(out.type).toBe('content');
+    expect(out.value.map((v) => v.type)).toEqual(['image-data', 'text']);
+  });
+
+  it('replays a stored video as the note: the attachment id never reaches the model, and nothing is loaded for it', () => {
+    const message: CanonMessage = {
+      id: 'a1', chatId: 'c', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null, createdAt: 0,
+      parts: [{ type: 'tool-call', id: 'call-1', name: 'media', args: {} }, { type: 'tool-result', id: 'call-1', name: 'media', result: [stored], isError: false }],
+    };
+    expect(replayCandidates([message], true)).toEqual([]);
+    for (const imagesOk of [true, false]) {
+      const out = replayToolOutput([text('made it'), stored], false, 'a1', new Map(), imagesOk);
+      expect(out).toEqual({ type: 'text', value: `made it\n${VIDEO_FOR_USER_NOTE}` });
+      expect(JSON.stringify(out)).not.toContain(stored.attachmentId);
+    }
+    // An error result goes as JSON: a video in it is the note too.
+    const err = replayToolOutput([stored, clip], true, 'a1', new Map(), true);
+    expect(JSON.stringify(err)).not.toContain(stored.attachmentId);
+    expect(JSON.stringify(err)).not.toContain(clip.data);
+  });
+});
 
 describe('liveToolOutput', () => {
   it('sends an inline image as image content to a model that takes images', () => {

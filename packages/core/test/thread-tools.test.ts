@@ -147,6 +147,26 @@ describe('askReplyProblem', () => {
     expect(askReplyProblem(plan, { changes: 'c'.repeat(8001) })).toMatch(/8000/);
     expect(askReplyProblem(plan, { changes: ' ' })).not.toBeNull();
   });
+  describe('a generation ask', () => {
+    const gen = { kind: 'generation' as const, toolName: 'generate_image', media: 'image' as const, prompt: 'a cat', negativePrompt: null, settings: '1024×1024 · seed 42' };
+    it('takes a cancel or a prompt to generate', () => {
+      expect(askReplyProblem(gen, { declined: true })).toBeNull();
+      expect(askReplyProblem(gen, { generate: { prompt: 'a cat', negativePrompt: null } })).toBeNull();
+      expect(askReplyProblem(gen, { generate: { prompt: 'a cat', negativePrompt: 'blurry' } })).toBeNull();
+    });
+    it('refuses an empty or over-long prompt, an over-long negative prompt and any other reply', () => {
+      expect(askReplyProblem(gen, { generate: { prompt: '   ', negativePrompt: null } })).toBe("The prompt can't be empty.");
+      expect(askReplyProblem(gen, { generate: { prompt: 'a'.repeat(4001), negativePrompt: null } })).toBe('A prompt can be at most 4000 characters.');
+      expect(askReplyProblem(gen, { generate: { prompt: 'a', negativePrompt: 'n'.repeat(4001) } })).toBe('A negative prompt can be at most 4000 characters.');
+      expect(askReplyProblem(gen, { approve: true })).toBe('This is a generation: generate it, or cancel.');
+      expect(askReplyProblem(gen, { answers: ['x'] })).toBe('This is a generation: generate it, or cancel.');
+    });
+    it('refuses a generate reply to a question or a plan', () => {
+      const reply = { generate: { prompt: 'a', negativePrompt: null } };
+      expect(askReplyProblem(ask, reply)).toMatch(/question/);
+      expect(askReplyProblem(plan, reply)).toMatch(/plan/);
+    });
+  });
 });
 
 describe('runners', () => {

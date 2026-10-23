@@ -13,7 +13,7 @@ export type AppEvent =
   | { type: 'chat-deleted'; chatId: string }
   | { type: 'turn-started'; chatId: string; messageIds: string[] }
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
-  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' }
+  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
   /** A machine was paired, renamed or removed: re-read the list. */
   | { type: 'peers-changed' }
@@ -54,7 +54,7 @@ export interface PendingApprovalSummary {
   requestId: string;
   toolName: string;
   /** Set for a question or plan card (spec 2026-10-12-thread-cards-design); absent for a tool approval. */
-  kind?: 'question' | 'plan';
+  kind?: 'question' | 'plan' | 'generation';
 }
 
 /** A reply still being written, as the app-wide stream reports it. */

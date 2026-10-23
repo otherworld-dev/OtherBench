@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
@@ -15,6 +15,8 @@ vi.mock('../../state/api.js', async (importOriginal) => {
       mcpServers: { list: vi.fn() },
       sandbox: { status: vi.fn() },
       computer: { status: vi.fn() },
+      connections: { mediaModels: vi.fn() },
+      mediaWorkflows: { list: vi.fn() },
     },
   };
 });
@@ -27,6 +29,8 @@ const mockedDelete = vi.mocked(api.profiles.delete);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
 const mockedSandboxStatus = vi.mocked(api.sandbox.status);
 const mockedComputerStatus = vi.mocked(api.computer.status);
+const mockedMediaModels = vi.mocked(api.connections.mediaModels);
+const mockedWorkflows = vi.mocked(api.mediaWorkflows.list);
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -102,6 +106,8 @@ function reset(): void {
   mockedMcpList.mockReset().mockResolvedValue([]);
   mockedSandboxStatus.mockReset().mockResolvedValue({ state: 'ready', packages: [], machine: 'This machine' });
   mockedComputerStatus.mockReset().mockResolvedValue({ computerUse: false });
+  mockedMediaModels.mockReset().mockResolvedValue({ models: [], checkpoints: [] });
+  mockedWorkflows.mockReset().mockResolvedValue([]);
 }
 
 describe('ProfilesPanel', () => {
@@ -825,5 +831,184 @@ describe('ProfilesPanel: where the shell runs', () => {
         expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], agentWeb: true }) })
       )
     );
+  });
+});
+
+describe('ProfilesPanel generation', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  const comfy = makeConnection({ id: 'comfy', name: 'Studio ComfyUI', kind: 'comfyui' });
+  const a1111 = makeConnection({ id: 'a1', name: 'Forge', kind: 'a1111' });
+
+  async function openNew(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Painter');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+  }
+
+  function arrange(): void {
+    useOtherBenchStore.getState().setConnections([makeConnection(), comfy, a1111]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    mockedMediaModels.mockImplementation(async (id) =>
+      id === 'comfy'
+        ? { models: [{ id: 'builtin:sdxl-txt2img', label: 'SDXL text to image' }, { id: 'w1', label: 'My flow' }], checkpoints: [] }
+        : { models: [{ id: 'sdxl-base', label: 'SDXL base' }], checkpoints: [] }
+    );
+  }
+
+  it('keeps generation connections out of the chat connection picker, and video to ComfyUI', async () => {
+    arrange();
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    const chat = within(screen.getByLabelText('Connection')).getAllByRole('option').map((o) => o.textContent);
+    expect(chat).not.toContain('Studio ComfyUI');
+    expect(chat).not.toContain('Forge');
+    const image = within(screen.getByLabelText('Image connection')).getAllByRole('option').map((o) => o.textContent);
+    expect(image).toEqual(['None', 'Studio ComfyUI', 'Forge']);
+    const video = within(screen.getByLabelText('Video connection')).getAllByRole('option').map((o) => o.textContent);
+    expect(video).toEqual(['None', 'Studio ComfyUI']);
+  });
+
+  it("reveals the chosen connection's models, and saves media with confirmPrompts on", async () => {
+    arrange();
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    expect(screen.getByRole('checkbox', { name: 'Show me the prompt before generating' })).toBeChecked();
+    await user.selectOptions(screen.getByLabelText('Image connection'), 'a1');
+    expect(await screen.findByRole('option', { name: 'SDXL base' })).toBeInTheDocument();
+    expect(mockedMediaModels).toHaveBeenCalledWith('a1', 'image');
+    await waitFor(() => expect(screen.getByLabelText('Image model')).toHaveValue('sdxl-base'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ media: { image: { connectionId: 'a1', model: 'sdxl-base' }, confirmPrompts: true } }) })
+      )
+    );
+  });
+
+  it('calls a ComfyUI choice a workflow, takes a video workflow, and saves confirmPrompts false when unticked', async () => {
+    arrange();
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    await user.selectOptions(screen.getByLabelText('Video connection'), 'comfy');
+    await waitFor(() => expect(screen.getByLabelText('Video workflow')).toHaveValue('builtin:sdxl-txt2img'));
+    await user.selectOptions(screen.getByLabelText('Video workflow'), 'w1');
+    await user.click(screen.getByRole('checkbox', { name: 'Show me the prompt before generating' }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ media: { video: { connectionId: 'comfy', model: 'w1' }, confirmPrompts: false } }) })
+      )
+    );
+  });
+
+  it("offers ComfyUI's model files for a workflow with a checkpoint binding, and saves the one chosen", async () => {
+    arrange();
+    mockedMediaModels.mockResolvedValue({
+      models: [{ id: 'builtin:sdxl-txt2img', label: 'SDXL text to image' }, { id: 'w1', label: 'My flow' }],
+      checkpoints: ['sd_xl_base_1.0.safetensors', 'juggernautXL.safetensors'],
+    });
+    mockedWorkflows.mockResolvedValue([
+      {
+        id: 'builtin:sdxl-txt2img', name: 'SDXL text to image', media: 'image', builtin: true,
+        graph: { '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' } } },
+        bindings: { checkpoint: { nodeId: '4', input: 'ckpt_name' } },
+      },
+      { id: 'w1', name: 'My flow', media: 'image', builtin: false, graph: {}, bindings: {} },
+    ]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    await user.selectOptions(screen.getByLabelText('Image connection'), 'comfy');
+    const picker = await screen.findByLabelText('Image model file');
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      "Workflow's own (sd_xl_base_1.0.safetensors)",
+      'sd_xl_base_1.0.safetensors',
+      'juggernautXL.safetensors',
+    ]);
+    expect(picker).toHaveValue('');
+    await user.selectOptions(picker, 'juggernautXL.safetensors');
+    // A workflow with no model file to choose shows no picker, and a change of workflow drops the choice.
+    await user.selectOptions(screen.getByLabelText('Image workflow'), 'w1');
+    expect(screen.queryByLabelText('Image model file')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Image workflow'), 'builtin:sdxl-txt2img');
+    expect(screen.getByLabelText('Image model file')).toHaveValue('');
+    await user.selectOptions(screen.getByLabelText('Image model file'), 'juggernautXL.safetensors');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolPolicy: expect.objectContaining({ media: { image: { connectionId: 'comfy', model: 'builtin:sdxl-txt2img', checkpoint: 'juggernautXL.safetensors' }, confirmPrompts: true } }),
+        })
+      )
+    );
+  });
+
+  it('shows the note when ComfyUI could not list its model files', async () => {
+    arrange();
+    mockedMediaModels.mockResolvedValue({ models: [{ id: 'w1', label: 'My flow' }], checkpoints: [], checkpointsError: 'ComfyUI did not answer.' });
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.selectOptions(screen.getByLabelText('Image connection'), 'comfy');
+    expect(await screen.findByText('ComfyUI did not answer.')).toBeInTheDocument();
+  });
+
+  it('clearing the image connection removes media.image', async () => {
+    arrange();
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', media: { image: { connectionId: 'a1', model: 'sdxl-base' }, confirmPrompts: true } } }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await waitFor(() => expect(screen.getByLabelText('Image model')).toHaveValue('sdxl-base'));
+    await user.selectOptions(screen.getByLabelText('Image connection'), '');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalled());
+    const sent = mockedPatch.mock.calls[0]?.[1]?.toolPolicy?.media;
+    expect(sent).toEqual({ confirmPrompts: true });
+    expect(sent).not.toHaveProperty('image');
+  });
+
+  it('shows a deleted connection as missing and refuses to save until it is changed', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection(), comfy]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', media: { image: { connectionId: 'gone', model: 'x' }, confirmPrompts: true } } }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByRole('option', { name: '(missing connection)' })).toBeInTheDocument();
+    expect(mockedMediaModels).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText('The image connection is missing. Choose another, or set it to None.')).toBeInTheDocument();
+    expect(mockedPatch).not.toHaveBeenCalled();
+    await user.selectOptions(screen.getByLabelText('Image connection'), '');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalled());
+    expect(mockedPatch.mock.calls[0]?.[1]?.toolPolicy?.media).toEqual({ confirmPrompts: true });
+  });
+
+  it('leaves a profile that never used generation without a media policy', async () => {
+    arrange();
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    expect(mockedCreate.mock.calls[0]?.[0].toolPolicy).not.toHaveProperty('media');
   });
 });

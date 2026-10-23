@@ -1,10 +1,12 @@
 import { useEffect, useState, type JSX } from 'react';
-import { DEFAULT_SANDBOX_HOSTS, type FsMode, type ModelParams, type Profile, type ShellRuns } from '@otherbench/core/types/config.js';
+import { DEFAULT_SANDBOX_HOSTS, type FsMode, type MediaPolicy, type ModelParams, type Profile, type ShellRuns } from '@otherbench/core/types/config.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody, type ToolPolicyBody } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
 import { useComputerUseAvailable } from '../../lib/computerUse.js';
+import { isGenerationKind } from '@otherbench/core/domain/media.js';
+import { GenerationSection, generationProblem, type GenerationState } from './GenerationSection.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -60,7 +62,9 @@ interface ProfileFormProps {
  * storing the row id here would silently fail to resolve a model at all.
  */
 function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
-  const connections = useOtherBenchStore((s) => s.connections);
+  const allConnections = useOtherBenchStore((s) => s.connections);
+  // Generation connections make images and video; they are never a profile's chat model.
+  const connections = allConnections.filter((c) => !isGenerationKind(c.kind));
   const models = useOtherBenchStore((s) => s.models);
   const chats = useOtherBenchStore((s) => s.chats);
 
@@ -113,6 +117,16 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
   const [agentMcp, setAgentMcp] = useState(profile?.toolPolicy.agentMcp ?? true);
   const [agentUserSettings, setAgentUserSettings] = useState(profile?.toolPolicy.agentUserSettings ?? false);
+  // Image and video generation (spec 2026-10-22-media-generation-design): off until a connection is chosen.
+  const [generation, setGeneration] = useState<GenerationState>(() => ({
+    imageConnectionId: profile?.toolPolicy.media?.image?.connectionId ?? '',
+    imageModel: profile?.toolPolicy.media?.image?.model ?? '',
+    imageCheckpoint: profile?.toolPolicy.media?.image?.checkpoint ?? '',
+    videoConnectionId: profile?.toolPolicy.media?.video?.connectionId ?? '',
+    videoModel: profile?.toolPolicy.media?.video?.model ?? '',
+    videoCheckpoint: profile?.toolPolicy.media?.video?.checkpoint ?? '',
+    confirmPrompts: profile?.toolPolicy.media?.confirmPrompts !== false,
+  }));
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
   const [useGlobalMemory, setUseGlobalMemory] = useState(profile?.useGlobalMemory !== false);
 
@@ -165,6 +179,30 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
+    const stale = isClaudeCode ? null : generationProblem(allConnections, generation);
+    if (stale) {
+      setError(stale);
+      return;
+    }
+    if (!isClaudeCode && generation.imageConnectionId && !generation.imageModel) {
+      setError('Choose an image model, or set the image connection to None.');
+      return;
+    }
+    if (!isClaudeCode && generation.videoConnectionId && !generation.videoModel) {
+      setError('Choose a video workflow, or set the video connection to None.');
+      return;
+    }
+    // Only when generation is, or was, set up, so a profile that never used it keeps its policy exactly as it was.
+    // A choice that was cleared is left out; sending `media` at all replaces the saved one.
+    // An empty checkpoint is the workflow's own, so it is left out.
+    const choice = (connectionId: string, model: string, checkpoint: string) => ({ connectionId, model, ...(checkpoint ? { checkpoint } : {}) });
+    const media: MediaPolicy = {
+      ...(generation.imageConnectionId ? { image: choice(generation.imageConnectionId, generation.imageModel, generation.imageCheckpoint) } : {}),
+      ...(generation.videoConnectionId ? { video: choice(generation.videoConnectionId, generation.videoModel, generation.videoCheckpoint) } : {}),
+    };
+    const mediaFields: Pick<ToolPolicyBody, 'media'> =
+      media.image || media.video || profile?.toolPolicy.media !== undefined ? { media: { ...media, confirmPrompts: generation.confirmPrompts } } : {};
+
     const hosts = hostsText
       .split(/\r?\n/)
       .map((h) => h.trim())
@@ -209,6 +247,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             computer,
             ...blocked,
             ...sandboxFields,
+            ...mediaFields,
             ...(subagents || profile?.toolPolicy.subagents !== undefined ? { subagents } : {}),
           },
       isDefault,
@@ -576,6 +615,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           </div>
         )}
       </div>
+
+      {!isClaudeCode && <GenerationSection connections={allConnections} value={generation} onChange={setGeneration} />}
 
       {/* Claude Code profiles too: OtherBench relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
       <div>

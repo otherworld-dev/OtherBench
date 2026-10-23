@@ -27,6 +27,7 @@ export const DESCRIPTION_MAX_CHARS = 500;
 export const PLAN_MAX_CHARS = 20_000;
 export const ANSWER_MAX_CHARS = 4_000;
 export const CHANGES_MAX_CHARS = 8_000;
+export const GENERATION_PROMPT_MAX_CHARS = 4_000;
 
 /** Added to the user's message in the request only (never stored) while Plan mode is on. */
 export const PLAN_MODE_NOTE =
@@ -256,6 +257,17 @@ export function askReplyProblem(ask: AskInput, reply: AskReply): string | null {
     for (const answer of reply.answers) {
       if (answer.trim() === '') return 'Every question needs an answer.';
       if (answer.length > ANSWER_MAX_CHARS) return `An answer can be at most ${ANSWER_MAX_CHARS} characters.`;
+    }
+    return null;
+  }
+  if (ask.kind === 'generation') {
+    if ('declined' in reply) return null;
+    if (!('generate' in reply)) return 'This is a generation: generate it, or cancel.';
+    const { prompt, negativePrompt } = reply.generate;
+    if (typeof prompt !== 'string' || prompt.trim() === '') return "The prompt can't be empty.";
+    if (prompt.length > GENERATION_PROMPT_MAX_CHARS) return `A prompt can be at most ${GENERATION_PROMPT_MAX_CHARS} characters.`;
+    if (negativePrompt !== null && (typeof negativePrompt !== 'string' || negativePrompt.length > GENERATION_PROMPT_MAX_CHARS)) {
+      return `A negative prompt can be at most ${GENERATION_PROMPT_MAX_CHARS} characters.`;
     }
     return null;
   }

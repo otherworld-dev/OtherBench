@@ -111,6 +111,85 @@ describe('GET /api/chats/:chatId/messages/:messageId/tool-images/:attachmentId',
   });
 });
 
+describe('video on the tool-images route', () => {
+  const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom', 'latin1'), Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz', 'latin1')]);
+  const video = (id: string, over: Partial<Attachment> = {}, bytes: Buffer = MP4) => file(id, { mime: 'video/mp4', filename: 'tool-video.mp4', ...over }, bytes);
+
+  it('is the same 404 when the message holding the file is not an assistant reply', async () => {
+    container.store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    await file('on-user', { messageId: 'u1' });
+    const res = await app().request(url('chat-1', 'u1', 'on-user'));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual(await (await app().request(url('chat-1', 'm1', 'nothing'))).json());
+  });
+
+  it('serves a stored mp4 typed from its bytes, with Accept-Ranges and the inert headers', async () => {
+    await video('clip', { mime: 'video/mp4; evil=1' });
+    const res = await app().request(url('chat-1', 'm1', 'clip'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('content-disposition')).toBe(`inline; filename="video.mp4"; filename*=UTF-8''video.mp4`);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(res.headers.get('content-length')).toBe(String(MP4.length));
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(MP4);
+  });
+
+  it('answers a single range with 206, Content-Range and just those bytes', async () => {
+    await video('clip');
+    const get = (range: string) => app().request(url('chat-1', 'm1', 'clip'), { headers: { Range: range } });
+    const first = await get('bytes=0-9');
+    expect(first.status).toBe(206);
+    expect(first.headers.get('content-range')).toBe(`bytes 0-9/${MP4.length}`);
+    expect(first.headers.get('content-length')).toBe('10');
+    expect(first.headers.get('content-type')).toBe('video/mp4');
+    expect(first.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(first.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(Buffer.from(await first.arrayBuffer())).toEqual(MP4.subarray(0, 10));
+    const open = await get('bytes=20-');
+    expect(open.status).toBe(206);
+    expect(open.headers.get('content-range')).toBe(`bytes 20-${MP4.length - 1}/${MP4.length}`);
+    expect(Buffer.from(await open.arrayBuffer())).toEqual(MP4.subarray(20));
+    const suffix = await get('bytes=-5');
+    expect(suffix.status).toBe(206);
+    expect(Buffer.from(await suffix.arrayBuffer())).toEqual(MP4.subarray(MP4.length - 5));
+    const clamped = await get(`bytes=10-${MP4.length + 100}`);
+    expect(clamped.headers.get('content-range')).toBe(`bytes 10-${MP4.length - 1}/${MP4.length}`);
+  });
+
+  it('is a 416 with the size for a range outside the file, and a full 200 for a malformed or multiple range', async () => {
+    await video('clip');
+    const get = (range: string) => app().request(url('chat-1', 'm1', 'clip'), { headers: { Range: range } });
+    for (const range of [`bytes=${MP4.length}-`, `bytes=${MP4.length + 5}-${MP4.length + 9}`, 'bytes=-0']) {
+      const res = await get(range);
+      expect(res.status, range).toBe(416);
+      expect(res.headers.get('content-range'), range).toBe(`bytes */${MP4.length}`);
+    }
+    for (const range of ['bytes=0-1,4-5', 'bytes=abc', 'bytes=5-2', 'items=0-1', 'bytes=', 'bytes=-']) {
+      const res = await get(range);
+      expect(res.status, range).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer()), range).toEqual(MP4);
+    }
+  });
+
+  it('is the same 404 for a video of another reply or chat, bytes that are not a video, or a row of the other kind', async () => {
+    await video('other-reply', { messageId: 'm1b' });
+    await video('other-chat', { chatId: 'chat-2', messageId: 'm2' });
+    await video('html-bytes', {}, Buffer.from('<html><script>alert(1)</script></html>'));
+    await video('png-bytes', {}, FAKE_PNG);
+    await video('huge-row', { size: 65 * 1024 * 1024 });
+    await file('image-row-video-bytes', { mime: 'image/png' }, MP4);
+    const bodies = new Set<string>();
+    for (const id of ['other-reply', 'other-chat', 'html-bytes', 'png-bytes', 'huge-row', 'image-row-video-bytes']) {
+      const res = await app().request(url('chat-1', 'm1', id), { headers: { Range: 'bytes=0-9' } });
+      expect(res.status, id).toBe(404);
+      bodies.add(await res.text());
+    }
+    expect(bodies.size).toBe(1);
+  });
+});
+
 describe('the id-only attachment routes', () => {
   it('still show an unsent upload and a file sent in its own chat (including an edit that kept its first message)', async () => {
     await file('preview', { messageId: null });

@@ -2,6 +2,7 @@ import type { Grant, LiveCall } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
+import type { MediaProgress } from './media.js';
 export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
 /** Which sub-agent a tool call or approval card belongs to (spec 2026-10-12-api-subagents-design). */
@@ -180,7 +181,9 @@ export type ToolApprovalEvent =
   /** A question or plan card for the user (spec 2026-10-12-thread-cards-design), tied to `ask.messageId`. */
   | { type: 'ask'; ask: UserAsk }
   /** That ask ended, however: answered, the turn stopped, or the backstop dropped it. */
-  | { type: 'ask-resolved'; askId: string; messageId: string };
+  | { type: 'ask-resolved'; askId: string; messageId: string }
+  /** How far a generation call has got (the media tools), by its tool call id. Throttled by the tool; never stored. */
+  | { type: 'progress'; messageId: string; callId: string; progress: MediaProgress };
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
 export type ApprovalOutcome =

@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
@@ -643,5 +645,133 @@ describe('POST /api/connections/:id/discover-models', () => {
     const body = await json(res);
     expect(body).toMatchObject({ kind: 'transient', retryable: true });
     expect(typeof body['message']).toBe('string');
+  });
+});
+
+describe('generation connection kinds', () => {
+  async function post(body: Record<string, unknown>): Promise<Response> {
+    return app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  it('creates a comfyui connection with a baseUrl', async () => {
+    const res = await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' });
+    expect(res.status).toBe(201);
+  });
+
+  it.each(['comfyui', 'a1111', 'openai_images'])('requires a baseUrl for %s', async (kind) => {
+    const res = await post({ name: 'Gen', kind });
+    expect(res.status).toBe(400);
+    expect(String((await json(res))['error'])).toContain('baseUrl');
+  });
+
+  it('refuses a user and password in a generation base URL, on create and on PATCH', async () => {
+    const res = await post({ name: 'A', kind: 'a1111', baseUrl: 'http://user:pass@127.0.0.1:7860' });
+    expect(res.status).toBe(400);
+    const message = String((await json(res))['error']);
+    expect(message).toContain('API key');
+    expect(message).not.toContain('pass@');
+    const created = await json(await post({ name: 'A', kind: 'a1111', baseUrl: 'http://127.0.0.1:7860' }));
+    const patched = await app().request(`/api/connections/${created['id'] as string}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: 'http://admin@127.0.0.1:7860' }),
+    });
+    expect(patched.status).toBe(400);
+    // A chat connection's URL is left as it was.
+    expect((await post({ name: 'C', kind: 'openai_compatible', baseUrl: 'http://user:pass@127.0.0.1:1234/v1' })).status).toBe(201);
+  });
+
+  it('refuses a PATCH that moves a connection between chat and generation kinds', async () => {
+    const gen = await json(await post({ name: 'G', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
+    const chat = await json(await post({ name: 'C', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1' }));
+    const kind = (id: unknown, k: string) =>
+      app().request(`/api/connections/${id as string}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: k }) });
+    expect((await kind(gen['id'], 'openai_compatible')).status).toBe(400);
+    expect((await kind(chat['id'], 'comfyui')).status).toBe(400);
+    // Within a side it is allowed, as before.
+    expect((await kind(gen['id'], 'a1111')).status).toBe(200);
+    expect((await kind(chat['id'], 'openai')).status).toBe(200);
+  });
+
+  it('refuses discover-models for a generation connection', async () => {
+    const created = await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
+    const discover = await app().request(`/api/connections/${created['id'] as string}/discover-models`, { method: 'POST' });
+    expect(discover.status).toBe(400);
+  });
+
+  describe('against a fake ComfyUI', () => {
+    let server: Server | undefined;
+    let hits: string[] = [];
+    let up = true;
+
+    async function startComfy(): Promise<string> {
+      hits = [];
+      up = true;
+      server = createServer((req, res) => {
+        hits.push(req.url ?? '');
+        const send = (status: number, body: unknown) => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        if (!up) return send(500, { error: 'down' });
+        if (req.url === '/system_stats') return send(200, { system: { os: 'nt' }, devices: [] });
+        if (req.url === '/object_info/CheckpointLoaderSimple') return send(200, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors'], {}] } } } });
+        if (req.url === '/object_info/UNETLoader') return send(200, { UNETLoader: { input: { required: { unet_name: [['wan2.2_ti2v_5B_fp16.safetensors'], {}] } } } });
+        send(404, {});
+      });
+      await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+      return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    }
+
+    afterEach(async () => {
+      server?.closeAllConnections();
+      await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+      server = undefined;
+    });
+
+    it('Test calls the backend and records the status like a chat test', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const ok = await app().request(`/api/connections/${id}/test`, { method: 'POST' });
+      expect(ok.status).toBe(200);
+      expect(await json(ok)).toMatchObject({ ok: true });
+      expect(hits).toContain('/system_stats');
+      expect(container.store.connections.get(id)).toMatchObject({ status: 'ok' });
+
+      up = false;
+      const bad = await json(await app().request(`/api/connections/${id}/test`, { method: 'POST' }));
+      expect(bad['ok']).toBe(false);
+      expect(typeof bad['message']).toBe('string');
+      expect(container.store.connections.get(id)).toMatchObject({ status: 'error', statusMessage: bad['message'] });
+    });
+
+    it('media-models lists the workflows and the server checkpoints', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const image = await app().request(`/api/connections/${id}/media-models?media=image`);
+      expect(image.status).toBe(200);
+      expect(await image.json()).toEqual({ models: [{ id: 'builtin:sdxl-txt2img', label: 'SDXL' }], checkpoints: ['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors'] });
+      const video = (await (await app().request(`/api/connections/${id}/media-models?media=video`)).json()) as { models: { id: string }[]; checkpoints: string[] };
+      expect(video.models.map((m) => m.id)).toEqual(['builtin:wan22-5b-t2v']);
+      expect(video.checkpoints).toEqual(['wan2.2_ti2v_5B_fp16.safetensors']);
+    });
+
+    it('media-models refuses a bad media and a chat connection', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      expect((await app().request(`/api/connections/${id}/media-models?media=audio`)).status).toBe(400);
+      const chat = (await json(await post({ name: 'Chat', kind: 'openai', apiKey: 'sk' })))['id'] as string;
+      expect((await app().request(`/api/connections/${chat}/media-models?media=image`)).status).toBe(400);
+    });
+
+    it('media-models still lists workflows when the checkpoints cannot be read', async () => {
+      const baseUrl = await startComfy();
+      up = false;
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const body = (await (await app().request(`/api/connections/${id}/media-models?media=image`)).json()) as Record<string, unknown>;
+      expect(body['models']).toEqual([{ id: 'builtin:sdxl-txt2img', label: 'SDXL' }]);
+      expect(body['checkpoints']).toEqual([]);
+      expect(typeof body['checkpointsError']).toBe('string');
+    });
   });
 });

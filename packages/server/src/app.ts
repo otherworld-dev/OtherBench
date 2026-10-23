@@ -16,6 +16,7 @@ import { commandsRoutes } from './routes/commands.js';
 import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
 import { connectionsRoutes } from './routes/connections.js';
+import { mediaRoutes } from './routes/media.js';
 import { healthRoutes } from './routes/health.js';
 import { importRoutes } from './routes/import.js';
 import { locationsRoutes, nodeRoutes } from './routes/locations.js';
@@ -129,6 +130,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // (its --cors-origin), never from a browser tab of OtherBench that a model with a browser grant could be using.
   authed.use('*', changesOnlyFromTheDesktopApp(container.computer, options.corsOrigins ?? []));
   authed.route('/connections', connectionsRoutes(container));
+  authed.route('/media', mediaRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
   authed.route('/chats', chatsRoutes(container));

@@ -834,7 +834,7 @@ describe('Ask routes', () => {
     const wrongKind = await post(`/api/asks/${id}/answer`, { approve: true });
     expect(wrongKind.status).toBe(400);
     expect(JSON.stringify(await wrongKind.json())).toContain('question');
-    for (const bad of [{}, { answers: 'Blue' }, { declined: false }, { approve: true, changes: 'x' }, { changes: 3 }]) {
+    for (const bad of [{}, { answers: 'Blue' }, { declined: false }, { approve: true, changes: 'x' }, { changes: 3 }, { generate: 'a cat' }, { generate: { prompt: 3 } }, { generate: { prompt: 'a', negativePrompt: 4 } }]) {
       expect((await post(`/api/asks/${id}/answer`, bad)).status).toBe(400);
     }
   });

@@ -2,10 +2,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@otherbench/core/domain/artifacts.js';
 import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
+import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@otherbench/core/ports/store.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
-import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, MAX_TOOL_IMAGE_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
+import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, isToolVideoMime, MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
@@ -55,6 +56,23 @@ function keyWhere(tbl: SyncTable): string {
 function rowKey(tbl: SyncTable, row: SyncRow): string | null {
   const parts = keyColumns(tbl).map((c) => row[c]);
   return parts.every((p) => typeof p === 'string' && p.length > 0) ? (parts as string[]).join(':') : null;
+}
+
+/** A workflow row as an import makes one: the same size cap and `workflowProblem` checks, and never a built-in's id. */
+function mediaWorkflowRowOk(row: SyncRow): boolean {
+  const { id, name, media, graph, bindings, checkpoint } = row;
+  if (typeof id !== 'string' || id.startsWith('builtin:')) return false;
+  if (typeof name !== 'string' || name.length === 0 || name.length > 200) return false;
+  if (media !== 'image' && media !== 'video') return false;
+  if (checkpoint != null && typeof checkpoint !== 'string') return false;
+  if (typeof graph !== 'string' || typeof bindings !== 'string') return false;
+  // The cap is on the text as stored, before anything is parsed.
+  if (new TextEncoder().encode(graph).length > MAX_WORKFLOW_GRAPH_BYTES) return false;
+  try {
+    return workflowImportProblem(JSON.parse(graph), JSON.parse(bindings)) === null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -171,12 +189,15 @@ export class SqliteSyncRepo implements SyncRepo {
 
   missingBlobs(): { id: string; sha256: string; size: number }[] {
     // Only a file bound to a message of its own chat is ever fetched or given a local blob.
-    const rows = this.db.prepare(`SELECT a.id, a.sha256, a.size FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string; size: unknown }[];
+    const rows = this.db
+      .prepare(`SELECT a.id, a.sha256, a.size, a.mime, hm.role AS role FROM attachment a JOIN message hm ON hm.id = a.message_id WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`)
+      .all() as { id: string; sha256: string; size: unknown; mime: unknown; role: unknown }[];
     // And only one whose row states a size a blob can be held to (what `attachmentRowOk` asks of a row on apply): an
     // older row may hold text or a fraction there, which no caller could cap a download by.
-    const sized = (r: { id: string; sha256: string; size: unknown }): r is { id: string; sha256: string; size: number } =>
-      typeof r.size === 'number' && Number.isInteger(r.size) && r.size >= 0 && r.size <= MAX_HISTORY_ATTACHMENT_BYTES;
-    return rows.filter(sized).filter((r) => isSha256(r.sha256));
+    // The cap is the one `attachmentRowOk` applied: a tool's video on a reply may be up to the video cap.
+    const sized = (r: { size: unknown; mime: unknown; role: unknown }): boolean =>
+      typeof r.size === 'number' && Number.isInteger(r.size) && r.size >= 0 && r.size <= (r.role === 'assistant' && isToolVideoMime(r.mime) ? MAX_TOOL_VIDEO_BYTES : MAX_HISTORY_ATTACHMENT_BYTES);
+    return rows.filter(sized).filter((r) => isSha256(r.sha256)).map((r) => ({ id: r.id, sha256: r.sha256, size: r.size as number }));
   }
 
   isSentBlob(sha256: string): boolean {
@@ -412,6 +433,8 @@ export class SqliteSyncRepo implements SyncRepo {
       // Delete wins for good: an id that was removed is never made again with a new binding.
       if (this.tombstone('attachment', u.id) !== null) return false;
     }
+    // A workflow is sent to a generation backend: only what an import would have accepted.
+    if (u.tbl === 'media_workflow' && !mediaWorkflowRowOk(row)) return false;
     // Artifact rows reach the model's prompt and the viewer: only what OtherBench itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
     if (u.tbl === 'artifact_version') {
@@ -436,12 +459,17 @@ export class SqliteSyncRepo implements SyncRepo {
    * An attachment row as OtherBench itself makes one (modelled on `artifactRowOk` and
    * `artifactVersionRowOk` above): the shape core checks for every file, a size
    * within the upload cap, and, for a file on an assistant reply (a tool's image),
-   * a raster type within the per-image cap. A user's upload keeps its own rules.
+   * a raster type within the per-image cap, or a video type within the per-video cap. A user's upload keeps its own rules.
    */
   private attachmentRowOk(row: SyncRow): boolean {
-    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, MAX_HISTORY_ATTACHMENT_BYTES)) return false;
     const holder = this.db.prepare('SELECT role FROM message WHERE id = ?').get(row['message_id'] as string) as { role: string } | undefined;
-    if (holder?.role === 'assistant') return isToolImageMime(row['mime']) && (row['size'] as number) <= MAX_TOOL_IMAGE_BYTES;
+    const onReply = holder?.role === 'assistant';
+    // A tool's video may be larger than an upload; the per-type caps below hold a reply's file to its own.
+    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, onReply ? MAX_TOOL_VIDEO_BYTES : MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    if (onReply) {
+      const size = row['size'] as number;
+      return (isToolImageMime(row['mime']) && size <= MAX_TOOL_IMAGE_BYTES) || (isToolVideoMime(row['mime']) && size <= MAX_TOOL_VIDEO_BYTES);
+    }
     return true;
   }
 

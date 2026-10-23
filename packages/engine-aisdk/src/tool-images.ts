@@ -18,6 +18,10 @@ import type { CanonMessage } from '@otherbench/core/types/messages.js';
  * first. The type the model is told comes from the bytes (png, jpeg, gif or
  * webp), never from a label. This also stops MCP tools' images reaching the
  * model as base64 inside JSON.
+ *
+ * A video (inline or stored) is never sent to a model, on any provider: it is
+ * `VIDEO_FOR_USER_NOTE` in its place, live and replayed, and a stored video
+ * reference is neither a replay candidate nor ever shown as an attachment id.
  */
 
 export const IMAGE_OMITTED_NOTE = "[image omitted: this model can't take images]";
@@ -26,6 +30,8 @@ export const IMAGE_UNAVAILABLE_NOTE = '[image not available]';
 export const IMAGE_NOT_YOURS_NOTE = "[image omitted: it doesn't belong to this chat]";
 export const IMAGE_TOO_LARGE_NOTE = '[image omitted: too large to send]';
 export const IMAGE_NOT_SHOWN_NOTE = '[image omitted]';
+/** What a model gets in place of a video a tool made: the person sees it, a model never receives one. */
+export const VIDEO_FOR_USER_NOTE = "[video shown to the user; you can't watch it]";
 /** Core's wording, shared with the Claude Code engine; exported from here as before. */
 export { IMAGE_UNSUPPORTED_NOTE };
 export const REPLAYED_TOOL_IMAGES = 3;
@@ -36,6 +42,10 @@ export const REPLAYED_IMAGES_MAX_TOTAL_BYTES = 2 * MAX_TOOL_IMAGE_BYTES;
 
 type Output = ToolResultPart['output'];
 type ContentItem = Extract<Output, { type: 'content' }>['value'][number];
+
+function isVideoItem(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'video';
+}
 
 function isTextItem(value: unknown): value is { type: 'text'; text: string } {
   return typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'text' && typeof (value as { text?: unknown }).text === 'string';
@@ -110,9 +120,10 @@ function contentOrText(value: ContentItem[]): Output {
  * would send it.
  */
 export function liveToolOutput(output: unknown, imagesOk: boolean): Output {
-  if (Array.isArray(output) && output.some(isInlineToolImage)) {
+  if (Array.isArray(output) && output.some((i) => isInlineToolImage(i) || isVideoItem(i))) {
     return contentOrText(
       output.map((item): ContentItem => {
+        if (isVideoItem(item)) return { type: 'text', text: VIDEO_FOR_USER_NOTE };
         if (isInlineToolImage(item)) {
           if (!imagesOk) return { type: 'text', text: IMAGE_OMITTED_NOTE };
           const checked = checkLive(item);
@@ -262,10 +273,11 @@ export function replayedBytes(images: Map<string, ReplayImage>): number {
  * earlier-screenshot note.
  */
 export function replayToolOutput(result: unknown, isError: boolean, messageId: string, replay: Map<string, ReplayImage>, imagesOk: boolean): Output {
-  if (!isError && Array.isArray(result) && result.some(isToolImageRef)) {
+  if (!isError && Array.isArray(result) && result.some((i) => isToolImageRef(i) || isVideoItem(i))) {
     const value: ContentItem[] = [];
     for (const item of result) {
-      if (isToolImageRef(item)) {
+      if (isVideoItem(item)) value.push({ type: 'text', text: VIDEO_FOR_USER_NOTE });
+      else if (isToolImageRef(item)) {
         const key = placeKey(messageId, item.attachmentId);
         const chosen = imagesOk ? replay.get(key) : undefined;
         replay.delete(key);
@@ -279,7 +291,7 @@ export function replayToolOutput(result: unknown, isError: boolean, messageId: s
     return contentOrText(value);
   }
   // An error result goes as JSON, so a reference in it would put an attachment id in front of the model: it is a note instead.
-  const plain = isError && Array.isArray(result) ? result.map((item) => (isToolImageRef(item) || isInlineToolImage(item) ? { type: 'text', text: IMAGE_NOT_SHOWN_NOTE } : item)) : result;
+  const plain = isError && Array.isArray(result) ? result.map((item) => (isVideoItem(item) ? { type: 'text', text: VIDEO_FOR_USER_NOTE } : isToolImageRef(item) || isInlineToolImage(item) ? { type: 'text', text: IMAGE_NOT_SHOWN_NOTE } : item)) : result;
   const value = (plain ?? null) as JSONValue;
   return isError ? { type: 'error-json', value } : { type: 'json', value };
 }

@@ -2,6 +2,7 @@ import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError, Su
 import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
+import type { MediaWorkflow } from '../domain/media-workflows.js';
 import type { Peer } from '../types/peer.js';
 import type { ChangeBatch, ChangeRow } from '../domain/sync.js';
 import type { ScheduleRule, ScheduleRunStatus, ScheduleTarget, ScheduleTrigger } from '../domain/schedule.js';
@@ -306,6 +307,17 @@ export interface AppRepo {
   /** A `workspaceRoot` in the patch (and no `workspace`) is stored as a folder bound to this machine. */
   update(id: string, patch: Partial<Omit<App, 'id'>>): App;
   /** Deletes the app. Its chats keep existing with `appId: null` (cleared through the chat repo so the change syncs); chats are never deleted. */
+  delete(id: string): void;
+}
+
+// --- media workflows ---------------------------------------------------------
+
+/** Imported ComfyUI workflows (migration 031); a synced table. Stored rows are never `builtin`. */
+export interface MediaWorkflowRepo {
+  list(): MediaWorkflow[];
+  get(id: string): MediaWorkflow | null;
+  create(wf: MediaWorkflow): MediaWorkflow;
+  update(id: string, patch: Partial<Omit<MediaWorkflow, 'id' | 'builtin'>>): MediaWorkflow;
   delete(id: string): void;
 }
 
@@ -989,6 +1001,7 @@ export interface Store {
   chats: ChatRepo;
   projects: ProjectRepo;
   apps: AppRepo;
+  mediaWorkflows: MediaWorkflowRepo;
   projectMemory: ProjectMemoryRepo;
   globalMemory: GlobalMemoryRepo;
   settings: SettingsRepo;

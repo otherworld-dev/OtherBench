@@ -161,6 +161,11 @@ function buildProvider(connection: Connection, apiKey: string | null): ProviderH
     case 'mock':
       return { kind: 'mock' };
 
+    case 'comfyui':
+    case 'a1111':
+    case 'openai_images':
+      throw new ConfigError(`"${connection.kind}" is a generation connection, not a chat model.`);
+
     default: {
       const exhaustive: never = connection.kind;
       throw new ConfigError(`Unknown connection kind: ${String(exhaustive)}`);

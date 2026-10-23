@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, type SaveToolImage } from '@otherbench/core/domain/tool-images.js';
+import { MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, sniffToolMediaMime, TOOL_VIDEO_MIMES, type SaveToolImage } from '@otherbench/core/domain/tool-images.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import { gcBlobIfOrphaned, withPinnedSha } from '@otherbench/store-sqlite/blob-gc.js';
 import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
@@ -10,10 +10,12 @@ const TOOL_IMAGE_FILENAMES: ReadonlyMap<string, string> = new Map([
   ['image/jpeg', 'tool-image.jpg'],
   ['image/gif', 'tool-image.gif'],
   ['image/webp', 'tool-image.webp'],
+  ['video/mp4', 'tool-video.mp4'],
+  ['video/webm', 'tool-video.webm'],
 ]);
 
 /**
- * Where `TurnRunner` keeps an image a tool returned (spec
+ * Where `TurnRunner` keeps an image (or a video, mp4 or webm) a tool returned (spec
  * 2026-10-12-computer-use-design section 6): the bytes in the blob store,
  * plus an attachment row on the reply (`messageId` set), so blob GC keeps
  * them while the reply exists and the chat-and-reply scoped route
@@ -30,7 +32,8 @@ const TOOL_IMAGE_FILENAMES: ReadonlyMap<string, string> = new Map([
  * `keepToolImages` (core) hands over bytes it has already checked, with the
  * type it read from them. This checks the same again and refuses anything
  * else, so nothing that is not a png, jpeg, gif or webp of at most
- * `MAX_TOOL_IMAGE_BYTES` is ever stored as a tool image, whoever calls. A
+ * `MAX_TOOL_IMAGE_BYTES` (or an mp4 or webm of at most `MAX_TOOL_VIDEO_BYTES`)
+ * is ever stored as a tool image, whoever calls. A
  * refusal throws; the runner shows `[image not kept]` in its place.
  *
  * Nothing is left behind by a failure. The blob is written first and the row
@@ -46,8 +49,9 @@ export function toolImageSaver(store: Store, blobStore: BlobStore): SaveToolImag
   return async (chatId, messageId, bytes, mime) => {
     const filename = typeof mime === 'string' ? TOOL_IMAGE_FILENAMES.get(mime) : undefined;
     if (filename === undefined) throw new Error('Not a kind of image a tool result may hold.');
-    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > MAX_TOOL_IMAGE_BYTES) throw new Error('A tool image must be between 1 byte and 5 MB.');
-    if (sniffToolImageMime(bytes) !== mime) throw new Error('The bytes are not the kind of image they were said to be.');
+    const maxBytes = TOOL_VIDEO_MIMES.includes(mime) ? MAX_TOOL_VIDEO_BYTES : MAX_TOOL_IMAGE_BYTES;
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maxBytes) throw new Error(`A tool image or video must be between 1 byte and ${maxBytes / (1024 * 1024)} MB.`);
+    if (sniffToolMediaMime(bytes) !== mime) throw new Error('The bytes are not the kind of image or video they were said to be.');
 
     const sha256 = sha256Of(bytes);
     try {

@@ -1106,6 +1106,30 @@ describe('a reply that stores files while it streams (tool screenshots)', () => 
     expect(b.store.sync.missingBlobs()).toEqual([{ id: 'shot', sha256: sha, size: 1 }]);
   });
 
+  it('takes a tool video on a reply up to 64 MB and lists it to fetch, refuses one over, and holds a user file to 25 MB', () => {
+    const MB = 1024 * 1024;
+    const a = streaming();
+    const file = (id: string, messageId: string, mime: string, size: number, c: string) =>
+      a.store.attachments.create({ id, chatId: 'c', messageId, filename: id, mime, size, sha256: c.repeat(64), storagePath: 'E:/blobs/' + id, extractedText: null });
+    file('clip', 'r1', 'video/mp4', 64 * MB, 'c');
+    file('clip-over', 'r1', 'video/mp4', 64 * MB + 1, 'd');
+    file('big-image', 'r1', 'image/png', 6 * MB, 'e');
+    file('user-ok', 'u', 'application/pdf', 25 * MB, 'f');
+    file('user-over', 'u', 'application/pdf', 26 * MB, '1');
+    file('user-video', 'u', 'video/mp4', 30 * MB, '2');
+    a.store.messages.updateStatus('r1', 'complete');
+    const b = node('b');
+    pull(a, b, { seq: 0 });
+
+    expect(b.store.attachments.get('clip')).toMatchObject({ messageId: 'r1', size: 64 * MB });
+    for (const id of ['clip-over', 'big-image', 'user-over', 'user-video']) expect(b.store.attachments.get(id), id).toBeNull();
+    expect(b.store.attachments.get('user-ok')).not.toBeNull();
+    const missing = b.store.sync.missingBlobs().map((m) => m.id);
+    expect(missing).toContain('clip');
+    expect(missing).toContain('user-ok');
+    expect(missing).not.toContain('clip-over');
+  });
+
   it('also follows a reply that ends in an error, and puts the reply before its files, in one batch and across batches', () => {
     const a = streaming();
     a.store.attachments.create({ id: 'shot2', chatId: 'c', messageId: 'r1', filename: 'shot2.png', mime: 'image/png', size: 1, sha256: 'b'.repeat(64), storagePath: 'E:/blobs/b', extractedText: null });

@@ -49,6 +49,7 @@ import { closeEngineChatsThatAreGone, followChatSettings } from './engine-chats.
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
+import { createMediaHost } from './media.js';
 import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { ScheduleService } from './schedule/service.js';
@@ -440,7 +441,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // (The profile and connection routes, whose deletes cascade past every event, call endIfChatGone themselves.)
     endSessionsOfChatsThatAreGone(events, computer);
   }
-  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, ...(computer ? { computer } : {}) });
+  // Image and video generation: backends are resolved per call, from the profile's choice.
+  const media = createMediaHost({ store, secrets });
+  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(

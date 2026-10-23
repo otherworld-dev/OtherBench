@@ -401,6 +401,30 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#image and #video triggers', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it.each([
+      ['#image a red cube\nthanks', 'generate_image', 'a red cube'],
+      ['#video a wave', 'generate_video', 'a wave'],
+    ])('%s calls the real tool with the rest of the line, keeps its result as it came, then says Done.', async (prompt, name, sent) => {
+      const result = [{ type: 'text', text: 'Generated.' }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }];
+      const execute = vi.fn(async () => result);
+      const tool: ToolSpec = { name, description: '', parameters: {}, risk: 'execute', source: 'media', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest(prompt, { tools: [tool] })));
+      expect(execute).toHaveBeenCalledWith({ prompt: sent }, expect.objectContaining({ toolCallId: expect.any(String) }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name, result, isError: false }));
+      expect(text(events)).toBe('Done.');
+    });
+
+    it('#image says so when the tool failed or was not offered', async () => {
+      const failing: ToolSpec = { name: 'generate_image', description: '', parameters: {}, risk: 'execute', source: 'media', execute: async () => ({ error: true, code: 'generation_cancelled', message: 'The user cancelled this generation.' }) };
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#image a cube', { tools: [failing] }))))).toBe("The generation didn't work: The user cancelled this generation.");
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#image a cube')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'generate_image', isError: true }));
+    });
+  });
+
   describe('#computer trigger', () => {
     const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
     const results = (events: EngineEvent[]) => events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');

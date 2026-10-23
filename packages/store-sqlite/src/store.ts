@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { SqliteArtifactRepo } from './repos/artifacts.js';
-import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo } from '@otherbench/core/ports/store.js';
+import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, MediaWorkflowRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo } from '@otherbench/core/ports/store.js';
 import { SqliteAttachmentRepo } from './repos/attachments.js';
 import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
@@ -18,6 +18,7 @@ import { SqliteProfileRepo } from './repos/profiles.js';
 import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteGlobalMemoryRepo } from './repos/global-memory.js';
 import { SqliteAppRepo } from './repos/apps.js';
+import { SqliteMediaWorkflowRepo } from './repos/media-workflows.js';
 import { SqliteProjectRepo } from './repos/projects.js';
 import { SqliteScheduleRepo } from './repos/schedules.js';
 import { SqliteSettingsRepo } from './repos/settings.js';
@@ -42,6 +43,7 @@ export class SqliteStore implements Store {
   readonly chats: ChatRepo;
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
+  readonly mediaWorkflows: MediaWorkflowRepo;
   readonly projectMemory: ProjectMemoryRepo;
   readonly globalMemory: GlobalMemoryRepo;
   readonly settings: SettingsRepo;
@@ -68,6 +70,7 @@ export class SqliteStore implements Store {
     this.chats = new SqliteChatRepo(db, selfId, clock);
     this.projects = new SqliteProjectRepo(db, selfId, clock);
     this.apps = new SqliteAppRepo(db, selfId, clock);
+    this.mediaWorkflows = new SqliteMediaWorkflowRepo(db, clock);
     this.projectMemory = new SqliteProjectMemoryRepo(db, clock);
     this.globalMemory = new SqliteGlobalMemoryRepo(db, clock);
     this.settings = new SqliteSettingsRepo(db);

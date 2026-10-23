@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { normaliseHost } from '@otherbench/core/domain/browser-hosts.js';
-import type { ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
+import type { MediaChoice, MediaPolicy, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
@@ -68,13 +69,56 @@ function parseBlockedHosts(value: unknown): string[] {
   return out;
 }
 
+/** A profile's chat model can't be a generation connection (they generate images and video, not text). */
+function requireChatConnection(container: Container, connectionId: string): void {
+  const conn = container.store.connections.get(connectionId);
+  if (conn && isGenerationKind(conn.kind)) throw new HTTPException(400, { message: "A generation connection can't be a profile's chat model." });
+}
+
+/** The longest model file name a ComfyUI choice may name. */
+const MAX_CHECKPOINT = 512;
+
+/** One image or video choice: a generation connection (video: ComfyUI only), a non-empty model and, for ComfyUI, an optional model file. */
+function parseMediaChoice(container: Container, value: unknown, key: 'image' | 'video'): MediaChoice {
+  const field = `toolPolicy.media.${key}`;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HTTPException(400, { message: `"${field}" must be an object.` });
+  const v = value as Record<string, unknown>;
+  const connectionId = requireNonEmptyString(v['connectionId'], `${field}.connectionId`);
+  const model = requireNonEmptyString(v['model'], `${field}.model`);
+  const conn = container.store.connections.get(connectionId);
+  if (!conn || !isGenerationKind(conn.kind)) {
+    throw new HTTPException(400, { message: `"${field}.connectionId" must name a generation connection (ComfyUI, A1111 or an OpenAI images API).` });
+  }
+  if (key === 'video' && conn.kind !== 'comfyui') throw new HTTPException(400, { message: `"${field}.connectionId" must name a ComfyUI connection: video needs ComfyUI.` });
+  const checkpoint = v['checkpoint'];
+  if (checkpoint === undefined) return { connectionId, model };
+  if (conn.kind !== 'comfyui') throw new HTTPException(400, { message: `"${field}.checkpoint" is only for a ComfyUI connection.` });
+  if (typeof checkpoint !== 'string' || checkpoint === '' || checkpoint.length > MAX_CHECKPOINT) {
+    throw new HTTPException(400, { message: `"${field}.checkpoint" must be a model file name of 1 to ${MAX_CHECKPOINT} characters.` });
+  }
+  return { connectionId, model, checkpoint };
+}
+
+function parseMediaPolicy(container: Container, value: unknown): MediaPolicy {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HTTPException(400, { message: '"toolPolicy.media" must be an object.' });
+  const v = value as Record<string, unknown>;
+  if (v['confirmPrompts'] !== undefined && typeof v['confirmPrompts'] !== 'boolean') {
+    throw new HTTPException(400, { message: '"toolPolicy.media.confirmPrompts" must be a boolean.' });
+  }
+  return {
+    ...(v['image'] !== undefined ? { image: parseMediaChoice(container, v['image'], 'image') } : {}),
+    ...(v['video'] !== undefined ? { video: parseMediaChoice(container, v['video'], 'video') } : {}),
+    ...(typeof v['confirmPrompts'] === 'boolean' ? { confirmPrompts: v['confirmPrompts'] } : {}),
+  };
+}
+
 /**
  * Parses a `toolPolicy` body. Omitted fields fall back to `base`: the defaults
  * on POST, the profile's EXISTING policy on PATCH -- so a partial PATCH such as
  * `{"fs":"read"}` cannot silently reset `mcpServerIds` (an access-control list)
  * or any other field it did not mention. Validation is identical either way.
  */
-function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY): ToolPolicy {
+function parseToolPolicy(container: Container, value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY): ToolPolicy {
   if (value === undefined) return base;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HTTPException(400, { message: '"toolPolicy" must be an object.' });
@@ -121,6 +165,8 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),
     // Computer use (spec 2026-10-12-computer-use-design): off unless a profile turns it on, so it is only ever stored when it was set.
     ...(typeof v['computer'] === 'boolean' ? { computer: v['computer'] } : base.computer !== undefined ? { computer: base.computer } : {}),
+    // Image and video generation: off unless set; an omitted field keeps the base's.
+    ...(v['media'] !== undefined ? { media: parseMediaPolicy(container, v['media']) } : base.media !== undefined ? { media: base.media } : {}),
     ...(v['browserBlockedHosts'] !== undefined
       ? { browserBlockedHosts: parseBlockedHosts(v['browserBlockedHosts']) }
       : base.browserBlockedHosts !== undefined
@@ -142,6 +188,7 @@ export function profilesRoutes(container: Container): Hono {
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
+    requireChatConnection(container, requireNonEmptyString(body.connectionId, 'connectionId'));
     const created = container.store.profiles.create({
       id: randomUUID(),
       name: requireNonEmptyString(body.name, 'name'),
@@ -151,7 +198,7 @@ export function profilesRoutes(container: Container): Hono {
       modelId: requireNonEmptyString(body.modelId, 'modelId'),
       systemPrompt: optionalNullableString(body.systemPrompt, 'systemPrompt') ?? null,
       params: parseParams(body.params),
-      toolPolicy: parseToolPolicy(body.toolPolicy),
+      toolPolicy: parseToolPolicy(container, body.toolPolicy),
       isDefault: optionalBoolean(body.isDefault, 'isDefault', false),
       useGlobalMemory: optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true),
       archivedAt: null,
@@ -170,11 +217,14 @@ export function profilesRoutes(container: Container): Hono {
     if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');
     if (body.description !== undefined) patch.description = optionalNullableString(body.description, 'description') ?? null;
     if (body.colour !== undefined) patch.colour = optionalNullableString(body.colour, 'colour') ?? null;
-    if (body.connectionId !== undefined) patch.connectionId = requireNonEmptyString(body.connectionId, 'connectionId');
+    if (body.connectionId !== undefined) {
+      patch.connectionId = requireNonEmptyString(body.connectionId, 'connectionId');
+      requireChatConnection(container, patch.connectionId);
+    }
     if (body.modelId !== undefined) patch.modelId = requireNonEmptyString(body.modelId, 'modelId');
     if (body.systemPrompt !== undefined) patch.systemPrompt = optionalNullableString(body.systemPrompt, 'systemPrompt') ?? null;
     if (body.params !== undefined) patch.params = parseParams(body.params);
-    if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(body.toolPolicy, existing.toolPolicy);
+    if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(container, body.toolPolicy, existing.toolPolicy);
     if (body.isDefault !== undefined) patch.isDefault = optionalBoolean(body.isDefault, 'isDefault', false);
     if (body.useGlobalMemory !== undefined) patch.useGlobalMemory = optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true);
     if (body.archivedAt !== undefined) {
