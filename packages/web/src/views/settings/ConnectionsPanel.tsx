@@ -2,8 +2,26 @@ import { useEffect, useState, type JSX } from 'react';
 import type { Connection, ConnectionKind } from '@otherbench/core/types/config.js';
 import { ApiError, api, type CreateConnectionBody } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
+import { isGenerationKind } from '@otherbench/core/domain/media.js';
+import { WorkflowsSection } from './WorkflowsSection.js';
 
 const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
+
+/** Kinds shown under a name of their own (the rest show as their kind). */
+const KIND_LABELS: Partial<Record<ConnectionKind, string>> = {
+  comfyui: 'ComfyUI (recommended)',
+  a1111: 'Automatic1111',
+  openai_images: 'OpenAI-compatible images',
+};
+
+/** What the Base URL box suggests for a kind; the generation kinds are never auto-detected, so they show their usual address. */
+const BASE_URL_PLACEHOLDERS: Partial<Record<ConnectionKind, string>> = {
+  ollama: 'Defaults to http://127.0.0.1:11434',
+  claude_code: 'Leave empty to use your Claude login',
+  comfyui: 'http://127.0.0.1:8188',
+  a1111: 'http://127.0.0.1:7860',
+  openai_images: 'http://127.0.0.1:8080/v1',
+};
 
 const STATUS_COLOR: Record<Connection['status'], string> = {
   ok: 'bg-[var(--success)]',
@@ -234,7 +252,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         >
           {CONNECTION_KINDS.map((k) => (
             <option key={k} value={k}>
-              {k}
+              {KIND_LABELS[k] ?? k}
             </option>
           ))}
         </select>
@@ -249,7 +267,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
           aria-label="Base URL"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder={kind === 'ollama' ? 'Defaults to http://127.0.0.1:11434' : kind === 'claude_code' ? 'Leave empty to use your Claude login' : 'https://api.example.com'}
+          placeholder={BASE_URL_PLACEHOLDERS[kind] ?? 'https://api.example.com'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
         />
         {kind === 'openai_compatible' && (
@@ -362,6 +380,8 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         </div>
       </div>
 
+      {connection && connection.kind === 'comfyui' && kind === 'comfyui' && <WorkflowsSection connectionId={connection.id} />}
+
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
@@ -386,14 +406,16 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
             >
               {testing ? 'Testing…' : 'Test'}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleDiscover()}
-              disabled={discovering}
-              className="btn px-3 py-1.5"
-            >
-              {discovering ? 'Discovering…' : 'Discover models'}
-            </button>
+            {!isGenerationKind(connection.kind) && (
+              <button
+                type="button"
+                onClick={() => void handleDiscover()}
+                disabled={discovering}
+                className="btn px-3 py-1.5"
+              >
+                {discovering ? 'Discovering…' : 'Discover models'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => void handleDelete()}

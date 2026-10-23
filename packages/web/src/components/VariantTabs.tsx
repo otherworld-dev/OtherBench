@@ -123,6 +123,8 @@ export interface VariantCardProps {
   /** This variant's own pending questions and plans, like `pendingApprovals`. */
   pendingAsks?: UserAsk[];
   onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
+  /** This variant's running generation calls, like `pendingApprovals`. */
+  progressByCall?: MessageExtras['progressByCall'];
 }
 
 /**
@@ -145,6 +147,7 @@ export function VariantCard({
   onResolveApproval,
   pendingAsks = [],
   onAnswerAsk,
+  progressByCall,
 }: VariantCardProps): JSX.Element {
   const metrics = useVariantMetrics(variant, usage, models);
 
@@ -163,7 +166,7 @@ export function VariantCard({
         </span>
       </div>
 
-      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} />
+      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} {...(progressByCall ? { progressByCall } : {})} />
 
       <div className="flex items-center justify-between gap-2">
         {/* One cut off when its machine went away is that machine's to finish: regenerate instead (forward.ts keepCutOffReply). */}
@@ -347,6 +350,7 @@ export function VariantTabs({
               onResolveApproval={onResolveApproval}
               pendingAsks={extras[active.id]?.pendingAsks ?? []}
               onAnswerAsk={onAnswerAsk}
+              {...(extras[active.id]?.progressByCall ? { progressByCall: extras[active.id]?.progressByCall } : {})}
             />
           </div>
         )
@@ -383,6 +387,7 @@ export function VariantGrid({
           onResolveApproval={onResolveApproval}
           pendingAsks={extras[v.id]?.pendingAsks ?? []}
           onAnswerAsk={onAnswerAsk}
+          {...(extras[v.id]?.progressByCall ? { progressByCall: extras[v.id]?.progressByCall } : {})}
         />
       ))}
     </div>

@@ -381,6 +381,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                           onClose={() => setReopenedParentId(null)}
                           onResolveApproval={resolveApproval}
                           onAnswerAsk={answerAsk}
+                        {...(extras[m.id]?.progressByCall ? { progressByCall: extras[m.id]?.progressByCall } : {})}
                         />
                       );
                     }

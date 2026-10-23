@@ -1,5 +1,6 @@
 import type { App, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
+import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
@@ -204,6 +205,12 @@ export interface BrowserLiveState {
   elsewhere?: string;
 }
 export type BrowserLiveEvent = { type: 'state'; state: BrowserLiveState } | { type: 'frame'; seq: number; jpeg: string };
+
+export interface MediaModelsResult {
+  models: { id: string; label: string }[];
+  checkpoints: string[];
+  checkpointsError?: string;
+}
 
 export interface CreateConnectionBody {
   name: string;
@@ -540,6 +547,18 @@ export const api = {
     delete: (id: string) => del(`/connections/${id}`),
     test: (id: string) => post<{ ok: boolean; message: string; latencyMs: number }>(`/connections/${id}/test`),
     discoverModels: (id: string) => post<ModelInfo[]>(`/connections/${id}/discover-models`),
+    /** A generation connection's models or workflows for the pickers; ComfyUI also lists the model files it has (`checkpointsError` when it couldn't say). */
+    mediaModels: (id: string, media: 'image' | 'video') =>
+      request<MediaModelsResult>(`/connections/${encodeURIComponent(id)}/media-models?media=${media}`),
+  },
+
+  /** ComfyUI workflows, built-in (`builtin:` ids, read-only) and imported. */
+  mediaWorkflows: {
+    list: () => request<MediaWorkflow[]>('/media/workflows'),
+    detect: (graph: unknown) => post<{ bindings: MediaWorkflow['bindings']; problem: string | null }>('/media/workflows/detect', { graph }),
+    create: (body: { name: string; media: 'image' | 'video'; graph: unknown; bindings: MediaWorkflow['bindings']; checkpoint?: string }) =>
+      post<MediaWorkflow>('/media/workflows', body),
+    delete: (id: string) => del(`/media/workflows/${encodeURIComponent(id)}`),
   },
 
   models: {
@@ -938,6 +957,9 @@ export const api = {
      * Use this, not `contentUrl`, for the images in a tool result.
      */
     toolImageUrl: (chatId: string, messageId: string, attachmentId: string) =>
+      apiUrl(`/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/tool-images/${encodeURIComponent(attachmentId)}`),
+    /** The same scoped route serves a tool's video (it supports Range). */
+    toolMediaUrl: (chatId: string, messageId: string, attachmentId: string) =>
       apiUrl(`/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/tool-images/${encodeURIComponent(attachmentId)}`),
     /**
      * True only for the narrow raster-image allowlist that

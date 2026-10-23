@@ -867,4 +867,44 @@ describe('Message user notes', () => {
     expect(text.indexOf('Looking at it.')).toBeLessThan(text.indexOf('also check the tests'));
     expect(text.indexOf('also check the tests')).toBeLessThan(text.indexOf('Checking the tests too.'));
   });
+  describe('generation', () => {
+    const call = { type: 'tool-call', id: 't1', name: 'generate_image', args: { prompt: 'a barn' } } as const;
+
+    it('shows a generation ask as its card', () => {
+      const ask = { kind: 'generation' as const, toolName: 'generate_image', media: 'image' as const, prompt: 'a barn', negativePrompt: null, settings: '1024×1024', id: 'g1', chatId: 'c1', messageId: 'm1' };
+      render(<Message message={base({ status: 'streaming', parts: [call] })} pendingAsks={[ask]} onAnswerAsk={vi.fn(async () => {})} />);
+      expect(screen.getByTestId('ask-card-g1')).toHaveAttribute('data-kind', 'generation');
+    });
+
+    it('shows a finished generate_image result as the image, outside the tool fold', () => {
+      const parts: Part[] = [
+        call,
+        {
+          type: 'tool-result',
+          id: 't1',
+          name: 'generate_image',
+          isError: false,
+          result: [
+            { type: 'text', text: 'Generated an image with prompt: "a barn"; negative: none; seed 1; 1024×1024; SDXL.' },
+            { type: 'image', attachmentId: 'a1', mimeType: 'image/png' },
+          ],
+        },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByTestId('generated-image').getAttribute('src')).toBe('/api/chats/c1/messages/m1/tool-images/a1');
+      expect(screen.getByText(/Generated an image/)).toBeInTheDocument();
+    });
+
+    it('keeps a failed generation as an ordinary tool result', () => {
+      const parts: Part[] = [call, { type: 'tool-result', id: 't1', name: 'generate_image', isError: true, result: { error: true, code: 'backend', message: 'ComfyUI is down' } }];
+      render(<Message message={base({ parts })} />);
+      expect(screen.queryByTestId('generated-image')).toBeNull();
+      expect(screen.getByText(/ComfyUI is down/)).toBeInTheDocument();
+    });
+
+    it('shows progress on a running generation call', () => {
+      render(<Message message={base({ status: 'streaming', parts: [call] })} progressByCall={{ t1: { stage: 'generating', step: 12, steps: 30 } }} />);
+      expect(screen.getByText('Generating… step 12 of 30')).toBeInTheDocument();
+    });
+  });
 });

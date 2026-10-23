@@ -19,7 +19,9 @@ vi.mock('../../state/api.js', async (importOriginal) => {
         delete: vi.fn(),
         test: vi.fn(),
         discoverModels: vi.fn(),
+        mediaModels: vi.fn(),
       },
+      mediaWorkflows: { list: vi.fn(async () => []), detect: vi.fn(), create: vi.fn(), delete: vi.fn() },
     },
   };
 });
@@ -143,6 +145,36 @@ describe('ConnectionsPanel', () => {
 
     expect(screen.getByTestId('api-key-status')).toHaveTextContent(/no key is currently set/i);
     expect(screen.getByLabelText('Replace API key')).toHaveValue('');
+  });
+
+  it.each([
+    ['comfyui', 'ComfyUI (recommended)', 'http://127.0.0.1:8188'],
+    ['a1111', 'Automatic1111', 'http://127.0.0.1:7860'],
+    ['openai_images', 'OpenAI-compatible images', 'http://127.0.0.1:8080/v1'],
+  ])('labels the %s kind and suggests its usual address', async (kind, label, placeholder) => {
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Connection kind'), kind);
+    expect(screen.getByLabelText('Base URL')).toHaveAttribute('placeholder', placeholder);
+    expect(screen.queryByTestId('workflows-section')).toBeNull();
+  });
+
+  it('lists ComfyUI first among the generation kinds', async () => {
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    const names = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(names.indexOf('ComfyUI (recommended)')).toBeLessThan(names.indexOf('Automatic1111'));
+  });
+
+  it("shows a ComfyUI connection's workflows in its edit form, and no other kind's", async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cu', name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' })]);
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByText('Comfy'));
+    expect(await screen.findByTestId('workflows-section')).toBeInTheDocument();
   });
 
   it('rejects an openai_compatible connection with no base URL client-side, without calling the API', async () => {
