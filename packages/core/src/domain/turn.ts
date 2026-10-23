@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Project, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
+import type { MediaProgress } from '../ports/media.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError, UserNotePart } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
@@ -52,6 +53,8 @@ export type TurnEvent = { messageId: string } & (
   /** A question or plan card raised by this reply's tool call (spec 2026-10-12-thread-cards-design), relayed like approvals. */
   | { type: 'ask-request'; ask: UserAsk }
   | { type: 'ask-resolved'; askId: string }
+  /** A generation call's progress (the media tools), relayed like asks. Live only: replayed from the stream buffer, never stored. */
+  | { type: 'tool-progress'; callId: string; progress: MediaProgress }
   /**
    * The capability-fallback disclosure (task 21 decision #3), synthesised by
    * `runVariant` itself -- like `approval-request`/`approval-resolved`, this
@@ -370,6 +373,9 @@ export class TurnRunner {
           break;
         case 'ask-resolved':
           this.emit({ messageId: event.messageId, type: 'ask-resolved', askId: event.askId });
+          break;
+        case 'progress':
+          this.emit({ messageId: event.messageId, type: 'tool-progress', callId: event.callId, progress: event.progress });
           break;
       }
     });

@@ -219,6 +219,25 @@ describe('subagent events', () => {
   });
 });
 
+describe('tool-progress', () => {
+  const progress: TurnEvent = { messageId: 'm1', type: 'tool-progress', callId: 't1', progress: { stage: 'generating', step: 4, steps: 20 } };
+
+  it('replays tool-progress from hello', () => {
+    const call: TurnEvent = { messageId: 'm1', type: 'tool-call', id: 't1', name: 'generate_image', args: { prompt: 'p' } };
+    const replayed = applyHelloBuffer(baseMessage(), [call, progress], 'streaming');
+    expect(replayed.extras.progressByCall).toEqual({ t1: { stage: 'generating', step: 4, steps: 20 } });
+    const after = applyEventToMessage(replayed.message, replayed.extras, { messageId: 'm1', type: 'tool-result', id: 't1', name: 'generate_image', result: [], isError: false });
+    expect(after.extras.progressByCall ?? {}).toEqual({});
+  });
+
+  it('keeps the latest progress per call and drops it all when the message stops streaming', () => {
+    let acc = replayEvents(baseMessage(), emptyExtras, [progress, { ...progress, progress: { stage: 'saving' } }]);
+    expect(acc.extras.progressByCall).toEqual({ t1: { stage: 'saving' } });
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status: 'cancelled' });
+    expect(acc.extras.progressByCall ?? {}).toEqual({});
+  });
+});
+
 describe('user-note', () => {
   it('reducer appends a user-note part', () => {
     const part = { type: 'user-note' as const, noteId: 'n1', text: 'also this', attachments: [] };

@@ -219,7 +219,11 @@ export class StreamRegistry {
     }
     if (!buffer) return; // Unknown to us -- registerTurn() was never called for it; nothing to attach this to.
 
-    buffer.events.push(event);
+    // A run of one call's progress keeps only its latest in the buffer: a replay
+    // needs no more, and a long video would otherwise fill it with steps.
+    const last = buffer.events.at(-1);
+    if (event.type === 'tool-progress' && last?.type === 'tool-progress' && last.callId === event.callId) buffer.events[buffer.events.length - 1] = event;
+    else buffer.events.push(event);
     if (event.type === 'status') {
       buffer.status = event.status;
       if (event.status !== 'streaming') this.scheduleEviction(buffer);

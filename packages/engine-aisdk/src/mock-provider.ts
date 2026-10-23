@@ -268,7 +268,9 @@ function firstHeading(snapshot: string): string | null {
  * rest of that line through the real tool when offered, then its output
  * ("I ran it in the sandbox: ..." for a sandboxed one). `#browser <url>` ->
  * a `browser` `open` of that address through the real tool when offered,
- * then the page's first heading.
+ * then the page's first heading. `#image <prompt>` / `#video <prompt>` -> a
+ * `generate_image` / `generate_video` call with the rest of that line through
+ * the real tool when offered, then "Done.".
  * `#computer` -> a screenshot, a click at (10, 20) and a short `type` through
  * the real `computer` tool when offered, then a slow reply (20 chunks a
  * second apart) that Stop can cancel; a step that fails ends it with a short
@@ -368,6 +370,12 @@ export class MockChatEngine implements ChatEngine {
     const browse = /#browser[ \t]+(\S+)/.exec(prompt);
     if (browse) {
       yield* this.streamBrowserTurn(req, browse[1]!, tokensIn);
+      return;
+    }
+
+    const generate = /#(image|video)[ \t]+([^\r\n]+)/.exec(prompt);
+    if (generate) {
+      yield* this.streamMediaTurn(req, generate[1] === 'image' ? 'generate_image' : 'generate_video', generate[2]!.trim(), tokensIn);
       return;
     }
 
@@ -669,6 +677,26 @@ export class MockChatEngine implements ChatEngine {
       yield { type: 'text-delta', text: chunk };
     }
     yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /**
+   * `#image <prompt>` / `#video <prompt>` (media-generation spec): one
+   * generation through the real tool when offered, with the rest of the line
+   * as its prompt. The result goes out as the tool returned it (the text and
+   * the media), not as a JSON string, so `TurnRunner` keeps the media. Then
+   * "Done.", or why it didn't work.
+   */
+  private async *streamMediaTurn(req: EngineRequest, name: string, prompt: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-${name}-${randomUUID()}`;
+    const args = { prompt };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name, args };
+    const tool = req.tools.find((t) => t.name === name);
+    const result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: `No ${name} tool was offered.` };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name, result, isError };
+    yield* this.answer(req, isError ? `The generation didn't work: ${String((result as { message?: unknown }).message ?? JSON.stringify(result))}` : 'Done.', tokensIn);
   }
 
   /**

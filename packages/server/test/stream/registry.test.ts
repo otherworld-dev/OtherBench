@@ -697,3 +697,25 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
     expect(got).toEqual([{ type: 'messages-changed', chatId: 'c1' }]);
   });
 });
+
+describe('StreamRegistry and generation progress', () => {
+  it("buffers tool-progress for a live reply's hello, keeping only the latest of a run for one call", () => {
+    const store = new InMemoryStore();
+    let approvalListener: ((event: ToolApprovalEvent) => void) | null = null;
+    const toolProvider = { onApprovalEvent: (cb: (event: ToolApprovalEvent) => void) => { approvalListener = cb; return () => {}; } } as unknown as ToolProvider;
+    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) } as ChatEngine, { toolProvider });
+    const registry = new StreamRegistry(runner, store);
+    registry.registerTurn('c1', ['m1']);
+    const got: unknown[] = [];
+    registry.subscribe('c1', (e) => got.push(e));
+    for (const step of [1, 2, 3]) approvalListener!({ type: 'progress', messageId: 'm1', callId: 't1', progress: { stage: 'generating', step, steps: 3 } });
+    approvalListener!({ type: 'progress', messageId: 'm1', callId: 't2', progress: { stage: 'queued' } });
+    // Every event still goes out live.
+    expect(got).toHaveLength(4);
+    const events = registry.snapshot('c1').find((b) => b.messageId === 'm1')?.events;
+    expect(events).toEqual([
+      { messageId: 'm1', type: 'tool-progress', callId: 't1', progress: { stage: 'generating', step: 3, steps: 3 } },
+      { messageId: 'm1', type: 'tool-progress', callId: 't2', progress: { stage: 'queued' } },
+    ]);
+  });
+});

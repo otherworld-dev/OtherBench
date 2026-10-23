@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
@@ -662,13 +664,85 @@ describe('generation connection kinds', () => {
     expect(String((await json(res))['error'])).toContain('baseUrl');
   });
 
-  it('refuses discover-models and answers test without throwing', async () => {
+  it('refuses discover-models for a generation connection', async () => {
     const created = await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' }));
-    const id = created['id'] as string;
-    const discover = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+    const discover = await app().request(`/api/connections/${created['id'] as string}/discover-models`, { method: 'POST' });
     expect(discover.status).toBe(400);
-    const test = await app().request(`/api/connections/${id}/test`, { method: 'POST' });
-    expect(test.status).toBe(200);
-    expect((await json(test))['ok']).toBe(false);
+  });
+
+  describe('against a fake ComfyUI', () => {
+    let server: Server | undefined;
+    let hits: string[] = [];
+    let up = true;
+
+    async function startComfy(): Promise<string> {
+      hits = [];
+      up = true;
+      server = createServer((req, res) => {
+        hits.push(req.url ?? '');
+        const send = (status: number, body: unknown) => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        if (!up) return send(500, { error: 'down' });
+        if (req.url === '/system_stats') return send(200, { system: { os: 'nt' }, devices: [] });
+        if (req.url === '/object_info/CheckpointLoaderSimple') return send(200, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors'], {}] } } } });
+        if (req.url === '/object_info/UNETLoader') return send(200, { UNETLoader: { input: { required: { unet_name: [['wan2.2_ti2v_5B_fp16.safetensors'], {}] } } } });
+        send(404, {});
+      });
+      await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+      return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    }
+
+    afterEach(async () => {
+      server?.closeAllConnections();
+      await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+      server = undefined;
+    });
+
+    it('Test calls the backend and records the status like a chat test', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const ok = await app().request(`/api/connections/${id}/test`, { method: 'POST' });
+      expect(ok.status).toBe(200);
+      expect(await json(ok)).toMatchObject({ ok: true });
+      expect(hits).toContain('/system_stats');
+      expect(container.store.connections.get(id)).toMatchObject({ status: 'ok' });
+
+      up = false;
+      const bad = await json(await app().request(`/api/connections/${id}/test`, { method: 'POST' }));
+      expect(bad['ok']).toBe(false);
+      expect(typeof bad['message']).toBe('string');
+      expect(container.store.connections.get(id)).toMatchObject({ status: 'error', statusMessage: bad['message'] });
+    });
+
+    it('media-models lists the workflows and the server checkpoints', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const image = await app().request(`/api/connections/${id}/media-models?media=image`);
+      expect(image.status).toBe(200);
+      expect(await image.json()).toEqual({ models: [{ id: 'builtin:sdxl-txt2img', label: 'SDXL' }], checkpoints: ['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors'] });
+      const video = (await (await app().request(`/api/connections/${id}/media-models?media=video`)).json()) as { models: { id: string }[]; checkpoints: string[] };
+      expect(video.models.map((m) => m.id)).toEqual(['builtin:wan22-5b-t2v']);
+      expect(video.checkpoints).toEqual(['wan2.2_ti2v_5B_fp16.safetensors']);
+    });
+
+    it('media-models refuses a bad media and a chat connection', async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      expect((await app().request(`/api/connections/${id}/media-models?media=audio`)).status).toBe(400);
+      const chat = (await json(await post({ name: 'Chat', kind: 'openai', apiKey: 'sk' })))['id'] as string;
+      expect((await app().request(`/api/connections/${chat}/media-models?media=image`)).status).toBe(400);
+    });
+
+    it('media-models still lists workflows when the checkpoints cannot be read', async () => {
+      const baseUrl = await startComfy();
+      up = false;
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const body = (await (await app().request(`/api/connections/${id}/media-models?media=image`)).json()) as Record<string, unknown>;
+      expect(body['models']).toEqual([{ id: 'builtin:sdxl-txt2img', label: 'SDXL' }]);
+      expect(body['checkpoints']).toEqual([]);
+      expect(typeof body['checkpointsError']).toBe('string');
+    });
   });
 });

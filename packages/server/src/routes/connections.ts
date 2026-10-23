@@ -4,12 +4,15 @@ import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@otherbench/core/domain/availability.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
-import type { DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
+import type { ConnectionTestResult, DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
+import type { MediaConnection } from '@otherbench/core/ports/media.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@otherbench/core/types/config.js';
 import { classifyProviderError } from '@otherbench/core/types/errors.js';
 import type { ErrorKind } from '@otherbench/core/types/messages.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
+import { comfyCheckpoints } from '@otherbench/tools/media/comfyui.js';
 import type { Container } from '../container.js';
+import { backendOf, mediaConnectionOf } from '../media.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
 const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
@@ -153,6 +156,31 @@ function upsertDiscoveredModels(container: Container, connectionId: string, disc
   return result;
 }
 
+/** How long a generation connection's Test or model listing may take. */
+const MEDIA_TIMEOUT_MS = 15_000;
+
+/** The request's signal with the time limit added, and the words for a failure under it. */
+function mediaCall(conn: Connection, request: AbortSignal): { signal: AbortSignal; failure: (err: unknown) => string } {
+  const timeout = AbortSignal.timeout(MEDIA_TIMEOUT_MS);
+  return {
+    signal: AbortSignal.any([request, timeout]),
+    failure: (err) =>
+      timeout.aborted ? `${conn.baseUrl ?? conn.name} didn't answer within ${MEDIA_TIMEOUT_MS / 1000} seconds.` : (err instanceof Error ? err.message : String(err)).slice(0, 500),
+  };
+}
+
+/** A generation connection's Test: its backend's own check, reported as a chat test's is. */
+async function testGeneration(container: Container, conn: Connection, request: AbortSignal): Promise<ConnectionTestResult> {
+  const startedAt = Date.now();
+  const { signal, failure } = mediaCall(conn, request);
+  try {
+    await backendOf(container.store, await mediaConnectionOf(container, conn)).test(signal);
+    return { ok: true, message: 'Connected.', latencyMs: Date.now() - startedAt };
+  } catch (err) {
+    return { ok: false, message: failure(err), latencyMs: Date.now() - startedAt };
+  }
+}
+
 export function connectionsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -269,16 +297,44 @@ export function connectionsRoutes(container: Container): Hono {
   app.post('/:id/test', async (c) => {
     const id = c.req.param('id');
     const conn = getConnectionOrThrow(container, id);
-    // Generation connections aren't tested through a chat engine; their test arrives with the media backends.
-    if (isGenerationKind(conn.kind)) return c.json({ ok: false, message: 'Testing a generation connection is not available yet.' });
-    const apiKey = conn.secretRef ? await container.secrets.get(conn.secretRef) : null;
-    const result = await container.engine.testConnection(conn, apiKey);
+    // A generation connection is tested by its backend, never a chat engine.
+    let result: ConnectionTestResult;
+    if (isGenerationKind(conn.kind)) {
+      result = await testGeneration(container, conn, c.req.raw.signal);
+    } else {
+      const apiKey = conn.secretRef ? await container.secrets.get(conn.secretRef) : null;
+      result = await container.engine.testConnection(conn, apiKey);
+    }
     container.store.connections.update(id, {
       status: result.ok ? 'ok' : 'error',
       statusMessage: result.message,
       checkedAt: Date.now(),
     });
     return c.json(result);
+  });
+
+  // The generation pickers: a generation connection's models or workflows, and for ComfyUI the model files it has.
+  app.get('/:id/media-models', async (c) => {
+    const conn = getConnectionOrThrow(container, c.req.param('id'));
+    if (!isGenerationKind(conn.kind)) throw new HTTPException(400, { message: 'Only a generation connection has generation models.' });
+    const media = c.req.query('media');
+    if (media !== 'image' && media !== 'video') throw new HTTPException(400, { message: '"media" must be "image" or "video".' });
+    const { signal, failure } = mediaCall(conn, c.req.raw.signal);
+    let models: { id: string; label: string }[];
+    let mc: MediaConnection;
+    try {
+      mc = await mediaConnectionOf(container, conn);
+      models = await backendOf(container.store, mc).listModels(media, signal);
+    } catch (err) {
+      throw new HTTPException(502, { message: failure(err) });
+    }
+    if (mc.kind !== 'comfyui') return c.json({ models, checkpoints: [] });
+    // The workflows are OtherBench's own: they are listed even when ComfyUI can't say which files it has.
+    try {
+      return c.json({ models, checkpoints: await comfyCheckpoints(mc, signal, media) });
+    } catch (err) {
+      return c.json({ models, checkpoints: [], checkpointsError: failure(err) });
+    }
   });
 
   app.post('/:id/discover-models', async (c) => {

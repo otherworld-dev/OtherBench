@@ -17,6 +17,7 @@ import { allowedWhilePlanning, isDeferrableInAutoMode, PermissionBroker, UNATTEN
 import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { UserAsks } from '@otherbench/core/domain/user-asks.js';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import type { MediaProgress } from '@otherbench/core/ports/media.js';
 import {
   NO_APPROVAL_REASON,
   type ApprovalChoice,
@@ -45,6 +46,7 @@ import type { BrowserManager } from './browser/manager.js';
 import { browserTool, isSensitiveBrowserKey, pageFailure } from './browser/tool.js';
 import { computerTool } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
+import { mediaTools, type MediaHost } from './media/tool.js';
 import { LiveCallCache, LiveCallLimiter, LiveRefusalAudit, shapeLiveResult } from './live-calls.js';
 import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
@@ -66,6 +68,8 @@ export interface OtherBenchToolProviderOptions {
   browser?: BrowserManager;
   /** The desktop shell's computer-use driver (spec 2026-10-12-computer-use-design); absent everywhere but the desktop app on Windows. */
   computer?: ComputerDriver;
+  /** Where image and video generation finds its backends (server/src/media.ts). Without it, no profile gets the media tools. */
+  media?: MediaHost;
 }
 
 const LIVE_TIMEOUT_MS = 30_000;
@@ -473,6 +477,7 @@ export class OtherBenchToolProvider implements ToolProvider {
   private readonly liveRefusals: LiveRefusalAudit;
   private readonly browser: BrowserManager | null;
   private readonly computer: ComputerDriver | null;
+  private readonly media: MediaHost | null;
 
   constructor(
     private readonly store: Store,
@@ -491,6 +496,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     this.asks = new UserAsks((event) => this.notify(event));
     this.browser = options.browser ?? null;
     this.computer = options.computer ?? null;
+    this.media = options.media ?? null;
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -531,6 +537,9 @@ export class OtherBenchToolProvider implements ToolProvider {
     // Computer use (spec 2026-10-12-computer-use-design section 4): only when the
     // profile turns it on AND the desktop shell on this machine can carry it out.
     if (policy.computer === true && this.computer?.available()) raw.push(computerTool(this.computer, this.store));
+    // Image and video generation (media-generation spec): each tool only when the
+    // profile chose a backend for it. Not relayed to Claude Code this round.
+    if (policy.media && this.media) raw.push(...mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p)));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
@@ -786,6 +795,11 @@ export class OtherBenchToolProvider implements ToolProvider {
   /** Questions and plans for the user (spec 2026-10-12-thread-cards-design): raised on the same event channel as approval cards. */
   askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
     return this.asks.ask(ctx, input);
+  }
+
+  /** A generation call's progress, on the same event channel as cards. A call with no id has nothing to tie it to, so it gets none. */
+  private relayProgress(ctx: ToolContext, progress: MediaProgress): void {
+    if (ctx.toolCallId) this.notify({ type: 'progress', messageId: ctx.messageId, callId: ctx.toolCallId, progress });
   }
 
   answerAsk(askId: string, reply: AskReply): AskAnswerResult {

@@ -1,4 +1,5 @@
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
+import type { MediaProgress } from '@otherbench/core/ports/media.js';
 import type { ApprovalRequest, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part } from '@otherbench/core/types/messages.js';
 import type { Usage } from '@otherbench/core/types/usage.js';
@@ -20,6 +21,8 @@ export interface MessageExtras {
   pendingApprovals: ApprovalRequest[];
   /** Questions and plans this message's tool calls are waiting on (spec 2026-10-12-thread-cards-design). Absent means none. */
   pendingAsks?: UserAsk[];
+  /** The latest progress of each generation call still running, by tool call id. Absent means none. */
+  progressByCall?: Record<string, MediaProgress>;
 }
 
 export const emptyExtras: MessageExtras = { usage: null, pendingApprovals: [] };
@@ -54,7 +57,7 @@ export function applyEventToMessage(
           ...message,
           parts: [...message.parts, { type: 'tool-result', id: event.id, name: event.name, result: event.result, isError: event.isError }],
         },
-        extras,
+        extras: withoutProgress(extras, event.id),
       };
     case 'user-note':
       return { message: { ...message, parts: [...message.parts, event.part] }, extras };
@@ -102,6 +105,9 @@ export function applyEventToMessage(
       return { message, extras: { ...extras, pendingAsks: [...(extras.pendingAsks ?? []), event.ask] } };
     case 'ask-resolved':
       return { message, extras: { ...extras, pendingAsks: (extras.pendingAsks ?? []).filter((a) => a.id !== event.askId) } };
+    case 'tool-progress':
+      if (typeof event.callId !== 'string' || typeof event.progress !== 'object' || event.progress === null) return { message, extras };
+      return { message, extras: { ...extras, progressByCall: { ...extras.progressByCall, [event.callId]: event.progress } } };
     case 'subagent':
       // The same fold the server checkpoints with (core domain/parts.ts), so a
       // live card and one rebuilt from the store agree. A hello replay starts
@@ -114,9 +120,17 @@ export function applyEventToMessage(
   }
 }
 
+/** A message no longer streaming waits on no card and runs no generation. */
 function withoutApprovals(extras: MessageExtras): MessageExtras {
-  if (extras.pendingApprovals.length === 0 && (extras.pendingAsks ?? []).length === 0) return extras;
-  return { ...extras, pendingApprovals: [], pendingAsks: [] };
+  const running = Object.keys(extras.progressByCall ?? {}).length > 0;
+  if (extras.pendingApprovals.length === 0 && (extras.pendingAsks ?? []).length === 0 && !running) return extras;
+  return { ...extras, pendingApprovals: [], pendingAsks: [], progressByCall: {} };
+}
+
+function withoutProgress(extras: MessageExtras, callId: string): MessageExtras {
+  if (!extras.progressByCall || !Object.hasOwn(extras.progressByCall, callId)) return extras;
+  const { [callId]: _done, ...rest } = extras.progressByCall;
+  return { ...extras, progressByCall: rest };
 }
 
 /** Folds a whole ordered list of events onto a message, in order. */
