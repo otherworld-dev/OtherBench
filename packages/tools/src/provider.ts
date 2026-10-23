@@ -407,6 +407,11 @@ function capMcpText(content: unknown): unknown {
 
 // ---------------------------------------------------------------------------
 
+/** A fresh plain object holding the model's own fields, so an approval can be tied to this object and no other. */
+function plainObject(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
+}
+
 /**
  * Assembles the tools one turn's `EngineRequest.tools` is populated with --
  * built-in fs/shell tools plus every allowlisted MCP server's currently
@@ -538,7 +543,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     // profile turns it on AND the desktop shell on this machine can carry it out.
     if (policy.computer === true && this.computer?.available()) raw.push(computerTool(this.computer, this.store));
     // Image and video generation (media-generation spec): each tool only when the
-    // profile chose a backend for it. Not relayed to Claude Code this round.
+    // profile chose a backend for it. Claude Code gets them through `relayOtherBenchTools`.
     if (policy.media && this.media) raw.push(...mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p)));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
@@ -551,8 +556,8 @@ export class OtherBenchToolProvider implements ToolProvider {
    * very same spec first): the allowlisted MCP servers' tools, the sandboxed
    * run_command when the shell runs in the sandbox and this OtherBench has one
    * (spec 2026-10-12-sandbox-design, "Claude Code"), and OtherBench's own relayed
-   * tools (`relayOtherBenchTools`: the browser and computer use, each of which runs
-   * only arguments `requestApproval` approved). Never the host run_command: a
+   * tools (`relayOtherBenchTools`: the browser, computer use and image and video
+   * generation, each of which runs only arguments `requestApproval` approved). Never the host run_command: a
    * profile that wants the sandbox gets it or nothing.
    */
   relayTools(policy: ToolPolicy): ToolSpec[] {
@@ -571,9 +576,10 @@ export class OtherBenchToolProvider implements ToolProvider {
   }
 
   /**
-   * OtherBench's own tools for the Claude Code relay: the browser and the computer
-   * tool, each when the profile turns it on (and, for computer use, the
-   * desktop shell can carry it out). The Claude Code gate approves each call
+   * OtherBench's own tools for the Claude Code relay: the browser, the computer
+   * tool and generate_image / generate_video, each when the profile turns it on
+   * (for computer use, when the desktop shell can carry it out too; for the
+   * generators, when the profile chose a backend and there is a media host). The Claude Code gate approves each call
    * through `requestApproval`, which hands back the described arguments, and
    * the engine keeps them as an approval ticket.
    *
@@ -587,6 +593,15 @@ export class OtherBenchToolProvider implements ToolProvider {
     const specs: ToolSpec[] = [];
     if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy)));
     if (policy.computer === true && this.computer?.available()) specs.push(this.relayed(computerTool(this.computer, this.store)));
+    // The generators have no describeCall of their own (an API model's gate needs none). This one
+    // copies the model's arguments, which is what turns on the ticket and the identity check:
+    // `runRelayedCall` runs only that object. The broker still decides on it (a card, or the
+    // generation ask `execute` raises under confirmPrompts).
+    if (policy.media && this.media) {
+      for (const tool of mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p))) {
+        specs.push(this.relayed({ ...tool, describeCall: async (args: unknown) => ({ args: plainObject(args), risk: 'execute' as const }) }));
+      }
+    }
     return specs;
   }
 

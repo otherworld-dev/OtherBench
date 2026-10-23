@@ -404,8 +404,43 @@ describe('the provider', () => {
     expect(store.audit.list('chat-1').at(-1)!.argsRedacted).toEqual({ prompt: 'the edited prompt', negative_prompt: 'blurry', seed: 3 });
   });
 
-  it('is not relayed to Claude Code', () => {
-    const p = provider({ backendFor: async () => ({ backend: new FakeBackend(), label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) });
-    expect(p.relayTools(policy()).map((t) => t.name)).toEqual([]);
+  const takes = { label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false };
+
+  it('is relayed to Claude Code for each choice the profile has, and only with a media host', () => {
+    const p = provider({ backendFor: async () => ({ backend: new FakeBackend(), ...takes }) });
+    const imageOnly = policy({ media: { image: { connectionId: 'gen', model: 'm' } } });
+    expect(p.relayTools(imageOnly).map((t) => [t.name, t.source, t.risk])).toEqual([['generate_image', 'media', 'execute']]);
+    expect(p.relayTools(policy()).map((t) => t.name)).toEqual(['generate_image', 'generate_video']);
+    expect(p.relayTools(policy({ media: undefined })).map((t) => t.name)).toEqual([]);
+    expect(provider().relayTools(policy()).map((t) => t.name)).toEqual([]);
+  });
+
+  it('describes a relayed call as a fresh plain copy of the model arguments, risk execute', async () => {
+    const p = provider({ backendFor: async () => ({ backend: new FakeBackend(), ...takes }) });
+    const spec = p.relayTools(policy()).find((t) => t.name === 'generate_image')!;
+    const raw = { prompt: 'a red cube', seed: 7 };
+    const described = (await spec.describeCall!(raw, ctx())) as { args: Record<string, unknown>; risk: string };
+    expect(described).toEqual({ args: raw, risk: 'execute' });
+    expect(described.args).not.toBe(raw);
+    expect(Object.getPrototypeOf(described.args)).toBe(Object.prototype);
+    expect(await spec.describeCall!('nope', ctx())).toEqual({ args: {}, risk: 'execute' });
+  });
+
+  it('runs a relayed call only with arguments requestApproval approved, once', async () => {
+    const backend = new FakeBackend();
+    const p = provider({ backendFor: async () => ({ backend, ...takes }) });
+    const pol = policy({ media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } });
+    const spec = p.relayTools(pol).find((t) => t.name === 'generate_image')!;
+    const refusal = { error: true, code: 'no_approval' };
+    expect(await spec.execute({ prompt: 'p' }, ctx())).toMatchObject(refusal);
+    const outcome = await p.requestApproval(spec, { prompt: 'p' }, pol, ctx());
+    if (!('allowed' in outcome) || !outcome.allowed) throw new Error('expected an approval');
+    expect(await spec.execute(structuredClone(outcome.args), ctx())).toMatchObject(refusal);
+    expect(backend.requests).toEqual([]);
+    const ran = (await spec.execute(outcome.args, ctx())) as Item[];
+    expect(ran[1]!.type).toBe('image');
+    expect(backend.requests).toHaveLength(1);
+    expect(await spec.execute(outcome.args, ctx())).toMatchObject(refusal);
+    expect(backend.requests).toHaveLength(1);
   });
 });
