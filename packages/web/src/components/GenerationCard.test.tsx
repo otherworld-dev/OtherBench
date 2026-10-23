@@ -34,6 +34,19 @@ describe('GenerationCard', () => {
     expect(screen.queryByText('Negative prompt')).toBeNull();
   });
 
+  it('shows an empty negative prompt as None, and lets one be written in Edit', async () => {
+    const onAnswer = vi.fn(async () => {});
+    const user = userEvent.setup();
+    render(<GenerationCard ask={{ ...ask, negativePrompt: '' }} profileName="Sonnet" onAnswer={onAnswer} />);
+    expect(screen.getByText('Negative prompt')).toBeInTheDocument();
+    expect(screen.getByText('None')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByLabelText('Negative prompt')).toHaveValue('');
+    await user.type(screen.getByLabelText('Negative prompt'), 'fog');
+    await user.click(screen.getByRole('button', { name: 'Generate' }));
+    expect(onAnswer).toHaveBeenCalledWith('g1', { generate: { prompt: 'a lighthouse at dusk', negativePrompt: 'fog' } });
+  });
+
   it('Generate sends the prompt unchanged', async () => {
     const onAnswer = vi.fn(async () => {});
     render(<GenerationCard ask={ask} profileName="Sonnet" onAnswer={onAnswer} />);

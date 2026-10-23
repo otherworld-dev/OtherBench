@@ -558,6 +558,9 @@ export const api = {
     detect: (graph: unknown) => post<{ bindings: MediaWorkflow['bindings']; problem: string | null }>('/media/workflows/detect', { graph }),
     create: (body: { name: string; media: 'image' | 'video'; graph: unknown; bindings: MediaWorkflow['bindings']; checkpoint?: string }) =>
       post<MediaWorkflow>('/media/workflows', body),
+    /** An imported workflow's name, media, bindings or model file (`checkpoint: null` goes back to the graph's own). */
+    update: (id: string, body: { name?: string; media?: 'image' | 'video'; bindings?: MediaWorkflow['bindings']; checkpoint?: string | null }) =>
+      patch<MediaWorkflow>(`/media/workflows/${encodeURIComponent(id)}`, body),
     delete: (id: string) => del(`/media/workflows/${encodeURIComponent(id)}`),
   },
 

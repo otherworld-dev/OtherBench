@@ -8,7 +8,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      mediaWorkflows: { list: vi.fn(), detect: vi.fn(), create: vi.fn(), delete: vi.fn() },
+      mediaWorkflows: { list: vi.fn(), detect: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
       connections: { mediaModels: vi.fn() },
     },
   };
@@ -20,6 +20,7 @@ import { WorkflowsSection } from './WorkflowsSection.js';
 const list = vi.mocked(api.mediaWorkflows.list);
 const detect = vi.mocked(api.mediaWorkflows.detect);
 const create = vi.mocked(api.mediaWorkflows.create);
+const update = vi.mocked(api.mediaWorkflows.update);
 const del = vi.mocked(api.mediaWorkflows.delete);
 const mediaModels = vi.mocked(api.connections.mediaModels);
 
@@ -40,12 +41,60 @@ beforeEach(() => {
   list.mockReset().mockResolvedValue([builtin, mine]);
   detect.mockReset();
   create.mockReset();
+  update.mockReset();
   del.mockReset();
   mediaModels.mockReset().mockResolvedValue({ models: [], checkpoints: ['a.safetensors', 'b.safetensors'] });
 });
 afterEach(cleanup);
 
 describe('WorkflowsSection', () => {
+  it("edits an imported workflow's name, bindings and model file through PATCH; built-in ones have no Edit", async () => {
+    const imported: MediaWorkflow = {
+      id: 'w2', name: 'Imported', media: 'image', graph, builtin: false, checkpoint: 'a.safetensors',
+      bindings: { prompt: { nodeId: '6', input: 'text' }, seed: { nodeId: '3', input: 'seed' }, checkpoint: { nodeId: '4', input: 'ckpt_name' } },
+    };
+    list.mockResolvedValue([builtin, imported]);
+    update.mockResolvedValue(imported);
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await user.click(await screen.findByRole('button', { name: 'Edit workflow Imported' }));
+    expect(screen.queryByRole('button', { name: 'Edit workflow SDXL text to image' })).toBeNull();
+    expect(screen.getByLabelText('Workflow name')).toHaveValue('Imported');
+    expect(screen.getByLabelText('Input for Seed')).toHaveDisplayValue('3 · KSampler · seed');
+    await waitFor(() => expect(screen.getByLabelText('Model file')).toHaveValue('a.safetensors'));
+    await user.clear(screen.getByLabelText('Workflow name'));
+    await user.type(screen.getByLabelText('Workflow name'), 'Renamed');
+    await user.selectOptions(screen.getByLabelText('Input for Seed'), '');
+    await user.selectOptions(screen.getByLabelText('Model file'), 'b.safetensors');
+    await user.click(screen.getByRole('button', { name: 'Save workflow' }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('w2', {
+        name: 'Renamed',
+        media: 'image',
+        bindings: { prompt: { nodeId: '6', input: 'text' }, checkpoint: { nodeId: '4', input: 'ckpt_name' } },
+        checkpoint: 'b.safetensors',
+      }),
+    );
+    expect(create).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('workflow-review')).toBeNull());
+  });
+
+  it("clears an imported workflow's model file back to its own with null", async () => {
+    const imported: MediaWorkflow = {
+      id: 'w2', name: 'Imported', media: 'image', graph, builtin: false, checkpoint: 'a.safetensors',
+      bindings: { prompt: { nodeId: '6', input: 'text' }, checkpoint: { nodeId: '4', input: 'ckpt_name' } },
+    };
+    list.mockResolvedValue([imported]);
+    update.mockResolvedValue(imported);
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await user.click(await screen.findByRole('button', { name: 'Edit workflow Imported' }));
+    await waitFor(() => expect(screen.getByLabelText('Model file')).toHaveValue('a.safetensors'));
+    await user.selectOptions(screen.getByLabelText('Model file'), '');
+    await user.click(screen.getByRole('button', { name: 'Save workflow' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith('w2', expect.objectContaining({ checkpoint: null })));
+  });
+
   it('lists workflows, with Delete only on imported ones', async () => {
     render(<WorkflowsSection connectionId="c1" />);
     expect(await screen.findByText('SDXL text to image')).toBeInTheDocument();

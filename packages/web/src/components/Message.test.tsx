@@ -911,6 +911,14 @@ describe('Message user notes', () => {
       expect(screen.getByTestId('generation-progress')).toBeInTheDocument();
     });
 
+    it('shows no progress while an approval card for the call is still waiting', () => {
+      const request = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'generate_image', risk: 'execute' as const, source: 'media' as const, args: { prompt: 'a barn' }, summary: 'generate_image' };
+      const { rerender } = render(<Message message={base({ status: 'streaming', parts: [call] })} pendingApprovals={[request]} onResolveApproval={async () => {}} />);
+      expect(screen.queryByTestId('generation-progress')).toBeNull();
+      rerender(<Message message={base({ status: 'streaming', parts: [call] })} pendingApprovals={[]} onResolveApproval={async () => {}} />);
+      expect(screen.getByTestId('generation-progress')).toBeInTheDocument();
+    });
+
     it('starts the elapsed time when the progress line first appears, not when the call began', () => {
       vi.useFakeTimers();
       try {

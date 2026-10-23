@@ -121,8 +121,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [generation, setGeneration] = useState<GenerationState>(() => ({
     imageConnectionId: profile?.toolPolicy.media?.image?.connectionId ?? '',
     imageModel: profile?.toolPolicy.media?.image?.model ?? '',
+    imageCheckpoint: profile?.toolPolicy.media?.image?.checkpoint ?? '',
     videoConnectionId: profile?.toolPolicy.media?.video?.connectionId ?? '',
     videoModel: profile?.toolPolicy.media?.video?.model ?? '',
+    videoCheckpoint: profile?.toolPolicy.media?.video?.checkpoint ?? '',
     confirmPrompts: profile?.toolPolicy.media?.confirmPrompts !== false,
   }));
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
@@ -192,9 +194,11 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     }
     // Only when generation is, or was, set up, so a profile that never used it keeps its policy exactly as it was.
     // A choice that was cleared is left out; sending `media` at all replaces the saved one.
+    // An empty checkpoint is the workflow's own, so it is left out.
+    const choice = (connectionId: string, model: string, checkpoint: string) => ({ connectionId, model, ...(checkpoint ? { checkpoint } : {}) });
     const media: MediaPolicy = {
-      ...(generation.imageConnectionId ? { image: { connectionId: generation.imageConnectionId, model: generation.imageModel } } : {}),
-      ...(generation.videoConnectionId ? { video: { connectionId: generation.videoConnectionId, model: generation.videoModel } } : {}),
+      ...(generation.imageConnectionId ? { image: choice(generation.imageConnectionId, generation.imageModel, generation.imageCheckpoint) } : {}),
+      ...(generation.videoConnectionId ? { video: choice(generation.videoConnectionId, generation.videoModel, generation.videoCheckpoint) } : {}),
     };
     const mediaFields: Pick<ToolPolicyBody, 'media'> =
       media.image || media.video || profile?.toolPolicy.media !== undefined ? { media: { ...media, confirmPrompts: generation.confirmPrompts } } : {};

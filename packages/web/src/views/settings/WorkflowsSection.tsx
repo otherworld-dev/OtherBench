@@ -48,12 +48,15 @@ interface Draft {
   media: 'image' | 'video';
   checkpoint: string;
   problem: string | null;
+  /** Set when an imported workflow is being edited rather than a new one reviewed: saving PATCHes it. */
+  editingId?: string;
 }
 
 /**
  * The ComfyUI workflows OtherBench can run, inside a ComfyUI connection's form: the built-in ones, and the ones imported
  * from "Workflow → Export (API)". An import is checked by the server, which guesses which inputs hold the prompt, size and
- * so on; the person confirms or changes each before it is saved.
+ * so on; the person confirms or changes each before it is saved. An imported workflow's name, bindings and model file
+ * can be changed later with Edit, in the same form.
  */
 export function WorkflowsSection({ connectionId }: { connectionId: string }): JSX.Element {
   const [workflows, setWorkflows] = useState<MediaWorkflow[] | null>(null);
@@ -133,6 +136,11 @@ export function WorkflowsSection({ connectionId }: { connectionId: string }): JS
     });
   }
 
+  function startEdit(wf: MediaWorkflow): void {
+    setImportError(null);
+    setDraft({ graph: wf.graph, bindings: wf.bindings, name: wf.name, media: wf.media, checkpoint: wf.checkpoint ?? '', problem: null, editingId: wf.id });
+  }
+
   async function handleSave(): Promise<void> {
     if (!draft) return;
     if (draft.name.trim() === '') {
@@ -141,14 +149,20 @@ export function WorkflowsSection({ connectionId }: { connectionId: string }): JS
     }
     setSaving(true);
     setImportError(null);
+    const checkpoint = draft.bindings.checkpoint && draft.checkpoint !== '' ? draft.checkpoint : null;
     try {
-      await api.mediaWorkflows.create({
-        name: draft.name.trim(),
-        media: draft.media,
-        graph: draft.graph,
-        bindings: draft.bindings,
-        ...(draft.bindings.checkpoint && draft.checkpoint !== '' ? { checkpoint: draft.checkpoint } : {}),
-      });
+      if (draft.editingId) {
+        // The graph stays as imported; null puts the model file back to the graph's own.
+        await api.mediaWorkflows.update(draft.editingId, { name: draft.name.trim(), media: draft.media, bindings: draft.bindings, checkpoint });
+      } else {
+        await api.mediaWorkflows.create({
+          name: draft.name.trim(),
+          media: draft.media,
+          graph: draft.graph,
+          bindings: draft.bindings,
+          ...(checkpoint !== null ? { checkpoint } : {}),
+        });
+      }
       setDraft(null);
       await reload();
     } catch (err) {
@@ -185,9 +199,14 @@ export function WorkflowsSection({ connectionId }: { connectionId: string }): JS
             {wf.builtin || wf.id.startsWith('builtin:') ? (
               <span className="text-xs text-[var(--text-muted)]">built in</span>
             ) : (
-              <button type="button" aria-label={`Delete workflow ${wf.name}`} onClick={() => void handleDelete(wf)} className="btn btn-danger px-2 py-0.5 text-xs">
-                Delete
-              </button>
+              <>
+                <button type="button" aria-label={`Edit workflow ${wf.name}`} onClick={() => startEdit(wf)} className="btn px-2 py-0.5 text-xs">
+                  Edit
+                </button>
+                <button type="button" aria-label={`Delete workflow ${wf.name}`} onClick={() => void handleDelete(wf)} className="btn btn-danger px-2 py-0.5 text-xs">
+                  Delete
+                </button>
+              </>
             )}
           </li>
         ))}
@@ -245,6 +264,7 @@ export function WorkflowsSection({ connectionId }: { connectionId: string }): JS
                 Model file
                 <select aria-label="Model file" value={draft.checkpoint} onChange={(e) => setDraft({ ...draft, checkpoint: e.target.value })} className={select}>
                   <option value="">Keep the workflow&apos;s own</option>
+                  {draft.checkpoint !== '' && !(checkpoints?.checkpoints ?? []).includes(draft.checkpoint) && <option value={draft.checkpoint}>{draft.checkpoint}</option>}
                   {(checkpoints?.checkpoints ?? []).map((c) => (
                     <option key={c} value={c}>
                       {c}

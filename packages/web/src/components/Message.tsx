@@ -562,8 +562,10 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       }
       if (run.length === 0) runStart = i;
       run.push(p);
-      // A generation that is still running shows where it has got to, outside the fold.
-      if (p.type === 'tool-call' && isGenerationTool(p.name) && ctx.replyStreaming && !results.has(p.id) && !ctx.askingTools?.has(p.name)) {
+      // A generation that is still running shows where it has got to, outside the fold. One whose
+      // prompt card or approval card is still waiting hasn't started, so it shows none yet.
+      const waiting = ctx.askingTools?.has(p.name) || ctx.pendingApprovals.some((r) => r.toolName === p.name && !r.subagent);
+      if (p.type === 'tool-call' && isGenerationTool(p.name) && ctx.replyStreaming && !results.has(p.id) && !waiting) {
         addCard(<GenerationProgress key={`progress-${p.id}`} progress={ctx.progress?.[p.id]} />);
       }
       const diff = p.type === 'tool-call' ? editDiffOf(p.name, p.args) : null;

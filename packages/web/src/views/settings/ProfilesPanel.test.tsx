@@ -16,6 +16,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
       sandbox: { status: vi.fn() },
       computer: { status: vi.fn() },
       connections: { mediaModels: vi.fn() },
+      mediaWorkflows: { list: vi.fn() },
     },
   };
 });
@@ -29,6 +30,7 @@ const mockedMcpList = vi.mocked(api.mcpServers.list);
 const mockedSandboxStatus = vi.mocked(api.sandbox.status);
 const mockedComputerStatus = vi.mocked(api.computer.status);
 const mockedMediaModels = vi.mocked(api.connections.mediaModels);
+const mockedWorkflows = vi.mocked(api.mediaWorkflows.list);
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -105,6 +107,7 @@ function reset(): void {
   mockedSandboxStatus.mockReset().mockResolvedValue({ state: 'ready', packages: [], machine: 'This machine' });
   mockedComputerStatus.mockReset().mockResolvedValue({ computerUse: false });
   mockedMediaModels.mockReset().mockResolvedValue({ models: [], checkpoints: [] });
+  mockedWorkflows.mockReset().mockResolvedValue([]);
 }
 
 describe('ProfilesPanel', () => {
@@ -902,6 +905,49 @@ describe('ProfilesPanel generation', () => {
     await waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(
         expect.objectContaining({ toolPolicy: expect.objectContaining({ media: { video: { connectionId: 'comfy', model: 'w1' }, confirmPrompts: false } }) })
+      )
+    );
+  });
+
+  it("offers ComfyUI's model files for a workflow with a checkpoint binding, and saves the one chosen", async () => {
+    arrange();
+    mockedMediaModels.mockResolvedValue({
+      models: [{ id: 'builtin:sdxl-txt2img', label: 'SDXL text to image' }, { id: 'w1', label: 'My flow' }],
+      checkpoints: ['sd_xl_base_1.0.safetensors', 'juggernautXL.safetensors'],
+    });
+    mockedWorkflows.mockResolvedValue([
+      {
+        id: 'builtin:sdxl-txt2img', name: 'SDXL text to image', media: 'image', builtin: true,
+        graph: { '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' } } },
+        bindings: { checkpoint: { nodeId: '4', input: 'ckpt_name' } },
+      },
+      { id: 'w1', name: 'My flow', media: 'image', builtin: false, graph: {}, bindings: {} },
+    ]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    await user.selectOptions(screen.getByLabelText('Image connection'), 'comfy');
+    const picker = await screen.findByLabelText('Image model file');
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      "Workflow's own (sd_xl_base_1.0.safetensors)",
+      'sd_xl_base_1.0.safetensors',
+      'juggernautXL.safetensors',
+    ]);
+    expect(picker).toHaveValue('');
+    await user.selectOptions(picker, 'juggernautXL.safetensors');
+    // A workflow with no model file to choose shows no picker, and a change of workflow drops the choice.
+    await user.selectOptions(screen.getByLabelText('Image workflow'), 'w1');
+    expect(screen.queryByLabelText('Image model file')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Image workflow'), 'builtin:sdxl-txt2img');
+    expect(screen.getByLabelText('Image model file')).toHaveValue('');
+    await user.selectOptions(screen.getByLabelText('Image model file'), 'juggernautXL.safetensors');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolPolicy: expect.objectContaining({ media: { image: { connectionId: 'comfy', model: 'builtin:sdxl-txt2img', checkpoint: 'juggernautXL.safetensors' }, confirmPrompts: true } }),
+        })
       )
     );
   });

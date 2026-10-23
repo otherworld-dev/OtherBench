@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import type { MediaProgress } from '@otherbench/core/ports/media.js';
 import { isToolImageRef, isToolVideoRef } from '@otherbench/core/domain/tool-images.js';
 import { api } from '../state/api.js';
@@ -123,16 +123,27 @@ function Note({ text }: { text: string }): JSX.Element {
 }
 
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }): JSX.Element {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  // Focus goes into the dialog, and back to whatever opened it when it closes.
   useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => opener?.focus();
+  }, []);
+  useEffect(() => {
+    // Caught on the way down and kept here: Escape would otherwise also hide the Quick Chat window.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
   return (
     <div role="dialog" aria-modal="true" aria-label="Generated image" data-testid="generated-image-dialog" onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-      <button type="button" aria-label="Close" onClick={onClose} className="btn absolute top-3 right-3 px-2 py-1">
+      <button ref={closeRef} type="button" aria-label="Close" onClick={onClose} className="btn absolute top-3 right-3 px-2 py-1">
         Close
       </button>
       <AuthedImage src={src} alt="Generated image, full size" data-testid="generated-image-full" onClick={(e) => e.stopPropagation()} className="max-h-full max-w-full object-contain" />

@@ -44,6 +44,35 @@ describe('GeneratedMedia', () => {
     expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
   });
 
+  it('keeps Escape to itself, so a Quick Chat window stays open', async () => {
+    const user = userEvent.setup();
+    const outside = vi.fn();
+    window.addEventListener('keydown', outside);
+    try {
+      render(<GeneratedMedia result={image} scope={scope} />);
+      await user.click(screen.getByTestId('generated-image'));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
+      expect(outside).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', outside);
+    }
+  });
+
+  it('moves focus into the dialog when it opens and back to the image when it closes', async () => {
+    const user = userEvent.setup();
+    render(<GeneratedMedia result={image} scope={scope} />);
+    const trigger = screen.getByRole('button', { name: 'View full size' });
+    await user.click(trigger);
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+    expect(trigger).toHaveFocus();
+  });
+
   it('shows a video with controls', () => {
     render(<GeneratedMedia result={video} scope={scope} />);
     const el = screen.getByTestId('generated-video') as HTMLVideoElement;
