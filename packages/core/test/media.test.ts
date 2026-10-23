@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GENERATION_KINDS, confirmPromptsOf, isGenerationKind } from '../src/domain/media.js';
+import { GENERATION_KINDS, confirmPromptsOf, hasUserinfo, isGenerationKind, withoutUserinfo } from '../src/domain/media.js';
 import { subagentPolicy } from '../src/domain/subagent.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
@@ -32,5 +32,22 @@ describe('subagentPolicy and media', () => {
     const out = subagentPolicy(parent, { ...BASE, media });
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.policy.media).toBeUndefined();
+  });
+});
+
+describe('userinfo in base URLs', () => {
+  it('spots a user or password in a URL', () => {
+    expect(hasUserinfo('http://user:pass@127.0.0.1:7860')).toBe(true);
+    expect(hasUserinfo('http://user@127.0.0.1:7860')).toBe(true);
+    expect(hasUserinfo('http://127.0.0.1:7860')).toBe(false);
+    expect(hasUserinfo('not a url')).toBe(false);
+  });
+
+  it('takes every user:pass@ out of a message, the password with an @ in it included', () => {
+    expect(withoutUserinfo('http://user:p@ss@127.0.0.1:7860')).toBe('http://127.0.0.1:7860');
+    expect(withoutUserinfo("Couldn't reach https://a:b@host/v1: Request cannot be constructed from a URL that includes credentials: https://a:b@host/v1/models")).toBe(
+      "Couldn't reach https://host/v1: Request cannot be constructed from a URL that includes credentials: https://host/v1/models",
+    );
+    expect(withoutUserinfo('http://127.0.0.1:8188 said no')).toBe('http://127.0.0.1:8188 said no');
   });
 });

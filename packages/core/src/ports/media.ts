@@ -7,6 +7,7 @@ export interface MediaRequest {
   media: 'image' | 'video';
   model: string;
   prompt: string;
+  /** `''` for none. `null` only where the backend takes no negative prompt (a workflow then keeps its own). */
   negativePrompt: string | null;
   width: number;
   height: number;
@@ -14,6 +15,20 @@ export interface MediaRequest {
   seed: number;
   /** Video only. */
   frames?: number;
+  /** ComfyUI only: the model file for the workflow's `checkpoint` binding, chosen in the profile. */
+  checkpoint?: string;
+}
+
+/**
+ * Which of a request's settings a backend actually uses. One it doesn't use is
+ * never shown in the ask or the result as if it had been sent.
+ */
+export interface MediaApplies {
+  negativePrompt: boolean;
+  seed: boolean;
+  /** Width and height together. */
+  size: boolean;
+  frames: boolean;
 }
 
 export type MediaProgress = { stage: 'queued' | 'generating' | 'saving'; step?: number; steps?: number };

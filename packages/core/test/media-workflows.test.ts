@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectBindings, fillWorkflow, workflowProblem, type MediaWorkflow } from '../src/domain/media-workflows.js';
+import { detectBindings, fillWorkflow, workflowApplies, workflowProblem, type MediaWorkflow } from '../src/domain/media-workflows.js';
 import type { MediaRequest } from '../src/ports/media.js';
 
 /** ComfyUI's default text-to-image graph, in API format. */
@@ -69,10 +69,42 @@ describe('fillWorkflow', () => {
     expect(fillWorkflow(WF, REQ)['4']!.inputs['ckpt_name']).toBe('base.safetensors');
   });
 
+  it("writes an empty negative prompt over the workflow's own", () => {
+    expect(fillWorkflow(WF, { ...REQ, negativePrompt: '' })['7']!.inputs['text']).toBe('');
+  });
+
+  it("fills the checkpoint from the request, else the workflow's choice, else keeps the graph's own", () => {
+    const chosen: MediaWorkflow = { ...WF, checkpoint: 'chosen.safetensors' };
+    expect(fillWorkflow(chosen, { ...REQ, checkpoint: 'profile.safetensors' })['4']!.inputs['ckpt_name']).toBe('profile.safetensors');
+    expect(fillWorkflow(chosen, REQ)['4']!.inputs['ckpt_name']).toBe('chosen.safetensors');
+    expect(fillWorkflow(WF, REQ)['4']!.inputs['ckpt_name']).toBe('base.safetensors');
+  });
+
+  it('leaves the size alone unless both width and height are bound', () => {
+    const half: MediaWorkflow = { ...WF, bindings: { prompt: WF.bindings.prompt!, width: WF.bindings.width! } };
+    const g = fillWorkflow(half, REQ);
+    expect(g['5']!.inputs['width']).toBe(512);
+    expect(g['5']!.inputs['height']).toBe(512);
+  });
+
   it('refuses a workflow with a broken binding', () => {
     expect(() => fillWorkflow({ ...WF, bindings: { ...WF.bindings, prompt: { nodeId: '99', input: 'text' } } }, REQ)).toThrow(
       'Input "text" on node 99 isn\'t in this workflow.',
     );
+  });
+});
+
+describe('workflowApplies', () => {
+  it('applies a role only when it is bound, and the default negative is the bound input as it is in the graph', () => {
+    expect(workflowApplies(WF)).toEqual({
+      applies: { negativePrompt: true, seed: true, size: true, frames: false },
+      defaultNegativePrompt: 'negative text',
+    });
+    expect(workflowApplies({ ...WF, bindings: { prompt: WF.bindings.prompt! } })).toEqual({
+      applies: { negativePrompt: false, seed: false, size: false, frames: false },
+      defaultNegativePrompt: null,
+    });
+    expect(workflowApplies({ ...WF, bindings: { prompt: WF.bindings.prompt!, width: WF.bindings.width! } }).applies.size).toBe(false);
   });
 });
 

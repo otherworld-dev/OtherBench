@@ -38,7 +38,11 @@ export interface PlanGate {
 export type AskInput =
   | { kind: 'question'; toolName: string; questions: Question[] }
   | { kind: 'plan'; toolName: string; plan: string }
-  /** A media tool's prompt, shown to edit or cancel before anything reaches the backend. `settings` is one line, e.g. "1024×1024 · seed 42 · SDXL (ComfyUI)". */
+  /**
+   * A media tool's prompt, shown to edit or cancel before anything reaches the backend. `negativePrompt` is
+   * the one that will be sent (`''` for none), or null when the backend takes none. `settings` is one line
+   * naming only what is applied, e.g. "1024×1024 · seed 42 · SDXL (ComfyUI)".
+   */
   | { kind: 'generation'; toolName: string; media: 'image' | 'video'; prompt: string; negativePrompt: string | null; settings: string };
 
 /** An ask waiting in the thread, tied to the reply that raised it. */

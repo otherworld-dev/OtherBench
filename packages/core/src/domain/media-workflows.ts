@@ -1,4 +1,4 @@
-import type { MediaRequest } from '../ports/media.js';
+import type { MediaApplies, MediaRequest } from '../ports/media.js';
 
 /**
  * ComfyUI workflows in API format ("Export (API)"), with the inputs that
@@ -39,14 +39,32 @@ export function fillWorkflow(wf: MediaWorkflow, req: MediaRequest): Graph {
     graph[b.nodeId]!.inputs[b.input] = value;
   };
   set('prompt', req.prompt);
-  // With no negative prompt the workflow keeps its own.
+  // `''` clears the workflow's own negative prompt; only `null` keeps it.
   set('negativePrompt', req.negativePrompt);
   set('seed', req.seed);
-  set('width', req.width);
-  set('height', req.height);
+  // Half a size would be one nobody asked for, so it is both or neither (`workflowApplies`).
+  if (wf.bindings.width && wf.bindings.height) {
+    set('width', req.width);
+    set('height', req.height);
+  }
   set('frames', req.frames);
-  set('checkpoint', wf.checkpoint);
+  // The profile's choice, else the one saved with the workflow, else the graph's own.
+  set('checkpoint', req.checkpoint ?? wf.checkpoint);
   return graph;
+}
+
+/**
+ * Which of a request's settings `fillWorkflow` writes into this workflow (a
+ * role is applied only when it is bound), and the negative prompt it runs with
+ * when none is given: the bound input's text as it is in the graph.
+ */
+export function workflowApplies(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): { applies: MediaApplies; defaultNegativePrompt: string | null } {
+  const b = wf.bindings;
+  const neg = b.negativePrompt ? inputsOf(wf.graph, b.negativePrompt.nodeId)?.[b.negativePrompt.input] : undefined;
+  return {
+    applies: { negativePrompt: !!b.negativePrompt, seed: !!b.seed, size: !!(b.width && b.height), frames: !!b.frames },
+    defaultNegativePrompt: typeof neg === 'string' ? neg : null,
+  };
 }
 
 function linkTarget(v: unknown): string | null {

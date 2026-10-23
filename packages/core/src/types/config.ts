@@ -141,6 +141,8 @@ export interface ToolPolicy {
 export interface MediaChoice {
   connectionId: string;
   model: string;
+  /** ComfyUI only: the model file for the workflow's `checkpoint` binding. Absent = the workflow's own. */
+  checkpoint?: string;
 }
 
 export interface MediaPolicy {
