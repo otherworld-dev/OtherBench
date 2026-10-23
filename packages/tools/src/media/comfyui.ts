@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { MediaBackend, MediaConnection, MediaOutput, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
 import { fillWorkflow, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import { MAX_TOOL_VIDEO_BYTES } from '@otherbench/core/domain/tool-images.js';
-import { httpError, mediaFetch, readCapped, readJson } from './http.js';
+import { httpError, mediaFetch, readCapped, readJson, shownBase } from './http.js';
 import { SDXL_TXT2IMG } from './workflows/sdxl-txt2img.js';
 import { WAN22_5B_T2V } from './workflows/wan22-5b-t2v.js';
 
@@ -99,11 +99,18 @@ function refusal(body: Record<string, unknown>): string | null {
   return used < items.length ? `${out}; and ${items.length - used} more` : out;
 }
 
-/** Every saved file in a history entry's outputs, under whichever key the save node used. */
-function outputFiles(outputs: unknown): ViewFile[] {
-  const all: ViewFile[] = [];
+const VIDEO_KEYS = new Set(['videos', 'gifs']);
+const VIDEO_NAME = /\.(mp4|webm)$/i;
+
+/**
+ * The saved files in a history entry's outputs, under whichever key the save
+ * node used, at most `MAX_OUTPUTS`. For a video, the files that look like video
+ * come first, so frames or a poster the workflow also saved don't crowd it out.
+ */
+function outputFiles(outputs: unknown, media: 'image' | 'video'): ViewFile[] {
+  const all: (ViewFile & { video: boolean })[] = [];
   for (const node of Object.values(obj(outputs))) {
-    for (const list of Object.values(obj(node))) {
+    for (const [key, list] of Object.entries(obj(node))) {
       if (!Array.isArray(list)) continue;
       for (const f of list.map(obj)) {
         if (typeof f['filename'] !== 'string' || !f['filename']) continue;
@@ -111,13 +118,22 @@ function outputFiles(outputs: unknown): ViewFile[] {
           filename: f['filename'],
           subfolder: typeof f['subfolder'] === 'string' ? f['subfolder'] : '',
           type: typeof f['type'] === 'string' ? f['type'] : 'output',
+          video: VIDEO_KEYS.has(key) || VIDEO_NAME.test(f['filename']),
         });
       }
     }
   }
   // Prefer saved files over previews of the same result.
   const saved = all.filter((f) => f.type === 'output');
-  return (saved.length ? saved : all).slice(0, MAX_OUTPUTS);
+  const files = saved.length ? saved : all;
+  const ordered = media === 'video' ? [...files.filter((f) => f.video), ...files.filter((f) => !f.video)] : files;
+  return ordered.slice(0, MAX_OUTPUTS).map(({ filename, subfolder, type }) => ({ filename, subfolder, type }));
+}
+
+/** Whether ComfyUI's queue shows this job running now (`GET /queue`'s `queue_running` entries are `[number, prompt_id, ...]`). */
+function runningIn(queue: unknown, promptId: string): boolean {
+  const running = obj(queue)['queue_running'];
+  return Array.isArray(running) && running.some((e) => Array.isArray(e) && e[1] === promptId);
 }
 
 export function createComfyBackend(
@@ -128,14 +144,35 @@ export function createComfyBackend(
   const post = (path: string, body: unknown, signal: AbortSignal) =>
     mediaFetch(conn, path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, signal);
 
-  /** Best effort; runs on its own signal because the caller's is already aborted. */
-  async function cancel(promptId: string): Promise<void> {
+  /**
+   * Best effort; runs on its own signal because the caller's is already aborted.
+   * The job always comes off the queue. It is interrupted only while it is known
+   * to be running (`state`, else `GET /queue` asked after the delete): an older
+   * ComfyUI's `/interrupt` stops whatever is running, which could be someone else's.
+   */
+  async function cancel(promptId: string, state: 'running' | 'finished' | 'unknown'): Promise<void> {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), CANCEL_TIMEOUT_MS);
     const quietly = (p: Promise<Response>) => p.then((r) => r.body?.cancel()).catch(() => {});
+    // `prompt_id` keeps a newer ComfyUI from interrupting someone else's job; older ones ignore it.
+    const interrupt = () => quietly(post('/interrupt', { prompt_id: promptId }, ac.signal));
     try {
-      // `prompt_id` keeps a newer ComfyUI from interrupting someone else's job; older ones ignore it.
-      await Promise.all([quietly(post('/queue', { delete: [promptId] }, ac.signal)), quietly(post('/interrupt', { prompt_id: promptId }, ac.signal))]);
+      const dequeued = quietly(post('/queue', { delete: [promptId] }, ac.signal));
+      if (state === 'running') {
+        await Promise.all([dequeued, interrupt()]);
+        return;
+      }
+      await dequeued;
+      if (state === 'finished') return;
+      const res = await mediaFetch(conn, '/queue', {}, ac.signal).catch(() => null);
+      if (!res?.ok) {
+        await res?.body?.cancel().catch(() => {});
+        return;
+      }
+      const running = await readJson(res, conn).then((q) => runningIn(q, promptId), () => false);
+      if (running) await interrupt();
+    } catch {
+      // the job may already be gone
     } finally {
       clearTimeout(t);
     }
@@ -153,10 +190,10 @@ export function createComfyBackend(
       }
       if (!res.ok) throw httpError(conn, res, 'Queueing the workflow');
       const id = obj(await readJson(res, conn))['prompt_id'];
-      if (typeof id !== 'string' || !id) throw new Error(`${conn.baseUrl} queued the workflow but gave no job id.`);
+      if (typeof id !== 'string' || !id) throw new Error(`${shownBase(conn)} queued the workflow but gave no job id.`);
       return id;
     } catch (e) {
-      if (ac.signal.aborted) throw new Error(`${conn.baseUrl} didn't take the workflow within ${SUBMIT_TIMEOUT_MS / 1000} seconds.`);
+      if (ac.signal.aborted) throw new Error(`${shownBase(conn)} didn't take the workflow within ${SUBMIT_TIMEOUT_MS / 1000} seconds.`);
       throw e;
     } finally {
       clearTimeout(t);
@@ -164,7 +201,7 @@ export function createComfyBackend(
   }
 
   /** The job's saved files, or null while it isn't in the history yet. */
-  async function finished(promptId: string, signal: AbortSignal): Promise<ViewFile[] | null> {
+  async function finished(promptId: string, media: 'image' | 'video', signal: AbortSignal): Promise<ViewFile[] | null> {
     const res = await mediaFetch(conn, `/history/${encodeURIComponent(promptId)}`, {}, signal);
     if (!res.ok) throw httpError(conn, res, 'Reading the result');
     const body = obj(await readJson(res, conn));
@@ -178,7 +215,7 @@ export function createComfyBackend(
     }
     if (status['status_str'] === 'error') throw new Error('ComfyUI failed to run the workflow.');
     // A history entry is only written once the job is over.
-    const files = outputFiles(entry['outputs']);
+    const files = outputFiles(entry['outputs'], media);
     if (!files.length) throw new Error('ComfyUI finished, but the workflow saved no image or video.');
     return files;
   }
@@ -211,6 +248,9 @@ export function createComfyBackend(
         let openTimer: ReturnType<typeof setTimeout> | undefined;
         let pollTimer: ReturnType<typeof setInterval> | undefined;
         let checking = false;
+        // Whether the job has started or ended, so Stop only interrupts a job that is running.
+        let running = false;
+        let ended = false;
         // Messages that arrive before the POST answers with the job id.
         const early: Record<string, unknown>[] = [];
         // Cuts off our own history and view reads on every exit.
@@ -243,7 +283,7 @@ export function createComfyBackend(
         };
 
         const onAbort = () => {
-          if (promptId !== null) void cancel(promptId);
+          if (promptId !== null) void cancel(promptId, ended ? 'finished' : running ? 'running' : 'unknown');
           finish(abortError());
         };
 
@@ -251,8 +291,9 @@ export function createComfyBackend(
           if (checking || settled || promptId === null) return;
           checking = true;
           try {
-            const files = await finished(promptId, reads.signal);
+            const files = await finished(promptId, req.media, reads.signal);
             if (!files) return startPolling();
+            ended = true;
             clearInterval(pollTimer);
             onProgress({ stage: 'saving' });
             finish(null, await download(files, reads.signal));
@@ -276,18 +317,26 @@ export function createComfyBackend(
           if (typeof data['prompt_id'] === 'string' && data['prompt_id'] !== promptId) return;
           switch (msg['type']) {
             case 'execution_start':
+              running = true;
               onProgress({ stage: 'generating' });
               break;
             case 'progress': {
+              running = true;
               const step = Number(data['value']);
               const steps = Number(data['max']);
               if (Number.isFinite(step) && Number.isFinite(steps)) onProgress({ stage: 'generating', step, steps });
               break;
             }
             case 'executing':
-              if (data['node'] === null) void check();
+              if (data['node'] === null) {
+                ended = true;
+                void check();
+              } else {
+                running = true;
+              }
               break;
             case 'execution_success':
+              ended = true;
               void check();
               break;
             case 'execution_error':
@@ -341,7 +390,7 @@ export function createComfyBackend(
             if (settled) return;
             const id = await submit(graph, clientId);
             if (settled) {
-              void cancel(id); // aborted while queueing
+              void cancel(id, 'unknown'); // aborted while queueing
               return;
             }
             promptId = id;
@@ -355,7 +404,7 @@ export function createComfyBackend(
     },
 
     async test(signal: AbortSignal) {
-      const notComfy = () => new Error(`${conn.baseUrl} isn't answering like ComfyUI.`);
+      const notComfy = () => new Error(`${shownBase(conn)} isn't answering like ComfyUI.`);
       const res = await mediaFetch(conn, '/system_stats', {}, signal);
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});

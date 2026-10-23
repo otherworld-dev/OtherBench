@@ -46,7 +46,7 @@ import type { BrowserManager } from './browser/manager.js';
 import { browserTool, isSensitiveBrowserKey, pageFailure } from './browser/tool.js';
 import { computerTool } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
-import { mediaTools, type MediaHost } from './media/tool.js';
+import { mediaAuditArgs, mediaTools, type MediaHost } from './media/tool.js';
 import { LiveCallCache, LiveCallLimiter, LiveRefusalAudit, shapeLiveResult } from './live-calls.js';
 import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
@@ -1055,7 +1055,9 @@ export class OtherBenchToolProvider implements ToolProvider {
       const host = (call.args as { host?: unknown } | null)?.host;
       result = tool.source === 'computer' ? screenContentError('computer_failed', messageOf(err)) : pageFailure('browser_error', messageOf(err), typeof host === 'string' ? host : null);
     }
-    this.auditCall(ctx, tool, call.args, result, this.now() - startedAt, call.grantedBy, undefined, call.decidedOnNode);
+    // A generation's prompt can be edited in its card after approval: the row keeps the one that was sent.
+    const audited = tool.source === 'media' ? mediaAuditArgs(call.args, result) : call.args;
+    this.auditCall(ctx, tool, audited, result, this.now() - startedAt, call.grantedBy, undefined, call.decidedOnNode);
     return result;
   }
 

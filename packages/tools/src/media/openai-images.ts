@@ -1,5 +1,5 @@
 import type { MediaBackend, MediaConnection, MediaRequest } from '@otherbench/core/ports/media.js';
-import { httpError, mediaFetch, readCapped, readJson } from './http.js';
+import { httpError, mediaFetch, readCapped, readJson, shownBase } from './http.js';
 
 function obj(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
@@ -50,7 +50,7 @@ export function createOpenAIImagesBackend(conn: MediaConnection): MediaBackend {
         if (!img.ok) throw httpError(conn, img, 'Fetching the image');
         return [{ bytes: await readCapped(img) }];
       }
-      throw new Error(`${conn.baseUrl} answered but returned no image.`);
+      throw new Error(`${shownBase(conn)} answered but returned no image.`);
     },
 
     async test(signal) {

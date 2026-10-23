@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
-import { mediaFetch } from '../../src/media/http.js';
+import { httpError, mediaFetch, readJson } from '../../src/media/http.js';
 
 const servers: Server[] = [];
 type Hit = { url: string; headers: IncomingMessage['headers'] };
@@ -78,5 +78,22 @@ describe('mediaFetch', () => {
     const err2 = await mediaFetch(conn(home.origin, { extraHeaders: { 'x-a': 'v\nbad' } }), '/x', {}, sig()).catch((e: Error) => e);
     expect((err2 as Error).message).toBe("The API key or a header value has characters that can't be sent.");
     expect(home.hits).toHaveLength(0);
+  });
+});
+
+describe('a base URL with a user and password in it', () => {
+  it('never names them in an error', async () => {
+    const home = await start((_r, res) => res.end('not json'));
+    const withUser = home.origin.replace('http://', 'http://admin:hunter2@');
+    const c = conn(withUser);
+    const reach = await mediaFetch(c, '/models', {}, sig()).then(() => null, (e: Error) => e.message);
+    expect(reach).toMatch(/127\.0\.0\.1/);
+    expect(httpError(c, new Response(null, { status: 401 }), 'x').message).toBe(`${home.origin} refused the credentials (HTTP 401). Check the API key.`);
+    expect(httpError(c, new Response(null, { status: 500 }), 'Listing models').message).toBe(`Listing models failed at ${home.origin} (HTTP 500).`);
+    const json = await readJson(new Response('nope'), c).then(() => null, (e: Error) => e.message);
+    for (const m of [reach, json]) {
+      expect(m).not.toContain('hunter2');
+      expect(m).not.toContain('admin');
+    }
   });
 });

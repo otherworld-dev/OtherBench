@@ -1,5 +1,11 @@
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
+import { withoutUserinfo } from '@otherbench/core/domain/media.js';
 import { MAX_TOOL_VIDEO_BYTES } from '@otherbench/core/domain/tool-images.js';
+
+/** The connection's base URL as an error message names it: never with a `user:pass@`. */
+export function shownBase(conn: MediaConnection): string {
+  return withoutUserinfo(conn.baseUrl);
+}
 
 function abortError(): Error {
   return new DOMException('The operation was aborted.', 'AbortError');
@@ -22,7 +28,7 @@ function authHeader(conn: MediaConnection): string | null {
 /**
  * Fetch `path` relative to the connection's base URL with its credentials and
  * extra headers. A network failure becomes a plain-English error naming the
- * base URL (never the key); an abort stays an `AbortError`.
+ * base URL (never the key, nor a `user:pass@` in the URL); an abort stays an `AbortError`.
  */
 export async function mediaFetch(
   conn: MediaConnection,
@@ -59,8 +65,9 @@ export async function mediaFetch(
     if (signal.aborted || isAbort(e)) throw abortError();
     const cause = (e as { cause?: { message?: string } } | null)?.cause;
     const reason = cause?.message ?? (e instanceof Error ? e.message : String(e));
-    if (/redirect/i.test(reason)) throw new Error(`${conn.baseUrl} tried to redirect the request, which isn't allowed.`);
-    throw new Error(`Couldn't reach ${conn.baseUrl}: ${reason}`);
+    if (/redirect/i.test(reason)) throw new Error(`${shownBase(conn)} tried to redirect the request, which isn't allowed.`);
+    // Node's own reason can quote the URL, credentials and all.
+    throw new Error(`Couldn't reach ${shownBase(conn)}: ${withoutUserinfo(reason)}`);
   }
 }
 
@@ -96,13 +103,13 @@ export async function readJson(res: Response, conn: MediaConnection): Promise<un
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`${conn.baseUrl} answered with something that isn't JSON.`);
+    throw new Error(`${shownBase(conn)} answered with something that isn't JSON.`);
   }
 }
 
 export function httpError(conn: MediaConnection, res: Response, what: string): Error {
   if (res.status === 401 || res.status === 403) {
-    return new Error(`${conn.baseUrl} refused the credentials (HTTP ${res.status}). Check the API key.`);
+    return new Error(`${shownBase(conn)} refused the credentials (HTTP ${res.status}). Check the API key.`);
   }
-  return new Error(`${what} failed at ${conn.baseUrl} (HTTP ${res.status}).`);
+  return new Error(`${what} failed at ${shownBase(conn)} (HTTP ${res.status}).`);
 }

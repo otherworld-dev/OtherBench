@@ -2,7 +2,7 @@ import { randomInt } from 'node:crypto';
 import { confirmPromptsOf } from '@otherbench/core/domain/media.js';
 import { GENERATION_PROMPT_MAX_CHARS, type AskFn } from '@otherbench/core/domain/thread-tools.js';
 import { MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, sniffToolMediaMime } from '@otherbench/core/domain/tool-images.js';
-import type { MediaBackend, MediaOutput, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
+import type { MediaApplies, MediaBackend, MediaOutput, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { MediaChoice, ToolPolicy } from '@otherbench/core/types/config.js';
 
@@ -16,15 +16,43 @@ type Aspect = 'square' | 'portrait' | 'landscape' | 'wide';
 export const IMAGE_TOOL = 'generate_image';
 export const VIDEO_TOOL = 'generate_video';
 
+/** A backend for one call, and how it takes a request. */
+export interface ResolvedMedia {
+  backend: MediaBackend;
+  /** Names it, e.g. `"SDXL (ComfyUI)"`. */
+  label: string;
+  /** What it uses of a request; nothing else is shown in the ask or the result. */
+  applies: MediaApplies;
+  /** The negative prompt it runs with when given none (a ComfyUI workflow's own), shown in the ask to keep or edit. */
+  defaultNegativePrompt: string | null;
+  /**
+   * True when a setting it doesn't apply still runs at a value of its own (a
+   * ComfyUI workflow's), so the ask and result say "workflow default"; false
+   * when it has no such setting at all (`openai_images` has no seed), so it is left out.
+   */
+  workflowDefaults: boolean;
+}
+
 /** Where the tools get a backend: the server resolves the connection and its secret (server/src/media.ts). */
 export interface MediaHost {
   /**
-   * The backend for a profile's choice and a label naming it, e.g.
-   * `"SDXL (ComfyUI)"`. Throws a plain-English Error when it can't be used
-   * (`'That generation connection no longer exists.'`, a deleted workflow).
+   * The backend for a profile's choice. Throws a plain-English Error when it
+   * can't be used (`'That generation connection no longer exists.'`, a
+   * deleted workflow).
    */
-  backendFor(connectionId: string, use: { media: Media; model: string }): Promise<{ backend: MediaBackend; label: string }>;
+  backendFor(connectionId: string, use: { media: Media; model: string }): Promise<ResolvedMedia>;
 }
+
+/** What a generation call actually sent, by the result it returned: the audit records these, not the model's. */
+const sentArgs = new WeakMap<object, Record<string, unknown>>();
+
+/** The arguments to audit for a media tool's call: the model's, with the prompt and negative prompt that were sent. */
+export function mediaAuditArgs(args: unknown, result: unknown): unknown {
+  return (result !== null && typeof result === 'object' && sentArgs.get(result)) || args;
+}
+
+/** A setting the backend doesn't use: a ComfyUI workflow runs its own, others leave it out. */
+const WORKFLOW_DEFAULT = 'workflow default';
 
 const ASPECTS: readonly Aspect[] = ['square', 'portrait', 'landscape', 'wide'];
 
@@ -176,30 +204,50 @@ function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: T
       if ('invalid' in parsed) return fail('invalid_input', parsed.invalid);
       const [width, height] = SIZES[media][parsed.aspect];
 
-      let resolved: { backend: MediaBackend; label: string };
+      let resolved: ResolvedMedia;
       try {
         resolved = await host.backendFor(choice.connectionId, { media, model: choice.model });
       } catch (err) {
         return fail('generation_unavailable', (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR));
       }
-      const { backend, label } = resolved;
+      const { backend, label, applies } = resolved;
 
-      let { prompt, negativePrompt } = parsed;
+      // Only what the backend applies is shown, sent and reported. A backend that takes a
+      // negative prompt always gets one (`''` for none), so a workflow's own is never sent unseen.
+      const unapplied = (what: string): string | null => (resolved.workflowDefaults ? `${what}: ${WORKFLOW_DEFAULT}` : null);
+      const seedText = applies.seed ? `seed ${parsed.seed}` : unapplied('seed');
+      const sizeText = applies.size ? `${width}×${height}` : unapplied('size');
+      const lengthText = media !== 'video' ? null : applies.frames ? `${parsed.seconds} s` : unapplied('length');
+
+      let prompt = parsed.prompt;
+      let negativePrompt = applies.negativePrompt ? (parsed.negativePrompt ?? resolved.defaultNegativePrompt ?? '') : null;
       if (confirm) {
         // Nothing reaches the backend that wasn't shown, and nobody can be shown it in an unattended run.
         if (ctx.unattended === true) return fail('approval_unavailable', UNATTENDED);
-        const length = media === 'video' ? ` · ${parsed.seconds} s` : '';
-        const settings = `${width}×${height}${length} · seed ${parsed.seed} · ${label}`;
+        const settings = [sizeText, lengthText, seedText, label].filter((t) => t !== null).join(' · ');
         const outcome = await askUser(ctx, { kind: 'generation', toolName: name, media, prompt, negativePrompt, settings });
         if ('unattended' in outcome) return fail('approval_unavailable', UNATTENDED);
         if ('cancelled' in outcome) return fail('cancelled', STOPPED_AT_ASK);
         if (!('generate' in outcome.reply)) return fail('generation_cancelled', CANCELLED);
-        ({ prompt, negativePrompt } = outcome.reply.generate);
+        prompt = outcome.reply.generate.prompt;
+        // An emptied negative is sent as none; one the backend doesn't take is never sent, whatever the reply says.
+        const edited = outcome.reply.generate.negativePrompt;
+        negativePrompt = applies.negativePrompt ? edited ?? '' : null;
       }
+      if (negativePrompt !== null && negativePrompt.trim() === '') negativePrompt = '';
       if (ctx.signal.aborted) return fail('cancelled', STOPPED);
 
       const req: MediaRequest = { media, model: choice.model, prompt, negativePrompt, width, height, seed: parsed.seed };
       if (media === 'video') req.frames = parsed.seconds * FPS + 1;
+      if (choice.checkpoint !== undefined) req.checkpoint = choice.checkpoint;
+      const sent: Record<string, unknown> = { ...(args as Record<string, unknown>), prompt };
+      if (negativePrompt === null) delete sent['negative_prompt'];
+      else sent['negative_prompt'] = negativePrompt;
+      const remember = <T extends object>(result: T): T => {
+        sentArgs.set(result, sent);
+        return result;
+      };
+
       const callId = ctx.toolCallId;
       const relay = throttled((p) => {
         if (callId) progress(ctx, p);
@@ -208,25 +256,22 @@ function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: T
       try {
         outputs = await backend.generate(req, relay.onProgress, ctx.signal);
       } catch (err) {
-        if (ctx.signal.aborted) return fail('cancelled', STOPPED);
-        return fail('generation_failed', (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) || 'The generation failed.');
+        if (ctx.signal.aborted) return remember(fail('cancelled', STOPPED));
+        return remember(fail('generation_failed', (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) || 'The generation failed.'));
       } finally {
         relay.end();
       }
-      if (ctx.signal.aborted) return fail('cancelled', STOPPED);
+      if (ctx.signal.aborted) return remember(fail('cancelled', STOPPED));
 
       const { kept, notes } = pick(media, outputs);
-      if (!kept) return fail('generation_failed', notes.length > 0 ? notes.join(' ') : 'The generator finished but returned nothing.');
-      const negative = negativePrompt === null ? 'none' : JSON.stringify(negativePrompt);
-      const length = media === 'video' ? ` ${parsed.seconds} s;` : '';
-      const text =
-        `Generated ${media === 'image' ? 'an image' : 'a video'} with prompt: ${JSON.stringify(prompt)}; negative: ${negative}; ` +
-        `seed ${parsed.seed}; ${width}×${height};${length} ${label}.` +
-        (notes.length > 0 ? ` ${notes.join(' ')}` : '');
-      return [
+      if (!kept) return remember(fail('generation_failed', notes.length > 0 ? notes.join(' ') : 'The generator finished but returned nothing.'));
+      const negative = negativePrompt === null ? null : `negative: ${negativePrompt === '' ? 'none' : JSON.stringify(negativePrompt)}`;
+      const made = [`Generated ${media === 'image' ? 'an image' : 'a video'} with prompt: ${JSON.stringify(prompt)}`, negative, seedText, sizeText, lengthText, label];
+      const text = `${made.filter((t) => t !== null).join('; ')}.` + (notes.length > 0 ? ` ${notes.join(' ')}` : '');
+      return remember([
         { type: 'text', text },
         { type: media, data: kept.bytes.toString('base64'), mimeType: kept.mime },
-      ];
+      ]);
     },
   };
 }

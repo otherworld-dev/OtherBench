@@ -53,6 +53,7 @@ describe('A1111 backend', () => {
     expect(JSON.parse(post.body)).toEqual({
       prompt: 'a cat', negative_prompt: 'blurry', width: 512, height: 768, seed: 42,
       override_settings: { sd_model_checkpoint: 'sd15.safetensors' },
+      override_settings_restore_afterwards: false,
     });
   });
 

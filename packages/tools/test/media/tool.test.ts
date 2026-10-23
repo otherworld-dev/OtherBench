@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
 import { MAX_TOOL_IMAGE_BYTES } from '@otherbench/core/domain/tool-images.js';
 import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
-import type { MediaBackend, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
+import { workflowApplies } from '@otherbench/core/domain/media-workflows.js';
+import type { MediaApplies, MediaBackend, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
 import type { AskInput, AskOutcome, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import { BUILTIN_WORKFLOWS } from '../../src/media/comfyui.js';
 import { mediaTools, type MediaHost } from '../../src/media/tool.js';
 import { OtherBenchToolProvider } from '../../src/provider.js';
 
@@ -44,15 +46,23 @@ class FakeBackend implements MediaBackend {
   }
 }
 
-function setup(opts: { reply?: (input: AskInput) => AskOutcome; host?: MediaHost; policy?: ToolPolicy } = {}) {
+/** What A1111 applies: everything, with no negative prompt of its own. */
+const ALL: MediaApplies = { negativePrompt: true, seed: true, size: true, frames: true };
+const OPENAI: MediaApplies = { negativePrompt: false, seed: false, size: true, frames: false };
+
+/** How a backend takes a request, as `MediaHost.backendFor` reports it. */
+type Takes = { label: string; applies: MediaApplies; defaultNegativePrompt: string | null; workflowDefaults: boolean };
+
+function setup(opts: { reply?: (input: AskInput) => AskOutcome; host?: MediaHost; policy?: ToolPolicy; takes?: Takes } = {}) {
   const backend = new FakeBackend();
   const asks: AskInput[] = [];
   const progress: { ctx: ToolContext; p: MediaProgress }[] = [];
   const used: { connectionId: string; media: string; model: string }[] = [];
+  const takes = opts.takes ?? { label: 'SDXL (ComfyUI)', applies: ALL, defaultNegativePrompt: null, workflowDefaults: true };
   const host: MediaHost = opts.host ?? {
     async backendFor(connectionId, use) {
       used.push({ connectionId, ...use });
-      return { backend, label: 'SDXL (ComfyUI)' };
+      return { backend, ...takes };
     },
   };
   const reply = opts.reply ?? ((input: AskInput) => ({ reply: { generate: { prompt: (input as { prompt: string }).prompt, negativePrompt: null } } }));
@@ -97,7 +107,7 @@ describe('generate_image / generate_video', () => {
     expect(asks).toEqual([
       { kind: 'generation', toolName: 'generate_image', media: 'image', prompt: 'a red cube', negativePrompt: 'blurry', settings: '1024×1024 · seed 7 · SDXL (ComfyUI)' },
     ]);
-    expect(backend.requests[0]).toMatchObject({ media: 'image', model: 'builtin:sdxl-txt2img', prompt: 'edited', negativePrompt: null, width: 1024, height: 1024, seed: 7 });
+    expect(backend.requests[0]).toMatchObject({ media: 'image', model: 'builtin:sdxl-txt2img', prompt: 'edited', negativePrompt: '', width: 1024, height: 1024, seed: 7 });
     expect(result[0]!.type).toBe('text');
     expect(result[0]!.text).toBe('Generated an image with prompt: "edited"; negative: none; seed 7; 1024×1024; SDXL (ComfyUI).');
     expect(result[1]).toEqual({ type: 'image', data: PNG.toString('base64'), mimeType: 'image/png' });
@@ -246,6 +256,99 @@ describe('generate_image / generate_video', () => {
   });
 });
 
+describe('the ask and the result say exactly what is sent', () => {
+  const SDXL = BUILTIN_WORKFLOWS.find((w) => w.id === 'builtin:sdxl-txt2img')!;
+  const sdxl: Takes = { label: 'SDXL (ComfyUI)', ...workflowApplies(SDXL), workflowDefaults: true };
+  const same = (input: AskInput): AskOutcome => {
+    const a = input as { prompt: string; negativePrompt: string | null };
+    return { reply: { generate: { prompt: a.prompt, negativePrompt: a.negativePrompt } } };
+  };
+  const text = (r: unknown) => (r as Item[])[0]!.text;
+  const shown = (asks: AskInput[]) => asks.map((a) => [(a as { negativePrompt: unknown }).negativePrompt, (a as { settings: string }).settings]);
+
+  it('A1111: shows and sends the negative, the seed and the size; an empty negative is sent as none', async () => {
+    const { backend, asks, tool } = setup({ takes: { label: 'sd15 (A1111)', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }, reply: same });
+    const r1 = await tool('generate_image').execute({ prompt: 'a cat', negative_prompt: 'blurry', seed: 7 }, ctx());
+    const r2 = await tool('generate_image').execute({ prompt: 'a cat', seed: 8 }, ctx());
+    expect(shown(asks)).toEqual([
+      ['blurry', '1024×1024 · seed 7 · sd15 (A1111)'],
+      ['', '1024×1024 · seed 8 · sd15 (A1111)'],
+    ]);
+    expect(backend.requests.map((r) => r.negativePrompt)).toEqual(['blurry', '']);
+    expect(text(r1)).toBe('Generated an image with prompt: "a cat"; negative: "blurry"; seed 7; 1024×1024; sd15 (A1111).');
+    expect(text(r2)).toBe('Generated an image with prompt: "a cat"; negative: none; seed 8; 1024×1024; sd15 (A1111).');
+  });
+
+  it('openai_images: no seed or negative anywhere, even when the model or the reply gives one', async () => {
+    const { backend, asks, tool } = setup({
+      takes: { label: 'gpt-image-1 (OpenAI-style)', applies: OPENAI, defaultNegativePrompt: null, workflowDefaults: false },
+      reply: (input) => ({ reply: { generate: { prompt: (input as { prompt: string }).prompt, negativePrompt: 'sneaked in' } } }),
+    });
+    const result = await tool('generate_image').execute({ prompt: 'a cat', negative_prompt: 'blurry', seed: 7 }, ctx());
+    expect(asks[0]).toEqual({ kind: 'generation', toolName: 'generate_image', media: 'image', prompt: 'a cat', negativePrompt: null, settings: '1024×1024 · gpt-image-1 (OpenAI-style)' });
+    expect(backend.requests[0]!.negativePrompt).toBeNull();
+    expect(text(result)).toBe('Generated an image with prompt: "a cat"; 1024×1024; gpt-image-1 (OpenAI-style).');
+  });
+
+  it("ComfyUI SDXL: the workflow's own negative is prefilled and sent; the model's replaces it; cleared, '' is sent", async () => {
+    const def = sdxl.defaultNegativePrompt!;
+    expect(def).toMatch(/watermark/);
+    let answer: string | null = def;
+    const { backend, asks, tool } = setup({
+      takes: sdxl,
+      reply: (input) => ({ reply: { generate: { prompt: (input as { prompt: string }).prompt, negativePrompt: answer } } }),
+    });
+    const kept = await tool('generate_image').execute({ prompt: 'a cat', seed: 1 }, ctx());
+    answer = 'ugly';
+    await tool('generate_image').execute({ prompt: 'a cat', negative_prompt: 'blurry', seed: 2 }, ctx());
+    answer = null;
+    const cleared = await tool('generate_image').execute({ prompt: 'a cat', seed: 3 }, ctx());
+    expect(asks.map((a) => (a as { negativePrompt: unknown }).negativePrompt)).toEqual([def, 'blurry', def]);
+    expect(backend.requests.map((r) => r.negativePrompt)).toEqual([def, 'ugly', '']);
+    expect(text(kept)).toBe(`Generated an image with prompt: "a cat"; negative: ${JSON.stringify(def)}; seed 1; 1024×1024; SDXL (ComfyUI).`);
+    expect(text(cleared)).toBe('Generated an image with prompt: "a cat"; negative: none; seed 3; 1024×1024; SDXL (ComfyUI).');
+  });
+
+  it('with confirm prompts off, sends the default negative a ComfyUI workflow would have shown', async () => {
+    const { backend, tool } = setup({ takes: sdxl, policy: policy({ media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } }) });
+    await tool('generate_image').execute({ prompt: 'a cat' }, ctx());
+    expect(backend.requests[0]!.negativePrompt).toBe(sdxl.defaultNegativePrompt);
+  });
+
+  it('an imported workflow with no seed, size or length binding says "workflow default" for each', async () => {
+    const takes: Takes = { label: 'Mine (ComfyUI)', applies: { negativePrompt: false, seed: false, size: false, frames: false }, defaultNegativePrompt: null, workflowDefaults: true };
+    const { backend, asks, tool } = setup({ takes, reply: same });
+    backend.outputs = [PNG];
+    const image = await tool('generate_image').execute({ prompt: 'a cat', negative_prompt: 'blurry', seed: 7 }, ctx());
+    backend.outputs = [MP4];
+    const video = await tool('generate_video').execute({ prompt: 'a wave', seconds: 3 }, ctx());
+    expect(shown(asks)).toEqual([
+      [null, 'size: workflow default · seed: workflow default · Mine (ComfyUI)'],
+      [null, 'size: workflow default · length: workflow default · seed: workflow default · Mine (ComfyUI)'],
+    ]);
+    expect(backend.requests[0]!.negativePrompt).toBeNull();
+    expect(text(image)).toBe('Generated an image with prompt: "a cat"; seed: workflow default; size: workflow default; Mine (ComfyUI).');
+    expect(text(video)).toBe('Generated a video with prompt: "a wave"; seed: workflow default; size: workflow default; length: workflow default; Mine (ComfyUI).');
+  });
+
+  it('a video names its length when the workflow takes one', async () => {
+    const { backend, asks, tool } = setup({ reply: same });
+    backend.outputs = [MP4];
+    const result = await tool('generate_video').execute({ prompt: 'a wave', seconds: 3, seed: 1 }, ctx());
+    expect((asks[0] as { settings: string }).settings).toBe('640×640 · 3 s · seed 1 · SDXL (ComfyUI)');
+    expect(text(result)).toBe('Generated a video with prompt: "a wave"; negative: none; seed 1; 640×640; 3 s; SDXL (ComfyUI).');
+  });
+
+  it("passes the profile's model file to the backend", async () => {
+    const { backend, tool } = setup({ policy: policy({ media: { image: { connectionId: 'gen', model: 'builtin:sdxl-txt2img', checkpoint: 'juggernaut.safetensors' } } }) });
+    await tool('generate_image').execute({ prompt: 'p' }, ctx());
+    expect(backend.requests[0]!.checkpoint).toBe('juggernaut.safetensors');
+    const plain = setup();
+    await plain.tool('generate_image').execute({ prompt: 'p' }, ctx());
+    expect(plain.backend.requests[0]).not.toHaveProperty('checkpoint');
+  });
+});
+
 describe('the provider', () => {
   const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 
@@ -256,7 +359,7 @@ describe('the provider', () => {
 
   it('lists generate_image, gated, only with a media host and the profile choice', async () => {
     const backend = new FakeBackend();
-    const host: MediaHost = { backendFor: async () => ({ backend, label: 'L' }) };
+    const host: MediaHost = { backendFor: async () => ({ backend, label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) };
     const imageOnly = policy({ media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } });
     const names = (await provider(host).listTools(imageOnly)).map((t) => t.name);
     expect(names).toContain('generate_image');
@@ -266,7 +369,7 @@ describe('the provider', () => {
 
   it('goes through the broker: a sub-agent call is refused and never reaches the backend', async () => {
     const backend = new FakeBackend();
-    const p = provider({ backendFor: async () => ({ backend, label: 'L' }) });
+    const p = provider({ backendFor: async () => ({ backend, label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) });
     const tool = (await p.listTools(policy({ media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } }))).find((t) => t.name === 'generate_image')!;
     const result = await tool.execute({ prompt: 'p' }, ctx({ subagent: { callId: 's', label: 'helper', parentProfileId: 'p1' } }));
     expect(result).toMatchObject({ error: true, code: 'permission_denied' });
@@ -276,7 +379,7 @@ describe('the provider', () => {
   it('relays progress as a progress event with the message and call id, and none without a call id', async () => {
     const backend = new FakeBackend();
     backend.during = async (onProgress) => onProgress({ stage: 'generating', step: 1, steps: 2 });
-    const p = provider({ backendFor: async () => ({ backend, label: 'L' }) });
+    const p = provider({ backendFor: async () => ({ backend, label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) });
     const events: ToolApprovalEvent[] = [];
     p.onApprovalEvent((e) => events.push(e));
     const tool = (await p.listTools(policy({ media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } }))).find((t) => t.name === 'generate_image')!;
@@ -285,8 +388,24 @@ describe('the provider', () => {
     expect(events).toEqual([{ type: 'progress', messageId: 'msg-1', callId: 'call-1', progress: { stage: 'generating', step: 1, steps: 2 } }]);
   });
 
+  it("audits the prompt and negative prompt that were sent, not the model's", async () => {
+    const store = new InMemoryStore();
+    const backend = new FakeBackend();
+    const p = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, {
+      media: { backendFor: async () => ({ backend, label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) },
+    });
+    // The user edits the prompt in the card.
+    p.onApprovalEvent((e) => {
+      if (e.type === 'ask') p.answerAsk(e.ask.id, { generate: { prompt: 'the edited prompt', negativePrompt: 'blurry' } });
+    });
+    const tool = (await p.listTools(policy({ media: { image: { connectionId: 'gen', model: 'm' } } }))).find((t) => t.name === 'generate_image')!;
+    await tool.execute({ prompt: 'the model prompt', seed: 3 }, ctx());
+    expect(backend.requests[0]!.prompt).toBe('the edited prompt');
+    expect(store.audit.list('chat-1').at(-1)!.argsRedacted).toEqual({ prompt: 'the edited prompt', negative_prompt: 'blurry', seed: 3 });
+  });
+
   it('is not relayed to Claude Code', () => {
-    const p = provider({ backendFor: async () => ({ backend: new FakeBackend(), label: 'L' }) });
+    const p = provider({ backendFor: async () => ({ backend: new FakeBackend(), label: 'L', applies: ALL, defaultNegativePrompt: null, workflowDefaults: false }) });
     expect(p.relayTools(policy()).map((t) => t.name)).toEqual([]);
   });
 });

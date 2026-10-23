@@ -248,13 +248,14 @@ describe('ComfyUI backend', () => {
     expect(seen.some((s) => s.url.startsWith('/ws?clientId='))).toBe(true);
   }, 10_000);
 
-  it('interrupts and deletes the job from the queue when aborted', async () => {
+  it('interrupts and deletes the job from the queue when aborted once it is running', async () => {
     const conn = await start(comfy(() => ({})));
     const ws = sockets();
     const ac = new AbortController();
     const p = createComfyBackend(conn, registry, ws.open).generate(req, () => {}, ac.signal);
     await until(() => seen.some((s) => s.url === '/prompt'));
     await new Promise((r) => setTimeout(r, 20));
+    ws.made[0]!.send('execution_start', { prompt_id: 'p1' });
     ac.abort();
     await expect(p).rejects.toMatchObject({ name: 'AbortError' });
     await until(() => seen.some((s) => s.url === '/interrupt') && seen.some((s) => s.url === '/queue'));
@@ -263,6 +264,120 @@ describe('ComfyUI backend', () => {
     expect(JSON.parse(queue.body)).toEqual({ delete: ['p1'] });
     expect(seen.find((s) => s.url === '/interrupt')!.method).toBe('POST');
     expect(ws.made[0]!.closed).toBe(true);
+  });
+
+  it('only deletes a job that is still waiting in the queue: an interrupt would stop whatever is running', async () => {
+    const conn = await start(
+      comfy(
+        () => ({}),
+        (r, res) => {
+          if (r.method === 'GET' && r.url === '/queue') {
+            json(res, { queue_running: [[0, 'someone-else', {}, {}, []]], queue_pending: [[1, 'p1', {}, {}, []]] });
+            return true;
+          }
+          return false;
+        },
+      ),
+    );
+    const ws = sockets();
+    const ac = new AbortController();
+    const p = createComfyBackend(conn, registry, ws.open).generate(req, () => {}, ac.signal);
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    await until(() => seen.some((s) => s.method === 'POST' && s.url === '/queue') && seen.some((s) => s.method === 'GET' && s.url === '/queue'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(JSON.parse(seen.find((s) => s.method === 'POST' && s.url === '/queue')!.body)).toEqual({ delete: ['p1'] });
+    expect(seen.some((s) => s.url === '/interrupt')).toBe(false);
+  });
+
+  it('interrupts a polled job that the queue shows running', async () => {
+    const conn = await start(
+      comfy(
+        () => ({}),
+        (r, res) => {
+          if (r.method === 'GET' && r.url === '/queue') {
+            json(res, { queue_running: [[1, 'p1', {}, {}, []]], queue_pending: [] });
+            return true;
+          }
+          return false;
+        },
+      ),
+    );
+    const ac = new AbortController();
+    const p = createComfyBackend(conn, registry, () => {
+      throw new ReferenceError('WebSocket is not defined');
+    }).generate(req, () => {}, ac.signal);
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    await until(() => seen.some((s) => s.url === '/interrupt'));
+    expect(JSON.parse(seen.find((s) => s.url === '/interrupt')!.body)).toEqual({ prompt_id: 'p1' });
+    expect(seen.some((s) => s.method === 'POST' && s.url === '/queue')).toBe(true);
+  });
+
+  it("doesn't interrupt once the job has finished, even if stopped while downloading", async () => {
+    let viewing = false;
+    const conn = await start(
+      comfy(
+        () => IMAGE_HISTORY,
+        (r) => {
+          if (r.url?.startsWith('/view?')) {
+            viewing = true; // never answers
+            return true;
+          }
+          return false;
+        },
+      ),
+    );
+    const ws = sockets();
+    const ac = new AbortController();
+    const p = createComfyBackend(conn, registry, ws.open).generate(req, () => {}, ac.signal);
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    ws.made[0]!.send('execution_start', { prompt_id: 'p1' });
+    ws.made[0]!.send('executing', { node: null, prompt_id: 'p1' });
+    await until(() => viewing);
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen.some((s) => s.url === '/interrupt')).toBe(false);
+  });
+
+  it('for a video, takes the video files before the images a workflow also saved', async () => {
+    const png = (n: number) => ({ filename: `frame_${n}.png`, subfolder: '', type: 'output' });
+    const conn = await start(
+      comfy(() => ({
+        p1: {
+          outputs: {
+            '9': { images: [png(1), png(2), png(3), png(4), png(5)] },
+            '58': { images: [{ filename: 'clip.webm', subfolder: '', type: 'output' }] },
+            '60': { gifs: [{ filename: 'clip_00001.mp4', subfolder: 'video', type: 'output' }] },
+          },
+          status: { status_str: 'success', completed: true, messages: [] },
+        },
+      })),
+    );
+    const ws = sockets();
+    const p = createComfyBackend(conn, registry, ws.open).generate({ ...req, media: 'video', model: WAN.id, frames: 121 }, () => {}, new AbortController().signal);
+    await until(() => seen.some((s) => s.url === '/prompt'));
+    await new Promise((r) => setTimeout(r, 20));
+    ws.made[0]!.send('execution_success', { prompt_id: 'p1' });
+    expect(await p).toHaveLength(4);
+    const viewed = seen.filter((s) => s.url.startsWith('/view?')).map((s) => new URL(s.url, conn.baseUrl).searchParams.get('filename'));
+    expect(viewed).toEqual(['clip.webm', 'clip_00001.mp4', 'frame_1.png', 'frame_2.png']);
+  });
+
+  it('never names a user and password from the base URL in an error', async () => {
+    const conn = await start((r, res) => json(res, {}, 500));
+    const withUser = { ...conn, baseUrl: conn.baseUrl.replace('http://', 'http://admin:hunter2@') };
+    const message = await createComfyBackend(withUser, registry, sockets('refuse').open)
+      .generate(req, () => {}, new AbortController().signal)
+      .then(() => '', (e: Error) => e.message);
+    expect(message).toContain('127.0.0.1');
+    expect(message).not.toContain('hunter2');
   });
 
   it('still cancels a job whose POST answers after the abort', async () => {

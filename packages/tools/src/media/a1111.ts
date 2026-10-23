@@ -1,5 +1,5 @@
 import type { MediaBackend, MediaConnection, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
-import { httpError, mediaFetch, readJson } from './http.js';
+import { httpError, mediaFetch, readJson, shownBase } from './http.js';
 
 const POLL_MS = 1000;
 
@@ -8,7 +8,7 @@ function obj(v: unknown): Record<string, unknown> {
 }
 
 export function createA1111Backend(conn: MediaConnection): MediaBackend {
-  const notApi = () => new Error(`${conn.baseUrl} isn't answering the A1111 API. Start it with --api.`);
+  const notApi = () => new Error(`${shownBase(conn)} isn't answering the A1111 API. Start it with --api.`);
 
   /** Best effort; runs on its own signal because the caller's is already aborted. */
   async function interrupt(): Promise<void> {
@@ -70,6 +70,8 @@ export function createA1111Backend(conn: MediaConnection): MediaBackend {
               height: req.height,
               seed: req.seed,
               override_settings: { sd_model_checkpoint: req.model },
+              // Restoring would reload the previous checkpoint after every image.
+              override_settings_restore_afterwards: false,
             }),
           },
           signal,
@@ -78,7 +80,7 @@ export function createA1111Backend(conn: MediaConnection): MediaBackend {
         const images = obj(await readJson(res, conn))['images'];
         const first = Array.isArray(images) ? images[0] : undefined;
         if (typeof first !== 'string' || first === '') {
-          throw new Error(`${conn.baseUrl} answered but returned no image.`);
+          throw new Error(`${shownBase(conn)} answered but returned no image.`);
         }
         // Tolerate a data-URL prefix; Buffer's base64 decoder would misread it.
         return [{ bytes: Buffer.from(first.replace(/^data:[^,]*,/, ''), 'base64') }];
