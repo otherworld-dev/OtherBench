@@ -148,7 +148,10 @@ describe('createGate approval tickets (onApproved)', () => {
     const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), onApproved });
     const input = { command: 'open', url: 'example.com' };
     expect(await gate('mcp__otherbench_x__browser', input, undefined, { own: { relay: described } })).toEqual({ allow: true });
-    expect(onApproved).toHaveBeenCalledWith(described, input, { command: 'open', host: 'example.com' });
+    expect(onApproved).toHaveBeenCalledWith(described, input, { command: 'open', host: 'example.com' }, undefined);
+    // With the hook's tool-use id, which the ticket keeps.
+    await gate('mcp__otherbench_x__browser', input, undefined, { own: { relay: described }, toolUseId: 'toolu_1' });
+    expect(onApproved).toHaveBeenLastCalledWith(described, input, { command: 'open', host: 'example.com' }, 'toolu_1');
   });
 
   it('keeps no ticket for a denied call, a spec without describeCall, or an outcome without args', async () => {
@@ -192,7 +195,7 @@ describe('createGate with the browser, the sandboxed shell and the ask path on o
     // The sandboxed command's arguments go to the broker as they are: it has no path to normalise.
     expect(requestApproval.mock.calls[0]![1]).toEqual({ command: 'ls' });
     expect(onApproved).toHaveBeenCalledTimes(1);
-    expect(onApproved).toHaveBeenCalledWith(browser, { command: 'open', url: 'example.com' }, described);
+    expect(onApproved).toHaveBeenCalledWith(browser, { command: 'open', url: 'example.com' }, described, undefined);
     expect(askUser).toHaveBeenCalledTimes(1);
   });
 

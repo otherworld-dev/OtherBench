@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
-import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@otherbench/core/domain/tool-images.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, VIDEO_FOR_USER_NOTE, type ToolImageBudget } from '@otherbench/core/domain/tool-images.js';
 import { NO_APPROVAL_REASON, type ToolContext, type ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { OtherBenchServerTool } from './otherbench-server.js';
 import type { ApprovalTickets } from './tickets.js';
@@ -67,9 +67,19 @@ export function currentRelayed(relay: Relay, approved: ToolSpec): ToolSpec {
 export const NO_TICKET = NO_APPROVAL_REASON;
 
 /**
+ * What OtherBench's server knows of one relayed call from its MCP request:
+ * Claude Code's tool-use id, when the request carries one, and the request's
+ * own signal (aborted when Claude Code gives up on the call).
+ */
+export interface RelayedCall {
+  toolUseId?: string;
+  signal?: AbortSignal;
+}
+
+/**
  * Runs a relayed call for the running reply, with the spec `currentRelayed`
  * chose. A spec with `describeCall` (the
- * browser, the computer tool) runs only with the arguments its approval
+ * browser, the computer tool, the generators) runs only with the arguments its approval
  * ticket holds, never with Claude Code's raw input; with no ticket nothing
  * runs. Other specs (MCP tools, the sandboxed run_command) run as before.
  *
@@ -79,16 +89,27 @@ export const NO_TICKET = NO_APPROVAL_REASON;
  * an argument object its own `requestApproval` approved, for the same chat,
  * reply and profile, once, and audits what came of it. So a call that got
  * past this function some other way still runs nothing.
+ *
+ * The call runs under its tool-use id (the hook's, kept on the ticket, else
+ * the request's), as an API model's call runs under its own: a generator's
+ * progress is sent by it. Its signal ends with the reply's or the request's.
+ * `keep` is handed whatever ran, errors included, by that id, when there is one.
  */
-export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext, tickets: ApprovalTickets): Promise<unknown> {
-  if (!spec.describeCall) return spec.execute(args, ctx);
-  const ticket = tickets.take(spec.name, args);
+export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext, tickets: ApprovalTickets, call: RelayedCall = {}, keep?: (toolUseId: string, output: unknown) => void): Promise<unknown> {
+  const signal = call.signal ? AbortSignal.any([ctx.signal, call.signal]) : ctx.signal;
+  const run = async (runArgs: unknown, toolUseId: string | undefined): Promise<unknown> => {
+    const output = await spec.execute(runArgs, { ...ctx, signal, ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}) });
+    if (toolUseId !== undefined) keep?.(toolUseId, output);
+    return output;
+  };
+  if (!spec.describeCall) return run(args, call.toolUseId);
+  const ticket = tickets.take(spec.name, args, call.toolUseId);
   if (!ticket) return { error: true, code: 'no_approval', message: NO_TICKET };
-  return spec.execute(ticket.args, ctx);
+  return run(ticket.args, ticket.toolUseId ?? call.toolUseId);
 }
 
 /** The running reply's relay executor, or undefined when no OtherBench reply is running. */
-type CurrentRelay = () => ((spec: ToolSpec, args: unknown) => Promise<unknown>) | undefined;
+type CurrentRelay = () => ((spec: ToolSpec, args: unknown, call?: RelayedCall) => Promise<unknown>) | undefined;
 
 /**
  * An error as MCP content. `about` is the line a tool put first in its error
@@ -102,6 +123,11 @@ function errorResult(text: string, about?: unknown): CallToolResult {
 
 function isToolError(value: unknown): value is { error: true; message: string; about?: unknown } {
   return typeof value === 'object' && value !== null && (value as { error?: unknown }).error === true && typeof (value as { message?: unknown }).message === 'string';
+}
+
+/** An item that claims to be a video, inline or a reference, whatever else it carries. */
+function isVideoItem(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'video';
 }
 
 /**
@@ -133,17 +159,21 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
     inputSchema: spec.parameters as Record<string, unknown>,
     // An MCP server's tools wait for tool search; the browser, the computer and the sandboxed shell are few and always there.
     alwaysLoad: spec.source !== 'mcp',
-    call: async (args) => {
+    call: async (args, call) => {
       const run = current();
       if (!run) return errorResult('No OtherBench reply is waiting on this tool call.');
       try {
-        const out = await run(spec, args);
+        const out = await run(spec, args, call);
         if (isToolError(out)) return errorResult(out.message, out.about);
         if (Array.isArray(out)) {
           // MCP content goes to Claude Code only after the same screening an API
           // model's tool result gets: images by their bytes and within the reply's
-          // budget, audio and resource blobs as a note. Nothing from here is stored.
-          const screened = screenToolResult(out, budgetFor(run), LIVE_IMAGE_LIMITS);
+          // budget, audio and resource blobs as a note. A video is never shown to
+          // a model: Claude gets the note an API model gets. Nothing from here is
+          // stored; a generator's own result reaches the reply by its tool-use id
+          // (TurnBinding.results).
+          const shown = out.map((item: unknown) => (isVideoItem(item) ? { type: 'text', text: VIDEO_FOR_USER_NOTE } : item));
+          const screened = screenToolResult(shown, budgetFor(run), LIVE_IMAGE_LIMITS);
           if (screened.forged) console.warn(`[claude-code relay] a "${spec.name}" result carried a reference to a stored image; removed.`);
           return { content: screened.result as CallToolResult['content'] };
         }

@@ -50,6 +50,20 @@ describe('ApprovalTickets', () => {
     expect(await runRelayed(spec, { action: 'wait', duration: 0 }, ctx, t)).toEqual({ approved: 0 });
   });
 
+  it("carries the hook's tool-use id, and of two identical tickets takes the one the call names", () => {
+    const t = new ApprovalTickets();
+    const input = { prompt: 'a red fox' };
+    t.add('generate_image', input, { prompt: 'a red fox', n: 1 }, 't1');
+    t.add('generate_image', input, { prompt: 'a red fox', n: 2 }, 't2');
+    t.add('generate_image', input, { prompt: 'a red fox', n: 3 });
+    expect(t.take('generate_image', input, 't2')).toEqual({ args: { prompt: 'a red fox', n: 2 }, toolUseId: 't2' });
+    // An id no ticket holds, or none at all: the oldest for that tool and input.
+    expect(t.take('generate_image', input, 't9')).toEqual({ args: { prompt: 'a red fox', n: 1 }, toolUseId: 't1' });
+    expect(t.take('generate_image', input)).toEqual({ args: { prompt: 'a red fox', n: 3 } });
+    expect(t.take('generate_image', input, 't2')).toBeNull();
+    expect(t.size).toBe(0);
+  });
+
   it('forgets everything on clear', () => {
     const t = new ApprovalTickets();
     t.add('browser', {}, { host: 'a' });

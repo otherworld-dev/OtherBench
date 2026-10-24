@@ -48,6 +48,9 @@ function commandStderr(message: unknown): string | null {
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
+/** OtherBench's generators, relayed: their result in the reply is the tool's own (`relayedResult`), not the transcript's text. */
+const MEDIA_TOOLS: ReadonlySet<string> = new Set(['generate_image', 'generate_video']);
+
 /** Claude Code's tools that start a helper (a subagent). */
 const HELPER_TOOLS: ReadonlySet<string> = new Set(['Task', 'Agent']);
 /** The longest error a failed helper's card shows. */
@@ -64,6 +67,12 @@ export interface SdkEventMapperOptions {
   now?: () => number;
   /** Told each helper card it starts (by the Task call's id), so the engine knows which reply holds it. */
   onCard?: (callId: string) => void;
+  /**
+   * What OtherBench's server returned for a relayed call, by its tool-use id,
+   * taken (and forgotten) once: a generator's image or video, which Claude
+   * Code's own transcript of the call doesn't keep. Undefined when none is held.
+   */
+  relayedResult?: (toolUseId: string) => unknown;
 }
 
 /**
@@ -224,9 +233,12 @@ export class SdkEventMapper {
         for (const block of blocksOf(m['message'])) {
           if (block.type !== 'tool_result') continue;
           const id = String(block['tool_use_id']);
-          const result = resultText(block['content']);
           const isError = block['is_error'] === true;
           const name = this.toolNames.get(id) ?? 'unknown';
+          // The main agent's generation: the tool's own result (its image or video, for TurnRunner to
+          // store), or its text when OtherBench's server held none (the call never reached it).
+          const held = helper === null && MEDIA_TOOLS.has(name) ? this.options.relayedResult?.(id) : undefined;
+          const result = held !== undefined ? held : resultText(block['content']);
           if (helper !== null) {
             out.push(this.helperEvent(helper, { type: 'tool-result', id, name, result, isError }));
             continue;

@@ -17,6 +17,13 @@ const PARENT_SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE
  * configuration), and this keeps it so if one is ever passed.
  */
 const ADDED_DIR_CONFIG_VARS = /^CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD$/i;
+/**
+ * Moves an MCP call that runs past this many ms to the background. A relayed
+ * call (a generation above all) must finish as the call the reply is waiting
+ * on, so it is always set to 0 (off), whatever OtherBench's own environment says.
+ */
+const AUTO_BACKGROUND_VAR = 'CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS';
+const AUTO_BACKGROUND_VARS = /^CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS$/i;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, '');
@@ -35,13 +42,14 @@ export function backendOf(conn: Connection): string {
  * loads an extra folder's CLAUDE.md, are removed for every backend. An endpoint backend gets its URL and token, and Claude Code's
  * background "small/fast" model is pointed at the chosen model so it never
  * asks the endpoint for a Claude model id. Every backend also gets Claude
- * Code's todo tools switched on.
+ * Code's todo tools switched on, and its moving of long MCP calls to the
+ * background switched off.
  */
 export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
     // The server's own API token (OTHERBENCH_TOKEN) never reaches Claude Code or its Bash (core/domain/child-env.ts).
-    if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
+    if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !AUTO_BACKGROUND_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
   }
   if (conn.baseUrl) {
     env['ANTHROPIC_BASE_URL'] = trimTrailingSlash(conn.baseUrl);
@@ -53,5 +61,6 @@ export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: 
   // for every model (probe: test/fixtures/README.md, "Thread tools"). OtherBench
   // shows the list as the reply's checklist.
   env['CLAUDE_CODE_ENABLE_TODO_TOOLS'] = '1';
+  env[AUTO_BACKGROUND_VAR] = '0';
   return env;
 }

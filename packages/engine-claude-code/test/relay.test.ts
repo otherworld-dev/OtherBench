@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { normaliseLiveToolName } from '@otherbench/core/domain/live-artifacts.js';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { otherBenchServerName, otherBenchToolName } from '../src/otherbench-server.js';
-import { buildRelay, currentRelayed, relayName, relayServerTool } from '../src/relay.js';
+import { buildRelay, currentRelayed, relayName, relayServerTool, runRelayed } from '../src/relay.js';
+import { ApprovalTickets } from '../src/tickets.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
+import { VIDEO_FOR_USER_NOTE } from '@otherbench/core/domain/tool-images.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 
 const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
   name: 'mcp__nextcloud__deck_add',
@@ -64,7 +67,7 @@ describe('relayServerTool', () => {
     const tool = relayServerTool('nextcloud__deck_add', spec(), () => run);
     expect(tool).toMatchObject({ name: 'nextcloud__deck_add', description: 'Add a Deck card', inputSchema: spec().parameters });
     expect(await tool.call({ title: 'x' })).toEqual({ content: [{ type: 'text', text: 'card added' }] });
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ name: 'mcp__nextcloud__deck_add' }), { title: 'x' });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ name: 'mcp__nextcloud__deck_add' }), { title: 'x' }, undefined);
   });
 
   it('bounds the MCP content it relays: type from the bytes, images within the reply budget, bulk audio and blobs as a note', async () => {
@@ -115,6 +118,35 @@ describe('relayServerTool', () => {
     expect(relayName('computer')).toBe('computer');
     const tool = relayServerTool('computer', spec({ name: 'computer', source: 'computer', serverId: undefined }), () => async () => screenshot);
     expect(await tool.call({ action: 'screenshot' })).toEqual({ content: screenshot });
+  });
+
+  it("gives Claude Code a note in place of a generated video, and a generated image as MCP image content", async () => {
+    const png = FAKE_PNG.toString('base64');
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(16)]).toString('base64');
+    const video = relayServerTool('generate_video', spec({ name: 'generate_video', source: 'media', serverId: undefined }), () => async () => [
+      { type: 'text', text: 'Generated a video.' },
+      { type: 'video', data: mp4, mimeType: 'video/mp4' },
+      { type: 'video', attachmentId: 'someone-elses', mimeType: 'video/mp4' },
+    ]);
+    expect(await video.call({ prompt: 'waves' })).toEqual({
+      content: [
+        { type: 'text', text: 'Generated a video.' },
+        { type: 'text', text: VIDEO_FOR_USER_NOTE },
+        { type: 'text', text: VIDEO_FOR_USER_NOTE },
+      ],
+    });
+    const image = relayServerTool('generate_image', spec({ name: 'generate_image', source: 'media', serverId: undefined }), () => async () => [
+      { type: 'text', text: 'Generated an image.' },
+      { type: 'image', data: png, mimeType: 'image/png' },
+    ]);
+    expect(await image.call({ prompt: 'a fox' })).toEqual({ content: [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }] });
+  });
+
+  it("hands the running reply Claude Code's tool-use id and the request's signal", async () => {
+    const run = vi.fn(async () => [{ type: 'text', text: 'ok' }]);
+    const signal = new AbortController().signal;
+    await relayServerTool('t', spec(), () => run).call({ title: 'x' }, { toolUseId: 'toolu_1', signal });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ name: 'mcp__nextcloud__deck_add' }), { title: 'x' }, { toolUseId: 'toolu_1', signal });
   });
 
   it('answers a tool error, a call that throws, or no running reply as an error result', async () => {
@@ -176,5 +208,56 @@ describe('currentRelayed', () => {
   it('refuses a spec whose source or risk is not what the gate approved', () => {
     expect(() => currentRelayed(buildRelay([spec({ name: 'run_command', source: 'mcp', risk: 'execute' })]), approved)).toThrow('changed since it was approved');
     expect(() => currentRelayed(buildRelay([spec({ name: 'run_command', source: 'sandbox', risk: 'read' })]), approved)).toThrow('changed since it was approved');
+  });
+});
+
+describe('runRelayed', () => {
+  const ctx = (signal = new AbortController().signal): ToolContext => ({ chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal });
+  const described = (execute: ToolSpec['execute']) => spec({ name: 'generate_image', source: 'media', risk: 'execute', serverId: undefined, describeCall: async (a) => ({ args: a as Record<string, unknown>, risk: 'execute' }), execute });
+
+  it("runs a ticket's call under the hook's tool-use id, else the one the request carries", async () => {
+    const seen: (string | undefined)[] = [];
+    const execute = vi.fn(async (_a: unknown, c: ToolContext) => (seen.push(c.toolCallId), [{ type: 'text', text: 'made' }]));
+    const t = new ApprovalTickets();
+    t.add('generate_image', { prompt: 'x' }, { prompt: 'x' }, 'toolu_hook');
+    t.add('generate_image', { prompt: 'x' }, { prompt: 'x' });
+    await runRelayed(described(execute), { prompt: 'x' }, ctx(), t, { toolUseId: 'toolu_meta' });
+    await runRelayed(described(execute), { prompt: 'x' }, ctx(), t, { toolUseId: 'toolu_meta' });
+    // A spec with no ticket to take runs under the request's id, or none.
+    await runRelayed(spec({ execute }), {}, ctx(), t, { toolUseId: 'toolu_mcp' });
+    await runRelayed(spec({ execute }), {}, ctx(), t);
+    expect(seen).toEqual(['toolu_hook', 'toolu_meta', 'toolu_mcp', undefined]);
+  });
+
+  it("aborts the tool's signal when the reply stops or Claude Code cancels the request", async () => {
+    const signals: AbortSignal[] = [];
+    const execute = async (_a: unknown, c: ToolContext) => (signals.push(c.signal), null);
+    const reply = new AbortController();
+    const request = new AbortController();
+    const other = new AbortController();
+    await runRelayed(spec({ execute }), {}, ctx(reply.signal), new ApprovalTickets(), { signal: request.signal });
+    await runRelayed(spec({ execute }), {}, ctx(reply.signal), new ApprovalTickets(), { signal: other.signal });
+    await runRelayed(spec({ execute }), {}, ctx(reply.signal), new ApprovalTickets());
+    request.abort();
+    expect(signals.map((s) => s.aborted)).toEqual([true, false, false]);
+    reply.abort();
+    expect(signals.every((s) => s.aborted)).toBe(true);
+  });
+
+  it('hands what ran, errors included, to `keep` by its tool-use id, and nothing when no id is known or nothing ran', async () => {
+    const kept: [string, unknown][] = [];
+    const keep = (id: string, out: unknown) => kept.push([id, out]);
+    const made = [{ type: 'text', text: 'made' }];
+    const failed = { error: true, code: 'generation_failed', message: 'out of memory' };
+    const t = new ApprovalTickets();
+    t.add('generate_image', { prompt: 'a' }, { prompt: 'a' }, 't1');
+    t.add('generate_image', { prompt: 'b' }, { prompt: 'b' }, 't2');
+    t.add('generate_image', { prompt: 'c' }, { prompt: 'c' });
+    expect(await runRelayed(described(async () => made), { prompt: 'a' }, ctx(), t, {}, keep)).toBe(made);
+    expect(await runRelayed(described(async () => failed), { prompt: 'b' }, ctx(), t, {}, keep)).toBe(failed);
+    await runRelayed(described(async () => made), { prompt: 'c' }, ctx(), t, {}, keep);
+    await runRelayed(described(async () => made), { prompt: 'never approved' }, ctx(), t, { toolUseId: 't4' }, keep);
+    expect(kept).toEqual([['t1', made], ['t2', failed]]);
+    expect(kept[0]![1]).toBe(made);
   });
 });

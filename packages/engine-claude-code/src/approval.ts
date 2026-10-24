@@ -168,8 +168,8 @@ export function createGate(deps: {
   ctx: ToolContext;
   /** Whether calls OtherBench would ask about go to Claude Code's classifier instead; a function is asked at each call (the mode can be switched mid-reply). */
   autoMode?: boolean | (() => boolean);
-  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
-  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
+  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4), with the call's tool-use id when Claude Code gave one. */
+  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown, toolUseId: string | undefined) => void;
   /** The reply's helpers: a call one of them made says so on its approval card. */
   helpers?: HelperRegistry;
   /**
@@ -258,7 +258,7 @@ export function createGate(deps: {
       if (!('allowed' in outcome)) return { allow: false, reason: 'OtherBench could not check this tool call: unrecognised approval outcome.' };
       if (!outcome.allowed) return { allow: false, reason: outcome.reason, ...(typeof outcome.about === 'string' ? { about: outcome.about } : {}) };
       // A relayed tool that describes its calls (the browser, computer use): keep what was approved, so only that runs.
-      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
+      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args, opts?.toolUseId);
       // Allowed (internal, by policy): Claude Code's question now goes to the user as a card.
       if (!own && toolName === AGENT_ASK_TOOL) return await askQuestion(normalised.args, signal);
       return { allow: true };

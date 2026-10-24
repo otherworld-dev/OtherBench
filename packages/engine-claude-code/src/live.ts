@@ -5,6 +5,7 @@ import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { Gate } from './approval.js';
 import type { BackgroundTasks } from './background.js';
 import type { ApprovalTickets } from './tickets.js';
+import type { RelayedCall } from './relay.js';
 
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
 export const LIVE_IDLE_MS = 30 * 60_000;
@@ -127,9 +128,17 @@ export interface TurnBinding {
   /** Runs a propose_plan call for this reply (spec 2026-10-12-thread-cards-design); absent when the reply isn't planning. */
   plan?: (args: unknown) => Promise<unknown>;
   /** Runs a relayed MCP tool's (already approved) call for this reply, with the reply's tool context. */
-  relay?: (spec: ToolSpec, args: unknown) => Promise<unknown>;
+  relay?: (spec: ToolSpec, args: unknown, call?: RelayedCall) => Promise<unknown>;
   /** This reply's approval tickets for relayed calls with `describeCall` (tickets.ts); cleared when the reply ends. */
   tickets?: ApprovalTickets;
+  /**
+   * What each relayed generator call returned, by its tool-use id, until the
+   * reply's mapper takes it for that call's result: Claude Code's transcript
+   * keeps only its text, and the reply needs the image or video itself. One
+   * holds up to a video's 64 MB of base64, so each is taken once and the map
+   * is cleared when the reply ends.
+   */
+  results: Map<string, unknown>;
   /** Keeps the summary of a /compact this reply sent (the PostCompact hook, manual trigger); absent when the reply isn't one. */
   compacted?: (summary: string) => void;
 }
