@@ -747,4 +747,57 @@ describe('createGate and the helpers of a reply', () => {
     expect(requestApproval.mock.calls[0]![3].subagent).toBeUndefined();
     expect(requestApproval.mock.calls[1]![3].shownSubagent).toBeUndefined();
   });
+
+  const media: ToolSpec = { name: 'generate_image', description: 'Generate an image', parameters: {}, risk: 'execute', source: 'media', execute: async () => undefined };
+  const relayMedia = { relay: media };
+
+  it("passes Claude Code's own word that a helper made the call (the hook's agent_id, canUseTool's agentID) to the gate", async () => {
+    const gate = vi.fn(async () => ({ allow: true }) as const);
+    await preToolUseHook(gate)({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 't1', agent_id: 'agent-7' } as never, 't1', { signal: new AbortController().signal });
+    await preToolUseHook(gate)({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 't2' } as never, 't2', { signal: new AbortController().signal });
+    await canUseToolFor(gate)('Bash', {}, { signal: new AbortController().signal, toolUseID: 't3', agentID: 'agent-8' } as never);
+    expect((gate.mock.calls as unknown[][]).map((c) => c[3])).toEqual([
+      { mayDefer: true, toolUseId: 't1', agentId: 'agent-7' },
+      { mayDefer: true, toolUseId: 't2' },
+      { toolUseId: 't3', agentId: 'agent-8' },
+    ]);
+  });
+
+  it(`names a call Claude Code says is a helper's even when no registry knows it yet, as "a helper", and a known one by its label`, async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ allowed: true });
+    const helpers = new HelperRegistry();
+    helpers.start('task-1', 'Find the bug');
+    helpers.own('known', 'task-1');
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), helpers });
+    await gate('mcp__otherbench_x__generate_image', {}, undefined, { own: relayMedia, toolUseId: 'unknown', agentId: 'agent-7' });
+    await gate('Grep', { pattern: 'x' }, undefined, { toolUseId: 'unknown-2', agentId: 'agent-7' });
+    await gate('mcp__otherbench_x__generate_image', {}, undefined, { own: relayMedia, toolUseId: 'known', agentId: 'agent-7' });
+    const shown = (requestApproval.mock.calls as unknown[][]).map((c) => (c[3] as ToolContext).shownSubagent);
+    expect(shown).toEqual([
+      { callId: 'agent-7', label: 'a helper', parentProfileId: 'p' },
+      { callId: 'agent-7', label: 'a helper', parentProfileId: 'p' },
+      { callId: 'task-1', label: 'Find the bug', parentProfileId: 'p' },
+    ]);
+  });
+
+  it("asks the process's background tasks who made a call: waiting for a generation with no word from Claude Code, at once for one it says is a helper's, never otherwise", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ allowed: true });
+    const backgroundOwner = vi.fn(async (id: string) => (id === 'bg' ? { callId: 'task-0', label: 'earlier helper' } : null));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), helpers: new HelperRegistry(), backgroundOwner });
+    await gate('mcp__otherbench_x__generate_image', {}, undefined, { own: relayMedia, toolUseId: 'bg' });
+    await gate('mcp__otherbench_x__generate_image', {}, undefined, { own: relayMedia, toolUseId: 'main' });
+    await gate('Grep', { pattern: 'x' }, undefined, { toolUseId: 'bg', agentId: 'agent-1' });
+    await gate('Grep', { pattern: 'x' }, undefined, { toolUseId: 'plain' });
+    expect(backgroundOwner.mock.calls).toEqual([['bg', true], ['main', true], ['bg', false]]);
+    const shown = (requestApproval.mock.calls as unknown[][]).map((c) => (c[3] as ToolContext).shownSubagent);
+    expect(shown).toEqual([{ callId: 'task-0', label: 'earlier helper', parentProfileId: 'p' }, undefined, { callId: 'task-0', label: 'earlier helper', parentProfileId: 'p' }, undefined]);
+  });
+
+  it("keeps the helper a between-replies context already names, rather than calling it \"a helper\"", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ allowed: true });
+    const tag = { callId: 'task-1', label: 'implementer', parentProfileId: 'p' };
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: { ...ctx(), shownSubagent: tag } });
+    await gate('mcp__otherbench_x__generate_image', {}, undefined, { own: relayMedia, toolUseId: 'c1', agentId: 'agent-7' });
+    expect((requestApproval.mock.calls[0]![3] as ToolContext).shownSubagent).toEqual(tag);
+  });
 });

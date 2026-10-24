@@ -109,7 +109,7 @@ const PROBE_TIMEOUT_MS = 20_000;
 
 /** How long a stopped reply's turn may take to end after Claude Code is interrupted before its process is closed. */
 export const INTERRUPT_GRACE_MS = 5_000;
-/** How long a helper's call between replies waits for this process's reader to learn which helper made it. */
+/** How long a helper's call between replies, or a generation Claude Code didn't say whose it is, waits for this process's reader to learn which helper made it. */
 const OWNER_WAIT_MS = 500;
 
 /** A clean chat's folder name under the scratch root: its id, made a plain name so it can't point outside (the server deletes it by the same rule). */
@@ -747,6 +747,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         readFolders: this.skillFolders(req.workspaceRoot),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
+        // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
+        backgroundOwner: async (toolUseId, wait) => {
+          const background = proc.live?.background;
+          if (!background) return null;
+          return wait ? background.whenOwned(toolUseId, OWNER_WAIT_MS) : background.ownerOf(toolUseId);
+        },
         onApproved: (spec, input, args, toolUseId) => tickets.add(spec.name, input, args, toolUseId),
       }),
       // Auto can be switched on mid-reply, so the classifier's blocks are audited whenever it could run.

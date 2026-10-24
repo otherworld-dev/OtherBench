@@ -16,8 +16,8 @@ import { buildRelay } from '../src/relay.js';
 import type { OtherBenchServerTool } from '../src/otherbench-server.js';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
-import { UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
-import { FakeToolProvider } from '@otherbench/core/testing/fakes.js';
+import { PermissionBroker, SUBAGENT_MEDIA_REFUSAL, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import { MAX_REQUEST_ATTACHMENT_BYTES } from '@otherbench/core/domain/request-budget.js';
 
@@ -1834,6 +1834,137 @@ describe('ClaudeCodeChatEngine relayed generate_image (spec 2026-10-24-media-cla
       toolu_b: [{ type: 'text', text: 'run 1' }, { type: 'image', data: png, mimeType: 'image/png' }],
     });
     expect(g.progress.map((p) => p.callId)).toEqual(['toolu_b', 'toolu_a']);
+    e.dispose();
+  });
+});
+
+describe("ClaudeCodeChatEngine: a Claude Code helper can't generate (spec 2026-10-24-media-claude-code)", () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const png = FAKE_PNG.toString('base64');
+  const msg = (o: object) => o as unknown as SDKMessage;
+  const executed: ToolContext[] = [];
+  const spec: ToolSpec = {
+    name: 'generate_image',
+    description: 'Generate an image',
+    parameters: { type: 'object', properties: { prompt: { type: 'string' } } },
+    risk: 'execute',
+    source: 'media',
+    describeCall: async (args) => ({ args: { ...(args as Record<string, unknown>) }, risk: 'execute' }),
+    execute: async (_args, ctx) => (executed.push(ctx), [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }]),
+  };
+  beforeEach(() => {
+    executed.length = 0;
+  });
+  // The real broker decides (a helper's generation is refused, the reply's own allowed under ask-on-changes); each approval is its own object.
+  const deciding = () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    return {
+      requestApproval: vi.fn(async (tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext) => {
+        const d = broker.decide(tool, args, policy, ctx);
+        return d.kind === 'deny' ? { allowed: false as const, reason: d.reason } : { allowed: true as const, grantedBy: 'policy', args: { ...(args as Record<string, unknown>) } };
+      }),
+      recordAgentDenial: vi.fn(),
+    };
+  };
+  const generating = (o: Partial<EngineRequest> = {}): Partial<EngineRequest> => ({
+    ...o,
+    profile: profile({ toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'gen', model: 'sdxl' } } } }),
+  });
+  function server() {
+    let tools: OtherBenchServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: OtherBenchServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    return { mcpServer, tool: () => tools.find((t) => t.name === 'generate_image')! };
+  }
+  const toolName = (options: Options) => `mcp__${Object.keys(options.mcpServers ?? {})[0]!}__generate_image`;
+  const preCall = (options: Options, id: string, extra: { agent_id?: string } = {}) =>
+    options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: toolName(options), tool_input: { prompt: 'a red fox' }, tool_use_id: id, ...extra } as never, id, sig());
+  const generate = (options: Options, id: string, parent: string | null) => msg({ type: 'assistant', parent_tool_use_id: parent, message: { content: [{ type: 'tool_use', id, name: toolName(options), input: { prompt: 'a red fox' } }] } });
+  const taskCall = msg({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it' } }] } });
+  const taskStarted = (backgrounded: boolean) => msg({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: backgrounded });
+  const make = (query: QueryFn, s: ReturnType<typeof server>) => {
+    const approvals = deciding();
+    return { e: new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [spec], mcpServer: s.mcpServer }), approvals };
+  };
+  const ctxOf = (a: ReturnType<typeof deciding>, n: number) => (a.requestApproval.mock.calls[n]! as unknown as [unknown, unknown, unknown, ToolContext])[3];
+  const refused = { hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: SUBAGENT_MEDIA_REFUSAL } };
+
+  it("refuses a helper's generation when Claude Code asks about it before this process has read the helper's message", async () => {
+    const s = server();
+    let answer: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      yield taskCall;
+      yield taskStarted(false);
+      // The hook comes first, with no agent_id; the helper's message naming the call only after it.
+      const asked = preCall(options, 'toolu_h');
+      yield generate(options, 'toolu_h', 'task-1');
+      answer = await asked;
+      yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Done.' }] } });
+      yield success();
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    expect(answer).toMatchObject(refused);
+    expect(ctxOf(approvals, 0).shownSubagent).toEqual({ callId: 'task-1', label: 'implementer', parentProfileId: 'p' });
+    expect(executed).toHaveLength(0);
+    e.dispose();
+  });
+
+  it("refuses a generation the hook says is a helper's (agent_id) though nothing here knows that helper", async () => {
+    const s = server();
+    let answer: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      answer = await preCall(options, 'toolu_x', { agent_id: 'agent-1' });
+      yield success();
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    expect(answer).toMatchObject(refused);
+    expect(ctxOf(approvals, 0).shownSubagent).toEqual({ callId: 'agent-1', label: 'a helper', parentProfileId: 'p' });
+    expect(executed).toHaveLength(0);
+    e.dispose();
+  });
+
+  it("refuses an earlier reply's background helper generating during a later reply, while the later reply's own agent still generates", async () => {
+    const s = server();
+    const answers: Record<string, unknown> = {};
+    let made: unknown;
+    const { query } = liveQuery(async function* ({ options, prompt, n }) {
+      const uuid = (prompt as { uuid?: string }).uuid;
+      const done = msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [uuid] });
+      if (n === 1) {
+        yield init('sess-1');
+        yield taskCall;
+        yield taskStarted(true);
+        yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] } });
+        yield done;
+        return;
+      }
+      yield init('sess-1');
+      // The first reply's helper, still working: a stranger to this reply's mapper.
+      yield generate(options, 'toolu_bg', 'task-1');
+      answers.helper = await preCall(options, 'toolu_bg');
+      // This reply's own agent: no agent_id, and no helper claims it.
+      yield generate(options, 'toolu_main', null);
+      answers.main = await preCall(options, 'toolu_main');
+      made = await s.tool().call({ prompt: 'a red fox' }, { toolUseId: 'toolu_main' });
+      yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_main', content: [{ type: 'text', text: 'Generated an image.' }] }] } });
+      yield done;
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    const events = await collect(e.stream(followUp(generating())));
+    expect(answers.helper).toMatchObject(refused);
+    expect(ctxOf(approvals, 0)).toMatchObject({ messageId: 'm2', shownSubagent: { callId: 'task-1', label: 'implementer' } });
+    expect(answers.main).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(ctxOf(approvals, 1).shownSubagent).toBeUndefined();
+    expect(made).toMatchObject({ content: [{ type: 'text', text: 'Generated an image.' }, { type: 'image' }] });
+    expect(executed.map((c) => c.toolCallId)).toEqual(['toolu_main']);
+    expect(events.find((ev) => ev.type === 'tool-result')).toMatchObject({ id: 'toolu_main', name: 'generate_image', isError: false });
     e.dispose();
   });
 });
