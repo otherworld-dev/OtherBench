@@ -4,7 +4,7 @@
 // and does Claude see an image content block in the result?
 // Needs `npm run build` first.
 // Run from packages/engine-claude-code:  node test/fixtures/media-relay-probe.mjs
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -30,7 +30,8 @@ const server = otherBenchMcpServer(NAME, [
 
 const cwd = mkdtempSync(join(tmpdir(), 'otherbench-media-probe-'));
 const q = query({
-  prompt: 'Call the generate_image tool once with prompt "a red dot". Then say in one short sentence what colour the returned image is.',
+  // No colour is named here, so naming the right one shows Claude saw the image's pixels.
+  prompt: 'Call the generate_image tool once with prompt "a small dot". Then say in one short sentence what colour the returned image is.',
   options: {
     cwd,
     model: 'haiku',
@@ -42,28 +43,35 @@ const q = query({
     persistSession: false,
     maxTurns: 3,
     hooks: {
-      PreToolUse: [{ hooks: [async (input) => { hookIds.push({ tool: input.tool_name, id: input.tool_use_id }); return { continue: true }; }] }],
+      PreToolUse: [{ hooks: [async (input) => { hookIds.push({ tool: input.tool_name, id: input.tool_use_id, agentId: input.agent_id ?? null }); return { continue: true }; }] }],
     },
   },
 });
 
 let result = null;
 const assistantText = [];
-for await (const msg of q) {
-  if (msg.type === 'assistant') for (const b of msg.message.content) if (b.type === 'text') assistantText.push(b.text);
-  if (msg.type === 'result') result = msg;
+try {
+  for await (const msg of q) {
+    if (msg.type === 'assistant') for (const b of msg.message.content) if (b.type === 'text') assistantText.push(b.text);
+    if (msg.type === 'result') result = msg;
+  }
+} finally {
+  rmSync(cwd, { recursive: true, force: true });
 }
-const hookId = hookIds.find((h) => h.tool.endsWith('generate_image'))?.id ?? null;
+const hook = hookIds.find((h) => h.tool.endsWith('generate_image'));
+const hookId = hook?.id ?? null;
 const metaId = seen[0]?.toolUseId ?? null;
 console.log('hook tool_use_id:', hookId);
 console.log('tool saw _meta id:', metaId);
 console.log('ids match:', hookId !== null && hookId === metaId);
+console.log("hook agent_id (the main agent's call, so none expected):", hook?.agentId ?? null);
 console.log('tool saw signal:', seen[0]?.signal ?? false);
 console.log('configured server timeout (ms):', server.timeout, server.timeout === OTHERBENCH_TOOL_TIMEOUT_MS ? '(6 h; whether the CLI honours it is not observable here)' : '');
 console.log('assistant text:', JSON.stringify(assistantText));
 console.log('result:', result?.subtype, JSON.stringify(result?.result ?? null));
-const sawImage = /red|pixel|dot|image/i.test(assistantText.join(' '));
-console.log('Claude described the image:', sawImage);
+// The image's colour, as a word: only the pixels say it.
+const sawImage = /\bred\b/i.test(assistantText.join(' '));
+console.log('Claude named the colour (red):', sawImage);
 const ok = seen.length === 1 && hookId !== null && hookId === metaId && seen[0].signal && sawImage;
 console.log(ok ? 'PROBE OK' : 'PROBE FAILED');
 process.exit(ok ? 0 : 1);
