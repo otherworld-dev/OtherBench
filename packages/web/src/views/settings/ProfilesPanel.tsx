@@ -179,16 +179,16 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
-    const stale = isClaudeCode ? null : generationProblem(allConnections, generation);
+    const stale = generationProblem(allConnections, generation);
     if (stale) {
       setError(stale);
       return;
     }
-    if (!isClaudeCode && generation.imageConnectionId && !generation.imageModel) {
+    if (generation.imageConnectionId && !generation.imageModel) {
       setError('Choose an image model, or set the image connection to None.');
       return;
     }
-    if (!isClaudeCode && generation.videoConnectionId && !generation.videoModel) {
+    if (generation.videoConnectionId && !generation.videoModel) {
       setError('Choose a video workflow, or set the video connection to None.');
       return;
     }
@@ -235,7 +235,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, agentUserSettings, artifacts, recall, browser, computer, ...blocked, ...sandboxFields }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, agentUserSettings, artifacts, recall, browser, computer, ...blocked, ...sandboxFields, ...mediaFields }
         : {
             fs,
             shell,
@@ -616,7 +616,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         )}
       </div>
 
-      {!isClaudeCode && <GenerationSection connections={allConnections} value={generation} onChange={setGeneration} />}
+      <GenerationSection connections={allConnections} value={generation} onChange={setGeneration} />
 
       {/* Claude Code profiles too: OtherBench relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
       <div>
