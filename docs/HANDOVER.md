@@ -1862,7 +1862,10 @@ Spec: `docs/superpowers/specs/2026-10-22-media-generation-design.md`. A chat mod
   PROBE OK
   ```
   So Claude Code does send the tool-use id on `tools/call`, the id equals the PreToolUse hook's, and Claude receives the image block: it named the colour, which only the pixels said. That is one run with a one-colour 1x1 image, so it is good evidence rather than proof. Not observable by the probe: whether the CLI honours the six-hour `timeout` on a `type: 'sdk'` server. That is only covered by the manual video check below.
-- **Still to verify against a real ComfyUI.** The bundled graphs follow ComfyUI's templates but have only been run against fakes. Check these node input names on a real install: `CLIPLoader.device`, `SaveVideo` `format` and `codec`, `CreateVideo.fps`, and the `Wan22ImageToVideoLatent` node and its inputs. Also that `/interrupt` accepts `{ prompt_id }` on the user's ComfyUI version. SDXL is base-only.
+- **Checked against a real ComfyUI (2026-10-24).** ComfyUI Desktop 0.8.2 on port 8000 (Desktop's default, not 8188), RTX 3090 24 GB.
+  - Both bundled graphs were accepted with no `node_errors` and ran: SDXL at 1024x1024 in 13.2 s, Wan 2.2 5B at 640x640 and 25 frames in 30.4 s. So the node input names (`CLIPLoader.device`, `SaveVideo` `format`/`codec`, `CreateVideo.fps`, `Wan22ImageToVideoLatent`) are right. SDXL is still base-only.
+  - `SaveVideo` lists its file under `images` (subfolder `video`) with an extra `animated: [true]`, not under `videos`. `outputFiles` handles that: it skips the boolean and picks the file by its `.mp4` name. The file is H.264 in an mp4 box and sniffs as `video/mp4`.
+  - Stop on a running Wan job interrupted it (`execution_interrupted`, no outputs) and left the queue empty, so `/interrupt { prompt_id }` works on 0.8.2.
 - **Known gaps** (from the reviews, not fixed):
   - A job that vanishes from ComfyUI's queue is waited on until Stop. This matters for an unattended `ask_on_mutate` run with confirmation off.
   - A transient `/history` error or the 30 s submit timeout fails the call but leaves the job running on the GPU.
@@ -1872,7 +1875,16 @@ Spec: `docs/superpowers/specs/2026-10-22-media-generation-design.md`. A chat mod
   - The lightbox moves focus in and back but doesn't trap it. A progress line is hidden while any ask or approval card of the same tool is pending (matched by tool name, not call). The video route reads the whole blob for each range request.
   - A1111 and OpenAI images are only tested against fakes.
 - **Tests.** Core: broker `media` branch, tool-image/video keeping, the generation ask. Tools: `test/media/` (http, comfyui against a fake `node:http` server and a fake socket, a1111, openai-images, workflows, the tool). Store: `media-workflows.test.ts` and the migration. Server: `test/routes/media.test.ts` and the connection and tool-image route cases. Web: `GenerationCard`, `GeneratedMedia`, `GenerationSection`, `WorkflowsSection`, `ProfilesPanel`, `ConnectionsPanel`. e2e: `packages/web/e2e/media-generation.spec.ts` starts a fake `openai_images` server (a 1x1 PNG) and a fake ComfyUI (no websocket, so the polling path; `fixtures/tiny.mp4`, VP9 in an mp4 box) on free loopback ports. With the mock model's `#image` and `#video` it checks the ask shows the prompt, nothing reaches the generator before Generate, the edited prompt is what is sent, the result line quotes it, and the image or playing video is still there after a reload.
-- **Manual check, not automated: NOT YET DONE.** Against a real ComfyUI with SDXL and Wan 2.2 5B installed: generate one image and one 3-second video from a chat, press Stop during a video and confirm ComfyUI's queue is empty, and import one workflow exported from ComfyUI. Record the results here when it has been done.
+- **Manual check: done 2026-10-24**, against the ComfyUI above.
+  - **Imported workflow.** Adam's own Z-Image Turbo workflow was imported (taken in API format from ComfyUI's `/history`, since the Export (API) menu item wasn't found in the 0.8.2 UI). Detection found the seed, size and model file but not the prompt, which sits in a `PrimitiveStringMultiline` node linked into `CLIPTextEncode`, so it was picked by hand. Generating through a Qwen3 Coder 30B (Ollama) profile worked: 1344x768, and the model's negative prompt was left out because the workflow has none, as intended.
+  - **Claude Code profile (Opus 5.5).** An image and a 480x832, 5 s Wan video were generated, with one card each. The video was stored but wouldn't play in the desktop app until `media-src` allowed `blob:` (2fc4abf3). With that fixed it plays.
+  - **Stop mid-video.** ComfyUI showed the job interrupted and the queue empty. The reply ended `cancelled` (not failed) with no attachment, and the audit row says `error: cancelled`, granted by `policy`: the one-card rule.
+  - A multi-minute video wasn't tried, so the six-hour relay timeout is only known from the CLI bundle (`timeout` is honoured for `type: 'sdk'` servers), not from a run.
+- **Found in the manual check, not fixed yet:**
+  - `detectBindings` doesn't follow a prompt that comes from a linked primitive text node.
+  - The workflow import control is a bare file input and easy to miss; it should be an Import workflow… button.
+  - A local chat model and ComfyUI on one card stall: Qwen3 Coder 30B (21 GB) plus Z-Image left 0.1 GB free and the reply took 3.5 min. At least warn; better, unload the Ollama model before a generation when both are on this machine.
+  - A profile whose model can't use tools (Qwen2.5 VL in Ollama) only fails after sending; the Generation section could say so when it's set up.
 
 ## Encryption at rest
 
