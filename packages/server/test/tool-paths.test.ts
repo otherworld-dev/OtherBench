@@ -724,6 +724,9 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
       expect(seenMcp(await server.call(first))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
       await approve(w, first);
+      // Under always ask it was a card's to approve (for a generation, with the prompt confirmation off).
+      expect(w.cards).toHaveLength(1);
+      expect(w.cards[0]!.toolName).toBe(tool);
       // Approved for these arguments, called with others.
       expect(seenMcp(await server.call(other))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
