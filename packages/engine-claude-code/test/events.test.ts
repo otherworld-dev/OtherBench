@@ -111,6 +111,19 @@ describe('SdkEventMapper on synthetic messages', () => {
     ]);
     expect(taken).toEqual(['t1', 't2']);
   });
+  it("takes a held result's error flag from the result itself, not from Claude Code's transcript", () => {
+    const SERVER = 'mcp__otherbench_0123456789abcdef__';
+    const failed = { error: true, code: 'generation_failed', message: 'out of memory' };
+    const made = [{ type: 'text', text: 'Generated an image.' }];
+    const held = new Map<string, unknown>([['t1', failed], ['t2', made]]);
+    const m = new SdkEventMapper({ renames: new Map([[`${SERVER}generate_image`, 'generate_image']]), relayedResult: (id) => held.get(id) });
+    const msg = (type: string, content: object[]) => ({ type, message: { content }, parent_tool_use_id: null, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    m.map(msg('assistant', [{ type: 'tool_use', id: 't1', name: `${SERVER}generate_image`, input: {} }, { type: 'tool_use', id: 't2', name: `${SERVER}generate_image`, input: {} }]));
+    // The transcript says the opposite of each held result.
+    expect(m.map(msg('user', [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'out of memory' }] }]))).toEqual([{ type: 'tool-result', id: 't1', name: 'generate_image', result: failed, isError: true }]);
+    expect(m.map(msg('user', [{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: 'made' }], is_error: true }]))).toEqual([{ type: 'tool-result', id: 't2', name: 'generate_image', result: made, isError: false }]);
+  });
+
   it('falls back to assistant text blocks when no deltas streamed', () => {
     const m = new SdkEventMapper();
     const assistant = { type: 'assistant', message: { content: [{ type: 'text', text: 'whole' }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;

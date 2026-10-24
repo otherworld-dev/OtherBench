@@ -51,6 +51,9 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ?
 /** OtherBench's generators, relayed: their result in the reply is the tool's own (`relayedResult`), not the transcript's text. */
 const MEDIA_TOOLS: ReadonlySet<string> = new Set(['generate_image', 'generate_video']);
 
+/** A tool's own error result (`{ error: true, ... }`), as the tool provider returns one. */
+const isErrorResult = (v: unknown): boolean => typeof v === 'object' && v !== null && (v as { error?: unknown }).error === true;
+
 /** Claude Code's tools that start a helper (a subagent). */
 const HELPER_TOOLS: ReadonlySet<string> = new Set(['Task', 'Agent']);
 /** The longest error a failed helper's card shows. */
@@ -233,12 +236,13 @@ export class SdkEventMapper {
         for (const block of blocksOf(m['message'])) {
           if (block.type !== 'tool_result') continue;
           const id = String(block['tool_use_id']);
-          const isError = block['is_error'] === true;
           const name = this.toolNames.get(id) ?? 'unknown';
           // The main agent's generation: the tool's own result (its image or video, for TurnRunner to
-          // store), or its text when OtherBench's server held none (the call never reached it).
+          // store), or its text when OtherBench's server held none (the call never reached it). A held
+          // result says itself whether it failed.
           const held = helper === null && MEDIA_TOOLS.has(name) ? this.options.relayedResult?.(id) : undefined;
           const result = held !== undefined ? held : resultText(block['content']);
+          const isError = held !== undefined ? isErrorResult(held) : block['is_error'] === true;
           if (helper !== null) {
             out.push(this.helperEvent(helper, { type: 'tool-result', id, name, result, isError }));
             continue;
