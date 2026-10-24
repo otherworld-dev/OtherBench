@@ -57,11 +57,15 @@ describe('ApprovalTickets', () => {
     t.add('generate_image', input, { prompt: 'a red fox', n: 2 }, 't2');
     t.add('generate_image', input, { prompt: 'a red fox', n: 3 });
     expect(t.take('generate_image', input, 't2')).toEqual({ args: { prompt: 'a red fox', n: 2 }, toolUseId: 't2' });
-    // An id no ticket holds, or none at all: the oldest for that tool and input.
+    // An id no ticket holds: one with no id before one another call's id is on.
+    expect(t.take('generate_image', input, 't9')).toEqual({ args: { prompt: 'a red fox', n: 3 } });
+    // None left without an id: the oldest. No id at all: the oldest too.
     expect(t.take('generate_image', input, 't9')).toEqual({ args: { prompt: 'a red fox', n: 1 }, toolUseId: 't1' });
-    expect(t.take('generate_image', input)).toEqual({ args: { prompt: 'a red fox', n: 3 } });
     expect(t.take('generate_image', input, 't2')).toBeNull();
     expect(t.size).toBe(0);
+    t.add('generate_image', input, { n: 4 }, 't4');
+    t.add('generate_image', input, { n: 5 });
+    expect(t.take('generate_image', input)).toEqual({ args: { n: 4 }, toolUseId: 't4' });
   });
 
   it('forgets everything on clear', () => {

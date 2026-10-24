@@ -39,14 +39,18 @@ export class ApprovalTickets {
 
   /**
    * The ticket for this tool and input whose tool-use id is `toolUseId`, else
-   * the oldest for them (the call didn't say which it is, or its hook gave no id).
+   * the oldest for them (the call didn't say which it is). A call that names an
+   * id no ticket holds takes the oldest one whose hook gave no id before one
+   * stamped with another call's.
    */
   take(toolName: string, input: unknown, toolUseId?: string): { args: unknown; toolUseId?: string } | null {
     const key = ticketKey(toolName, input);
     const list = this.waiting.get(key);
     if (!list || list.length === 0) return null;
-    const named = toolUseId === undefined ? -1 : list.findIndex((seq) => this.all.get(seq)?.toolUseId === toolUseId);
-    const [seq] = list.splice(named < 0 ? 0 : named, 1);
+    const find = (id: string | undefined): number => list.findIndex((seq) => this.all.get(seq)?.toolUseId === id);
+    const named = toolUseId === undefined ? -1 : find(toolUseId);
+    const unnamed = named < 0 && toolUseId !== undefined ? find(undefined) : -1;
+    const [seq] = list.splice(named >= 0 ? named : unnamed >= 0 ? unnamed : 0, 1);
     if (list.length === 0) this.waiting.delete(key);
     const ticket = seq === undefined ? undefined : this.all.get(seq);
     if (seq !== undefined) this.all.delete(seq);

@@ -215,18 +215,20 @@ describe('runRelayed', () => {
   const ctx = (signal = new AbortController().signal): ToolContext => ({ chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal });
   const described = (execute: ToolSpec['execute']) => spec({ name: 'generate_image', source: 'media', risk: 'execute', serverId: undefined, describeCall: async (a) => ({ args: a as Record<string, unknown>, risk: 'execute' }), execute });
 
-  it("runs a ticket's call under the hook's tool-use id, else the one the request carries", async () => {
+  it("runs a ticket's call under the request's own tool-use id, else the hook's kept on the ticket", async () => {
     const seen: (string | undefined)[] = [];
     const execute = vi.fn(async (_a: unknown, c: ToolContext) => (seen.push(c.toolCallId), [{ type: 'text', text: 'made' }]));
     const t = new ApprovalTickets();
     t.add('generate_image', { prompt: 'x' }, { prompt: 'x' }, 'toolu_hook');
-    t.add('generate_image', { prompt: 'x' }, { prompt: 'x' });
+    t.add('generate_image', { prompt: 'x' }, { prompt: 'x' }, 'toolu_other');
+    // The request names its call: its id wins over the ticket's.
     await runRelayed(described(execute), { prompt: 'x' }, ctx(), t, { toolUseId: 'toolu_meta' });
-    await runRelayed(described(execute), { prompt: 'x' }, ctx(), t, { toolUseId: 'toolu_meta' });
+    // The request names none: the hook's.
+    await runRelayed(described(execute), { prompt: 'x' }, ctx(), t);
     // A spec with no ticket to take runs under the request's id, or none.
     await runRelayed(spec({ execute }), {}, ctx(), t, { toolUseId: 'toolu_mcp' });
     await runRelayed(spec({ execute }), {}, ctx(), t);
-    expect(seen).toEqual(['toolu_hook', 'toolu_meta', 'toolu_mcp', undefined]);
+    expect(seen).toEqual(['toolu_meta', 'toolu_other', 'toolu_mcp', undefined]);
   });
 
   it("aborts the tool's signal when the reply stops or Claude Code cancels the request", async () => {

@@ -90,8 +90,8 @@ export interface RelayedCall {
  * reply and profile, once, and audits what came of it. So a call that got
  * past this function some other way still runs nothing.
  *
- * The call runs under its tool-use id (the hook's, kept on the ticket, else
- * the request's), as an API model's call runs under its own: a generator's
+ * The call runs under its tool-use id (the request's own, else the hook's kept
+ * on the ticket), as an API model's call runs under its own: a generator's
  * progress is sent by it. Its signal ends with the reply's or the request's.
  * `keep` is handed whatever ran, errors included, by that id, when there is one.
  */
@@ -105,7 +105,7 @@ export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext
   if (!spec.describeCall) return run(args, call.toolUseId);
   const ticket = tickets.take(spec.name, args, call.toolUseId);
   if (!ticket) return { error: true, code: 'no_approval', message: NO_TICKET };
-  return run(ticket.args, ticket.toolUseId ?? call.toolUseId);
+  return run(ticket.args, call.toolUseId ?? ticket.toolUseId);
 }
 
 /** The running reply's relay executor, or undefined when no OtherBench reply is running. */
