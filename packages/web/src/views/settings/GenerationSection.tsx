@@ -153,7 +153,7 @@ export function generationProblem(connections: Connection[], value: GenerationSt
   return null;
 }
 
-/** The Generation part of a profile: which connection makes its images and its video, and whether it asks first. Not shown for Claude Code profiles. */
+/** The Generation part of a profile: which connection makes its images and its video, and whether it asks first. Claude Code profiles get it too, through the relay. */
 export function GenerationSection({ connections, value, onChange }: { connections: Connection[]; value: GenerationState; onChange: (next: GenerationState) => void }): JSX.Element {
   const generation = connections.filter((c) => isGenerationKind(c.kind));
   const video = generation.filter((c) => c.kind === 'comfyui');

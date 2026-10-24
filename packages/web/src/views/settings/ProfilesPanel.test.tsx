@@ -858,6 +858,27 @@ describe('ProfilesPanel generation', () => {
     );
   }
 
+  it('offers generation on a Claude Code profile too, and saves its media policy', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' }), comfy]);
+    useOtherBenchStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'opus' })]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'opus' })]);
+    mockedMcpList.mockResolvedValue([]);
+    mockedMediaModels.mockResolvedValue({ models: [{ id: 'builtin:wan22-5b-t2v', label: 'Wan 2.2 5B' }], checkpoints: [] });
+    mockedPatch.mockResolvedValue(makeProfile({ connectionId: 'cc', modelId: 'opus' }));
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.selectOptions(screen.getByLabelText('Video connection'), 'comfy');
+    await waitFor(() => expect(screen.getByLabelText('Video workflow')).toHaveValue('builtin:wan22-5b-t2v'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedPatch).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ media: { video: { connectionId: 'comfy', model: 'builtin:wan22-5b-t2v' }, confirmPrompts: true } }) })
+      )
+    );
+  });
+
   it('keeps generation connections out of the chat connection picker, and video to ComfyUI', async () => {
     arrange();
     const user = userEvent.setup();
