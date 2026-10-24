@@ -16,8 +16,8 @@ import { buildRelay } from '../src/relay.js';
 import type { OtherBenchServerTool } from '../src/otherbench-server.js';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
-import { UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
-import { FakeToolProvider } from '@otherbench/core/testing/fakes.js';
+import { PermissionBroker, SUBAGENT_MEDIA_REFUSAL, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
 import { MAX_REQUEST_ATTACHMENT_BYTES } from '@otherbench/core/domain/request-budget.js';
 
@@ -146,7 +146,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(o.thinking).toBeUndefined();
     expect(o.maxThinkingTokens).toBeUndefined();
     expect(o.resume).toBeUndefined();
-    expect(o.env).toEqual({ PATH: '/bin', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
+    expect(o.env).toEqual({ PATH: '/bin', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '0' });
     expect(o.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(o.hooks?.PreToolUse?.[0]?.timeout).toBe(86_400);
     expect(calls[0]!.prompt).toMatchObject({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } });
@@ -1669,6 +1669,302 @@ describe('ClaudeCodeChatEngine relayed browser (spec 2026-10-12-model-browser-de
     const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: relayOtherBenchTools(async () => ({})), mcpServer: s.mcpServer });
     const events = await collect(e.stream(req({ profile: browserOn(true) })));
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'browser' }));
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine relayed generate_image (spec 2026-10-24-media-claude-code)', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const png = FAKE_PNG.toString('base64');
+  /**
+   * A stand-in for the tool provider's relayed generate_image: it raises the
+   * generation ask and sends progress as the real one does (both by the call's
+   * tool context), then answers with an image.
+   */
+  function generator(o: { made?: (n: number) => unknown; wait?: (ctx: ToolContext, n: number) => Promise<void> } = {}) {
+    const progress: { messageId: string; callId: string }[] = [];
+    const contexts: ToolContext[] = [];
+    const askUser = vi.fn(async (_ctx: ToolContext, _input: unknown) => ({ askId: 'a1', reply: { generate: { prompt: 'a red fox' } } }) as never);
+    let n = 0;
+    const spec: ToolSpec = {
+      name: 'generate_image',
+      description: 'Generate an image',
+      parameters: { type: 'object', properties: { prompt: { type: 'string' } } },
+      risk: 'execute',
+      source: 'media',
+      describeCall: async (args) => ({ args: { ...(args as Record<string, unknown>) }, risk: 'execute' }),
+      execute: async (_args, ctx) => {
+        const mine = ++n;
+        contexts.push(ctx);
+        await askUser(ctx, { kind: 'generation', toolName: 'generate_image', media: 'image', prompt: 'a red fox', negativePrompt: null, settings: '' });
+        if (ctx.toolCallId) progress.push({ messageId: ctx.messageId, callId: ctx.toolCallId });
+        await o.wait?.(ctx, mine);
+        return o.made ? o.made(mine) : [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }];
+      },
+    };
+    return { spec, progress, contexts, askUser };
+  }
+  // Each approval is its own object, as the tool provider's are (runRelayedCall runs only that object).
+  const approving = () => ({ requestApproval: vi.fn(async (_spec: unknown, args: unknown) => ({ allowed: true as const, grantedBy: 'ask:once', args: { ...(args as Record<string, unknown>) } })), recordAgentDenial: vi.fn() });
+  function server() {
+    let tools: OtherBenchServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: OtherBenchServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    return { mcpServer, tool: () => tools.find((t) => t.name === 'generate_image')! };
+  }
+  const toolName = (options: Options) => `mcp__${Object.keys(options.mcpServers ?? {})[0]!}__generate_image`;
+  const preCall = (options: Options, input: Record<string, unknown>, id: string) =>
+    options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: toolName(options), tool_input: input, tool_use_id: id } as never, id, sig());
+  const toolUse = (options: Options, ids: string[], input: Record<string, unknown>) =>
+    ({ type: 'assistant', parent_tool_use_id: null, message: { content: ids.map((id) => ({ type: 'tool_use', id, name: toolName(options), input })) } }) as unknown as SDKMessage;
+  // Claude Code's transcript of the call: the text, the image as an API block.
+  const toolResult = (id: string, text: string) =>
+    ({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }] }] } }) as unknown as SDKMessage;
+  const make = (g: ReturnType<typeof generator>, query: QueryFn, s: ReturnType<typeof server>) =>
+    new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [g.spec], mcpServer: s.mcpServer });
+
+  it("runs under Claude Code's tool-use id: its progress carries it, the generation ask is raised, and the reply gets the image", async () => {
+    const g = generator();
+    const s = server();
+    let answer: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      yield toolUse(options, ['toolu_1'], { prompt: 'a red fox' });
+      await preCall(options, { prompt: 'a red fox' }, 'toolu_1');
+      answer = await s.tool().call({ prompt: 'a red fox' });
+      yield toolResult('toolu_1', 'Generated an image.');
+      yield success();
+    });
+    const e = make(g, query, s);
+    const events = await collect(e.stream(req()));
+    expect(g.progress).toEqual([{ messageId: 'm1', callId: 'toolu_1' }]);
+    expect(g.askUser).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'chat', messageId: 'm1', toolCallId: 'toolu_1' }), expect.objectContaining({ kind: 'generation' }));
+    // Claude sees the image too, as MCP image content.
+    expect(answer).toEqual({ content: [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }] });
+    // The reply's own result is the tool's, with the image inline, for TurnRunner to store.
+    const result = events.find((ev) => ev.type === 'tool-result');
+    expect(result).toEqual({ type: 'tool-result', id: 'toolu_1', name: 'generate_image', result: [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }], isError: false });
+    e.dispose();
+  });
+
+  it("takes the id from the MCP request when the hook gave none, and keeps a failed generation's own error", async () => {
+    const failed = { error: true, code: 'generation_failed', message: 'The generator ran out of memory.' };
+    const g = generator({ made: () => failed });
+    const s = server();
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      yield toolUse(options, ['toolu_2'], { prompt: 'a red fox' });
+      // The hook's id is left out: canUseTool's path can lack one.
+      await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: toolName(options), tool_input: { prompt: 'a red fox' } } as never, undefined, sig());
+      await s.tool().call({ prompt: 'a red fox' }, { toolUseId: 'toolu_2' });
+      yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: [{ type: 'text', text: failed.message }], is_error: true }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = make(g, query, s);
+    const events = await collect(e.stream(req()));
+    expect(g.progress).toEqual([{ messageId: 'm1', callId: 'toolu_2' }]);
+    expect(events.find((ev) => ev.type === 'tool-result')).toEqual({ type: 'tool-result', id: 'toolu_2', name: 'generate_image', result: failed, isError: true });
+    e.dispose();
+  });
+
+  it("stops the generation when the reply is stopped: Stop aborts the tool's signal", async () => {
+    const ac = new AbortController();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const g = generator({
+      wait: (ctx) => {
+        started();
+        return new Promise<void>((resolve) => ctx.signal.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    });
+    const s = server();
+    let call: Promise<unknown> | null = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await preCall(options, { prompt: 'a red fox' }, 'toolu_1');
+      call = s.tool().call({ prompt: 'a red fox' });
+      await running;
+      ac.abort();
+      await call;
+      yield success();
+    });
+    const e = make(g, query, s);
+    await collect(e.stream(req({ signal: ac.signal })));
+    await call;
+    expect(g.contexts).toHaveLength(1);
+    expect(g.contexts[0]!.signal.aborted).toBe(true);
+    e.dispose();
+  });
+
+  it('keeps two identical calls made at once apart: each reply result is its own call\'s', async () => {
+    let release!: () => void;
+    const both = new Promise<void>((resolve) => (release = resolve));
+    const g = generator({
+      made: (n) => [{ type: 'text', text: `run ${n}` }, { type: 'image', data: png, mimeType: 'image/png' }],
+      // The first to start finishes last.
+      wait: async (_ctx, n) => {
+        if (n === 2) release();
+        else await both;
+      },
+    });
+    const s = server();
+    const answers: Record<string, unknown> = {};
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      yield toolUse(options, ['toolu_a', 'toolu_b'], { prompt: 'a red fox' });
+      await preCall(options, { prompt: 'a red fox' }, 'toolu_a');
+      await preCall(options, { prompt: 'a red fox' }, 'toolu_b');
+      // Claude Code calls them in the other order, each naming its own call.
+      const [b, a] = await Promise.all([s.tool().call({ prompt: 'a red fox' }, { toolUseId: 'toolu_b' }), s.tool().call({ prompt: 'a red fox' }, { toolUseId: 'toolu_a' })]);
+      Object.assign(answers, { toolu_a: a, toolu_b: b });
+      yield toolResult('toolu_a', 'seen a');
+      yield toolResult('toolu_b', 'seen b');
+      yield success();
+    });
+    const e = make(g, query, s);
+    const events = await collect(e.stream(req()));
+    const results = Object.fromEntries(events.filter((ev) => ev.type === 'tool-result').map((ev) => [ev.id, ev.result]));
+    const textOf = (v: unknown) => (v as { content: { text?: string }[] }).content[0]!.text;
+    expect(textOf(answers.toolu_b)).toBe('run 1');
+    expect(textOf(answers.toolu_a)).toBe('run 2');
+    expect(results).toEqual({
+      toolu_a: [{ type: 'text', text: 'run 2' }, { type: 'image', data: png, mimeType: 'image/png' }],
+      toolu_b: [{ type: 'text', text: 'run 1' }, { type: 'image', data: png, mimeType: 'image/png' }],
+    });
+    expect(g.progress.map((p) => p.callId)).toEqual(['toolu_b', 'toolu_a']);
+    e.dispose();
+  });
+});
+
+describe("ClaudeCodeChatEngine: a Claude Code helper can't generate (spec 2026-10-24-media-claude-code)", () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const png = FAKE_PNG.toString('base64');
+  const msg = (o: object) => o as unknown as SDKMessage;
+  const executed: ToolContext[] = [];
+  const spec: ToolSpec = {
+    name: 'generate_image',
+    description: 'Generate an image',
+    parameters: { type: 'object', properties: { prompt: { type: 'string' } } },
+    risk: 'execute',
+    source: 'media',
+    describeCall: async (args) => ({ args: { ...(args as Record<string, unknown>) }, risk: 'execute' }),
+    execute: async (_args, ctx) => (executed.push(ctx), [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: png, mimeType: 'image/png' }]),
+  };
+  beforeEach(() => {
+    executed.length = 0;
+  });
+  // The real broker decides (a helper's generation is refused, the reply's own allowed under ask-on-changes); each approval is its own object.
+  const deciding = () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    return {
+      requestApproval: vi.fn(async (tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext) => {
+        const d = broker.decide(tool, args, policy, ctx);
+        return d.kind === 'deny' ? { allowed: false as const, reason: d.reason } : { allowed: true as const, grantedBy: 'policy', args: { ...(args as Record<string, unknown>) } };
+      }),
+      recordAgentDenial: vi.fn(),
+    };
+  };
+  const generating = (o: Partial<EngineRequest> = {}): Partial<EngineRequest> => ({
+    ...o,
+    profile: profile({ toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'gen', model: 'sdxl' } } } }),
+  });
+  function server() {
+    let tools: OtherBenchServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: OtherBenchServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    return { mcpServer, tool: () => tools.find((t) => t.name === 'generate_image')! };
+  }
+  const toolName = (options: Options) => `mcp__${Object.keys(options.mcpServers ?? {})[0]!}__generate_image`;
+  const preCall = (options: Options, id: string, extra: { agent_id?: string } = {}) =>
+    options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: toolName(options), tool_input: { prompt: 'a red fox' }, tool_use_id: id, ...extra } as never, id, sig());
+  const generate = (options: Options, id: string, parent: string | null) => msg({ type: 'assistant', parent_tool_use_id: parent, message: { content: [{ type: 'tool_use', id, name: toolName(options), input: { prompt: 'a red fox' } }] } });
+  const taskCall = msg({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'implementer', prompt: 'fix it' } }] } });
+  const taskStarted = (backgrounded: boolean) => msg({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'task-1', description: 'implementer', task_type: 'local_agent', is_backgrounded: backgrounded });
+  const make = (query: QueryFn, s: ReturnType<typeof server>) => {
+    const approvals = deciding();
+    return { e: new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [spec], mcpServer: s.mcpServer }), approvals };
+  };
+  const ctxOf = (a: ReturnType<typeof deciding>, n: number) => (a.requestApproval.mock.calls[n]! as unknown as [unknown, unknown, unknown, ToolContext])[3];
+  const refused = { hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: SUBAGENT_MEDIA_REFUSAL } };
+
+  it("refuses a helper's generation when Claude Code asks about it before this process has read the helper's message", async () => {
+    const s = server();
+    let answer: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      yield taskCall;
+      yield taskStarted(false);
+      // The hook comes first, with no agent_id; the helper's message naming the call only after it.
+      const asked = preCall(options, 'toolu_h');
+      yield generate(options, 'toolu_h', 'task-1');
+      answer = await asked;
+      yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Done.' }] } });
+      yield success();
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    expect(answer).toMatchObject(refused);
+    expect(ctxOf(approvals, 0).shownSubagent).toEqual({ callId: 'task-1', label: 'implementer', parentProfileId: 'p' });
+    expect(executed).toHaveLength(0);
+    e.dispose();
+  });
+
+  it("refuses a generation the hook says is a helper's (agent_id) though nothing here knows that helper", async () => {
+    const s = server();
+    let answer: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      answer = await preCall(options, 'toolu_x', { agent_id: 'agent-1' });
+      yield success();
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    expect(answer).toMatchObject(refused);
+    expect(ctxOf(approvals, 0).shownSubagent).toEqual({ callId: 'agent-1', label: 'a helper', parentProfileId: 'p' });
+    expect(executed).toHaveLength(0);
+    e.dispose();
+  });
+
+  it("refuses an earlier reply's background helper generating during a later reply, while the later reply's own agent still generates", async () => {
+    const s = server();
+    const answers: Record<string, unknown> = {};
+    let made: unknown;
+    const { query } = liveQuery(async function* ({ options, prompt, n }) {
+      const uuid = (prompt as { uuid?: string }).uuid;
+      const done = msg({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, user_message_uuids: [uuid] });
+      if (n === 1) {
+        yield init('sess-1');
+        yield taskCall;
+        yield taskStarted(true);
+        yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1', content: 'Started in the background.' }] } });
+        yield done;
+        return;
+      }
+      yield init('sess-1');
+      // The first reply's helper, still working: a stranger to this reply's mapper.
+      yield generate(options, 'toolu_bg', 'task-1');
+      answers.helper = await preCall(options, 'toolu_bg');
+      // This reply's own agent: no agent_id, and no helper claims it.
+      yield generate(options, 'toolu_main', null);
+      answers.main = await preCall(options, 'toolu_main');
+      made = await s.tool().call({ prompt: 'a red fox' }, { toolUseId: 'toolu_main' });
+      yield msg({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_main', content: [{ type: 'text', text: 'Generated an image.' }] }] } });
+      yield done;
+    });
+    const { e, approvals } = make(query, s);
+    await collect(e.stream(req(generating())));
+    const events = await collect(e.stream(followUp(generating())));
+    expect(answers.helper).toMatchObject(refused);
+    expect(ctxOf(approvals, 0)).toMatchObject({ messageId: 'm2', shownSubagent: { callId: 'task-1', label: 'implementer' } });
+    expect(answers.main).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(ctxOf(approvals, 1).shownSubagent).toBeUndefined();
+    expect(made).toMatchObject({ content: [{ type: 'text', text: 'Generated an image.' }, { type: 'image' }] });
+    expect(executed.map((c) => c.toolCallId)).toEqual(['toolu_main']);
+    expect(events.find((ev) => ev.type === 'tool-result')).toMatchObject({ id: 'toolu_main', name: 'generate_image', isError: false });
     e.dispose();
   });
 });

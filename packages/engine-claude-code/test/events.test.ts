@@ -76,6 +76,54 @@ describe('SdkEventMapper on synthetic messages', () => {
       { type: 'tool-result', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.\nScreenshot, 1366×768.", isError: false },
     ]);
   });
+  it("keeps a generator's whole result, image and all, for the main agent's call, and only the text of anyone else's", () => {
+    const SERVER = 'mcp__otherbench_0123456789abcdef__';
+    const image = [{ type: 'text', text: 'Generated an image.' }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }];
+    const held = new Map<string, unknown>([['t1', image], ['t3', [{ type: 'text', text: 'browser raw' }]], ['h2', image]]);
+    const taken: string[] = [];
+    const relayedResult = (id: string) => {
+      taken.push(id);
+      const out = held.get(id);
+      held.delete(id);
+      return out;
+    };
+    const renames = new Map([[`${SERVER}generate_image`, 'generate_image'], [`${SERVER}generate_video`, 'generate_video'], [`${SERVER}browser`, 'browser']]);
+    const m = new SdkEventMapper({ renames, relayedResult, helpers: new HelperRegistry() });
+    const assistant = (content: object[], parent: string | null = null) => ({ type: 'assistant', message: { content }, parent_tool_use_id: parent, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    const user = (content: object[], parent: string | null = null) => ({ type: 'user', message: { content }, parent_tool_use_id: parent, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    // What Claude Code puts in its transcript: the MCP content, the image as an API block.
+    const seen = [{ type: 'text', text: 'Generated an image.' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }];
+    m.map(assistant([
+      { type: 'tool_use', id: 't1', name: `${SERVER}generate_image`, input: { prompt: 'a fox' } },
+      { type: 'tool_use', id: 't2', name: `${SERVER}generate_video`, input: { prompt: 'waves' } },
+      { type: 'tool_use', id: 't3', name: `${SERVER}browser`, input: { command: 'snapshot' } },
+      { type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Look', prompt: 'p' } },
+    ]));
+    expect(m.map(user([{ type: 'tool_result', tool_use_id: 't1', content: seen }]))).toEqual([{ type: 'tool-result', id: 't1', name: 'generate_image', result: image, isError: false }]);
+    // Nothing held (the call never reached OtherBench's server): its text, as before.
+    expect(m.map(user([{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: 'No reply is waiting.' }], is_error: true }]))).toEqual([
+      { type: 'tool-result', id: 't2', name: 'generate_video', result: 'No reply is waiting.', isError: true },
+    ]);
+    expect(m.map(user([{ type: 'tool_result', tool_use_id: 't3', content: [{ type: 'text', text: 'page' }] }]))).toEqual([{ type: 'tool-result', id: 't3', name: 'browser', result: 'page', isError: false }]);
+    m.map(assistant([{ type: 'tool_use', id: 'h2', name: `${SERVER}generate_image`, input: { prompt: 'a fox' } }], 'task-1'));
+    expect(m.map(user([{ type: 'tool_result', tool_use_id: 'h2', content: seen }], 'task-1'))).toEqual([
+      { type: 'subagent', callId: 'task-1', event: { type: 'tool-result', id: 'h2', name: 'generate_image', result: 'Generated an image.', isError: false } },
+    ]);
+    expect(taken).toEqual(['t1', 't2']);
+  });
+  it("takes a held result's error flag from the result itself, not from Claude Code's transcript", () => {
+    const SERVER = 'mcp__otherbench_0123456789abcdef__';
+    const failed = { error: true, code: 'generation_failed', message: 'out of memory' };
+    const made = [{ type: 'text', text: 'Generated an image.' }];
+    const held = new Map<string, unknown>([['t1', failed], ['t2', made]]);
+    const m = new SdkEventMapper({ renames: new Map([[`${SERVER}generate_image`, 'generate_image']]), relayedResult: (id) => held.get(id) });
+    const msg = (type: string, content: object[]) => ({ type, message: { content }, parent_tool_use_id: null, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    m.map(msg('assistant', [{ type: 'tool_use', id: 't1', name: `${SERVER}generate_image`, input: {} }, { type: 'tool_use', id: 't2', name: `${SERVER}generate_image`, input: {} }]));
+    // The transcript says the opposite of each held result.
+    expect(m.map(msg('user', [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'out of memory' }] }]))).toEqual([{ type: 'tool-result', id: 't1', name: 'generate_image', result: failed, isError: true }]);
+    expect(m.map(msg('user', [{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: 'made' }], is_error: true }]))).toEqual([{ type: 'tool-result', id: 't2', name: 'generate_image', result: made, isError: false }]);
+  });
+
   it('falls back to assistant text blocks when no deltas streamed', () => {
     const m = new SdkEventMapper();
     const assistant = { type: 'assistant', message: { content: [{ type: 'text', text: 'whole' }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;

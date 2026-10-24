@@ -30,7 +30,7 @@ import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, NOTE_PICKED, PromptQueue, type NotePickedMessage, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
 import { toPlanUsage } from './plan-usage.js';
-import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
+import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay, type RelayedCall } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 import { ApprovalTickets } from './tickets.js';
 
@@ -109,7 +109,7 @@ const PROBE_TIMEOUT_MS = 20_000;
 
 /** How long a stopped reply's turn may take to end after Claude Code is interrupted before its process is closed. */
 export const INTERRUPT_GRACE_MS = 5_000;
-/** How long a helper's call between replies waits for this process's reader to learn which helper made it. */
+/** How long a helper's call between replies, or a generation Claude Code didn't say whose it is, waits for this process's reader to learn which helper made it. */
 const OWNER_WAIT_MS = 500;
 
 /** A clean chat's folder name under the scratch root: its id, made a plain name so it can't point outside (the server deletes it by the same rule). */
@@ -514,7 +514,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     prepared.proc.live = live;
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
-    const mapper = this.replyMapper(live, req, prepared.helpers);
+    const mapper = this.replyMapper(live, req, prepared.helpers, prepared.binding.results);
     this.running.set(req.messageId, { live, req });
     let stopped!: () => void;
     const stoppedNow = new Promise<{ stopped: true }>((resolve) => (stopped = () => resolve({ stopped: true })));
@@ -571,6 +571,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     } finally {
       this.running.delete(req.messageId);
       prepared.tickets.clear();
+      prepared.binding.results.clear();
       req.signal.removeEventListener('abort', onAbort);
       live.binding = null;
       if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
@@ -690,7 +691,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
     live.binding = binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, policy: profile.toolPolicy, ctx: gateCtx, autoMode, unattended: req.unattended === true };
-    return yield* this.runReplyTurn(req, plan, backend, notice, cwd, live, reused, content, autoMode, helpers, tickets, compaction);
+    return yield* this.runReplyTurn(req, plan, backend, notice, cwd, live, reused, content, autoMode, helpers, tickets, binding.results, compaction);
   }
 
   /**
@@ -730,6 +731,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       relay: relay.hash,
     };
     const tickets = new ApprovalTickets();
+    const results = new Map<string, unknown>();
     // The helpers this reply's agent starts: the mapper records them, the gate names them on approval cards.
     const helpers = new HelperRegistry();
     // The process this reply runs in, once chosen. Its calls go to the
@@ -745,7 +747,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         readFolders: this.skillFolders(req.workspaceRoot),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
-        onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
+        // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
+        backgroundOwner: async (toolUseId, wait) => {
+          const background = proc.live?.background;
+          if (!background) return null;
+          return wait ? background.whenOwned(toolUseId, OWNER_WAIT_MS) : background.ownerOf(toolUseId);
+        },
+        onApproved: (spec, input, args, toolUseId) => tickets.add(spec.name, input, args, toolUseId),
       }),
       // Auto can be switched on mid-reply, so the classifier's blocks are audited whenever it could run.
       ...(backend === CLAUDE_BACKEND ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
@@ -758,20 +766,37 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // gate approved: see currentRelayed, which fails closed (the browser
       // branch's `?? spec` fallback to the old spec is not kept). A tool that
       // describes its calls then runs only with its approval ticket: runRelayed.
-      ...(relay.tools.size > 0 ? { relay: async (approved: ToolSpec, args: unknown) => runRelayed(currentRelayed(relay, approved), args, gateCtx, tickets) } : {}),
+      // A generator's result is kept by its tool-use id for the reply's mapper.
+      ...(relay.tools.size > 0
+        ? {
+            relay: async (approved: ToolSpec, args: unknown, call?: RelayedCall) => {
+              const spec = currentRelayed(relay, approved);
+              return runRelayed(spec, args, gateCtx, tickets, call, spec.source === 'media' ? (id, output) => results.set(id, output) : undefined);
+            },
+          }
+        : {}),
       tickets,
+      results,
     };
     return { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc };
   }
 
-  /** The mapper for one reply on `live`: this process's own tools under the API engines' names, helper cards noted for its background tasks. */
-  private replyMapper(live: LiveProcess, req: EngineRequest, helpers: HelperRegistry): SdkEventMapper {
+  /**
+   * The mapper for one reply on `live`: this process's own tools under the API engines' names, helper cards
+   * noted for its background tasks, and a generator's result as its relayed call returned it (`results`).
+   */
+  private replyMapper(live: LiveProcess, req: EngineRequest, helpers: HelperRegistry, results: Map<string, unknown>): SdkEventMapper {
     const renames = new Map<string, string>();
     if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
     if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
     if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
     for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
-    return new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, profileId: req.profile.id, modelId: req.profile.modelId });
+    const relayedResult = (id: string): unknown => {
+      const held = results.get(id);
+      results.delete(id);
+      return held;
+    };
+    return new SdkEventMapper({ ...(renames.size > 0 ? { renames } : {}), helpers, relayedResult, profileId: req.profile.id, modelId: req.profile.modelId });
   }
 
   /** A user's reply on `live`: sends its message and reads its turn (see runTurn). */
@@ -787,6 +812,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     autoMode: boolean,
     helpers: HelperRegistry,
     tickets: ApprovalTickets,
+    results: Map<string, unknown>,
     compaction: Compaction | null
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
@@ -821,7 +847,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     live.input.push(userMessage(content, uuid));
     this.running.set(req.messageId, { live, req });
 
-    const mapper = this.replyMapper(live, req, helpers);
+    const mapper = this.replyMapper(live, req, helpers, results);
     let sawInit = false;
     let finished = false;
     // The turn's own result arrived (a success or not): the process is in a known state.
@@ -917,6 +943,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     } finally {
       this.running.delete(req.messageId);
       tickets.clear();
+      results.clear();
       req.signal.removeEventListener('abort', onAbort);
       if (req.signal.aborted && !ended && !live.isClosed) {
         // Stopped mid-turn: the process goes back to the pool at once, so the

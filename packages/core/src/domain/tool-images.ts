@@ -30,6 +30,8 @@ import type { CanonMessage, Part, PendingMark } from '../types/messages.js';
 export const TOOL_IMAGE_MIMES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 export const MAX_TOOL_IMAGES_PER_MESSAGE = 50;
 export const MAX_TOOL_IMAGE_BYTES = 5 * 1024 * 1024;
+/** What a model gets in place of a video a tool made: the person sees it, a model never receives one. */
+export const VIDEO_FOR_USER_NOTE = "[video shown to the user; you can't watch it]";
 export const IMAGE_NOT_KEPT = '[image not kept]';
 export const IMAGE_NOT_KEPT_LIMIT = '[image not kept: too many or too large]';
 export const TOOL_IMAGE_REF_REMOVED = "[image reference removed: tools can't refer to stored images]";

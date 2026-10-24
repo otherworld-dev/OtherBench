@@ -9,6 +9,7 @@ import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { createGate, preToolUseHook } from '@otherbench/engine-claude-code/approval.js';
 import { relayServerTool, runRelayed } from '@otherbench/engine-claude-code/relay.js';
 import { ApprovalTickets } from '@otherbench/engine-claude-code/tickets.js';
+import type { MediaBackend } from '@otherbench/core/ports/media.js';
 import { BrowserManager } from '@otherbench/tools/browser/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { FakeFactory, fakeProxy } from '../../tools/test/browser/fakes.js';
@@ -42,6 +43,9 @@ const NO_APPROVAL = 'OtherBench has no approval for this call.';
 
 const ON: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true, browser: true, artifacts: false, recall: false };
 const OFF: ToolPolicy = { ...ON, computer: false, browser: false };
+/** Generating asks the user for the prompt first unless the profile turns that off (`confirmPrompts`); off, the broker asks a card as for any execute-risk tool. */
+const MEDIA_ON: ToolPolicy = { ...ON, media: { image: { connectionId: 'gen', model: 'm' }, confirmPrompts: false } };
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24, 1)]);
 const mcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 
 const KEY = FAKE_COMPUTER_APP.path;
@@ -50,7 +54,7 @@ const APP = { app: KEY, appName: 'FakeApp.exe', appTitle: 'Fake App', appRisk: '
 const EXPECT = { app: KEY, shellView: false, windowId: 'hwnd-1', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' };
 const SHOT = 'Screenshot, 1366\u00d7768.';
 
-type ToolName = 'computer' | 'browser';
+type ToolName = 'computer' | 'browser' | 'generate_image';
 
 interface World {
   store: InMemoryStore;
@@ -58,6 +62,8 @@ interface World {
   /** The names of the driver calls made, in order. */
   driverCalls: string[];
   factory: FakeFactory;
+  /** The prompts the fake image backend was asked to generate, in order. */
+  generated: string[];
   browser: BrowserManager;
   provider: OtherBenchToolProvider;
   cards: ApprovalRequest[];
@@ -85,8 +91,20 @@ function world(): World {
   }
   const factory = new FakeFactory();
   const browser = new BrowserManager({ factory, startProxy: fakeProxy().start });
-  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver, browser });
-  const w: World = { store, driver, driverCalls, factory, browser, provider, cards: [], onCard: () => ({ choice: 'once' }), tickets: new ApprovalTickets() };
+  const generated: string[] = [];
+  const backend: MediaBackend = {
+    async generate(req) {
+      generated.push(req.prompt);
+      return [{ bytes: PNG }];
+    },
+    async test() {},
+    async listModels() {
+      return [];
+    },
+  };
+  const media = { backendFor: async () => ({ backend, label: 'Fake', applies: { negativePrompt: true, seed: true, size: true, frames: true }, defaultNegativePrompt: null, workflowDefaults: false }) };
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver, browser, media });
+  const w: World = { store, driver, driverCalls, factory, generated, browser, provider, cards: [], onCard: () => ({ choice: 'once' }), tickets: new ApprovalTickets() };
   provider.onApprovalEvent((e) => {
     if (e.type !== 'request') return;
     w.cards.push(e.request);
@@ -684,18 +702,19 @@ describe('the same call down every path to a tool', () => {
 // ---------------------------------------------------------------------------
 // (h) What only Claude Code's path has: a call approved in one step and run in another
 
-const TOOLS: { tool: ToolName; first: Record<string, unknown>; other: Record<string, unknown>; done(w: World): unknown[] }[] = [
+const TOOLS: { tool: ToolName; policy?: ToolPolicy; first: Record<string, unknown>; other: Record<string, unknown>; done(w: World): unknown[] }[] = [
   { tool: 'computer', first: { action: 'key', text: 'ctrl+s' }, other: { action: 'key', text: 'ctrl+z' }, done: (w) => w.driver.actions.map((a) => [a.chatId, a.action]) },
   { tool: 'browser', first: { command: 'open', url: 'https://example.com/' }, other: { command: 'open', url: 'https://example.com/other' }, done: (w) => w.factory.sessions.flatMap((s) => s.actions) },
+  { tool: 'generate_image', policy: MEDIA_ON, first: { prompt: 'a red cube' }, other: { prompt: 'a blue sphere' }, done: (w) => w.generated },
 ];
 
 describe('(h) a relayed call runs only what OtherBench approved, once, for the reply it approved it for', () => {
   const REFUSED: Seen = { error: true, about: null, text: NO_APPROVAL, images: 0 };
 
-  for (const { tool, first, other, done } of TOOLS) {
-    const specOf = (w: World): ToolSpec => w.provider.relayOtherBenchTools(ON).find((t) => t.name === tool)!;
+  for (const { tool, policy = ON, first, other, done } of TOOLS) {
+    const specOf = (w: World): ToolSpec => w.provider.relayOtherBenchTools(policy).find((t) => t.name === tool)!;
     const approve = async (w: World, args: Record<string, unknown>, ctx = context()): Promise<void> => {
-      expect(await hooked(w, specOf(w), ON, ctx, args)).toMatchObject({ allow: true });
+      expect(await hooked(w, specOf(w), policy, ctx, args)).toMatchObject({ allow: true });
     };
 
     it(`${tool}: with no ticket, a used ticket or a ticket for other arguments, nothing runs`, async () => {
@@ -705,6 +724,9 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
       expect(seenMcp(await server.call(first))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
       await approve(w, first);
+      // Under always ask it was a card's to approve (for a generation, with the prompt confirmation off).
+      expect(w.cards).toHaveLength(1);
+      expect(w.cards[0]!.toolName).toBe(tool);
       // Approved for these arguments, called with others.
       expect(seenMcp(await server.call(other))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
@@ -737,7 +759,7 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
       // The model's own arguments, and arguments dressed up as described ones.
       expect(await spec.execute(first, context())).toEqual(refusal);
       expect(await spec.execute({ ...first, ...APP, host: 'example.com' }, context())).toEqual(refusal);
-      const outcome = await w.provider.requestApproval(spec, first, ON, context());
+      const outcome = await w.provider.requestApproval(spec, first, policy, context());
       if (!('allowed' in outcome) || !outcome.allowed) throw new Error('expected an approval');
       // A copy of what was approved is not what was approved.
       expect(await spec.execute(structuredClone(outcome.args), context())).toEqual(refusal);
@@ -749,6 +771,15 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
       expect(done(w)).toHaveLength(1);
     });
   }
+
+  it('generate_image: under always ask with the prompt confirmation on there is no card, the generation ask is the user saying yes', async () => {
+    const w = world();
+    const policy: ToolPolicy = { ...ON, media: { image: { connectionId: 'gen', model: 'm' } } };
+    const spec = w.provider.relayOtherBenchTools(policy).find((t) => t.name === 'generate_image')!;
+    expect(await hooked(w, spec, policy, context(), { prompt: 'a red cube' })).toMatchObject({ allow: true });
+    expect(w.cards).toEqual([]);
+    expect(w.generated).toEqual([]);
+  });
 
   it('an API model has no such second step: its spec is the gate, and arguments dressed up as described ones are described again', async () => {
     const w = world();

@@ -34,6 +34,10 @@ export function denialText(decision: { reason: string; about?: string }): string
  * go to Claude Code's classifier instead of a card.
  */
 /**
+ * `opts.agentId`: Claude Code's own word that a helper made the call (the
+ * PreToolUse hook's `agent_id`, canUseTool's `agentID`); absent for the main
+ * agent's calls.
+ *
  * `opts.own`: the call is to one of this process's own OtherBench tools -- the
  * engine matched the exact per-process name (otherbench-server.ts), never a name
  * alone. One of artifact, recall or plan, or `{ relay }`: a tool relayed from one of
@@ -44,7 +48,7 @@ export type Gate = (
   toolName: string,
   input: Record<string, unknown>,
   signal?: AbortSignal,
-  opts?: { mayDefer?: boolean; own?: OtherBenchTool | { relay: ToolSpec }; toolUseId?: string }
+  opts?: { mayDefer?: boolean; own?: OtherBenchTool | { relay: ToolSpec }; toolUseId?: string; agentId?: string }
 ) => Promise<GateDecision>;
 
 /** OtherBench's own tools on its per-process server, as the broker knows them. */
@@ -55,6 +59,9 @@ const OWN_TOOLS: Record<OtherBenchTool, { name: string; description: string; sou
   recall: { name: RECALL_TOOL, description: 'OtherBench recall tool', source: 'recall' },
   plan: { name: PLAN_TOOL, description: 'OtherBench plan tool', source: 'thread' },
 };
+
+/** A helper's call no registry can name yet: its card says only that a helper asked. */
+const UNNAMED_HELPER = 'a helper';
 
 /** When the engine was given no way to put a question to the user. */
 const NO_ASK_REASON = "OtherBench can't put a question to the user here. Use your judgement, carry on, and say in your reply what you assumed.";
@@ -168,10 +175,17 @@ export function createGate(deps: {
   ctx: ToolContext;
   /** Whether calls OtherBench would ask about go to Claude Code's classifier instead; a function is asked at each call (the mode can be switched mid-reply). */
   autoMode?: boolean | (() => boolean);
-  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
-  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
+  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4), with the call's tool-use id when Claude Code gave one. */
+  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown, toolUseId: string | undefined) => void;
   /** The reply's helpers: a call one of them made says so on its approval card. */
   helpers?: HelperRegistry;
+  /**
+   * The process's background tasks, for a call `helpers` doesn't know: an
+   * earlier reply's helper still working, or one of this reply's whose
+   * message hasn't been read yet. With `wait`, up to OWNER_WAIT_MS for the
+   * message that says (BackgroundTasks.whenOwned).
+   */
+  backgroundOwner?: (toolUseId: string, wait: boolean) => Promise<{ callId: string; label: string } | null>;
   /**
    * Read-only folders for Claude Code's file tools alone (the user's skills,
    * engine-claude-code/src/skill-folders.ts): not in `ctx`, so no relayed tool
@@ -248,9 +262,20 @@ export function createGate(deps: {
       // can't decide) always gets a card.
       const auto = typeof deps.autoMode === 'function' ? deps.autoMode() : deps.autoMode === true;
       const deferAsk = auto && opts?.mayDefer === true;
-      // A helper's call is named on its card (best effort: known once its message has been read); the decision is the reply's own.
-      const helper = deps.helpers?.ownerOf(opts?.toolUseId);
-      const shown = helper ? { shownSubagent: { callId: helper.callId, label: helper.label, parentProfileId: deps.ctx.profileId } } : {};
+      // A helper's call is named on its card; the decision is the reply's own,
+      // but for a generation, which a helper may never make (core refuses one
+      // with `shownSubagent`). Claude Code says itself when a helper made the
+      // call (`agentId`), so that never rests on this process having read the
+      // helper's message yet. When it doesn't say, a generation alone waits
+      // for the background tasks to learn whose call it is before it's decided.
+      const toolUseId = opts?.toolUseId;
+      const agentId = opts?.agentId;
+      const media = relay?.source === 'media';
+      let helper = deps.helpers?.ownerOf(toolUseId) ?? null;
+      if (helper === null && toolUseId !== undefined && (agentId !== undefined || media)) helper = (await deps.backgroundOwner?.(toolUseId, agentId === undefined)) ?? null;
+      // A helper's call nothing can name yet keeps the helper a between-replies context names, else is "a helper".
+      const tag = helper ?? (agentId !== undefined && !deps.ctx.shownSubagent ? { callId: agentId, label: UNNAMED_HELPER } : null);
+      const shown = tag ? { shownSubagent: { callId: tag.callId, label: tag.label, parentProfileId: deps.ctx.profileId } } : {};
       const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal, ...shown }, { deferAsk });
       if ('deferred' in outcome && outcome.deferred === true) {
         return deferAsk ? { defer: true } : { allow: false, reason: 'OtherBench could not check this tool call: unexpected deferral.' };
@@ -258,7 +283,7 @@ export function createGate(deps: {
       if (!('allowed' in outcome)) return { allow: false, reason: 'OtherBench could not check this tool call: unrecognised approval outcome.' };
       if (!outcome.allowed) return { allow: false, reason: outcome.reason, ...(typeof outcome.about === 'string' ? { about: outcome.about } : {}) };
       // A relayed tool that describes its calls (the browser, computer use): keep what was approved, so only that runs.
-      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
+      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args, opts?.toolUseId);
       // Allowed (internal, by policy): Claude Code's question now goes to the user as a card.
       if (!own && toolName === AGENT_ASK_TOOL) return await askQuestion(normalised.args, signal);
       return { allow: true };
@@ -302,7 +327,7 @@ function couldNotCheck(err: unknown, computer: boolean): Extract<GateDecision, {
   return { allow: false, reason: message, about };
 }
 
-async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean; toolUseId?: string }): Promise<GateDecision> {
+async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean; toolUseId?: string; agentId?: string }): Promise<GateDecision> {
   try {
     return await gate(toolName, input, signal, opts);
   } catch (err) {
@@ -324,7 +349,8 @@ export function preToolUseHook(gate: Gate): HookCallback {
   return async (input, toolUseId, options) => {
     if (input.hook_event_name !== 'PreToolUse') return {};
     const id = toolUseId ?? input.tool_use_id;
-    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options?.signal, { mayDefer: true, ...(id ? { toolUseId: id } : {}) });
+    const agentId = typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : undefined;
+    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options?.signal, { mayDefer: true, ...(id ? { toolUseId: id } : {}), ...(agentId ? { agentId } : {}) });
     if ('defer' in decision) return { ...DEFER_TO_AUTO_MODE };
     return {
       hookSpecificOutput: {
@@ -341,7 +367,9 @@ export function preToolUseHook(gate: Gate): HookCallback {
 /** Fallback for any permission prompt Claude Code still raises after the hook. Never defers. */
 export function canUseToolFor(gate: Gate): CanUseTool {
   return async (toolName, input, options) => {
-    const decision = await safely(gate, toolName, input, options?.signal, options?.toolUseID ? { toolUseId: options.toolUseID } : undefined);
+    const agentId = typeof options?.agentID === 'string' && options.agentID ? options.agentID : undefined;
+    const ids = { ...(options?.toolUseID ? { toolUseId: options.toolUseID } : {}), ...(agentId ? { agentId } : {}) };
+    const decision = await safely(gate, toolName, input, options?.signal, Object.keys(ids).length > 0 ? ids : undefined);
     // Unreachable (the gate defers only for mayDefer), but fail closed.
     if ('defer' in decision) return { behavior: 'deny', message: 'OtherBench could not check this tool call.' };
     return decision.allow ? { behavior: 'allow', updatedInput: decision.updatedInput ?? input } : { behavior: 'deny', message: denialText(decision) };

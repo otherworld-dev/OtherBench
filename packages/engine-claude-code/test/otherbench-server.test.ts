@@ -90,6 +90,30 @@ describe("OtherBench's MCP server, on raw handlers", () => {
     expect(result).toMatchObject({ isError: false, content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] });
   });
 
+  it("hands a call Claude Code's tool-use id when the request carries one, and the request's signal", async () => {
+    const seen: { toolUseId?: string; signal?: AbortSignal }[] = [];
+    const tool: OtherBenchServerTool = {
+      name: 'generate_image',
+      description: 'Generate an image',
+      inputSchema: { type: 'object', properties: {} },
+      alwaysLoad: true,
+      call: async (_args, opts) => {
+        seen.push(opts ?? {});
+        return { content: [{ type: 'text', text: 'ok' }] };
+      },
+    };
+    const client = await connect([tool]);
+    await client.callTool({ name: 'generate_image', arguments: {}, _meta: { 'claudecode/toolUseId': 'toolu_01' } });
+    await client.callTool({ name: 'generate_image', arguments: {} });
+    await client.callTool({ name: 'generate_image', arguments: {}, _meta: { 'claudecode/toolUseId': 7 } });
+    expect(seen.map((s) => s.toolUseId)).toEqual(['toolu_01', undefined, undefined]);
+    for (const s of seen) expect(s.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('gives a tool call six hours, so a long generation is not cut off at the default timeout', () => {
+    expect(otherBenchMcpServer('otherbench_test', []).timeout).toBe(6 * 60 * 60 * 1000);
+  });
+
   it('answers an unknown tool, or a call that throws, as an error result rather than failing the request', async () => {
     const throwing: OtherBenchServerTool = {
       name: 'boom',

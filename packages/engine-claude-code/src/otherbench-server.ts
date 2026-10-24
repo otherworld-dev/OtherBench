@@ -38,8 +38,19 @@ export interface OtherBenchServerTool {
    * a line each until the model looks one up.
    */
   alwaysLoad: boolean;
-  call(args: unknown): Promise<CallToolResult>;
+  /** `opts`: Claude Code's tool-use id when its request carries one, and the request's signal (relay.ts `RelayedCall`). */
+  call(args: unknown, opts?: { toolUseId?: string; signal?: AbortSignal }): Promise<CallToolResult>;
 }
+
+/**
+ * How long Claude Code waits on one call to this server: six hours, so a long
+ * generation (a video on a local GPU) isn't cut off at the default or at the
+ * user's own MCP_TOOL_TIMEOUT. Stop and a cancelled call still end it at once.
+ */
+export const OTHERBENCH_TOOL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
+/** Where Claude Code puts the tool-use id on a `tools/call` request (seen in its CLI; not every version may send it). */
+const TOOL_USE_ID_META = 'claudecode/toolUseId';
 
 /**
  * A fresh name for one process's OtherBench server. The gate lets that server's
@@ -132,7 +143,8 @@ function errorResult(text: string): CallToolResult {
  * an in-process MCP server answering `tools/list` and `tools/call` itself.
  * A tool marked `alwaysLoad` is never deferred behind tool search; the rest
  * are, as Claude Code defers any MCP server's tools. A call to an unknown tool, or one that throws,
- * comes back as an error result rather than failing the request.
+ * comes back as an error result rather than failing the request. Each call may take
+ * `OTHERBENCH_TOOL_TIMEOUT_MS`.
  */
 export function otherBenchMcpServer(name: string, tools: OtherBenchServerTool[]): McpSdkServerConfigWithInstance {
   const byName = new Map(tools.map((t) => [t.name, t]));
@@ -140,14 +152,15 @@ export function otherBenchMcpServer(name: string, tools: OtherBenchServerTool[])
   instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...(t.alwaysLoad ? { _meta: { 'anthropic/alwaysLoad': true } } : {}) })),
   }));
-  instance.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  instance.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const tool = byName.get(request.params.name);
     if (!tool) return errorResult(`OtherBench has no tool called "${request.params.name}".`);
+    const toolUseId = (request.params._meta as Record<string, unknown> | undefined)?.[TOOL_USE_ID_META];
     try {
-      return await tool.call(request.params.arguments ?? {});
+      return await tool.call(request.params.arguments ?? {}, { ...(typeof toolUseId === 'string' && toolUseId.length > 0 ? { toolUseId } : {}), signal: extra.signal });
     } catch (err) {
       return errorResult(err instanceof Error ? err.message : String(err));
     }
   });
-  return { type: 'sdk', name, instance };
+  return { type: 'sdk', name, instance, timeout: OTHERBENCH_TOOL_TIMEOUT_MS };
 }
