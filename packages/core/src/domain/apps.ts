@@ -1,7 +1,10 @@
-import type { App } from '../ports/store.js';
+import type { App, AppFolder } from '../ports/store.js';
 
 /** Longest app name, after trimming (spec 2026-10-20-code-tab-design, "Data"). Same bound as a project's. */
 export const APP_NAME_MAX = 80;
+
+/** Longest app folder name, after trimming (plan 2026-10-25-app-folders). */
+export const APP_FOLDER_NAME_MAX = 100;
 
 /**
  * Most issues one Issues tab list fetches (`gh issue list --limit`). A list
@@ -21,6 +24,15 @@ function asciiFold(s: string): string {
  * the in-memory store and the web client sort with this.
  */
 export function compareApps(a: App, b: App): number {
+  if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+  const an = asciiFold(a.name);
+  const bn = asciiFold(b.name);
+  if (an !== bn) return an < bn ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** Sidebar order for folders: `sortOrder`, then name (ASCII case-insensitive), then id; mirrors `SqliteAppFolderRepo.list`. */
+export function compareAppFolders(a: AppFolder, b: AppFolder): number {
   if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
   const an = asciiFold(a.name);
   const bn = asciiFold(b.name);

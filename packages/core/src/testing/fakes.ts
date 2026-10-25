@@ -44,6 +44,9 @@ import type {
   ModelRepo,
   NewChat,
   NewApp,
+  NewAppFolder,
+  AppFolder,
+  AppFolderRepo,
   NewProject,
   NodeRepo,
   PeerRepo,
@@ -80,7 +83,7 @@ import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/t
 import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
 import type { MediaWorkflow } from '../domain/media-workflows.js';
-import { compareApps } from '../domain/apps.js';
+import { compareApps, compareAppFolders } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
@@ -842,6 +845,7 @@ class InMemoryAppRepo implements AppRepo {
       wikiCollective: a.wikiCollective ?? null,
       wikiPagePath: a.wikiPagePath ?? null,
       bookmarkTag: a.bookmarkTag ?? null,
+      folderId: a.folderId ?? null,
       sortOrder: a.sortOrder ?? 0,
       createdAt: a.createdAt ?? now,
       updatedAt: a.updatedAt ?? now,
@@ -866,6 +870,31 @@ class InMemoryAppRepo implements AppRepo {
     // chat.app_id has no foreign key (migration 029): its chats are cleared here, through the chat repo, as SqliteAppRepo does.
     for (const chat of this.chats.list()) {
       if (chat.appId === id) this.chats.update(chat.id, { appId: null });
+    }
+    this.repo.delete(id);
+  }
+}
+
+class InMemoryAppFolderRepo implements AppFolderRepo {
+  private readonly repo = new InMemoryCrudRepo<AppFolder>();
+  constructor(private readonly apps: AppRepo) {}
+  create(f: NewAppFolder): AppFolder {
+    const now = Date.now();
+    return this.repo.create({ id: f.id, name: f.name, sortOrder: f.sortOrder ?? 0, createdAt: now, updatedAt: now });
+  }
+  get(id: string): AppFolder | null {
+    return this.repo.get(id);
+  }
+  list(): AppFolder[] {
+    return this.repo.list().sort(compareAppFolders);
+  }
+  update(id: string, patch: Partial<Pick<AppFolder, 'name' | 'sortOrder'>>): AppFolder {
+    return this.repo.update(id, { ...patch, updatedAt: Date.now() });
+  }
+  delete(id: string): void {
+    // app.folder_id has no foreign key (migration 032): its apps are cleared here, through the app repo, as SqliteAppFolderRepo does.
+    for (const app of this.apps.list()) {
+      if (app.folderId === id) this.apps.update(app.id, { folderId: null });
     }
     this.repo.delete(id);
   }
@@ -1437,6 +1466,7 @@ export class InMemoryStore implements Store {
   readonly globalMemory: GlobalMemoryRepo = new InMemoryGlobalMemoryRepo();
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
+  readonly appFolders: AppFolderRepo;
   readonly mediaWorkflows: MediaWorkflowRepo = new InMemoryMediaWorkflowRepo();
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
@@ -1472,6 +1502,7 @@ export class InMemoryStore implements Store {
     this.projects = projects;
     const apps = new InMemoryAppRepo(this.chats, selfNodeId);
     this.apps = apps;
+    this.appFolders = new InMemoryAppFolderRepo(apps);
     this.locations = new InMemoryLocationRepo((id) => {
       chats.clearLocation(id);
       projects.clearLocation(id);

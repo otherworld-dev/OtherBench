@@ -50,6 +50,7 @@ interface AppBody {
   linkedProjectId?: unknown;
   defaultProfileId?: unknown;
   sortOrder?: unknown;
+  folderId?: unknown;
 }
 
 /** Trimmed, 1 to APP_NAME_MAX characters, as a project's name. */
@@ -125,6 +126,14 @@ function optionalDefaultProfileId(container: Container, value: unknown): string 
   const profile = container.store.profiles.get(parsed);
   if (!profile) throw new HTTPException(400, { message: `"defaultProfileId": profile "${parsed}" not found.` });
   if (profile.archivedAt !== null) throw new HTTPException(400, { message: `"defaultProfileId": profile "${profile.name}" is archived.` });
+  return parsed;
+}
+
+/** An existing folder's id, or null (no folder). */
+function optionalFolderId(container: Container, value: unknown): string | null | undefined {
+  const parsed = optionalNullableString(value, 'folderId');
+  if (parsed === undefined || parsed === null) return parsed;
+  if (!container.store.appFolders.get(parsed)) throw new HTTPException(400, { message: '"folderId" names no folder.' });
   return parsed;
 }
 
@@ -277,9 +286,10 @@ export function appsRoutes(container: Container): Hono {
     const nextcloud = nextcloudFields(null, body);
     const linkedProjectId = optionalLinkedProjectId(container, body.linkedProjectId) ?? null;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
+    const folderId = optionalFolderId(container, body.folderId) ?? null;
     // New apps go to the bottom of the sidebar unless the request places them.
     const sortOrder = optionalSortOrder(body.sortOrder) ?? container.store.apps.list().reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1;
-    const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, sortOrder, ...nextcloud });
+    const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, folderId, sortOrder, ...nextcloud });
     return c.json(appView(container, created), 201);
   });
 
@@ -302,6 +312,8 @@ export function appsRoutes(container: Container): Hono {
     if (linkedProjectId !== undefined) patch.linkedProjectId = linkedProjectId;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId);
     if (defaultProfileId !== undefined) patch.defaultProfileId = defaultProfileId;
+    const folderId = optionalFolderId(container, body.folderId);
+    if (folderId !== undefined) patch.folderId = folderId;
     const sortOrder = optionalSortOrder(body.sortOrder);
     if (sortOrder !== undefined) patch.sortOrder = sortOrder;
     patch.updatedAt = Date.now();

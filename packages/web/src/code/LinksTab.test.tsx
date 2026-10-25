@@ -25,7 +25,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { LinksTab } from './LinksTab.js';
 
 const app = (over: Partial<App> = {}): App => ({
-  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: 'otherbench', sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: 'otherbench', folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const bm = (id: number, over: Partial<Bookmark> = {}): Bookmark => ({
   id, url: `https://example.com/page${id}`, title: `Link ${id}`, description: '', tags: ['otherbench'], added: 1_760_000_000 + id, ...over,

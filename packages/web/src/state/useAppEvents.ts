@@ -17,20 +17,21 @@ import { useOtherBenchStore } from './store.js';
  */
 /**
  * Another machine's changes were applied: chats, projects, profiles,
- * connections and apps may all have changed. Apps sync like the rest (spec
+ * connections, apps and app folders may all have changed. Apps sync like the rest (spec
  * 2026-10-20-code-tab-design, "Apps sync like projects"), so an app made,
  * renamed or deleted on the other machine shows in the Code sidebar without a
  * reload.
  */
 export function refreshAfterSync(): void {
-  const { setChats, setProjects, setProfiles, setConnections, setApps } = useOtherBenchStore.getState();
-  Promise.all([api.chats.list(), api.projects.list(), api.profiles.list(), api.connections.list(), api.apps.list()])
-    .then(([chats, projects, profiles, connections, apps]) => {
+  const { setChats, setProjects, setProfiles, setConnections, setApps, setAppFolders } = useOtherBenchStore.getState();
+  Promise.all([api.chats.list(), api.projects.list(), api.profiles.list(), api.connections.list(), api.apps.list(), api.appFolders.list()])
+    .then(([chats, projects, profiles, connections, apps, appFolders]) => {
       setChats(chats);
       setProjects(projects);
       setProfiles(profiles);
       setConnections(connections);
       setApps(apps);
+      setAppFolders(appFolders);
     })
     .catch((err: unknown) => console.error('[otherbench-web] failed to reload after a sync:', err));
 }

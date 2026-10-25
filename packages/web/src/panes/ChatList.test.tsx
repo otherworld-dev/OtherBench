@@ -1,7 +1,7 @@
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 
 const desktopListeners = new Map<string, () => void>();
@@ -22,6 +22,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
       chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), export: vi.fn() },
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       apps: { ...actual.api.apps, list: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      appFolders: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       searchChats: vi.fn(),
       health: vi.fn(),
     },
@@ -53,6 +54,10 @@ const mockedSearch = vi.mocked(api.searchChats);
 const mockedHealth = vi.mocked(api.health);
 const mockedAppPatch = vi.mocked(api.apps.patch);
 const mockedAppDelete = vi.mocked(api.apps.delete);
+const mockedFolderList = vi.mocked(api.appFolders.list);
+const mockedFolderCreate = vi.mocked(api.appFolders.create);
+const mockedFolderPatch = vi.mocked(api.appFolders.patch);
+const mockedFolderDelete = vi.mocked(api.appFolders.delete);
 
 const profile: Profile = {
   id: 'profile-1',
@@ -98,7 +103,11 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
 }
 
 function makeApp(overrides: Partial<App> & { id: string }): App {
-  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+}
+
+function makeFolder(overrides: Partial<AppFolder> & { id: string }): AppFolder {
+  return { name: overrides.id, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */
@@ -1806,5 +1815,362 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
     await waitFor(() => expect(screen.queryByTestId('group-A')).toBeNull());
     expect(useOtherBenchStore.getState().chats.find((c) => c.id === 'ca')!.appId).toBeNull();
     expect(mockedDelete).not.toHaveBeenCalled();
+  });
+
+  describe('app folders (plan 2026-10-25-app-folders)', () => {
+    const games = makeFolder({ id: 'F1', name: 'Games', sortOrder: 0 });
+    const work = makeFolder({ id: 'F2', name: 'Work', sortOrder: 1 });
+    // Games holds Alpha and Beta; Work holds Wiki; Gamma is at the top level, its sortOrder below Alpha's.
+    const filed = [
+      { ...alpha, folderId: 'F1', sortOrder: 1 },
+      { ...beta, folderId: 'F1', sortOrder: 2 },
+      makeApp({ id: 'W', name: 'Wiki', folderId: 'F2', sortOrder: 0 }),
+      makeApp({ id: 'G', name: 'Gamma', sortOrder: 0 }),
+    ];
+    const folderChats = [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A' }), makeChat({ id: 'cg', title: 'Gamma chat', appId: 'G' })];
+
+    function setupFolders(over: Partial<ReturnType<typeof useOtherBenchStore.getState>> = {}) {
+      mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+      mockedFolderPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().appFolders.find((f) => f.id === id)!, ...body }) as AppFolder);
+      return setup({ mode: 'code', apps: filed, appFolders: [work, games], chats: folderChats, ...over });
+    }
+
+    const headingTransfer = (key: string) => ({ types: [PROJECT_DRAG_MIME], getData: (t: string) => (t === PROJECT_DRAG_MIME ? key : ''), setData: vi.fn(), dropEffect: 'none', effectAllowed: 'all' });
+    const nameButton = (key: string) => screen.getByTestId(`group-heading-${key}`).querySelector<HTMLElement>('[data-heading-main]')!;
+
+    /** Starts dragging heading `key` and drags it over the top (or bottom) half of `targetKey`'s heading. */
+    function dragHeadingOver(key: string, targetKey: string, half: 'top' | 'bottom' = 'top'): HTMLElement {
+      fireEvent.dragStart(nameButton(key), { dataTransfer: headingTransfer(key) });
+      const target = screen.getByTestId(`group-heading-${targetKey}`);
+      target.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+      fireEvent(target, Object.defineProperty(createEvent.dragOver(target, { dataTransfer: headingTransfer(key) }), 'clientY', { value: half === 'top' ? 105 : 115 }));
+      return target;
+    }
+
+    function dropOn(target: HTMLElement, key: string, half: 'top' | 'bottom' = 'top'): void {
+      fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: headingTransfer(key) }), 'clientY', { value: half === 'top' ? 105 : 115 }));
+    }
+
+    it('shows folders first as headings with their apps nested inside, counting apps, then the top-level apps', () => {
+      setupFolders();
+      expect(headingOrder()).toEqual(['folder:F1', 'A', 'B', 'folder:F2', 'W', 'G']);
+      expect(within(screen.getByTestId('group-heading-folder:F1')).getByText('Games')).toBeInTheDocument();
+      expect(screen.getByTestId('group-count-folder:F1')).toHaveTextContent('2');
+      const folderGroup = screen.getByTestId('group-folder:F1');
+      // Nested as sub-projects are: a list item inside the folder's list.
+      expect(within(folderGroup).getByTestId('subgroup-A')).toContainElement(screen.getByTestId('group-A'));
+      expect(folderGroup).not.toContainElement(screen.getByTestId('group-G'));
+      expect(rowIds('group-A')).toEqual(['ca']);
+    });
+
+    it('folds a folder from its heading, hiding its apps, and remembers it after a re-render', async () => {
+      const user = setupFolders();
+      await user.click(nameButton('folder:F1'));
+      expect(screen.queryByTestId('group-A')).toBeNull();
+      expect(screen.getByTestId('group-count-folder:F1')).toHaveTextContent('2');
+      expect(nameButton('folder:F1')).toHaveAttribute('aria-expanded', 'false');
+      expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toContain('folder:F1');
+
+      cleanup();
+      resetSidebarGroupsForTests();
+      render(<ChatList />);
+      expect(screen.getByTestId('group-heading-folder:F1')).toBeInTheDocument();
+      expect(screen.queryByTestId('group-A')).toBeNull();
+      expect(screen.getByTestId('group-W')).toBeInTheDocument();
+    });
+
+    it("a folded folder's heading shows the status of its apps' chats", () => {
+      setGroupCollapsed('folder:F1', true);
+      setupFolders({ appRunningTurns: { m1: 'ca' } });
+      expect(screen.queryByTestId('chat-row-ca')).toBeNull();
+      expect(screen.getByTestId('group-status-folder:F1')).toHaveAttribute('data-status', 'working');
+      expect(screen.queryByTestId('group-status-folder:F2')).toBeNull();
+    });
+
+    it('an empty folder shows "No apps yet" with a count of 0', () => {
+      setupFolders({ appFolders: [games, work, makeFolder({ id: 'F3', name: 'Empty', sortOrder: 2 })] });
+      expect(within(screen.getByTestId('group-folder:F3')).getByText('No apps yet')).toBeInTheDocument();
+      expect(screen.getByTestId('group-count-folder:F3')).toHaveTextContent('0');
+      expect(screen.getByTestId('group-count-folder:F3')).toHaveAttribute('title', '0 apps');
+    });
+
+    it('with folders but no apps, shows the folders rather than the no-apps note', () => {
+      setupFolders({ apps: [], chats: [] });
+      expect(screen.getByTestId('group-folder:F1')).toBeInTheDocument();
+      expect(screen.queryByText(/An app is a repo folder/)).toBeNull();
+    });
+
+    it('a search that matches only inside a folder shows the folder and no "No chats match"', async () => {
+      mockedSearch.mockResolvedValue([]);
+      const user = setupFolders();
+      await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
+      await waitFor(() => expect(screen.queryByTestId('group-G')).toBeNull());
+      expect(rowIds('group-folder:F1')).toEqual(['ca']);
+      expect(screen.queryByText('No chats match your search.')).toBeNull();
+    });
+
+    it('the footer has one primary button, + New app, and New folder is an icon button like the New project button in Chat mode', async () => {
+      const created = makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 });
+      mockedFolderCreate.mockResolvedValue(created);
+      const user = setupFolders();
+      const button = screen.getByRole('button', { name: 'New folder' });
+      expect(button).toHaveAttribute('title', 'New folder');
+      expect(button.className).not.toContain('btn-primary');
+      expect(button.querySelector('svg')).not.toBeNull();
+      expect(screen.getByRole('button', { name: '+ New app' }).className).toContain('btn-primary');
+      expect(button.parentElement!.querySelectorAll('.btn-primary')).toHaveLength(1);
+      await user.click(button);
+      expect(mockedFolderCreate).toHaveBeenCalledWith({});
+      const input = await screen.findByRole('textbox', { name: 'Folder name' });
+      expect(input).toHaveValue('New folder');
+      await user.clear(input);
+      await user.type(input, 'PhD{Enter}');
+      expect(mockedFolderPatch).toHaveBeenCalledWith('F9', { name: 'PhD' });
+      await waitFor(() => expect(within(screen.getByTestId('group-heading-folder:F9')).getByText('PhD')).toBeInTheDocument());
+    });
+
+    it('a double-click on New folder makes one folder', async () => {
+      let release: (f: AppFolder) => void = () => {};
+      mockedFolderCreate.mockReset();
+      mockedFolderCreate.mockReturnValue(new Promise<AppFolder>((resolve) => (release = resolve)));
+      const user = setupFolders();
+      await user.dblClick(screen.getByRole('button', { name: 'New folder' }));
+      release(makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 }));
+      await screen.findByRole('textbox', { name: 'Folder name' });
+      expect(mockedFolderCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('New folder while searching clears the search so the new folder and its rename show', async () => {
+      mockedSearch.mockResolvedValue([]);
+      mockedFolderCreate.mockReset();
+      mockedFolderCreate.mockResolvedValue(makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 }));
+      const user = setupFolders();
+      const search = screen.getByRole('searchbox', { name: 'Search chats' });
+      await user.type(search, 'sse');
+      await waitFor(() => expect(screen.queryByTestId('group-G')).toBeNull());
+      await user.click(screen.getByRole('button', { name: 'New folder' }));
+      expect(await screen.findByRole('textbox', { name: 'Folder name' })).toBeInTheDocument();
+      expect(search).toHaveValue('');
+      expect(screen.getByTestId('group-G')).toBeInTheDocument();
+    });
+
+    it('picking the current folder in Move to folder… files nothing and returns focus to the app heading', async () => {
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
+      await user.click(within(screen.getByRole('menu', { name: 'Move to folder…' })).getByRole('menuitemradio', { name: 'Games' }));
+      expect(mockedAppPatch).not.toHaveBeenCalled();
+      await waitFor(() => expect(nameButton('A')).toHaveFocus());
+    });
+
+    it('a 404 on deleting a folder counts as already gone: the folder leaves and its apps show at the top level', async () => {
+      mockedFolderDelete.mockRejectedValue(new ApiError(404, 'Folder "F1" not found.'));
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+      await user.click(within(screen.getByRole('alertdialog', { name: 'Delete Games?' })).getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(screen.queryByTestId('group-folder:F1')).toBeNull());
+      expect(headingOrder()).toEqual(['folder:F2', 'W', 'G', 'A', 'B']);
+    });
+
+    it("a folder's menu offers Rename, Move up, Move down and Delete…; Rename saves the name", async () => {
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      const menu = screen.getByRole('menu', { name: 'Folder actions' });
+      expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Move up', 'Move down', 'Delete…']);
+      expect(within(menu).getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+      await user.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
+      const input = screen.getByRole('textbox', { name: 'Folder name' });
+      await user.clear(input);
+      await user.type(input, 'Play{Enter}');
+      expect(mockedFolderPatch).toHaveBeenCalledWith('F1', { name: 'Play' });
+      await waitFor(() => expect(within(screen.getByTestId('group-heading-folder:F1')).getByText('Play')).toBeInTheDocument());
+    });
+
+    it("a folder's Move down and Move up reorder the folders, saving the order", async () => {
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F2', 'W', 'folder:F1', 'A', 'B', 'G']));
+      expect(mockedFolderPatch.mock.calls).toEqual([
+        ['F2', { sortOrder: 0 }],
+        ['F1', { sortOrder: 1 }],
+      ]);
+      mockedFolderPatch.mockClear();
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
+      await user.click(screen.getByRole('menuitem', { name: 'Move up' }));
+      await waitFor(() => expect(headingOrder()[0]).toBe('folder:F1'));
+      expect(mockedFolderPatch.mock.calls).toEqual([
+        ['F1', { sortOrder: 0 }],
+        ['F2', { sortOrder: 1 }],
+      ]);
+    });
+
+    it("dragging a folder's heading onto another's top half puts it above; a failure says so and reloads", async () => {
+      setupFolders();
+      const target = dragHeadingOver('folder:F2', 'folder:F1');
+      expect(target).toHaveAttribute('data-drop-position', 'before');
+      dropOn(target, 'folder:F2');
+      await waitFor(() => expect(headingOrder()[0]).toBe('folder:F2'));
+      expect(mockedFolderPatch.mock.calls).toEqual([
+        ['F2', { sortOrder: 0 }],
+        ['F1', { sortOrder: 1 }],
+      ]);
+
+      mockedFolderPatch.mockRejectedValue(new Error('offline'));
+      mockedFolderList.mockResolvedValue([games, { ...work, sortOrder: 1 }]);
+      dropOn(dragHeadingOver('folder:F1', 'folder:F2'), 'folder:F1');
+      expect(await screen.findByText(/Couldn't reorder the folders/)).toBeInTheDocument();
+      await waitFor(() => expect(headingOrder()[0]).toBe('folder:F1'));
+    });
+
+    it('a folder heading is no target for a folder dropped on itself, and an app heading takes no folder', () => {
+      setupFolders();
+      const self = dragHeadingOver('folder:F1', 'folder:F1');
+      expect(self).not.toHaveAttribute('data-drop-position');
+      const app = screen.getByTestId('group-heading-W');
+      app.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+      fireEvent(app, Object.defineProperty(createEvent.dragOver(app, { dataTransfer: headingTransfer('folder:F1') }), 'clientY', { value: 105 }));
+      expect(app).not.toHaveAttribute('data-drop-position');
+      dropOn(app, 'folder:F1');
+      expect(mockedFolderPatch).not.toHaveBeenCalled();
+      expect(mockedAppPatch).not.toHaveBeenCalled();
+    });
+
+    it('Delete… confirms with what happens, then its apps show at the top level and the open app stays open', async () => {
+      mockedFolderDelete.mockResolvedValue(undefined);
+      const user = setupFolders({ activeChatId: 'app:A' });
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+      const dialog = screen.getByRole('alertdialog', { name: 'Delete Games?' });
+      expect(dialog).toHaveTextContent('Its apps move out of the folder; nothing is deleted.');
+      await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+      expect(mockedFolderDelete).toHaveBeenCalledWith('F1');
+      await waitFor(() => expect(screen.queryByTestId('group-folder:F1')).toBeNull());
+      expect(headingOrder()).toEqual(['folder:F2', 'W', 'G', 'A', 'B']);
+      expect(useOtherBenchStore.getState().activeChatId).toBe('app:A');
+      expect(nameButton('A')).toHaveAttribute('aria-current', 'true');
+      expect(mockedAppDelete).not.toHaveBeenCalled();
+    });
+
+    it('Move to folder… lists No folder first, files the app last in the folder, and opens a folded one', async () => {
+      setGroupCollapsed('folder:F1', true);
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-G')).getByRole('button', { name: 'App actions' }));
+      const appMenu = screen.getByRole('menu', { name: 'App actions' });
+      expect(within(appMenu).getAllByRole('menuitem').map((el) => el.textContent!.replace('▸', ''))).toEqual(['Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
+      await user.click(within(appMenu).getByRole('menuitem', { name: 'Move to folder…' }));
+      const submenu = screen.getByRole('menu', { name: 'Move to folder…' });
+      const items = within(submenu).getAllByRole('menuitemradio');
+      expect(items.map((i) => [i.textContent!.replace('✓', '').trim(), i.getAttribute('aria-checked')])).toEqual([
+        ['No folder', 'true'],
+        ['Games', 'false'],
+        ['Work', 'false'],
+      ]);
+      await user.click(within(submenu).getByRole('menuitemradio', { name: 'Games' }));
+
+      // Games is renumbered 0..n-1, the moved app last.
+      expect(mockedAppPatch.mock.calls).toEqual([
+        ['A', { sortOrder: 0 }],
+        ['B', { sortOrder: 1 }],
+        ['G', { folderId: 'F1', sortOrder: 2 }],
+      ]);
+      await waitFor(() => expect(within(screen.getByTestId('group-folder:F1')).getByTestId('group-G')).toBeInTheDocument());
+      expect(headingOrder()).toEqual(['folder:F1', 'A', 'B', 'G', 'folder:F2', 'W']);
+      expect(nameButton('folder:F1')).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it("Move to folder… that fails says so and shows the server's apps", async () => {
+      mockedAppPatch.mockReset();
+      mockedAppPatch.mockRejectedValue(new Error('offline'));
+      vi.mocked(api.apps.list).mockResolvedValue(filed);
+      const user = setup({ mode: 'code', apps: filed, appFolders: [games, work], chats: folderChats });
+      await user.click(within(screen.getByTestId('group-heading-G')).getByRole('button', { name: 'App actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
+      await user.click(within(screen.getByRole('menu', { name: 'Move to folder…' })).getByRole('menuitemradio', { name: 'Work' }));
+      expect(await screen.findByText(/Couldn't move the app/)).toBeInTheDocument();
+      expect(vi.mocked(api.apps.list)).toHaveBeenCalled();
+      expect(screen.getByTestId('group-folder:F2')).not.toContainElement(screen.getByTestId('group-G'));
+    });
+
+    it('dragging an app onto a folder heading files it there, last, and opens the folder', async () => {
+      setGroupCollapsed('folder:F2', true);
+      setupFolders();
+      const target = dragHeadingOver('G', 'folder:F2');
+      expect(target).toHaveAttribute('data-drop-active', 'true');
+      expect(target).not.toHaveAttribute('data-drop-position');
+      dropOn(target, 'G');
+      await waitFor(() => expect(within(screen.getByTestId('group-folder:F2')).getByTestId('group-G')).toBeInTheDocument());
+      expect(mockedAppPatch.mock.calls).toEqual([['G', { folderId: 'F2', sortOrder: 1 }]]);
+      expect(headingOrder()).toEqual(['folder:F1', 'A', 'B', 'folder:F2', 'W', 'G']);
+      expect(target).not.toHaveAttribute('data-drop-active');
+    });
+
+    it("dragging an app onto an app heading in another folder files it there, at that place", async () => {
+      setupFolders();
+      const target = dragHeadingOver('B', 'W', 'top');
+      expect(target).toHaveAttribute('data-drop-position', 'before');
+      dropOn(target, 'B', 'top');
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'A', 'folder:F2', 'B', 'W', 'G']));
+      expect(mockedAppPatch.mock.calls).toEqual([
+        ['B', { folderId: 'F2', sortOrder: 0 }],
+        ['W', { sortOrder: 1 }],
+      ]);
+    });
+
+    it('dragging a filed app onto a top-level app heading takes it out of its folder, below that app', async () => {
+      setupFolders();
+      dropOn(dragHeadingOver('A', 'G', 'bottom'), 'A', 'bottom');
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'G', 'A']));
+      expect(mockedAppPatch.mock.calls).toEqual([['A', { folderId: null, sortOrder: 1 }]]);
+    });
+
+    it('dragging a filed app shows a top-level drop zone after the last folder; dropping there puts it first among the top-level apps', async () => {
+      setupFolders();
+      expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
+      // A top-level app's drag has no zone: it is at the top level already.
+      fireEvent.dragStart(nameButton('G'), { dataTransfer: headingTransfer('G') });
+      expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
+      fireEvent.dragEnd(nameButton('G'), { dataTransfer: headingTransfer('G') });
+
+      fireEvent.dragStart(nameButton('A'), { dataTransfer: headingTransfer('A') });
+      const zone = screen.getByTestId('app-top-level-drop-zone');
+      expect(zone).toHaveTextContent('No folder');
+      // After the last folder, before the top-level apps.
+      expect(screen.getByTestId('group-folder:F2').compareDocumentPosition(zone) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(zone.compareDocumentPosition(screen.getByTestId('group-G')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      fireEvent.dragOver(zone, { dataTransfer: headingTransfer('A') });
+      expect(zone).toHaveAttribute('data-drop-active', 'true');
+      fireEvent.drop(zone, { dataTransfer: headingTransfer('A') });
+
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'A', 'G']));
+      expect(mockedAppPatch.mock.calls).toEqual([
+        ['A', { folderId: null, sortOrder: 0 }],
+        ['G', { sortOrder: 1 }],
+      ]);
+      expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
+    });
+
+    it('Move up is disabled on the first app of a folder, even with a top-level app sorting above it', async () => {
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+      expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+      await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'A', 'folder:F2', 'W', 'G']));
+      // Games renumbers to 0..1 on its own; Alpha already has 1.
+      expect(mockedAppPatch.mock.calls).toEqual([['B', { sortOrder: 0 }]]);
+    });
+
+    it('dropping a chat on an app heading inside a folder still files the chat in that app', async () => {
+      setupFolders();
+      const heading = screen.getByTestId('group-heading-A');
+      fireEvent.dragOver(heading, { dataTransfer: dataTransfer('cg') });
+      expect(heading).toHaveAttribute('data-drop-active', 'true');
+      fireEvent.drop(heading, { dataTransfer: dataTransfer('cg') });
+      expect(mockedPatch).toHaveBeenCalledWith('cg', { appId: 'A' });
+      await waitFor(() => expect(rowIds('group-A').sort()).toEqual(['ca', 'cg']));
+    });
   });
 });

@@ -23,7 +23,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { AppHome } from './AppHome.js';
 
 const app = (over: Partial<App> = {}): App => ({
-  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:/Git/OtherBench', githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: 'p1', defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  id: 'a1', name: 'OtherBench', workspace: null, workspaceRoot: 'E:/Git/OtherBench', githubRepo: 'otherworld-dev/OtherBench', linkedProjectId: 'p1', defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const project: Project = { id: 'p1', name: 'Planning', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 const chat = (id: string, over: Partial<Chat> = {}): Chat => ({
@@ -108,6 +108,17 @@ describe('AppHome', () => {
     expect(within(list).getAllByRole('listitem').map((r) => r.getAttribute('data-chat-id'))).toEqual(['c1']);
     await userEvent.setup().click(within(list).getByRole('button', { name: /^Chat c1/ }));
     expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
+  });
+
+  it('still lists the chats of an app that sits in a folder', () => {
+    useOtherBenchStore.setState({
+      apps: [app({ folderId: 'f1' })],
+      appFolders: [{ id: 'f1', name: 'Games', sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+      appsLoaded: true,
+      chats: [chat('c1'), chat('c2', { appId: 'other' })],
+    });
+    render(<AppHome appId="a1" />);
+    expect(within(screen.getByTestId('app-home-chats')).getAllByRole('listitem').map((r) => r.getAttribute('data-chat-id'))).toEqual(['c1']);
   });
 
   it('shows the open issues', async () => {

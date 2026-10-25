@@ -22,7 +22,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { WikiTab } from './WikiTab.js';
 
 const app = (over: Partial<App> = {}): App => ({
-  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/OtherBench', bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/OtherBench', bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const tree = (): WikiTree => ({
   collective: 'Otherworld Dev',

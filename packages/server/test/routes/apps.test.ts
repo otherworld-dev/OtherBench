@@ -263,6 +263,36 @@ describe('apps CRUD', () => {
     expect((await send('DELETE', '/api/apps/nope')).status).toBe(404);
   });
 
+  it("PATCH sets, moves and clears an app's folderId; one naming no folder is a 400", async () => {
+    newApp('a1', tmp());
+    store.appFolders.create({ id: 'f1', name: 'Work' });
+    store.appFolders.create({ id: 'f2', name: 'Play' });
+    expect(await json(await send('PATCH', '/api/apps/a1', { folderId: 'f1' }))).toMatchObject({ folderId: 'f1' });
+    expect(store.apps.get('a1')?.folderId).toBe('f1');
+    expect(await json(await send('PATCH', '/api/apps/a1', { folderId: 'f2' }))).toMatchObject({ folderId: 'f2' });
+    const bad = await send('PATCH', '/api/apps/a1', { folderId: 'nope' });
+    expect(bad.status).toBe(400);
+    expect((await json<{ error: string }>(bad)).error).toBe('"folderId" names no folder.');
+    expect((await send('PATCH', '/api/apps/a1', { folderId: 7 })).status).toBe(400);
+    expect(store.apps.get('a1')?.folderId).toBe('f2');
+    expect(await json(await send('PATCH', '/api/apps/a1', { name: 'Same' }))).toMatchObject({ folderId: 'f2' });
+    expect(await json(await send('PATCH', '/api/apps/a1', { folderId: null }))).toMatchObject({ folderId: null });
+    expect(store.apps.get('a1')?.folderId).toBeNull();
+  });
+
+  it('POST takes a folderId (null or an existing folder) and refuses one naming no folder', async () => {
+    store.appFolders.create({ id: 'f1', name: 'Work' });
+    const inFolder = await send('POST', '/api/apps', { name: 'A', workspacePath: tmp(), folderId: 'f1' });
+    expect(inFolder.status).toBe(201);
+    expect(await json(inFolder)).toMatchObject({ folderId: 'f1' });
+    const none = await send('POST', '/api/apps', { name: 'B', workspacePath: tmp() });
+    expect(await json(none)).toMatchObject({ folderId: null });
+    const bad = await send('POST', '/api/apps', { name: 'C', workspacePath: tmp(), folderId: 'nope' });
+    expect(bad.status).toBe(400);
+    expect((await json<{ error: string }>(bad)).error).toBe('"folderId" names no folder.');
+    expect(store.apps.list()).toHaveLength(2);
+  });
+
   it("a workspace PATCH moves every chat in the app to the new folder, announcing each", async () => {
     const before = tmp();
     const after = tmp();

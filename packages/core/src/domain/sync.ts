@@ -13,6 +13,7 @@ export const SYNC_TABLES = [
   'model',
   'profile',
   'project',
+  'app_folder',
   'app',
   'project_memory',
   'global_memory',

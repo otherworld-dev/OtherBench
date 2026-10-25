@@ -274,6 +274,8 @@ export interface App {
   wikiPagePath: string | null;
   /** The Nextcloud Bookmarks tag that marks the app's links, or null. */
   bookmarkTag: string | null;
+  /** The Code sidebar folder this app is in, or null for the top level. Not trusted on read: not a foreign key (migration 032), so a synced row can name a folder that is missing here, which shows as none. */
+  folderId: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareApps`. */
   sortOrder: number;
   createdAt: number;
@@ -283,7 +285,7 @@ export interface App {
 /** What `AppRepo.create` takes: timestamps default to now, `sortOrder` to 0, the links to null; `workspace` and a bare `workspaceRoot` as on `NewProject`. */
 export type NewApp = Omit<
   App,
-  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId' | 'deckBoardId' | 'wikiCollective' | 'wikiPagePath' | 'bookmarkTag'
+  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId' | 'deckBoardId' | 'wikiCollective' | 'wikiPagePath' | 'bookmarkTag' | 'folderId'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
@@ -294,6 +296,7 @@ export type NewApp = Omit<
   wikiCollective?: string | null;
   wikiPagePath?: string | null;
   bookmarkTag?: string | null;
+  folderId?: string | null;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -307,6 +310,31 @@ export interface AppRepo {
   /** A `workspaceRoot` in the patch (and no `workspace`) is stored as a folder bound to this machine. */
   update(id: string, patch: Partial<Omit<App, 'id'>>): App;
   /** Deletes the app. Its chats keep existing with `appId: null` (cleared through the chat repo so the change syncs); chats are never deleted. */
+  delete(id: string): void;
+}
+
+// --- app folders -------------------------------------------------------------
+
+/** A folder in the Code sidebar that groups apps (migration 032); one level, a synced table. */
+export interface AppFolder {
+  id: string;
+  name: string;
+  /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareAppFolders`. */
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** What `AppFolderRepo.create` takes: `sortOrder` defaults to 0, timestamps to now. */
+export type NewAppFolder = { id: string; name: string; sortOrder?: number };
+
+export interface AppFolderRepo {
+  create(f: NewAppFolder): AppFolder;
+  get(id: string): AppFolder | null;
+  /** Every folder, in sidebar order (`compareAppFolders`). */
+  list(): AppFolder[];
+  update(id: string, patch: Partial<Pick<AppFolder, 'name' | 'sortOrder'>>): AppFolder;
+  /** Deletes the folder. Its apps keep existing with `folderId: null` (cleared through the app repo so the change syncs); apps are never deleted. */
   delete(id: string): void;
 }
 
@@ -1001,6 +1029,7 @@ export interface Store {
   chats: ChatRepo;
   projects: ProjectRepo;
   apps: AppRepo;
+  appFolders: AppFolderRepo;
   mediaWorkflows: MediaWorkflowRepo;
   projectMemory: ProjectMemoryRepo;
   globalMemory: GlobalMemoryRepo;

@@ -1,7 +1,7 @@
-import { compareApps } from '@otherbench/core/domain/apps.js';
 import { projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { MenuItem } from '../../components/Menu.js';
+import { codeSidebarAppOrder } from './model.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 
@@ -52,7 +52,8 @@ export function chatMenuItems(
   h: ChatMenuHandlers,
   position: { index: number; count: number } | null = null,
   isTab = false,
-  apps: App[] = []
+  apps: App[] = [],
+  folders: AppFolder[] = []
 ): MenuItem[] {
   const inApp = chat.appId !== null;
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
@@ -103,7 +104,7 @@ export function chatMenuItems(
           {
             id: 'move-app',
             label: 'Move to app…',
-            submenu: [...apps].sort(compareApps).map((a) => ({ id: a.id, label: a.name, checked: chat.appId === a.id, onSelect: () => h.moveToApp(a.id) })),
+            submenu: codeSidebarAppOrder(apps, folders).map((a) => ({ id: a.id, label: a.name, checked: chat.appId === a.id, onSelect: () => h.moveToApp(a.id) })),
           },
         ]),
     ...(inApp ? [{ id: 'move-out-app', label: 'Move out of app', onSelect: h.moveOutOfApp }] : []),
@@ -128,19 +129,53 @@ export interface AppMenuHandlers {
   rename(): void;
   /** Opens the app form on this app. */
   edit(): void;
-  /** Moves the app one place up (-1) or down (+1) in the Code sidebar. */
+  /** Moves the app one place up (-1) or down (+1) among its siblings in the Code sidebar. */
   move(dir: -1 | 1): void;
+  /** Files the app last in a folder, or (null) at the top level. */
+  moveToFolder(folderId: string | null): void;
   requestDelete(): void;
 }
 
 /**
  * An app heading's ⋯ menu in Code mode (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit, move, delete.
- * `index` and `count`: the app's place in the Code sidebar, for Move up / Move down.
+ * `index` and `count`: the app's place among its siblings (its folder's apps, or the top level), for Move up / Move down.
+ *
+ * `folders` (in sidebar order) adds "Move to folder…" after Edit… (plan 2026-10-25-app-folders): No folder, then each
+ * folder, with `folderId` (the app's loaded folder, or null) checked. Left out while there are no folders.
  */
-export function appMenuItems(index: number, count: number, h: AppMenuHandlers): MenuItem[] {
+export function appMenuItems(index: number, count: number, h: AppMenuHandlers, folders: AppFolder[] = [], folderId: string | null = null): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'edit', label: 'Edit…', onSelect: h.edit },
+    ...(folders.length === 0
+      ? []
+      : [
+          {
+            id: 'move-folder',
+            label: 'Move to folder…',
+            submenu: [
+              { id: 'no-folder', label: 'No folder', checked: folderId === null, onSelect: () => h.moveToFolder(null) },
+              ...folders.map((f) => ({ id: f.id, label: f.name, checked: folderId === f.id, onSelect: () => h.moveToFolder(f.id) })),
+            ],
+          },
+        ]),
+    { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
+    { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
+    { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
+  ];
+}
+
+export interface FolderMenuHandlers {
+  rename(): void;
+  /** Moves the folder one place up (-1) or down (+1) among the folders. */
+  move(dir: -1 | 1): void;
+  requestDelete(): void;
+}
+
+/** An app folder heading's ⋯ menu in Code mode (plan 2026-10-25-app-folders). `index` of `count`: its place among the folders. */
+export function folderMenuItems(index: number, count: number, h: FolderMenuHandlers): MenuItem[] {
+  return [
+    { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
     { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },

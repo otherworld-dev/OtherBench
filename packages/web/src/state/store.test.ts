@@ -793,7 +793,7 @@ describe('notes (messages sent while a reply runs)', () => {
 });
 
 function makeApp(overrides: Partial<App> = {}): App {
-  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-design)', () => {
@@ -896,6 +896,19 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     s().upsertApp(makeApp({ id: 'b', name: 'Renamed' }));
     s().upsertApp(makeApp({ id: 'c', name: 'C' }));
     expect(s().apps.map((a) => [a.id, a.name])).toEqual([['a', 'OtherBench'], ['b', 'Renamed'], ['c', 'C']]);
+  });
+
+  it('setAppFolders, upsertAppFolder and removeAppFolder; removing a folder frees its apps', () => {
+    const folder = (id: string, name: string) => ({ id, name, sortOrder: 0, createdAt: 1, updatedAt: 1 });
+    expect(s().appFolders).toEqual([]);
+    s().setAppFolders([folder('f1', 'One'), folder('f2', 'Two')]);
+    s().upsertAppFolder(folder('f2', 'Renamed'));
+    s().upsertAppFolder(folder('f3', 'Three'));
+    expect(s().appFolders.map((f) => [f.id, f.name])).toEqual([['f1', 'One'], ['f2', 'Renamed'], ['f3', 'Three']]);
+    s().setApps([makeApp({ id: 'a', folderId: 'f1' }), makeApp({ id: 'b', folderId: 'f2' })]);
+    s().removeAppFolder('f1');
+    expect(s().appFolders.map((f) => f.id)).toEqual(['f2', 'f3']);
+    expect(s().apps.map((a) => [a.id, a.folderId])).toEqual([['a', null], ['b', 'f2']]);
   });
 
   it("an app deleted elsewhere arrives as a list without it: its home tab closes, in whichever mode's pane state holds it", () => {

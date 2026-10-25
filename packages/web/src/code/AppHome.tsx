@@ -144,10 +144,15 @@ function NewChat({ app }: { app: App }): JSX.Element {
 function AppChats({ app }: { app: App }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const apps = useOtherBenchStore((s) => s.apps);
+  const appFolders = useOtherBenchStore((s) => s.appFolders);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const { waiting, working, background } = useChatActivity();
   // The Code sidebar's own grouping, so the page and the sidebar always agree on order.
-  const listed = useMemo(() => buildCodeSidebar(chats, apps, null).groups.find((g) => g.app?.id === app.id)?.chats ?? [], [chats, apps, app.id]);
+  const listed = useMemo(() => {
+    const model = buildCodeSidebar(chats, apps, appFolders, null);
+    const groups = [...model.groups, ...model.folders.flatMap((f) => f.groups)];
+    return groups.find((g) => g.app?.id === app.id)?.chats ?? [];
+  }, [chats, apps, appFolders, app.id]);
 
   return (
     <section data-testid="app-home-chats" aria-label="Chats" className="min-w-0">

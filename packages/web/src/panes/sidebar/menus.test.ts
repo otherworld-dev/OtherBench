@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
-import { appMenuItems, chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
+import { appMenuItems, chatMenuItems, folderMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -11,7 +11,11 @@ function project(id: string, name: string): Project {
 }
 
 function app(id: string, name: string): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+}
+
+function folder(id: string, name: string): AppFolder {
+  return { id, name, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 }
 
 function chatHandlers(): ChatMenuHandlers {
@@ -29,6 +33,13 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
     expect(submenu.map((i) => i.label)).toEqual(['Alpha', 'Beta']);
     submenu[0]!.onSelect!();
     expect(h.moveToApp).toHaveBeenCalledWith('A');
+  });
+
+  it('lists apps in the Code sidebar order, so filing one does not reshuffle the submenu', () => {
+    const f = [folder('f', 'F')];
+    const list = [{ ...app('A', 'A'), sortOrder: 0 }, { ...app('B', 'B'), sortOrder: 1 }, { ...app('C', 'C'), sortOrder: 2 }, { ...app('D', 'D'), sortOrder: 0, folderId: 'f' }];
+    const items = chatMenuItems(chat(), [], chatHandlers(), null, false, list, f);
+    expect(items.find((i) => i.id === 'move-app')!.submenu!.map((i) => i.label)).toEqual(['D', 'A', 'B', 'C']);
   });
 
   it('has no Move to app… while there are no apps', () => {
@@ -52,8 +63,10 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
 });
 
 describe('appMenuItems', () => {
+  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), move: vi.fn(), moveToFolder: vi.fn(), requestDelete: vi.fn() });
+
   it('offers Rename, Edit…, Move up, Move down and Delete…, each calling its handler', () => {
-    const h = { rename: vi.fn(), edit: vi.fn(), move: vi.fn(), requestDelete: vi.fn() };
+    const h = appHandlers();
     const items = appMenuItems(1, 3, h);
     expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Move up', 'Move down', 'Delete…']);
     expect(items[4]!.danger).toBe(true);
@@ -65,11 +78,44 @@ describe('appMenuItems', () => {
   });
 
   it('disables Move up for the first app and Move down for the last', () => {
-    const h = { rename: vi.fn(), edit: vi.fn(), move: vi.fn(), requestDelete: vi.fn() };
+    const h = appHandlers();
     const first = appMenuItems(0, 2, h);
     expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
     expect(appMenuItems(1, 2, h).find((i) => i.id === 'down')!.disabled).toBe(true);
+  });
+
+  it('with folders, offers Move to folder… after Edit…: No folder first, then each folder, the current one checked', () => {
+    const h = appHandlers();
+    const folders = [folder('f1', 'Games'), folder('f2', 'Work')];
+    const items = appMenuItems(0, 1, h, folders, 'f2');
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
+    const submenu = items.find((i) => i.id === 'move-folder')!.submenu!;
+    expect(submenu.map((i) => [i.label, i.checked])).toEqual([
+      ['No folder', false],
+      ['Games', false],
+      ['Work', true],
+    ]);
+    submenu[1]!.onSelect!();
+    submenu[0]!.onSelect!();
+    expect(h.moveToFolder.mock.calls).toEqual([['f1'], [null]]);
+    // An app in no folder has No folder checked.
+    expect(appMenuItems(0, 1, h, folders, null).find((i) => i.id === 'move-folder')!.submenu![0]!.checked).toBe(true);
+  });
+});
+
+describe('folderMenuItems', () => {
+  it('offers Rename, Move up, Move down and Delete…, the ends disabled, each calling its handler', () => {
+    const h = { rename: vi.fn(), move: vi.fn(), requestDelete: vi.fn() };
+    const items = folderMenuItems(1, 3, h);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Move up', 'Move down', 'Delete…']);
+    expect(items[3]!.danger).toBe(true);
+    for (const item of items) item.onSelect!();
+    expect(h.rename).toHaveBeenCalled();
+    expect(h.move.mock.calls).toEqual([[-1], [1]]);
+    expect(h.requestDelete).toHaveBeenCalled();
+    expect(folderMenuItems(0, 2, h).find((i) => i.id === 'up')!.disabled).toBe(true);
+    expect(folderMenuItems(1, 2, h).find((i) => i.id === 'down')!.disabled).toBe(true);
   });
 });
 

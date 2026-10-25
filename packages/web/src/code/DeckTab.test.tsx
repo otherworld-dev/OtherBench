@@ -36,7 +36,7 @@ import { DeckTab } from './DeckTab.js';
 import { startChatFromCard } from './startChatFromCard.js';
 
 const app = (over: Partial<App> = {}): App => ({
-  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: 7, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+  id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: 7, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
 });
 const feature = { id: 5, title: 'feature', color: '00aa00' };
 const bug = { id: 6, title: 'bug', color: 'aa0000' };

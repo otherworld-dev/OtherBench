@@ -60,6 +60,7 @@ function MainApp(): JSX.Element {
   const setChats = useOtherBenchStore((s) => s.setChats);
   const setProjects = useOtherBenchStore((s) => s.setProjects);
   const setApps = useOtherBenchStore((s) => s.setApps);
+  const setAppFolders = useOtherBenchStore((s) => s.setAppFolders);
   const mode = useOtherBenchStore((s) => s.mode);
 
   // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
@@ -109,9 +110,10 @@ function MainApp(): JSX.Element {
       api.chats.list().then(setChats),
       api.projects.list().then(setProjects),
       api.apps.list().then(setApps),
+      api.appFolders.list().then(setAppFolders),
     ]).then((results) => {
       if (cancelled) return;
-      const labels = ['connections', 'models', 'profiles', 'chats', 'projects', 'apps'] as const;
+      const labels = ['connections', 'models', 'profiles', 'chats', 'projects', 'apps', 'app folders'] as const;
       results.forEach((r, i) => {
         if (r.status === 'rejected') console.error(`[otherbench-web] failed to load ${labels[i]}:`, r.reason);
       });
@@ -122,7 +124,7 @@ function MainApp(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [setConnections, setModels, setProfiles, setChats, setProjects, setApps]);
+  }, [setConnections, setModels, setProfiles, setChats, setProjects, setApps, setAppFolders]);
 
   useAppEvents();
   useTrayStatus();

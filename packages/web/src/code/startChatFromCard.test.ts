@@ -14,7 +14,7 @@ import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { cardDraft, startChatFromCard } from './startChatFromCard.js';
 
-const app: App = { id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: 7, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const app: App = { id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: 7, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 const card: DeckCardDetail = {
   id: 966, title: 'Terminal', stackId: 2, labels: [], duedate: null, done: false, archived: false,
   description: 'A built-in terminal.', boardId: 7, boardTitle: 'OtherBench', stackTitle: 'Doing', createdAt: 1, url: 'https://nc.example/index.php/apps/deck/board/7/card/966',

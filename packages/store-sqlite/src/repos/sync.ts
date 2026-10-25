@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@otherbench/core/domain/artifacts.js';
 import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
+import { APP_FOLDER_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
 import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
@@ -56,6 +57,16 @@ function keyWhere(tbl: SyncTable): string {
 function rowKey(tbl: SyncTable, row: SyncRow): string | null {
   const parts = keyColumns(tbl).map((c) => row[c]);
   return parts.every((p) => typeof p === 'string' && p.length > 0) ? (parts as string[]).join(':') : null;
+}
+
+/** A folder row as the app makes one: a name of 1-100 characters after trimming, and an integer position. */
+function appFolderRowOk(row: SyncRow): boolean {
+  const { id, name, sort_order: sortOrder } = row;
+  if (typeof id !== 'string' || id.length === 0) return false;
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > APP_FOLDER_NAME_MAX) return false;
+  return Number.isInteger(sortOrder);
 }
 
 /** A workflow row as an import makes one: the same size cap and `workflowProblem` checks, and never a built-in's id. */
@@ -433,6 +444,9 @@ export class SqliteSyncRepo implements SyncRepo {
       // Delete wins for good: an id that was removed is never made again with a new binding.
       if (this.tombstone('attachment', u.id) !== null) return false;
     }
+    if (u.tbl === 'app_folder' && !appFolderRowOk(row)) return false;
+    // `folder_id` is not a foreign key (migration 032) and is never checked against the folders here: rows arrive in no fixed order.
+    if (u.tbl === 'app' && row['folder_id'] != null && typeof row['folder_id'] !== 'string') return false;
     // A workflow is sent to a generation backend: only what an import would have accepted.
     if (u.tbl === 'media_workflow' && !mediaWorkflowRowOk(row)) return false;
     // Artifact rows reach the model's prompt and the viewer: only what OtherBench itself could have made.
