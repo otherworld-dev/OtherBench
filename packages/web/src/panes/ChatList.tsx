@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
+import { APP_NAME_MAX, compareApps } from '@otherbench/core/domain/apps.js';
 import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
@@ -29,9 +29,11 @@ import {
   buildSidebar,
   capRows,
   GROUP_ROW_CAP,
+  moveAppPatches,
   moveProjectPatches,
   moveTarget,
   placeChatPatches,
+  placeAppPatches,
   placeProjectPatches,
   projectSiblings,
   titleMatches,
@@ -148,6 +150,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
+  const setApps = useOtherBenchStore((s) => s.setApps);
   const removeApp = useOtherBenchStore((s) => s.removeApp);
   const codeMode = mode === 'code';
   const collapsedGroups = useCollapsedGroups();
@@ -176,6 +179,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // The project heading being dragged, and the sibling heading it's over: where a drop would place it.
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [projectDrop, setProjectDrop] = useState<{ projectId: string; position: DropPosition } | null>(null);
+  // Dragging an app's heading in Code mode, as with project headings in Chat mode.
+  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
+  const [appDrop, setAppDrop] = useState<{ appId: string; position: DropPosition } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -597,6 +603,44 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setNoProjectMenu(position);
   }
 
+  /** Sends app order PATCHes one by one; on a failure says so and shows the server's order, since part may have landed. */
+  async function sendAppOrder(patches: { id: string; sortOrder: number }[], focusId: string): Promise<void> {
+    setError(null);
+    try {
+      for (const { id, sortOrder } of patches) upsertApp(await api.apps.patch(id, { sortOrder }));
+    } catch (err) {
+      console.error('[otherbench-web] failed to reorder apps:', err);
+      setError(errorText(err, "Couldn't reorder the apps"));
+      try {
+        setApps(await api.apps.list());
+      } catch {
+        // the error line above already says something went wrong.
+      }
+    }
+    focusLater(headingSelector(focusId), LIST_SELECTOR);
+  }
+
+  /** Puts a dragged app above or below app `targetId` (a drop on its heading). */
+  async function placeApp(movingId: string, targetId: string, position: DropPosition): Promise<void> {
+    if (movingId === targetId || !apps.some((a) => a.id === targetId)) return;
+    let beforeId: string | null = targetId;
+    if (position === 'after') {
+      const rest = [...apps].sort(compareApps).filter((a) => a.id !== movingId);
+      beforeId = rest[rest.findIndex((a) => a.id === targetId) + 1]?.id ?? null;
+    }
+    const patches = placeAppPatches(apps, movingId, beforeId);
+    if (patches.length > 0) await sendAppOrder(patches, movingId);
+  }
+
+  /** The app's place in the Code sidebar's order. */
+  function appIndex(appId: string): number {
+    return [...apps].sort(compareApps).findIndex((a) => a.id === appId);
+  }
+
+  async function moveApp(appId: string, dir: -1 | 1): Promise<void> {
+    await sendAppOrder(moveAppPatches(apps, appId, dir), appId);
+  }
+
   /** Opens a capped group in full (focus goes to the first chat it revealed), or caps it again. */
   function setGroupExpanded(key: string, expanded: boolean, firstRevealedId?: string): void {
     setExpandedGroups((current) => {
@@ -889,7 +933,26 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** The app-only props of a Code mode group heading. */
   function appGroupProps(app: App): Partial<ProjectGroupProps> {
+    const target = draggingAppId !== null && draggingAppId !== app.id;
     return {
+      reorder: {
+        draggable: !searching,
+        onDragStart: () => setDraggingAppId(app.id),
+        onDragEnd: () => {
+          setDraggingAppId(null);
+          setAppDrop(null);
+        },
+        target,
+        indicator: target && appDrop?.appId === app.id ? appDrop.position : null,
+        onOver: (position) => setAppDrop({ appId: app.id, position }),
+        onLeave: () => setAppDrop((current) => (current?.appId === app.id ? null : current)),
+        onDrop: (position) => {
+          const moving = draggingAppId;
+          setDraggingAppId(null);
+          setAppDrop(null);
+          if (moving) void placeApp(moving, app.id, position);
+        },
+      },
       onOpen: () => openAppHome(app.id),
       openTitle: "Open the app's home",
       active: activeChatId === appTabId(app.id),
@@ -1222,9 +1285,10 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           key={`app:${menuApp.id}`}
           label="App actions"
           position={appMenu.position}
-          items={appMenuItems({
+          items={appMenuItems(appIndex(menuApp.id), apps.length, {
             rename: () => setRenamingAppId(menuApp.id),
             edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
+            move: (dir) => void moveApp(menuApp.id, dir),
             requestDelete: () => setDeletingAppId(menuApp.id),
           })}
           onClose={(reason) => {
