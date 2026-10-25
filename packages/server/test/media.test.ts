@@ -69,7 +69,7 @@ describe('createMediaHost', () => {
     const { host } = setup(connection());
     const asks: AskInput[] = [];
     const policy: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'gen', model: 'wf-gone' } } };
-    const [tool] = mediaTools(
+    const [tool] = await mediaTools(
       host,
       policy,
       async (_c, input) => {

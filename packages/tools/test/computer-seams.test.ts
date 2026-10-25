@@ -150,7 +150,7 @@ describe('computer use in a scheduled run (seam 1: unattended)', () => {
     provider.onApprovalEvent((e) => {
       if (e.type === 'request') cards.push(e.request);
     });
-    const [spec] = provider.relayOtherBenchTools(computerPolicy());
+    const [spec] = (await provider.relayOtherBenchTools(computerPolicy()));
     expect(spec).toMatchObject({ name: 'computer', source: 'computer' });
     for (const args of [LOOK, CLICK]) {
       // `deferAsk` as in auto mode: a scheduled run never hands a call to Claude Code's classifier either.
@@ -190,7 +190,7 @@ describe('computer use in a Plan-mode chat (seam 3)', () => {
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const driver = new FakeComputerDriver();
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), emptyMcp, { computer: driver });
-    const [spec] = provider.relayOtherBenchTools(computerPolicy());
+    const [spec] = (await provider.relayOtherBenchTools(computerPolicy()));
     const { createPlanGate } = await import('@otherbench/core/domain/thread-tools.js');
     for (const args of [LOOK, CLICK]) {
       expect(await provider.requestApproval(spec!, args, computerPolicy(), ctx({ plan: createPlanGate() }))).toEqual({ allowed: false, reason: PLAN_REFUSAL });

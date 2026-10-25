@@ -250,27 +250,27 @@ describe('OtherBenchToolProvider and the sandbox', () => {
   it('relayTools(policy) hands Claude Code the same sandboxed run_command, ungated', async () => {
     const sandbox = new FakeSandbox({ ready: true });
     const { provider, events } = setup(sandbox);
-    const relayed = provider.relayTools(policy({ approvalMode: 'always_ask' }));
+    const relayed = (await provider.relayTools(policy({ approvalMode: 'always_ask' })));
     expect(relayed.map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox']]);
     await relayed[0]!.execute({ command: 'ls' }, ctx());
     expect(sandbox.requests).toHaveLength(1);
     // Claude Code's gate has approved the call already; the spec itself never asks.
     expect(events).toEqual([]);
-    expect(provider.relayTools(policy({ shellRuns: 'host' }))).toEqual([]);
-    expect(provider.relayTools(policy({ shell: false }))).toEqual([]);
+    expect((await provider.relayTools(policy({ shellRuns: 'host' })))).toEqual([]);
+    expect((await provider.relayTools(policy({ shell: false })))).toEqual([]);
   });
 
-  it('relayTools carries no run_command at all when this OtherBench has no sandbox: there is no host fallback', () => {
+  it('relayTools carries no run_command at all when this OtherBench has no sandbox: there is no host fallback', async () => {
     const { provider } = setup(null);
-    expect(provider.relayTools(policy())).toEqual([]);
-    expect(provider.relayTools(policy({ shellRuns: 'host' }))).toEqual([]);
+    expect((await provider.relayTools(policy()))).toEqual([]);
+    expect((await provider.relayTools(policy({ shellRuns: 'host' })))).toEqual([]);
   });
 
   it("the provider labels nothing 'sandbox' but the one sandboxed run_command, listed or relayed", async () => {
     for (const sandbox of [new FakeSandbox({ ready: true }), null]) {
       const { provider } = setup(sandbox);
       const listed = await provider.listTools(policy({ mcpServerIds: ['s1'], artifacts: true, recall: true }));
-      for (const spec of [...listed, ...provider.relayTools(policy({ mcpServerIds: ['s1'] }))].filter((t) => t.source === 'sandbox')) {
+      for (const spec of [...listed, ...(await provider.relayTools(policy({ mcpServerIds: ['s1'] })))].filter((t) => t.source === 'sandbox')) {
         expect(spec.name).toBe('run_command');
         expect(spec.risk).toBe('execute');
         expect(spec.description).toBe(SANDBOX_RUN_COMMAND_DESCRIPTION);

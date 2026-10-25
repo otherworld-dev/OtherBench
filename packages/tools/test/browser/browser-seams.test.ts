@@ -92,7 +92,7 @@ describe('the browser in a Plan-mode chat', () => {
 
   it("refuses the relayed browser the same way: Claude Code's gate gets the plan refusal, and no ticket's worth of arguments", async () => {
     const s = setup({ answer: 'once' });
-    const [spec] = s.provider.relayTools(policy());
+    const [spec] = (await s.provider.relayTools(policy()));
     expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ plan: createPlanGate() }));
     expect(outcome).toEqual({ allowed: false, reason: PLAN_REFUSAL });
@@ -175,7 +175,7 @@ describe('the browser in a scheduled run', () => {
 
   it("refuses the relayed browser the same way, and never hands it to Claude Code's auto mode", async () => {
     const s = setup({ answer: 'once' });
-    const [spec] = s.provider.relayTools(policy());
+    const [spec] = (await s.provider.relayTools(policy()));
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ unattended: true }), { deferAsk: true });
     expect(outcome).toEqual({ allowed: false, reason: UNATTENDED_REASON });
     // With someone watching, auto mode still doesn't get it: the card is OtherBench's.

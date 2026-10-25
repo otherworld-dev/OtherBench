@@ -237,7 +237,7 @@ export function createComfyBackend(
       if (!wf) throw new Error("The ComfyUI workflow this profile uses doesn't exist any more.");
       if (wf.media !== req.media) throw new Error(`"${wf.name}" makes ${wf.media}s, not ${req.media}s.`);
       const graph = fillWorkflow(wf, req);
-      const clientId = randomUUID();
+      const clientId = `otherbench-${randomUUID()}`;
       onProgress({ stage: 'queued' });
 
       return new Promise<MediaOutput[]>((resolve, reject) => {
@@ -422,6 +422,27 @@ export function createComfyBackend(
     async listModels(media) {
       return workflows.list(media).map((w) => ({ id: w.id, label: w.name }));
     },
+  };
+}
+
+/** The ComfyUI version and its first GPU, from `/system_stats`. */
+export async function comfySystemSummary(
+  conn: MediaConnection,
+  signal: AbortSignal,
+): Promise<{ version: string; gpu: string | null; vramGb: number | null }> {
+  const res = await mediaFetch(conn, '/system_stats', {}, signal);
+  if (!res.ok) throw httpError(conn, res, 'The check');
+  const body = obj(await readJson(res, conn));
+  const version = obj(body['system'])['comfyui_version'];
+  const devices = body['devices'];
+  const device = Array.isArray(devices) ? obj(devices[0]) : {};
+  const name = device['name'];
+  const vram = device['vram_total'];
+  return {
+    version: typeof version === 'string' ? version : '',
+    // `cuda:0 NVIDIA GeForce RTX 3090 : cudaMallocAsync`
+    gpu: typeof name === 'string' && name.trim() !== '' ? name.replace(/^cuda:\d+\s+/, '').replace(/\s*:\s*cudaMallocAsync$/, '').trim() : null,
+    vramGb: typeof vram === 'number' && Number.isFinite(vram) && vram > 0 ? Math.round(vram / 2 ** 30) : null,
   };
 }
 

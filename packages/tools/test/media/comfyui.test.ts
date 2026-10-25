@@ -6,6 +6,7 @@ import { detectBindings, workflowProblem, type MediaWorkflow } from '@otherbench
 import {
   BUILTIN_WORKFLOWS,
   comfyCheckpoints,
+  comfySystemSummary,
   createComfyBackend,
   type WebSocketLike,
 } from '../../src/media/comfyui.js';
@@ -130,6 +131,7 @@ describe('ComfyUI backend', () => {
     expect(sock.url).toBe(`${conn.baseUrl.replace('http:', 'ws:')}/ws?clientId=${clientId}`);
     const post = JSON.parse(seen.find((s) => s.url === '/prompt')!.body);
     expect(post.client_id).toBe(clientId);
+    expect(post.client_id).toMatch(/^otherbench-/);
     expect(post.prompt['6'].inputs.text).toBe('a cat');
     expect(post.prompt['3'].inputs.seed).toBe(42);
 
@@ -561,6 +563,24 @@ describe('ComfyUI backend', () => {
     await expect(createComfyBackend(conn, registry, sockets().open).test(new AbortController().signal)).rejects.toThrow(
       `${conn.baseUrl} isn't answering like ComfyUI.`,
     );
+  });
+});
+
+describe('comfySystemSummary', () => {
+  const STATS = {
+    system: { os: 'nt', comfyui_version: '0.8.2' },
+    devices: [{ name: 'cuda:0 NVIDIA GeForce RTX 3090 : cudaMallocAsync', type: 'cuda', vram_total: 25769803776 }],
+  };
+
+  it('reads the version, the GPU name (cleaned) and its memory from /system_stats', async () => {
+    const conn = await start((r, res) => (r.url === '/system_stats' ? json(res, STATS) : json(res, {}, 404)));
+    expect(await comfySystemSummary(conn, new AbortController().signal)).toEqual({ version: '0.8.2', gpu: 'NVIDIA GeForce RTX 3090', vramGb: 24 });
+    expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual(['GET /system_stats']);
+  });
+
+  it('has no GPU when ComfyUI lists no device', async () => {
+    const conn = await start((_r, res) => json(res, { system: { comfyui_version: '0.8.2' }, devices: [] }));
+    expect(await comfySystemSummary(conn, new AbortController().signal)).toEqual({ version: '0.8.2', gpu: null, vramGb: null });
   });
 });
 

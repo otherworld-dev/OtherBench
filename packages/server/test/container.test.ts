@@ -470,7 +470,7 @@ describe('createContainer and the sandbox', () => {
       expect(sandbox.setupCalls).toBe(0);
       // The provider got it: the sandboxed run_command is relayed for a profile whose shell runs there.
       const policy: ToolPolicy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
-      expect((container.toolProvider as OtherBenchToolProvider).relayTools(policy).map((t) => t.name)).toEqual(['run_command']);
+      expect((await (container.toolProvider as OtherBenchToolProvider).relayTools(policy)).map((t) => t.name)).toEqual(['run_command']);
       container.close();
       await vi.waitFor(() => expect(sandbox.closed).toBe(true));
     } finally {
@@ -531,7 +531,7 @@ describe('computer use wiring', () => {
       expect(container.computer).toBeUndefined();
       expect(await names(container, on)).not.toContain('computer');
       // Nor to Claude Code, whose tools are listed apart.
-      const relayed = (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => { name: string }[] }).relayOtherBenchTools(on);
+      const relayed = (await (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => Promise<{ name: string }[]> }).relayOtherBenchTools(on));
       expect(relayed.map((t) => t.name)).not.toContain('computer');
     } finally {
       container.close();
@@ -695,8 +695,8 @@ describe('computer use wiring', () => {
   describe('with the desktop driver (the server was started by the shell)', () => {
     // The shell here is the in-memory stand-in (computer/fake-shell.ts): no shell or desktop app is started.
     const openOn = (driver: DesktopComputerDriver): Promise<Container> => createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), computer: driver });
-    const relayed = (container: Container): string[] =>
-      (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => { name: string }[] }).relayOtherBenchTools(on).map((t) => t.name);
+    const relayed = async (container: Container): Promise<string[]> =>
+      (await (container.toolProvider as unknown as { relayOtherBenchTools: (policy: typeof on) => Promise<{ name: string }[]> }).relayOtherBenchTools(on)).map((t) => t.name);
 
     it('offers no computer tool at all while the shell says computer use is off, which is how it ships', async () => {
       const { shell, driver } = connect();
@@ -710,7 +710,7 @@ describe('computer use wiring', () => {
           await hello();
           expect(container.computer!.available()).toBe(false);
           expect(await names(container, on)).not.toContain('computer');
-          expect(relayed(container)).not.toContain('computer');
+          expect(await relayed(container)).not.toContain('computer');
           // Whoever asks anyway is refused here, and the shell is asked nothing.
           expect(await container.computer!.ensureSession('c1', 'One')).toEqual({ ok: false, reason: DESKTOP_NOT_AVAILABLE_REASON });
         }
@@ -729,7 +729,7 @@ describe('computer use wiring', () => {
         expect(await names(container, on)).not.toContain('computer');
         await driver.hello();
         expect(await names(container, on)).toContain('computer');
-        expect(relayed(container)).toContain('computer');
+        expect(await relayed(container)).toContain('computer');
         expect(await names(container, off)).not.toContain('computer');
 
         const tool = (await container.toolProvider.listTools(on)).find((t) => t.name === 'computer')!;
@@ -741,7 +741,7 @@ describe('computer use wiring', () => {
         shell.close();
         await vi.waitFor(() => expect(container.computer!.available()).toBe(false));
         expect(await names(container, on)).not.toContain('computer');
-        expect(relayed(container)).not.toContain('computer');
+        expect(await relayed(container)).not.toContain('computer');
       } finally {
         // The session was still on record when the shell went: the close says it could not confirm its end.
         container.close();

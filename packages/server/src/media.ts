@@ -57,6 +57,11 @@ export function backendOf(store: Store, conn: MediaConnection): MediaBackend {
  */
 export function createMediaHost(deps: Deps): MediaHost {
   return {
+    // Placeholders until the unload and the workflow limits are wired here.
+    async limitsFor() {
+      return null;
+    },
+    async freeGpu() {},
     async backendFor(connectionId, use) {
       const conn = deps.store.connections.get(connectionId);
       if (!conn) throw new Error('That generation connection no longer exists.');

@@ -158,14 +158,14 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
       { id: 's2', name: 'other', tools: [{ name: 'x' }] },
     ]);
     const provider = new OtherBenchToolProvider(store, broker, mcp);
-    const specs = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
+    const specs = (await provider.relayTools(policy({ mcpServerIds: ['s1'] })));
     expect(specs.map((s) => [s.name, s.source, s.serverId])).toEqual([['mcp__nextcloud__deck_add', 'mcp', 's1']]);
     const pending: unknown[] = [];
     provider.onApprovalEvent((e) => pending.push(e));
     const ctx = { chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
     expect(await specs[0]!.execute({ title: 'x' }, ctx)).toEqual([{ type: 'text', text: 'ok' }]);
     expect(pending).toEqual([]); // no card: the Claude Code gate has already approved the call
-    expect(provider.relayTools(policy())).toEqual([]);
+    expect((await provider.relayTools(policy()))).toEqual([]);
   });
 
   it('relays the sandboxed run_command, the browser and the MCP tools together, each only when the profile has it; relayMcpTools holds the MCP ones alone', async () => {
@@ -180,16 +180,16 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
     const all = policy({ shell: true, shellRuns: 'sandbox', browser: true, mcpServerIds: ['s1', 's2'] });
     const shape = (specs: { name: string; source: string }[]) => specs.map((s) => [s.name, s.source]);
     const mcpOnly = [['mcp__nextcloud__deck_add', 'mcp'], ['mcp__evil__browser', 'mcp'], ['mcp__evil__run_command', 'mcp']];
-    expect(shape(provider.relayTools(all))).toEqual([['run_command', 'sandbox'], ['browser', 'browser'], ...mcpOnly]);
+    expect(shape((await provider.relayTools(all)))).toEqual([['run_command', 'sandbox'], ['browser', 'browser'], ...mcpOnly]);
     // What a live artifact's declaration may name: never the shell, never the browser.
     expect(shape(provider.relayMcpTools(all.mcpServerIds))).toEqual(mcpOnly);
-    expect(shape(provider.relayOtherBenchTools(all))).toEqual([['browser', 'browser']]);
+    expect(shape((await provider.relayOtherBenchTools(all)))).toEqual([['browser', 'browser']]);
     // Each switch on its own.
-    expect(shape(provider.relayTools({ ...all, browser: false }))).toEqual([['run_command', 'sandbox'], ...mcpOnly]);
-    expect(shape(provider.relayTools({ ...all, shellRuns: 'host' }))).toEqual([['browser', 'browser'], ...mcpOnly]);
-    expect(shape(provider.relayTools({ ...all, shell: false, mcpServerIds: [] }))).toEqual([['browser', 'browser']]);
+    expect(shape((await provider.relayTools({ ...all, browser: false })))).toEqual([['run_command', 'sandbox'], ...mcpOnly]);
+    expect(shape((await provider.relayTools({ ...all, shellRuns: 'host' })))).toEqual([['browser', 'browser'], ...mcpOnly]);
+    expect(shape((await provider.relayTools({ ...all, shell: false, mcpServerIds: [] })))).toEqual([['browser', 'browser']]);
     // Only the browser describes its calls, so only it needs an approval ticket in Claude Code.
-    expect(provider.relayTools(all).filter((s) => s.describeCall).map((s) => s.name)).toEqual(['browser']);
+    expect((await provider.relayTools(all)).filter((s) => s.describeCall).map((s) => s.name)).toEqual(['browser']);
     // The API model's list has the same three kinds, gated, and still exactly one run_command and one browser.
     const listed = await provider.listTools(all);
     expect(listed.filter((t) => t.name === 'run_command' || t.name === 'browser').map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox'], ['browser', 'browser']]);
@@ -204,7 +204,7 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
       shutdown: async () => {},
     };
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
-    const relayed = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
+    const relayed = (await provider.relayTools(policy({ mcpServerIds: ['s1'] })));
     expect(relayed.map((t) => t.name)).toEqual(['mcp__nextcloud__deck_list']);
     expect(await relayed[0]!.execute({}, ctx())).toMatchObject({ error: true, code: 'mcp_call_failed', message: 'MCP server "nextcloud" isn\'t connected.' });
     expect((await provider.listTools(policy({ mcpServerIds: ['s1'] }))).map((t) => t.name)).toContain('mcp__nextcloud__deck_list');
@@ -220,7 +220,7 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
       callTool: async () => ({ content: [{ type: 'text', text: 'a'.repeat(60_000) }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }, { type: 'text', text: 'b'.repeat(60_000) }], isError: false }),
     } as unknown as McpClient;
     const mcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = { listFor: () => [{ id: 's1', name: 'big', client }], refresh: async () => {}, shutdown: async () => {} };
-    const [spec] = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp).relayTools(policy({ mcpServerIds: ['s1'] }));
+    const [spec] = (await new OtherBenchToolProvider(store, new PermissionBroker(store), mcp).relayTools(policy({ mcpServerIds: ['s1'] })));
 
     const out = (await spec!.execute({}, ctx())) as { type: string; text?: string }[];
     const texts = out.filter((c) => c.type === 'text').map((c) => c.text ?? '');
@@ -254,7 +254,7 @@ describe('OtherBenchToolProvider.relayTools (the Claude Code relay)', () => {
       shutdown: async () => {},
     };
     const provider = new OtherBenchToolProvider(store, broker, mcp);
-    const [spec] = provider.relayTools(policy({ mcpServerIds: ['s1'] }));
+    const [spec] = (await provider.relayTools(policy({ mcpServerIds: ['s1'] })));
 
     live = 2;
     current = client(2);
@@ -1044,7 +1044,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
   it('requestApproval describes the call first and hands back what it approved; the relay is ungated', async () => {
     const { provider, store } = browserProvider();
     answerAll(provider);
-    const [spec] = provider.relayOtherBenchTools(on());
+    const [spec] = (await provider.relayOtherBenchTools(on()));
     expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
     expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({
       allowed: true,
@@ -1053,8 +1053,8 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     });
     expect(await provider.requestApproval(spec!, { command: 'click', ref: 'e1' }, on(), ctx())).toEqual({ allowed: false, reason: NO_PAGE });
     expect(store.audit.list('chat-1').find((r) => r.grantedBy === 'deny:policy')).toMatchObject({ toolName: 'browser' });
-    expect(provider.relayOtherBenchTools(policy())).toEqual([]);
-    expect(makeProvider().provider.relayOtherBenchTools(on())).toEqual([]);
+    expect((await provider.relayOtherBenchTools(policy()))).toEqual([]);
+    expect((await makeProvider().provider.relayOtherBenchTools(on()))).toEqual([]);
   });
 
   describe('describing a call (security fix round 1)', () => {
@@ -1084,7 +1084,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     it('a denied requestApproval carries no args, so nothing described leaks out with a refusal', async () => {
       const { provider } = browserProvider();
       answerAll(provider, { choice: 'deny' });
-      const [spec] = provider.relayOtherBenchTools(on());
+      const [spec] = (await provider.relayOtherBenchTools(on()));
       expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
     });
 
@@ -1100,7 +1100,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       browser.peek = (chatId) => { turn.abort(); return peek(chatId); };
       // A snapshot is a read: the broker would let it through without a card.
       expect(await tool.execute({ command: 'snapshot' }, ctx({ signal: turn.signal }))).toMatchObject({ error: true, code: 'cancelled' });
-      const [spec] = provider.relayOtherBenchTools(on());
+      const [spec] = (await provider.relayOtherBenchTools(on()));
       expect(await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx({ signal: turn.signal }))).toMatchObject({ allowed: false });
       expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
       expect(store.audit.list('chat-1').filter((r) => r.grantedBy === 'deny:cancelled')).toHaveLength(2);
@@ -1129,7 +1129,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     it('refuses the relayed call too: the arguments the gate approved carry the page they were approved on', async () => {
       const { provider, factory } = browserProvider();
       answerAll(provider);
-      const [spec] = provider.relayOtherBenchTools(on());
+      const [spec] = (await provider.relayOtherBenchTools(on()));
       const opened = await provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, on(), ctx());
       if (!opened.allowed) throw new Error(opened.reason);
       await spec!.execute(opened.args, ctx());
@@ -1161,7 +1161,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       expect(hostile).toHaveLength(2048);
       const tool = (await browserOf(provider, on()))!;
       const gated = (await tool.execute({ command: 'open', url: hostile }, ctx())) as { code: string; message: string };
-      const [spec] = provider.relayOtherBenchTools(on());
+      const [spec] = (await provider.relayOtherBenchTools(on()));
       const relayed = (await provider.requestApproval(spec!, { command: 'open', url: hostile }, on(), ctx())) as { allowed: false; reason: string };
       expect(gated.code).toBe('permission_denied');
       expect(relayed.allowed).toBe(false);
@@ -1199,7 +1199,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       expect(gated).toEqual(expected);
       expect(Object.keys(gated as object)[0]).toBe('about');
       browser.peek = peek;
-      const [spec] = provider.relayOtherBenchTools(on());
+      const [spec] = (await provider.relayOtherBenchTools(on()));
       const approved = await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx());
       if (!approved.allowed) throw new Error(approved.reason);
       // Described already: only the run looks now.
