@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-import { detectBindings, fillWorkflow, workflowApplies, workflowProblem, type MediaWorkflow } from '../src/domain/media-workflows.js';
+import { detectBindings, fillWorkflow, shapeSizes, workflowApplies, workflowLimits, workflowProblem, workflowShapeKey, type MediaWorkflow } from '../src/domain/media-workflows.js';
+import { SDXL_TXT2IMG } from '../../tools/src/media/workflows/sdxl-txt2img.js';
+import { WAN22_5B_T2V } from '../../tools/src/media/workflows/wan22-5b-t2v.js';
 import type { MediaRequest } from '../src/ports/media.js';
 
 /** ComfyUI's default text-to-image graph, in API format. */
@@ -189,5 +192,99 @@ describe('workflowProblem', () => {
     expect(workflowProblem({ graph: GRAPH, bindings: { seed: { nodeId: '3', input: 'seed' } } })).toBe(
       'No input is marked as the prompt.',
     );
+  });
+});
+
+describe('detection through primitive nodes', () => {
+  const zimage = JSON.parse(readFileSync(new URL('./fixtures/zimage-turbo-api.json', import.meta.url), 'utf8')) as MediaWorkflow['graph'];
+
+  it('binds the Z-Image prompt to the primitive that feeds the encoder', () => {
+    const b = detectBindings(zimage);
+    expect(b.prompt).toEqual({ nodeId: '58', input: 'value' });
+    expect(b.negativePrompt).toBeUndefined();
+    expect(b.seed).toEqual({ nodeId: '57:3', input: 'seed' });
+    expect(b.width).toEqual({ nodeId: '57:13', input: 'width' });
+    expect(b.height).toEqual({ nodeId: '57:13', input: 'height' });
+    expect(b.checkpoint).toEqual({ nodeId: '57:28', input: 'unet_name' });
+    expect(workflowProblem({ graph: zimage, bindings: b })).toBeNull();
+  });
+
+  it('binds a seed fed by a PrimitiveInt to the primitive', () => {
+    const graph = structuredClone(GRAPH);
+    graph['3']!.inputs['seed'] = ['20', 0];
+    graph['20'] = { class_type: 'PrimitiveInt', inputs: { value: 5, control_after_generate: 'fixed' } };
+    expect(detectBindings(graph).seed).toEqual({ nodeId: '20', input: 'value' });
+  });
+
+  it('leaves a text link to a node with two string inputs unbound', () => {
+    const graph = structuredClone(GRAPH);
+    graph['6']!.inputs['text'] = ['21', 0];
+    graph['21'] = { class_type: 'StringConcatenate', inputs: { string_a: 'a', string_b: 'b' } };
+    const b = detectBindings(graph);
+    expect(b.prompt).toBeUndefined();
+    expect(b.negativePrompt).toEqual({ nodeId: '7', input: 'text' });
+  });
+
+  it('flags one primitive feeding both encoders', () => {
+    const graph = structuredClone(GRAPH);
+    graph['6']!.inputs['text'] = ['22', 0];
+    graph['7']!.inputs['text'] = ['22', 0];
+    graph['22'] = { class_type: 'PrimitiveStringMultiline', inputs: { value: 'x' } };
+    const bindings = detectBindings(graph);
+    expect(bindings.prompt).toEqual({ nodeId: '22', input: 'value' });
+    expect(bindings.negativePrompt).toEqual({ nodeId: '22', input: 'value' });
+    expect(workflowProblem({ graph, bindings })).toBe("The prompt and the negative prompt are the same input, so they can't be filled separately.");
+  });
+});
+
+describe('workflowLimits', () => {
+  it('reads the SDXL builtin', () => {
+    expect(workflowLimits(SDXL_TXT2IMG)).toEqual({ size: { width: 1024, height: 1024 }, maxFrames: null, fps: 24 });
+  });
+
+  it('reads the Wan builtin', () => {
+    expect(workflowLimits(WAN22_5B_T2V)).toEqual({ size: { width: 1280, height: 704 }, maxFrames: 121, fps: 24 });
+  });
+
+  it('has no size when width and height are not bound, and takes a frame_rate from any node', () => {
+    const graph: MediaWorkflow['graph'] = { '1': { class_type: 'X', inputs: { frame_rate: 16 } } };
+    expect(workflowLimits({ graph, bindings: { prompt: { nodeId: '1', input: 'text' } } })).toEqual({ size: null, maxFrames: null, fps: 16 });
+  });
+});
+
+describe('shapeSizes', () => {
+  it('keeps a wide native size and turns it for portrait', () => {
+    const s = shapeSizes({ width: 1280, height: 704 }, 32);
+    expect(s.wide).toEqual([1280, 704]);
+    expect(s.portrait).toEqual([704, 1280]);
+    expect(s.square).toEqual([960, 960]);
+    expect(s.landscape).toEqual([1152, 768]);
+  });
+
+  it('sizes the other shapes of a square native by area', () => {
+    const s = shapeSizes({ width: 1024, height: 1024 }, 16);
+    expect(s.square).toEqual([1024, 1024]);
+    expect(s.portrait).toEqual([832, 1248]);
+    expect(s.landscape).toEqual([1248, 832]);
+    expect(s.wide).toEqual([1360, 768]);
+  });
+
+  it('turns a portrait native for landscape', () => {
+    const s = shapeSizes({ width: 768, height: 1344 }, 16);
+    expect(s.portrait).toEqual([768, 1344]);
+    expect(s.landscape).toEqual([1344, 768]);
+  });
+});
+
+describe('workflowShapeKey', () => {
+  const zimage = JSON.parse(readFileSync(new URL('./fixtures/zimage-turbo-api.json', import.meta.url), 'utf8')) as MediaWorkflow['graph'];
+
+  it('ignores primitive values and tells a different graph apart', () => {
+    const other = structuredClone(zimage);
+    (other['58']!.inputs as Record<string, unknown>)['value'] = 'a different prompt';
+    (other['57:3']!.inputs as Record<string, unknown>)['seed'] = 99;
+    expect(workflowShapeKey(other)).toBe(workflowShapeKey(zimage));
+    other['999'] = { class_type: 'Note', inputs: {} };
+    expect(workflowShapeKey(other)).not.toBe(workflowShapeKey(zimage));
   });
 });

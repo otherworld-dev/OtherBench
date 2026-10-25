@@ -93,7 +93,8 @@ function encoderFor(graph: Graph, from: string, input: 'positive' | 'negative'):
     seen.add(id);
     const inputs = inputsOf(graph, id);
     if (!inputs) return null;
-    if (classOf(graph, id).startsWith('CLIPTextEncode') && typeof inputs['text'] === 'string') return id;
+    const text = inputs['text'];
+    if (classOf(graph, id).startsWith('CLIPTextEncode') && (typeof text === 'string' || linkTarget(text) !== null)) return id;
     id = linkTarget(inputs[input] ?? inputs['conditioning']);
   }
   return null;
@@ -105,46 +106,72 @@ const SEED_INPUTS = new Map([
   ['RandomNoise', 'noise_seed'],
 ]);
 
+/**
+ * The input a role should bind for `inputs[name]` on node `id`: the input itself
+ * when it holds a value of `type`, else, when it is a link, the one input of
+ * that type on the node it links to (a primitive node), else null. A node with
+ * two such inputs is ambiguous, so it binds nothing.
+ */
+function bindingFor(graph: Graph, id: string, name: string, type: 'string' | 'number'): WorkflowBinding | null {
+  const v = inputsOf(graph, id)?.[name];
+  if (typeof v === type) return { nodeId: id, input: name };
+  const target = linkTarget(v);
+  const inputs = target === null ? null : inputsOf(graph, target);
+  if (target === null || !inputs) return null;
+  const own = Object.keys(inputs).filter((k) => linkTarget(inputs[k]) === null && typeof inputs[k] === type);
+  return own.length === 1 ? { nodeId: target, input: own[0]! } : null;
+}
+
+const sameInput = (a: WorkflowBinding, b: WorkflowBinding) => a.nodeId === b.nodeId && a.input === b.input;
+
 /** A first guess at the bindings, worked out from the graph's own links. */
 export function detectBindings(graph: Graph): Bindings {
   const out: Bindings = {};
   const ids = Object.keys(graph);
-  const numeric = (inputs: Record<string, unknown>, k: string) => typeof inputs[k] === 'number';
 
   for (const id of ids) {
     if (out.prompt && out.negativePrompt) break;
     if (linkTarget(inputsOf(graph, id)?.['positive']) === null) continue;
     const pos = encoderFor(graph, id, 'positive');
     const neg = encoderFor(graph, id, 'negative');
-    if (pos && !out.prompt) out.prompt = { nodeId: pos, input: 'text' };
+    if (pos && !out.prompt) {
+      const b = bindingFor(graph, pos, 'text', 'string');
+      if (b) out.prompt = b;
+    }
     // A negative that resolves to the prompt's own encoder (a zeroed-out positive) isn't one.
-    if (neg && neg !== pos && !out.negativePrompt) out.negativePrompt = { nodeId: neg, input: 'text' };
+    if (neg && neg !== pos && !out.negativePrompt) {
+      const b = bindingFor(graph, neg, 'text', 'string');
+      if (b) out.negativePrompt = b;
+    }
   }
 
   for (const id of ids) {
     const input = SEED_INPUTS.get(classOf(graph, id));
-    const inputs = inputsOf(graph, id);
-    if (input && inputs && numeric(inputs, input)) {
-      out.seed = { nodeId: id, input };
+    const b = input ? bindingFor(graph, id, input, 'number') : null;
+    if (b) {
+      out.seed = b;
       break;
     }
   }
 
   // The latent a sampler starts from, else any latent node with a size.
   const sized = (id: string | null) => {
-    const inputs = id === null ? null : inputsOf(graph, id);
-    return inputs && numeric(inputs, 'width') && numeric(inputs, 'height') ? id : null;
+    if (id === null) return null;
+    const width = bindingFor(graph, id, 'width', 'number');
+    const height = bindingFor(graph, id, 'height', 'number');
+    return width && height && !sameInput(width, height) ? { id, width, height } : null;
   };
   const latent =
-    ids.map((id) => sized(linkTarget(inputsOf(graph, id)?.['latent_image']))).find((id) => id !== null) ??
-    ids.find((id) => /Latent/.test(classOf(graph, id)) && sized(id) !== null);
+    ids.map((id) => sized(linkTarget(inputsOf(graph, id)?.['latent_image']))).find((s) => s !== null) ??
+    ids.map((id) => (/Latent/.test(classOf(graph, id)) ? sized(id) : null)).find((s) => s !== null);
   if (latent) {
-    const inputs = inputsOf(graph, latent)!;
-    out.width = { nodeId: latent, input: 'width' };
-    out.height = { nodeId: latent, input: 'height' };
-    if (numeric(inputs, 'length')) out.frames = { nodeId: latent, input: 'length' };
-    else if (/Video/.test(classOf(graph, latent)) && numeric(inputs, 'batch_size')) {
-      out.frames = { nodeId: latent, input: 'batch_size' };
+    out.width = latent.width;
+    out.height = latent.height;
+    const length = bindingFor(graph, latent.id, 'length', 'number');
+    if (length) out.frames = length;
+    else if (/Video/.test(classOf(graph, latent.id))) {
+      const batch = bindingFor(graph, latent.id, 'batch_size', 'number');
+      if (batch) out.frames = batch;
     }
   }
 
@@ -183,8 +210,86 @@ export function workflowProblem(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): 
     if (spec?.kind === 'text' && typeof value !== 'string') return `${where} isn't text, so it can't be the ${spec.label}.`;
     if (spec?.kind === 'number' && typeof value !== 'number') return `${where} isn't a number, so it can't be the ${spec.label}.`;
   }
-  if (!wf.bindings.prompt) return 'No input is marked as the prompt.';
+  const { prompt, negativePrompt } = wf.bindings;
+  if (!prompt) return 'No input is marked as the prompt.';
+  if (negativePrompt && prompt.nodeId === negativePrompt.nodeId && prompt.input === negativePrompt.input) {
+    return "The prompt and the negative prompt are the same input, so they can't be filled separately.";
+  }
   return null;
+}
+
+export interface WorkflowLimits {
+  /** The size the workflow is built for; null when width and height aren't both bound to numbers. */
+  size: { width: number; height: number } | null;
+  /** The frame count the workflow holds; null when frames isn't bound to a number. */
+  maxFrames: number | null;
+  fps: number;
+}
+
+function boundNumber(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>, role: WorkflowRole): number | null {
+  const b = wf.bindings[role];
+  const v = b ? inputsOf(wf.graph, b.nodeId)?.[b.input] : undefined;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** The size, length and frame rate a workflow is built for, read from its own graph. */
+export function workflowLimits(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): WorkflowLimits {
+  const width = boundNumber(wf, 'width');
+  const height = boundNumber(wf, 'height');
+  let fps = 24;
+  outer: for (const id of Object.keys(wf.graph)) {
+    const inputs = inputsOf(wf.graph, id);
+    for (const k of ['fps', 'frame_rate']) {
+      const v = inputs?.[k];
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        fps = v;
+        break outer;
+      }
+    }
+  }
+  return { size: width !== null && height !== null ? { width, height } : null, maxFrames: boundNumber(wf, 'frames'), fps };
+}
+
+export type Aspect = 'square' | 'portrait' | 'landscape' | 'wide';
+
+export const SHAPE_RATIOS: Record<Aspect, number> = { square: 1, portrait: 2 / 3, landscape: 3 / 2, wide: 16 / 9 };
+
+/**
+ * The four shapes at about the pixel count of a workflow's native size. The
+ * shape nearest the native one is native exactly (and the portrait/landscape
+ * pair is the native size turned); the rest are sized by area, to the nearest multiple.
+ */
+export function shapeSizes(native: { width: number; height: number }, multiple: number): Record<Aspect, [number, number]> {
+  const aspects = Object.keys(SHAPE_RATIOS) as Aspect[];
+  const ratio = native.width / native.height;
+  const dist = (a: Aspect) => Math.abs(Math.log(ratio / SHAPE_RATIOS[a]));
+  const nearest = aspects.reduce((best, a) => (dist(a) < dist(best) ? a : best));
+  const area = native.width * native.height;
+  const snap = (x: number) => Math.max(multiple, Math.round(x / multiple) * multiple);
+  const out = {} as Record<Aspect, [number, number]>;
+  for (const a of aspects) out[a] = [snap(Math.sqrt(area * SHAPE_RATIOS[a])), snap(Math.sqrt(area / SHAPE_RATIOS[a]))];
+  out[nearest] = [native.width, native.height];
+  if (nearest === 'landscape' || nearest === 'wide') out.portrait = [native.height, native.width];
+  else if (nearest === 'portrait') out.landscape = [native.height, native.width];
+  return out;
+}
+
+/**
+ * A key for a graph's structure: its nodes, their classes and how they are
+ * wired. Values are left out, so runs of one workflow with other prompts or seeds match.
+ */
+export function workflowShapeKey(graph: Graph): string {
+  return Object.keys(graph)
+    .sort()
+    .map((id) => {
+      const inputs = inputsOf(graph, id) ?? {};
+      const links = Object.keys(inputs)
+        .sort()
+        .filter((k) => linkTarget(inputs[k]) !== null)
+        .map((k) => `${k}=${JSON.stringify(inputs[k])}`);
+      return `${id}:${classOf(graph, id)}(${links.join(',')})`;
+    })
+    .join(';');
 }
 
 /** The most graph JSON an import (or a synced row) may carry. */

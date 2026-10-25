@@ -1,4 +1,5 @@
 import type { Connection, ToolPolicy } from '../types/config.js';
+import { isLoopbackUrl } from './availability.js';
 
 /**
  * Connection kinds that generate images or video. They are never routed a
@@ -14,6 +15,16 @@ export function isGenerationKind(kind: Connection['kind']): boolean {
 /** Whether a generation call shows its prompt in the ask (and refuses unattended runs). Absent means true. */
 export function confirmPromptsOf(policy: ToolPolicy): boolean {
   return policy.media?.confirmPrompts !== false;
+}
+
+/** Whether a profile frees a local chat model's GPU memory before a generation. Absent means true. */
+export function unloadChatModelOf(policy: ToolPolicy): boolean {
+  return policy.media?.unloadChatModel !== false;
+}
+
+/** Whether the chat model and the generation backend both run on this machine, so they share its GPU. */
+export function sharesLocalGpu(chat: Pick<Connection, 'kind' | 'baseUrl'>, generation: Pick<Connection, 'baseUrl'>): boolean {
+  return chat.kind === 'ollama' && isLoopbackUrl(chat.baseUrl ?? 'http://127.0.0.1:11434') && isLoopbackUrl(generation.baseUrl ?? '');
 }
 
 // `scheme://` then everything up to the last `@` before the path: a password may hold an `@`.

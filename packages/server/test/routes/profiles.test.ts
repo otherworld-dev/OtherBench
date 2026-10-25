@@ -594,6 +594,14 @@ describe('media policy and generation connections', () => {
     expect((await patch(id, { toolPolicy: { media: { image: { ...image, checkpoint: 'x'.repeat(512) } } } })).status).toBe(200);
   });
 
+  it('validates unloadChatModel as a boolean and stores false', async () => {
+    const id = await makeProfile();
+    expect((await patch(id, { toolPolicy: { media: { unloadChatModel: 'no' } } })).status).toBe(400);
+    const res = await patch(id, { toolPolicy: { media: { unloadChatModel: false } } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { toolPolicy: { media: { unloadChatModel: unknown } } }).toolPolicy.media.unloadChatModel).toBe(false);
+  });
+
   it('rejects a non-boolean confirmPrompts', async () => {
     const id = await makeProfile();
     expect((await patch(id, { toolPolicy: { media: { confirmPrompts: 'yes' } } })).status).toBe(400);

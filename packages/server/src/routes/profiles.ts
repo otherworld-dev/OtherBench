@@ -105,10 +105,14 @@ function parseMediaPolicy(container: Container, value: unknown): MediaPolicy {
   if (v['confirmPrompts'] !== undefined && typeof v['confirmPrompts'] !== 'boolean') {
     throw new HTTPException(400, { message: '"toolPolicy.media.confirmPrompts" must be a boolean.' });
   }
+  if (v['unloadChatModel'] !== undefined && typeof v['unloadChatModel'] !== 'boolean') {
+    throw new HTTPException(400, { message: '"toolPolicy.media.unloadChatModel" must be a boolean.' });
+  }
   return {
     ...(v['image'] !== undefined ? { image: parseMediaChoice(container, v['image'], 'image') } : {}),
     ...(v['video'] !== undefined ? { video: parseMediaChoice(container, v['video'], 'video') } : {}),
     ...(typeof v['confirmPrompts'] === 'boolean' ? { confirmPrompts: v['confirmPrompts'] } : {}),
+    ...(typeof v['unloadChatModel'] === 'boolean' ? { unloadChatModel: v['unloadChatModel'] } : {}),
   };
 }
 

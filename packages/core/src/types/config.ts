@@ -150,6 +150,8 @@ export interface MediaPolicy {
   video?: MediaChoice;
   /** Show the prompt in the ask and refuse unattended runs. Absent = true. */
   confirmPrompts?: boolean;
+  /** Free a local Ollama chat model's GPU memory before a generation on this machine. Absent = true. */
+  unloadChatModel?: boolean;
 }
 
 /**
