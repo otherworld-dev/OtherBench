@@ -510,6 +510,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const backend = backendOf(req.profile.connection);
     const clean = !req.workspaceRoot;
     const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
+    // This process is already running the turn, and until `live.binding` is set its hooks refuse the
+    // turn's calls ("No OtherBench reply is waiting"). So prepareReply's awaits (relayTools, and the media tools'
+    // `limitsFor` under it) must stay store reads that settle at once: no network or disk I/O before the
+    // binding is set. The binding is built by prepareReply itself, so it can't be set any sooner.
     const prepared = await this.prepareReply(req, backend, clean);
     prepared.proc.live = live;
     live.binding = prepared.binding;
