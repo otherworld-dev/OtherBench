@@ -235,8 +235,8 @@ function mediaTool(media: Media, choice: MediaChoice, limits: WorkflowLimits | n
       }
       const parsed = parseArgs(media, shape, args);
       if ('invalid' in parsed) return fail('invalid_input', parsed.invalid);
-      // No size to shape: 0 × 0 is unbound, so it isn't applied or reported.
-      const [width, height] = shape.sizes ? shape.sizes[parsed.aspect] : [0, 0];
+      // No size to shape: none is sent, so the workflow keeps its own and nothing is reported.
+      const size = shape.sizes ? shape.sizes[parsed.aspect] : null;
 
       let resolved: ResolvedMedia;
       try {
@@ -250,7 +250,7 @@ function mediaTool(media: Media, choice: MediaChoice, limits: WorkflowLimits | n
       // negative prompt always gets one (`''` for none), so a workflow's own is never sent unseen.
       const unapplied = (what: string): string | null => (resolved.workflowDefaults ? `${what}: ${WORKFLOW_DEFAULT}` : null);
       const seedText = applies.seed ? `seed ${parsed.seed}` : unapplied('seed');
-      const sizeText = applies.size && shape.sizes ? `${width}×${height}` : unapplied('size');
+      const sizeText = applies.size && size ? `${size[0]}×${size[1]}` : unapplied('size');
       const lengthText = media !== 'video' ? null : applies.frames && shape.maxSeconds !== null ? `${parsed.seconds} s` : unapplied('length');
 
       let prompt = parsed.prompt;
@@ -282,7 +282,11 @@ function mediaTool(media: Media, choice: MediaChoice, limits: WorkflowLimits | n
         if (ctx.signal.aborted) return fail('cancelled', STOPPED);
       }
 
-      const req: MediaRequest = { media, model: choice.model, prompt, negativePrompt, width, height, seed: parsed.seed };
+      const req: MediaRequest = { media, model: choice.model, prompt, negativePrompt, seed: parsed.seed };
+      if (size) {
+        req.width = size[0];
+        req.height = size[1];
+      }
       if (media === 'video' && shape.maxSeconds !== null) req.frames = parsed.seconds * shape.fps + 1;
       if (choice.checkpoint !== undefined) req.checkpoint = choice.checkpoint;
       const sent: Record<string, unknown> = { ...(args as Record<string, unknown>), prompt };

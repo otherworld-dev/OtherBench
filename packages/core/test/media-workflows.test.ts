@@ -57,6 +57,13 @@ describe('fillWorkflow', () => {
     expect(g['7']!.inputs['text']).toBe('negative text');
   });
 
+  it("keeps the graph's own width and height when the request has no size", () => {
+    const { width: _w, height: _h, ...noSize } = REQ;
+    const g = fillWorkflow(WF, noSize);
+    expect([g['5']!.inputs['width'], g['5']!.inputs['height']]).toEqual([512, 512]);
+    expect(g['6']!.inputs['text']).toBe('a cat');
+  });
+
   it('writes the chosen checkpoint and the frame count when there are bindings for them', () => {
     const latent = { class_type: 'EmptyHunyuanLatentVideo', inputs: { width: 640, height: 640, length: 25, batch_size: 1 } };
     const wf: MediaWorkflow = {

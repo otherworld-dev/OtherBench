@@ -171,7 +171,7 @@ describe('generate_image / generate_video', () => {
       [1360, 768],
       [1024, 1024],
       [704, 1280],
-      shapeSizes({ width: 1280, height: 704 }, 32).landscape,
+      [1152, 768],
     ]);
   });
 
@@ -207,7 +207,8 @@ describe('generate_image / generate_video', () => {
     expect((t.parameters as { properties: Record<string, unknown> }).properties).not.toHaveProperty('aspect');
     expect(t.description).toContain('This workflow uses its own size.');
     const result = (await t.execute({ prompt: 'a cat', seed: 1 }, ctx())) as Item[];
-    expect(backend.requests[0]).toMatchObject({ width: 0, height: 0 });
+    expect(backend.requests[0]).not.toHaveProperty('width');
+    expect(backend.requests[0]).not.toHaveProperty('height');
     expect((asks[0] as { settings: string }).settings).toBe('size: workflow default · seed 1 · SDXL (ComfyUI)');
     expect(result[0]!.text).toContain('size: workflow default');
     expect(result[0]!.text).not.toContain('0×0');

@@ -43,7 +43,7 @@ export function fillWorkflow(wf: MediaWorkflow, req: MediaRequest): Graph {
   set('negativePrompt', req.negativePrompt);
   set('seed', req.seed);
   // Half a size would be one nobody asked for, so it is both or neither (`workflowApplies`).
-  if (wf.bindings.width && wf.bindings.height) {
+  if (wf.bindings.width && wf.bindings.height && req.width !== undefined && req.height !== undefined) {
     set('width', req.width);
     set('height', req.height);
   }

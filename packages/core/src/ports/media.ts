@@ -9,8 +9,9 @@ export interface MediaRequest {
   prompt: string;
   /** `''` for none. `null` only where the backend takes no negative prompt (a workflow then keeps its own). */
   negativePrompt: string | null;
-  width: number;
-  height: number;
+  /** Width and height are both present or both absent; absent, a workflow keeps its own size. */
+  width?: number;
+  height?: number;
   /** The tool picks a random one when the model gives none. */
   seed: number;
   /** Video only. */
