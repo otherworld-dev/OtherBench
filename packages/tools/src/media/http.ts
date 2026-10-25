@@ -72,9 +72,12 @@ export async function mediaFetch(
 }
 
 /** Read a body, stopping as soon as it passes `cap` bytes. */
+/** An answer over `readCapped`'s cap, told apart from a failed read so a caller can ask for less. */
+export class AnswerTooLargeError extends Error {}
+
 export async function readCapped(res: Response, cap: number = MAX_TOOL_VIDEO_BYTES): Promise<Buffer> {
   const tooBig = () =>
-    new Error(`The server's answer was larger than ${Math.floor(cap / (1024 * 1024))} MB, so it was refused.`);
+    new AnswerTooLargeError(`The server's answer was larger than ${Math.floor(cap / (1024 * 1024))} MB, so it was refused.`);
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > cap) {
     await res.body?.cancel().catch(() => {});

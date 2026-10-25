@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { MediaBackend, MediaConnection, MediaOutput, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
-import { fillWorkflow, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import { CHECKPOINT_LOADERS, fillWorkflow, shapeSizes, workflowLimits, type CheckpointLoader, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import { MAX_TOOL_VIDEO_BYTES } from '@otherbench/core/domain/tool-images.js';
 import { httpError, mediaFetch, readCapped, readJson, shownBase } from './http.js';
 import { SDXL_TXT2IMG } from './workflows/sdxl-txt2img.js';
@@ -136,6 +136,21 @@ function runningIn(queue: unknown, promptId: string): boolean {
   return Array.isArray(running) && running.some((e) => Array.isArray(e) && e[1] === promptId);
 }
 
+const CHANGED = "The workflow's size or length changed while the prompt was waiting. Ask again.";
+
+/**
+ * Whether a request still fits the workflow as it is now. The tool sized it
+ * before the ask, which can wait for minutes while the workflow is edited or synced.
+ */
+function fitsNow(wf: MediaWorkflow, req: MediaRequest): boolean {
+  const limits = workflowLimits(wf);
+  if (req.frames !== undefined && (limits.maxFrames === null || req.frames > limits.maxFrames)) return false;
+  if (req.width === undefined && req.height === undefined) return true;
+  if (limits.size === null) return false;
+  const shapes = Object.values(shapeSizes(limits.size, wf.media === 'video' ? 32 : 16));
+  return shapes.some(([w, h]) => w === req.width && h === req.height);
+}
+
 export function createComfyBackend(
   conn: MediaConnection,
   workflows: ComfyWorkflows,
@@ -236,6 +251,7 @@ export function createComfyBackend(
       const wf = workflows.get(req.model);
       if (!wf) throw new Error("The ComfyUI workflow this profile uses doesn't exist any more.");
       if (wf.media !== req.media) throw new Error(`"${wf.name}" makes ${wf.media}s, not ${req.media}s.`);
+      if (!fitsNow(wf, req)) throw new Error(CHANGED);
       const graph = fillWorkflow(wf, req);
       const clientId = `otherbench-${randomUUID()}`;
       onProgress({ stage: 'queued' });
@@ -452,15 +468,16 @@ export function comfySummaryOf(stats: unknown): { version: string; gpu: string |
 }
 
 /**
- * The model files the server has for a workflow's `checkpoint` binding:
- * checkpoints for images, diffusion models (UNETLoader) for video.
+ * The model files the server has for a workflow's `checkpoint` binding, from
+ * the loader it is on (`checkpointLoaderOf`): a Z-Image workflow makes images
+ * but loads a diffusion model, so the loader decides, not the media.
  */
 export async function comfyCheckpoints(
   conn: MediaConnection,
   signal: AbortSignal,
-  media: 'image' | 'video' = 'image',
+  loader: CheckpointLoader = 'CheckpointLoaderSimple',
 ): Promise<string[]> {
-  const [node, input] = media === 'video' ? ['UNETLoader', 'unet_name'] : ['CheckpointLoaderSimple', 'ckpt_name'];
+  const [node, input] = [loader, CHECKPOINT_LOADERS[loader]];
   const res = await mediaFetch(conn, `/object_info/${node}`, {}, signal);
   if (!res.ok) throw httpError(conn, res, 'Listing models');
   const spec = obj(obj(obj(obj(await readJson(res, conn))[node])['input'])['required'])[input];

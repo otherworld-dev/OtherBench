@@ -100,7 +100,7 @@ async function setup(opts: { reply?: (input: AskInput) => AskOutcome; host?: Med
     if (!t) throw new Error(`no ${name}`);
     return t;
   };
-  return { backend, asks, progress, used, freed, tools, tool };
+  return { backend, asks, progress, used, freed, tools, tool, limits };
 }
 
 type Item = { type: string; text?: string; data?: string; mimeType?: string };
@@ -228,6 +228,24 @@ describe('generate_image / generate_video', () => {
     backend.outputs = [MP4];
     await tool('generate_video').execute({ prompt: 'p', seconds: 2 }, ctx());
     expect(backend.requests[0]!.frames).toBe(33);
+  });
+
+  it('rounds the frame count at a frame rate that is not whole', async () => {
+    const { backend, tool } = await setup({ limits: { video: { size: { width: 832, height: 480 }, maxFrames: 121, fps: 23.976 } } });
+    backend.outputs = [MP4];
+    await tool('generate_video').execute({ prompt: 'p', seconds: 2 }, ctx());
+    expect(backend.requests[0]!.frames).toBe(49);
+  });
+
+  it('execute re-reads changed limits: the ones the workflow has when the call comes, not when the tools were listed', async () => {
+    const { backend, tool, limits } = await setup();
+    backend.outputs = [MP4];
+    // Listed with a 121-frame Wan; synced down to 49 frames and a portrait size before the call.
+    expect((tool('generate_video').parameters as { properties: Record<string, Record<string, unknown>> }).properties['seconds']).toMatchObject({ maximum: 5 });
+    limits.video = { size: { width: 704, height: 1280 }, maxFrames: 49, fps: 24 };
+    expect(await tool('generate_video').execute({ prompt: 'p', seconds: 5 }, ctx())).toEqual({ error: true, code: 'invalid_input', message: '"seconds" must be a whole number from 1 to 2.' });
+    await tool('generate_video').execute({ prompt: 'p', seconds: 2, aspect: 'portrait' }, ctx());
+    expect(backend.requests.map((r) => [r.width, r.height, r.frames])).toEqual([[704, 1280, 49]]);
   });
 
   it('seconds: 3 sends 73 frames; video defaults to 5 seconds', async () => {

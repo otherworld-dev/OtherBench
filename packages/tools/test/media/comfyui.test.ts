@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { MediaConnection, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
-import { detectBindings, workflowProblem, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import { detectBindings, shapeSizes, workflowLimits, workflowProblem, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import {
   BUILTIN_WORKFLOWS,
   comfyCheckpoints,
@@ -193,7 +193,7 @@ describe('ComfyUI backend', () => {
     );
     const ws = sockets();
     const p = createComfyBackend(conn, registry, ws.open).generate(
-      { ...req, media: 'video', model: WAN.id, frames: 121 },
+      { ...req, media: 'video', model: WAN.id, width: 1280, height: 704, frames: 121 },
       () => {},
       new AbortController().signal,
     );
@@ -363,7 +363,7 @@ describe('ComfyUI backend', () => {
       })),
     );
     const ws = sockets();
-    const p = createComfyBackend(conn, registry, ws.open).generate({ ...req, media: 'video', model: WAN.id, frames: 121 }, () => {}, new AbortController().signal);
+    const p = createComfyBackend(conn, registry, ws.open).generate({ ...req, media: 'video', model: WAN.id, width: 1280, height: 704, frames: 121 }, () => {}, new AbortController().signal);
     await until(() => seen.some((s) => s.url === '/prompt'));
     await new Promise((r) => setTimeout(r, 20));
     ws.made[0]!.send('execution_success', { prompt_id: 'p1' });
@@ -544,6 +544,66 @@ describe('ComfyUI backend', () => {
     expect(seen).toHaveLength(0);
   });
 
+  describe('a workflow changed while the prompt was waiting', () => {
+    const CHANGED = "The workflow's size or length changed while the prompt was waiting. Ask again.";
+    /** A registry holding one copy of `wf` that the test can change. */
+    function holding(wf: MediaWorkflow) {
+      const copy = structuredClone(wf);
+      return { wf: copy, registry: { get: (id: string) => (id === copy.id ? copy : null), list: () => [copy] } };
+    }
+    const set = (wf: MediaWorkflow, role: 'width' | 'height' | 'frames', value: unknown) => {
+      const b = wf.bindings[role]!;
+      wf.graph[b.nodeId]!.inputs[b.input] = value;
+    };
+
+    it('refuses a length over the max length it has now, and posts nothing', async () => {
+      const conn = await start(comfy(() => IMAGE_HISTORY));
+      const { wf, registry: held } = holding(WAN);
+      // Built against a max length of 121 frames...
+      const asked = { ...req, media: 'video' as const, model: WAN.id, width: 1280, height: 704, frames: workflowLimits(wf).maxFrames! };
+      // ...then synced down to 49 while the card was up.
+      set(wf, 'frames', 49);
+      await expect(createComfyBackend(conn, held, sockets().open).generate(asked, () => {}, new AbortController().signal)).rejects.toThrow(CHANGED);
+      expect(seen.filter((s) => s.url === '/prompt')).toEqual([]);
+    });
+
+    it('refuses a size that is no longer one of its shapes, and posts nothing', async () => {
+      const conn = await start(comfy(() => IMAGE_HISTORY));
+      const { wf, registry: held } = holding(SDXL);
+      const [width, height] = shapeSizes(workflowLimits(wf).size!, 16).square;
+      set(wf, 'width', 832);
+      set(wf, 'height', 1216);
+      await expect(createComfyBackend(conn, held, sockets().open).generate({ ...req, width, height }, () => {}, new AbortController().signal)).rejects.toThrow(CHANGED);
+      expect(seen.filter((s) => s.url === '/prompt')).toEqual([]);
+    });
+
+    it('refuses a size or length the workflow no longer holds at all', async () => {
+      const conn = await start(comfy(() => IMAGE_HISTORY));
+      const sized = holding(SDXL);
+      delete sized.wf.bindings.width;
+      delete sized.wf.bindings.height;
+      await expect(createComfyBackend(conn, sized.registry, sockets().open).generate(req, () => {}, new AbortController().signal)).rejects.toThrow(CHANGED);
+      const long = holding(WAN);
+      delete long.wf.bindings.frames;
+      const asked = { ...req, media: 'video' as const, model: WAN.id, width: 1280, height: 704, frames: 49 };
+      await expect(createComfyBackend(conn, long.registry, sockets().open).generate(asked, () => {}, new AbortController().signal)).rejects.toThrow(CHANGED);
+      expect(seen.filter((s) => s.url === '/prompt')).toEqual([]);
+    });
+
+    it('still runs a request that fits: any of its shapes, and up to its max length', async () => {
+      const conn = await start(comfy(() => IMAGE_HISTORY));
+      const ws = sockets();
+      const [width, height] = shapeSizes(workflowLimits(WAN).size!, 32).portrait;
+      const p = createComfyBackend(conn, registry, ws.open).generate({ ...req, media: 'video', model: WAN.id, width, height, frames: 49 }, () => {}, new AbortController().signal);
+      await until(() => seen.some((s) => s.url === '/prompt'));
+      const post = JSON.parse(seen.find((s) => s.url === '/prompt')!.body);
+      expect(post.prompt[WAN.bindings.frames!.nodeId].inputs[WAN.bindings.frames!.input]).toBe(49);
+      await new Promise((r) => setTimeout(r, 20));
+      ws.made[0]!.send('execution_success', { prompt_id: 'p1' });
+      await p;
+    });
+  });
+
   it('lists the workflows for a media as its models', async () => {
     const conn = await start(comfy(() => ({})));
     const b = createComfyBackend(conn, registry, sockets().open);
@@ -585,7 +645,7 @@ describe('comfySystemSummary', () => {
 });
 
 describe('comfyCheckpoints', () => {
-  it('lists checkpoint files for images and UNET files for video', async () => {
+  it('lists the files of the loader asked for: checkpoints by default, or the UNET loader', async () => {
     const conn = await start((r, res) => {
       if (r.url === '/object_info/CheckpointLoaderSimple') {
         return json(res, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [['a.safetensors', 'b.ckpt'], {}] } } } });
@@ -598,7 +658,7 @@ describe('comfyCheckpoints', () => {
     });
     const signal = new AbortController().signal;
     expect(await comfyCheckpoints(conn, signal)).toEqual(['a.safetensors', 'b.ckpt']);
-    expect(await comfyCheckpoints(conn, signal, 'video')).toEqual(['wan.safetensors']);
+    expect(await comfyCheckpoints(conn, signal, 'UNETLoader')).toEqual(['wan.safetensors']);
   });
 });
 

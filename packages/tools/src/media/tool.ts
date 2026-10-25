@@ -287,7 +287,8 @@ function mediaTool(media: Media, choice: MediaChoice, limits: WorkflowLimits | n
         req.width = size[0];
         req.height = size[1];
       }
-      if (media === 'video' && shape.maxSeconds !== null) req.frames = parsed.seconds * shape.fps + 1;
+      // A rate that isn't whole (23.976) still sends a whole frame count, and never more than the workflow holds.
+      if (media === 'video' && shape.maxSeconds !== null) req.frames = Math.round(parsed.seconds * shape.fps) + 1;
       if (choice.checkpoint !== undefined) req.checkpoint = choice.checkpoint;
       const sent: Record<string, unknown> = { ...(args as Record<string, unknown>), prompt };
       if (negativePrompt === null) delete sent['negative_prompt'];
