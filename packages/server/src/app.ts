@@ -7,6 +7,7 @@ import { corsAllowlist, hostCheck } from './desktop.js';
 import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
 import { appNextcloudRoutes } from './routes/app-nextcloud.js';
+import { appFoldersRoutes } from './routes/app-folders.js';
 import { appsRoutes } from './routes/apps.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
@@ -141,6 +142,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // An app's Deck, wiki and links: same prefix, other paths; mounted first, authed only like the rest.
   authed.route('/apps', appNextcloudRoutes(container));
   authed.route('/apps', appsRoutes(container));
+  authed.route('/app-folders', appFoldersRoutes(container));
   // The Code tab's terminals (spec 2026-10-21-code-terminal-design): a shell with no approval card, so only on a local
   // server, and like the app routes never on the peer listener. Full paths under /apps/:id/terminals; appsRoutes owns
   // nothing there. The status route is always there so the web can say why there's no Terminal tab.
