@@ -432,7 +432,12 @@ export async function comfySystemSummary(
 ): Promise<{ version: string; gpu: string | null; vramGb: number | null }> {
   const res = await mediaFetch(conn, '/system_stats', {}, signal);
   if (!res.ok) throw httpError(conn, res, 'The check');
-  const body = obj(await readJson(res, conn));
+  return comfySummaryOf(await readJson(res, conn));
+}
+
+/** The version and first GPU in a `/system_stats` answer. */
+export function comfySummaryOf(stats: unknown): { version: string; gpu: string | null; vramGb: number | null } {
+  const body = obj(stats);
   const version = obj(body['system'])['comfyui_version'];
   const devices = body['devices'];
   const device = Array.isArray(devices) ? obj(devices[0]) : {};

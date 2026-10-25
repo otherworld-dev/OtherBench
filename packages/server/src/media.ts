@@ -1,9 +1,10 @@
 import { availableOn } from '@otherbench/core/domain/availability.js';
-import { isGenerationKind } from '@otherbench/core/domain/media.js';
-import { workflowApplies, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import { isGenerationKind, sharesLocalGpu, withoutUserinfo } from '@otherbench/core/domain/media.js';
+import { workflowApplies, workflowLimits, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { MediaApplies, MediaBackend, MediaConnection } from '@otherbench/core/ports/media.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { Connection } from '@otherbench/core/types/config.js';
+import { DEFAULT_OLLAMA_BASE_URL } from '@otherbench/engine-aisdk/registry.js';
 import { createA1111Backend } from '@otherbench/tools/media/a1111.js';
 import { BUILTIN_WORKFLOWS, createComfyBackend, type ComfyWorkflows } from '@otherbench/tools/media/comfyui.js';
 import { createOpenAIImagesBackend } from '@otherbench/tools/media/openai-images.js';
@@ -49,6 +50,52 @@ export function backendOf(store: Store, conn: MediaConnection): MediaBackend {
   }
 }
 
+/** How long the unload may hold up a generation. */
+const UNLOAD_TIMEOUT_MS = 10_000;
+
+/** Ollama's native API root: OtherBench talks to its OpenAI-style `/v1`, which the unload isn't part of. */
+function ollamaRoot(baseUrl: string | null): string {
+  const trimmed = (baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -'/v1'.length) : trimmed;
+}
+
+/**
+ * Asks Ollama to unload a profile's chat model (`keep_alive: 0`), so a
+ * generation on the same card has its memory; Ollama loads it again when the
+ * reply carries on. Only for an Ollama chat connection on this machine with a
+ * generator also on this machine, and only ever the profile's own model.
+ * Best effort: a failure is logged and the generation goes ahead.
+ */
+async function unloadChatModel(deps: Deps, use: { profileId: string; generationConnectionId: string }, signal: AbortSignal): Promise<void> {
+  const profile = deps.store.profiles.get(use.profileId);
+  const chat = profile ? deps.store.connections.get(profile.connectionId) : null;
+  const generation = deps.store.connections.get(use.generationConnectionId);
+  if (!profile || !chat || !generation || !sharesLocalGpu(chat, generation)) return;
+  if (!availableOn(chat, deps.store.nodes.self().id)) return;
+  const url = `${ollamaRoot(chat.baseUrl)}/api/generate`;
+  try {
+    // The key goes only to the chat connection's own address, and a redirect can't carry it elsewhere.
+    const apiKey = chat.secretRef ? await deps.secrets.get(chat.secretRef) : null;
+    const headers = new Headers(chat.extraHeaders);
+    headers.set('content-type', 'application/json');
+    if (apiKey) headers.set('authorization', `Bearer ${apiKey}`);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: profile.modelId, keep_alive: 0, prompt: '' }),
+      redirect: 'error',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(UNLOAD_TIMEOUT_MS)]),
+    });
+    await res.body?.cancel().catch(() => {});
+    if (!res.ok) console.error(`[otherbench-server] Ollama didn't unload "${profile.modelId}" before generating (HTTP ${res.status}); generating anyway.`);
+  } catch (err) {
+    if (signal.aborted) return;
+    // Node's reason can quote the URL; the key is never in it.
+    const reason = withoutUserinfo(err instanceof Error ? ((err.cause as { message?: string } | undefined)?.message ?? err.message) : String(err));
+    console.error(`[otherbench-server] couldn't ask Ollama at ${withoutUserinfo(url)} to unload "${profile.modelId}" before generating; generating anyway: ${reason}`);
+  }
+}
+
 /**
  * The `MediaHost` the tool provider is given. Everything is read when a call
  * comes, not when the tools are listed: a connection can be deleted, moved to
@@ -57,11 +104,21 @@ export function backendOf(store: Store, conn: MediaConnection): MediaBackend {
  */
 export function createMediaHost(deps: Deps): MediaHost {
   return {
-    // Placeholders until the unload and the workflow limits are wired here.
-    async limitsFor() {
-      return null;
+    // Never throws for a workflow that exists: a throw would change the tool's schema. A deleted
+    // one is null here, and `backendFor` says so when the call comes.
+    async limitsFor(use) {
+      const conn = deps.store.connections.get(use.connectionId);
+      if (conn?.kind !== 'comfyui') return null;
+      const wf = comfyWorkflows(deps.store).get(use.model);
+      return wf && wf.media === use.media ? workflowLimits(wf) : null;
     },
-    async freeGpu() {},
+    async freeGpu(use, signal) {
+      try {
+        await unloadChatModel(deps, use, signal);
+      } catch (err) {
+        console.error('[otherbench-server] freeing the GPU before generating failed; generating anyway:', err);
+      }
+    },
     async backendFor(connectionId, use) {
       const conn = deps.store.connections.get(connectionId);
       if (!conn) throw new Error('That generation connection no longer exists.');
