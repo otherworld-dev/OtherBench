@@ -389,6 +389,48 @@ export function runStoreContract(
       });
     });
 
+    describe('app folders', () => {
+      function makeAppInput(over: { id: string } & Partial<App>) {
+        return { name: 'Test App', ...over };
+      }
+
+      it('create/get round-trip, with sortOrder 0 and the timestamps now; an unknown id is null', () => {
+        const created = store.appFolders.create({ id: 'f1', name: 'Work' });
+        expect(created).toMatchObject({ id: 'f1', name: 'Work', sortOrder: 0 });
+        expectRecentTimestamp(created.createdAt);
+        expect(store.appFolders.get('f1')).toEqual(created);
+        expect(store.appFolders.get('nope')).toBeNull();
+        expect(store.appFolders.update('f1', { name: 'Play', sortOrder: 2 })).toMatchObject({ name: 'Play', sortOrder: 2 });
+      });
+
+      it('lists by sortOrder, then name (case-insensitive), then id', () => {
+        store.appFolders.create({ id: 'f3', name: 'beta', sortOrder: 1 });
+        store.appFolders.create({ id: 'f5', name: 'Same', sortOrder: 1 });
+        store.appFolders.create({ id: 'f2', name: 'Alpha', sortOrder: 1 });
+        store.appFolders.create({ id: 'f4', name: 'same', sortOrder: 1 });
+        store.appFolders.create({ id: 'f1', name: 'Zed', sortOrder: 0 });
+        expect(store.appFolders.list().map((f) => f.id)).toEqual(['f1', 'f2', 'f3', 'f4', 'f5']);
+      });
+
+      it("an app's folderId defaults to null, round-trips, and deleting the folder clears it on its apps only", () => {
+        store.appFolders.create({ id: 'f1', name: 'One' });
+        store.appFolders.create({ id: 'f2', name: 'Two' });
+        expect(store.apps.create(makeAppInput({ id: 'a0' })).folderId).toBeNull();
+        store.apps.create(makeAppInput({ id: 'a1', folderId: 'f1' }));
+        store.apps.create(makeAppInput({ id: 'a2', folderId: 'f2' }));
+        expect(store.apps.get('a1')!.folderId).toBe('f1');
+        expect(store.apps.update('a0', { folderId: 'f1' }).folderId).toBe('f1');
+
+        store.appFolders.delete('f1');
+
+        expect(store.appFolders.get('f1')).toBeNull();
+        expect(store.apps.get('a1')).toMatchObject({ folderId: null });
+        expect(store.apps.get('a0')).toMatchObject({ folderId: null });
+        expect(store.apps.get('a2')!.folderId).toBe('f2');
+        expect(() => store.appFolders.delete('f1')).not.toThrow();
+      });
+    });
+
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
         return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };

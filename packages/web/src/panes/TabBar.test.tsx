@@ -188,7 +188,7 @@ describe('TabBar (#824)', () => {
     useOtherBenchStore.setState({ mode: 'code', paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
     const { rerender } = render(<TabBar narrow={false} />);
     expect(screen.getAllByRole('tab', { name: /Loading…/ })).toHaveLength(2);
-    useOtherBenchStore.getState().setApps([{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
+    useOtherBenchStore.getState().setApps([{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
     useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
     rerender(<TabBar narrow={false} />);
     expect(screen.getByRole('tab', { name: /OtherBench/ })).toBeInTheDocument();
