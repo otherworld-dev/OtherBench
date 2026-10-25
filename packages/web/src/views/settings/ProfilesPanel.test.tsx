@@ -879,6 +879,71 @@ describe('ProfilesPanel generation', () => {
     );
   });
 
+  describe('tools warning and unloading the chat model', () => {
+    const local = makeConnection({ id: 'comfy', name: 'Studio ComfyUI', kind: 'comfyui', baseUrl: 'http://127.0.0.1:8188' });
+    const remote = makeConnection({ id: 'comfy', name: 'Studio ComfyUI', kind: 'comfyui', baseUrl: 'http://192.168.1.9:8188' });
+    const unload = 'Unload the chat model before generating (frees the graphics card; the reply after the picture is slower)';
+
+    async function pickComfy(chat: Connection, gen: Connection, model: ModelInfo) {
+      useOtherBenchStore.getState().setConnections([chat, gen]);
+      useOtherBenchStore.getState().setModels([model]);
+      mockedMediaModels.mockResolvedValue({ models: [{ id: 'w1', label: 'My flow' }], checkpoints: [] });
+      mockedCreate.mockResolvedValue(makeProfile());
+      const user = userEvent.setup();
+      render(<ProfilesPanel />);
+      await user.click(screen.getByRole('button', { name: '+ New profile' }));
+      await user.type(screen.getByLabelText('Profile name'), 'Painter');
+      await user.selectOptions(screen.getByLabelText('Connection'), chat.id);
+      await user.selectOptions(screen.getByLabelText('Model'), model.modelId);
+      await user.selectOptions(screen.getByLabelText('Image connection'), 'comfy');
+      await waitFor(() => expect(screen.getByLabelText('Image workflow')).toHaveValue('w1'));
+      return user;
+    }
+
+    it("warns when the chat model can't use tools, and not when that is unknown", async () => {
+      await pickComfy(makeConnection(), local, makeModel({ supportsTools: false }));
+      expect(screen.getByText("⚠ llama3.2 can't use tools, so this profile can't generate. Pick a model that can.")).toBeInTheDocument();
+    });
+
+    it('does not warn for a model that can use tools, or one not known either way', async () => {
+      await pickComfy(makeConnection(), local, makeModel({ supportsTools: true }));
+      expect(screen.queryByText(/can't use tools/)).toBeNull();
+      cleanup();
+      await pickComfy(makeConnection(), local, makeModel({ supportsTools: null as unknown as boolean }));
+      expect(screen.queryByText(/can't use tools/)).toBeNull();
+    });
+
+    it('shows the unload box for Ollama with a local ComfyUI, ticked, and leaves the field out when ticked', async () => {
+      const user = await pickComfy(makeConnection(), local, makeModel());
+      expect(screen.getByRole('checkbox', { name: unload })).toBeChecked();
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+      await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+      expect(mockedCreate.mock.calls[0]?.[0]?.toolPolicy?.media).toEqual({ image: { connectionId: 'comfy', model: 'w1' }, confirmPrompts: true });
+    });
+
+    it('saves unloadChatModel false when unticked', async () => {
+      const user = await pickComfy(makeConnection(), local, makeModel());
+      await user.click(screen.getByRole('checkbox', { name: unload }));
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+      await waitFor(() =>
+        expect(mockedCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ toolPolicy: expect.objectContaining({ media: { image: { connectionId: 'comfy', model: 'w1' }, confirmPrompts: true, unloadChatModel: false } }) })
+        )
+      );
+    });
+
+    it('hides the unload box for a remote ComfyUI, an Anthropic profile and a Claude Code profile', async () => {
+      await pickComfy(makeConnection(), remote, makeModel());
+      expect(screen.queryByRole('checkbox', { name: unload })).toBeNull();
+      cleanup();
+      await pickComfy(makeConnection({ id: 'ant', kind: 'anthropic' }), local, makeModel({ connectionId: 'ant', modelId: 'sonnet' }));
+      expect(screen.queryByRole('checkbox', { name: unload })).toBeNull();
+      cleanup();
+      await pickComfy(makeConnection({ id: 'cc', kind: 'claude_code' }), local, makeModel({ connectionId: 'cc', modelId: 'opus' }));
+      expect(screen.queryByRole('checkbox', { name: unload })).toBeNull();
+    });
+  });
+
   it('keeps generation connections out of the chat connection picker, and video to ComfyUI', async () => {
     arrange();
     const user = userEvent.setup();

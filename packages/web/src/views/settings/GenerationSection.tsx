@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { Connection } from '@otherbench/core/types/config.js';
-import { isGenerationKind } from '@otherbench/core/domain/media.js';
+import type { Connection, ModelInfo } from '@otherbench/core/types/config.js';
+import { availableOn } from '@otherbench/core/domain/availability.js';
+import { isGenerationKind, sharesLocalGpu } from '@otherbench/core/domain/media.js';
 import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import { api, ApiError, type MediaModelsResult } from '../../state/api.js';
 
@@ -13,6 +14,8 @@ export interface GenerationState {
   videoModel: string;
   videoCheckpoint: string;
   confirmPrompts: boolean;
+  /** Free the graphics card before generating; ticked unless the profile says otherwise. */
+  unloadChatModel: boolean;
 }
 
 interface ChoiceProps {
@@ -153,10 +156,31 @@ export function generationProblem(connections: Connection[], value: GenerationSt
   return null;
 }
 
+const UNLOAD_LABEL = 'Unload the chat model before generating (frees the graphics card; the reply after the picture is slower)';
+
 /** The Generation part of a profile: which connection makes its images and its video, and whether it asks first. Claude Code profiles get it too, through the relay. */
-export function GenerationSection({ connections, value, onChange }: { connections: Connection[]; value: GenerationState; onChange: (next: GenerationState) => void }): JSX.Element {
+export function GenerationSection({
+  connections,
+  value,
+  onChange,
+  chatConnection,
+  chatModel,
+  selfNodeId,
+}: {
+  connections: Connection[];
+  value: GenerationState;
+  onChange: (next: GenerationState) => void;
+  /** The profile's chat connection and model, for the tools warning and the unload option. */
+  chatConnection?: Connection;
+  chatModel?: ModelInfo;
+  /** This machine's node id; unloading only happens for a chat connection available here. Unknown until machines load. */
+  selfNodeId?: string;
+}): JSX.Element {
   const generation = connections.filter((c) => isGenerationKind(c.kind));
   const video = generation.filter((c) => c.kind === 'comfyui');
+  const chosen = [value.imageConnectionId, value.videoConnectionId].map((id) => generation.find((c) => c.id === id)).filter((c): c is Connection => c !== undefined);
+  // The server frees the card only when the chat connection is on this machine too.
+  const canUnload = chatConnection !== undefined && (selfNodeId === undefined || availableOn(chatConnection, selfNodeId)) && chosen.some((g) => sharesLocalGpu(chatConnection, g));
   return (
     <div data-testid="generation-settings" className="space-y-2">
       <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Generation</span>
@@ -181,10 +205,21 @@ export function GenerationSection({ connections, value, onChange }: { connection
             onChange={(c, m, k) => onChange({ ...value, videoConnectionId: c, videoModel: m, videoCheckpoint: k })}
           />
           <p className="text-xs text-[var(--text-muted)]">Video needs ComfyUI.</p>
+          {chosen.length > 0 && chatModel?.supportsTools === false && (
+            <p role="alert" className="text-xs text-[var(--danger)]">
+              ⚠ {chatModel.displayName} can't use tools, so this profile can't generate. Pick a model that can.
+            </p>
+          )}
           <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label="Show me the prompt before generating" checked={value.confirmPrompts} onChange={(e) => onChange({ ...value, confirmPrompts: e.target.checked })} />
             Show me the prompt before generating
           </label>
+          {canUnload && (
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
+              <input type="checkbox" aria-label={UNLOAD_LABEL} checked={value.unloadChatModel} onChange={(e) => onChange({ ...value, unloadChatModel: e.target.checked })} />
+              {UNLOAD_LABEL}
+            </label>
+          )}
         </>
       )}
     </div>
