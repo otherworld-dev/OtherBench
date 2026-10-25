@@ -544,7 +544,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     if (policy.computer === true && this.computer?.available()) raw.push(computerTool(this.computer, this.store));
     // Image and video generation (media-generation spec): each tool only when the
     // profile chose a backend for it. Claude Code gets them through `relayOtherBenchTools`.
-    if (policy.media && this.media) raw.push(...mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p)));
+    if (policy.media && this.media) raw.push(...(await mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p))));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
@@ -560,9 +560,9 @@ export class OtherBenchToolProvider implements ToolProvider {
    * generation, each of which runs only arguments `requestApproval` approved). Never the host run_command: a
    * profile that wants the sandbox gets it or nothing.
    */
-  relayTools(policy: ToolPolicy): ToolSpec[] {
+  async relayTools(policy: ToolPolicy): Promise<ToolSpec[]> {
     const shell = runsShellInSandbox(policy) && this.sandbox !== null ? [this.sandboxTool(policy)] : [];
-    return this.deduplicateNames([...shell, ...this.relayOtherBenchTools(policy), ...this.relayMcpTools(policy.mcpServerIds)]);
+    return this.deduplicateNames([...shell, ...(await this.relayOtherBenchTools(policy)), ...this.relayMcpTools(policy.mcpServerIds)]);
   }
 
   /**
@@ -589,7 +589,7 @@ export class OtherBenchToolProvider implements ToolProvider {
    * writes the audit row for what came of it. So whatever calls it, and with
    * whatever, nothing runs that no approval stands behind.
    */
-  relayOtherBenchTools(policy: ToolPolicy): ToolSpec[] {
+  async relayOtherBenchTools(policy: ToolPolicy): Promise<ToolSpec[]> {
     const specs: ToolSpec[] = [];
     if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy)));
     if (policy.computer === true && this.computer?.available()) specs.push(this.relayed(computerTool(this.computer, this.store)));
@@ -598,7 +598,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     // `runRelayedCall` runs only that object. The broker still decides on it (a card, or the
     // generation ask `execute` raises under confirmPrompts).
     if (policy.media && this.media) {
-      for (const tool of mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p))) {
+      for (const tool of await mediaTools(this.media, policy, (ctx, input) => this.askUser(ctx, input), (ctx, p) => this.relayProgress(ctx, p))) {
         specs.push(this.relayed({ ...tool, describeCall: async (args: unknown) => ({ args: plainObject(args), risk: 'execute' as const }) }));
       }
     }

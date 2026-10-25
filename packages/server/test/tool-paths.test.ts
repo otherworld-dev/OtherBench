@@ -102,7 +102,7 @@ function world(): World {
       return [];
     },
   };
-  const media = { backendFor: async () => ({ backend, label: 'Fake', applies: { negativePrompt: true, seed: true, size: true, frames: true }, defaultNegativePrompt: null, workflowDefaults: false }) };
+  const media = { backendFor: async () => ({ backend, label: 'Fake', applies: { negativePrompt: true, seed: true, size: true, frames: true }, defaultNegativePrompt: null, workflowDefaults: false }), limitsFor: async () => null, freeGpu: async () => {} };
   const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver, browser, media });
   const w: World = { store, driver, driverCalls, factory, generated, browser, provider, cards: [], onCard: () => ({ choice: 'once' }), tickets: new ApprovalTickets() };
   provider.onApprovalEvent((e) => {
@@ -219,7 +219,7 @@ const API: Path = {
     const policy = c.policy ?? ON;
     const listed = (await w.provider.listTools(policy)).find((t) => t.name === c.tool);
     // A tool the profile turns off is not listed at all. The gate is held to the same answer as the other path anyway.
-    const tool = listed ?? gateOf(w, w.provider.relayOtherBenchTools(c.listedUnder ?? ON).find((t) => t.name === c.tool)!, policy);
+    const tool = listed ?? gateOf(w, (await w.provider.relayOtherBenchTools(c.listedUnder ?? ON)).find((t) => t.name === c.tool)!, policy);
     const restore = stoppingOnAnswer(w, c.stopBeforeRun);
     try {
       return seenResult(await tool.execute(c.args, context(c.ctx)));
@@ -249,7 +249,7 @@ const CLAUDE_CODE: Path = {
   async call(w, c) {
     const policy = c.policy ?? ON;
     const ctx = context(c.ctx);
-    const spec = w.provider.relayOtherBenchTools(c.listedUnder ?? policy).find((t) => t.name === c.tool)!;
+    const spec = (await w.provider.relayOtherBenchTools(c.listedUnder ?? policy)).find((t) => t.name === c.tool)!;
     const decision = await hooked(w, spec, policy, ctx, c.args);
     if (!decision.allow) return seenDenial(decision.reason);
     // Claude Code calls the tool on OtherBench's server some time after the hook said yes.
@@ -712,14 +712,14 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
   const REFUSED: Seen = { error: true, about: null, text: NO_APPROVAL, images: 0 };
 
   for (const { tool, policy = ON, first, other, done } of TOOLS) {
-    const specOf = (w: World): ToolSpec => w.provider.relayOtherBenchTools(policy).find((t) => t.name === tool)!;
+    const specOf = async (w: World): Promise<ToolSpec> => (await w.provider.relayOtherBenchTools(policy)).find((t) => t.name === tool)!;
     const approve = async (w: World, args: Record<string, unknown>, ctx = context()): Promise<void> => {
-      expect(await hooked(w, specOf(w), policy, ctx, args)).toMatchObject({ allow: true });
+      expect(await hooked(w, await specOf(w), policy, ctx, args)).toMatchObject({ allow: true });
     };
 
     it(`${tool}: with no ticket, a used ticket or a ticket for other arguments, nothing runs`, async () => {
       const w = world();
-      const server = relayed(w, specOf(w), context());
+      const server = relayed(w, await specOf(w), context());
       // Never approved at all.
       expect(seenMcp(await server.call(first))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
@@ -742,10 +742,10 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
       const w = world();
       await approve(w, first);
       // The same tickets, in the hands of another chat's reply.
-      expect(seenMcp(await relayed(w, specOf(w), context({ chatId: 'chat-2' })).call(first))).toEqual(REFUSED);
+      expect(seenMcp(await relayed(w, await specOf(w), context({ chatId: 'chat-2' })).call(first))).toEqual(REFUSED);
       await approve(w, first);
       // And of a later reply in the same chat.
-      expect(seenMcp(await relayed(w, specOf(w), context({ messageId: 'msg-2' })).call(first))).toEqual(REFUSED);
+      expect(seenMcp(await relayed(w, await specOf(w), context({ messageId: 'msg-2' })).call(first))).toEqual(REFUSED);
       expect(done(w)).toEqual([]);
       expect(w.driver.started.map((s) => s.chatId)).not.toContain('chat-2');
       // Each is on record as a refusal by the rules.
@@ -754,7 +754,7 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
 
     it(`${tool}: the relayed spec's own execute runs nothing it was not handed by an approval, whoever calls it`, async () => {
       const w = world();
-      const spec = specOf(w);
+      const spec = await specOf(w);
       const refusal = { error: true, code: 'no_approval', message: NO_APPROVAL };
       // The model's own arguments, and arguments dressed up as described ones.
       expect(await spec.execute(first, context())).toEqual(refusal);
@@ -775,7 +775,7 @@ describe('(h) a relayed call runs only what OtherBench approved, once, for the r
   it('generate_image: under always ask with the prompt confirmation on there is no card, the generation ask is the user saying yes', async () => {
     const w = world();
     const policy: ToolPolicy = { ...ON, media: { image: { connectionId: 'gen', model: 'm' } } };
-    const spec = w.provider.relayOtherBenchTools(policy).find((t) => t.name === 'generate_image')!;
+    const spec = (await w.provider.relayOtherBenchTools(policy)).find((t) => t.name === 'generate_image')!;
     expect(await hooked(w, spec, policy, context(), { prompt: 'a red cube' })).toMatchObject({ allow: true });
     expect(w.cards).toEqual([]);
     expect(w.generated).toEqual([]);

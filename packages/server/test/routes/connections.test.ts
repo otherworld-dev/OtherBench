@@ -703,10 +703,12 @@ describe('generation connection kinds', () => {
     let server: Server | undefined;
     let hits: string[] = [];
     let up = true;
+    let history: Record<string, unknown> = {};
 
     async function startComfy(): Promise<string> {
       hits = [];
       up = true;
+      history = {};
       server = createServer((req, res) => {
         hits.push(req.url ?? '');
         const send = (status: number, body: unknown) => {
@@ -714,7 +716,8 @@ describe('generation connection kinds', () => {
           res.end(JSON.stringify(body));
         };
         if (!up) return send(500, { error: 'down' });
-        if (req.url === '/system_stats') return send(200, { system: { os: 'nt' }, devices: [] });
+        if (req.url === '/system_stats') return send(200, { system: { os: 'nt', comfyui_version: '0.8.2' }, devices: [{ name: 'cuda:0 NVIDIA GeForce RTX 3090 : cudaMallocAsync', vram_total: 25769279488 }] });
+        if (req.url?.startsWith('/history')) return send(200, history);
         if (req.url === '/object_info/CheckpointLoaderSimple') return send(200, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors'], {}] } } } });
         if (req.url === '/object_info/UNETLoader') return send(200, { UNETLoader: { input: { required: { unet_name: [['wan2.2_ti2v_5B_fp16.safetensors'], {}] } } } });
         send(404, {});
@@ -734,7 +737,7 @@ describe('generation connection kinds', () => {
       const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
       const ok = await app().request(`/api/connections/${id}/test`, { method: 'POST' });
       expect(ok.status).toBe(200);
-      expect(await json(ok)).toMatchObject({ ok: true });
+      expect(await json(ok)).toMatchObject({ ok: true, message: 'ComfyUI 0.8.2 · NVIDIA GeForce RTX 3090, 24 GB' });
       expect(hits).toContain('/system_stats');
       expect(container.store.connections.get(id)).toMatchObject({ status: 'ok' });
 
@@ -756,6 +759,48 @@ describe('generation connection kinds', () => {
       expect(video.checkpoints).toEqual(['wan2.2_ti2v_5B_fp16.safetensors']);
     });
 
+    it('lists the workflows run from ComfyUI, and says when it has no templates', async () => {
+      const baseUrl = await startComfy();
+      const graph = { '1': { class_type: 'CLIPTextEncode', inputs: { text: 'a fox' } }, '2': { class_type: 'SaveImage', inputs: { images: ['1', 0] } } };
+      history = {
+        mine: { prompt: [1, 'mine', graph, { client_id: 'abc', create_time: 5, extra_pnginfo: { workflow: { nodes: [] } } }, ['2']], outputs: {}, status: {} },
+        ours: { prompt: [2, 'ours', graph, { client_id: 'otherbench-1', create_time: 6 }, ['2']], outputs: {}, status: {} },
+      };
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const recent = await app().request(`/api/connections/${id}/comfy/recent`);
+      expect(recent.status).toBe(200);
+      expect(((await recent.json()) as { promptId: string }[]).map((r) => r.promptId)).toEqual(['mine']);
+      const templates = await app().request(`/api/connections/${id}/comfy/templates`);
+      expect(templates.status).toBe(200);
+      expect(await templates.json()).toEqual({ unsupported: true });
+    });
+
+    it('recent and templates are ComfyUI-only, and an unreachable ComfyUI is a 502', async () => {
+      const a1111 = (await json(await post({ name: 'A', kind: 'a1111', baseUrl: 'http://127.0.0.1:7860' })))['id'] as string;
+      expect((await app().request(`/api/connections/${a1111}/comfy/recent`)).status).toBe(400);
+      expect((await app().request(`/api/connections/${a1111}/comfy/templates`)).status).toBe(400);
+      expect((await app().request('/api/connections/nope/comfy/recent')).status).toBe(404);
+      const baseUrl = await startComfy();
+      up = false;
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const res = await app().request(`/api/connections/${id}/comfy/recent`);
+      expect(res.status).toBe(502);
+      expect(String((await json(res))['error'])).toMatch(/HTTP 500/);
+    });
+
+    it("media-models lists the files of the loader a workflow's model file is on, so a Z-Image image workflow gets UNET files", async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const zimage = (await (await app().request(`/api/connections/${id}/media-models?media=image&loader=UNETLoader`)).json()) as { models: { id: string }[]; checkpoints: string[] };
+      expect(zimage.models.map((m) => m.id)).toEqual(['builtin:sdxl-txt2img']);
+      expect(zimage.checkpoints).toEqual(['wan2.2_ti2v_5B_fp16.safetensors']);
+      const sdxlVideo = (await (await app().request(`/api/connections/${id}/media-models?media=video&loader=CheckpointLoaderSimple`)).json()) as { checkpoints: string[] };
+      expect(sdxlVideo.checkpoints).toEqual(['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors']);
+      const bad = await app().request(`/api/connections/${id}/media-models?media=image&loader=LoadImage`);
+      expect(bad.status).toBe(400);
+      expect(hits).not.toContain('/object_info/LoadImage');
+    });
+
     it('media-models refuses a bad media and a chat connection', async () => {
       const baseUrl = await startComfy();
       const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
@@ -773,5 +818,34 @@ describe('generation connection kinds', () => {
       expect(body['checkpoints']).toEqual([]);
       expect(typeof body['checkpointsError']).toBe('string');
     });
+  });
+});
+
+describe('POST /api/connections/find-comfyui', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('probes only the two addresses and creates nothing', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+      urls.push(String(input));
+      if (String(input).startsWith('http://127.0.0.1:8000/')) {
+        return new Response(JSON.stringify({ system: { comfyui_version: '0.8.2' }, devices: [{ name: 'cuda:0 NVIDIA GeForce RTX 3090 : cudaMallocAsync', vram_total: 25769279488 }] }));
+      }
+      throw new TypeError('fetch failed');
+    });
+    const res = await app().request('/api/connections/find-comfyui', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ baseUrl: 'http://127.0.0.1:8000', version: '0.8.2', gpu: 'NVIDIA GeForce RTX 3090', vramGb: 24 });
+    expect(urls).toEqual(['http://127.0.0.1:8188/system_stats', 'http://127.0.0.1:8000/system_stats']);
+    expect(container.store.connections.list()).toEqual([]);
+  });
+
+  it('says when neither answers', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('fetch failed');
+    });
+    expect(await (await app().request('/api/connections/find-comfyui', { method: 'POST' })).json()).toEqual({ found: false });
   });
 });

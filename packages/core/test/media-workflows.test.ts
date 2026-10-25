@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-import { detectBindings, fillWorkflow, workflowApplies, workflowProblem, type MediaWorkflow } from '../src/domain/media-workflows.js';
+import { checkpointLoaderOf, detectBindings, fillWorkflow, shapeSizes, workflowApplies, workflowLimits, workflowProblem, workflowShapeKey, type MediaWorkflow } from '../src/domain/media-workflows.js';
 import type { MediaRequest } from '../src/ports/media.js';
 
 /** ComfyUI's default text-to-image graph, in API format. */
@@ -54,6 +55,13 @@ describe('fillWorkflow', () => {
   it("keeps the workflow's own negative prompt when the request has none", () => {
     const g = fillWorkflow(WF, { ...REQ, negativePrompt: null });
     expect(g['7']!.inputs['text']).toBe('negative text');
+  });
+
+  it("keeps the graph's own width and height when the request has no size", () => {
+    const { width: _w, height: _h, ...noSize } = REQ;
+    const g = fillWorkflow(WF, noSize);
+    expect([g['5']!.inputs['width'], g['5']!.inputs['height']]).toEqual([512, 512]);
+    expect(g['6']!.inputs['text']).toBe('a cat');
   });
 
   it('writes the chosen checkpoint and the frame count when there are bindings for them', () => {
@@ -189,5 +197,162 @@ describe('workflowProblem', () => {
     expect(workflowProblem({ graph: GRAPH, bindings: { seed: { nodeId: '3', input: 'seed' } } })).toBe(
       'No input is marked as the prompt.',
     );
+  });
+});
+
+describe('detection through primitive nodes', () => {
+  const zimage = JSON.parse(readFileSync(new URL('./fixtures/zimage-turbo-api.json', import.meta.url), 'utf8')) as MediaWorkflow['graph'];
+
+  it('binds the Z-Image prompt to the primitive that feeds the encoder', () => {
+    const b = detectBindings(zimage);
+    expect(b.prompt).toEqual({ nodeId: '58', input: 'value' });
+    expect(b.negativePrompt).toBeUndefined();
+    expect(b.seed).toEqual({ nodeId: '57:3', input: 'seed' });
+    expect(b.width).toEqual({ nodeId: '57:13', input: 'width' });
+    expect(b.height).toEqual({ nodeId: '57:13', input: 'height' });
+    expect(b.checkpoint).toEqual({ nodeId: '57:28', input: 'unet_name' });
+    expect(workflowProblem({ graph: zimage, bindings: b })).toBeNull();
+  });
+
+  it('binds a seed fed by a PrimitiveInt to the primitive', () => {
+    const graph = structuredClone(GRAPH);
+    graph['3']!.inputs['seed'] = ['20', 0];
+    graph['20'] = { class_type: 'PrimitiveInt', inputs: { value: 5, control_after_generate: 'fixed' } };
+    expect(detectBindings(graph).seed).toEqual({ nodeId: '20', input: 'value' });
+  });
+
+  it('leaves a text link to a node with two string inputs unbound', () => {
+    const graph = structuredClone(GRAPH);
+    graph['6']!.inputs['text'] = ['21', 0];
+    graph['21'] = { class_type: 'StringConcatenate', inputs: { string_a: 'a', string_b: 'b' } };
+    const b = detectBindings(graph);
+    expect(b.prompt).toBeUndefined();
+    expect(b.negativePrompt).toEqual({ nodeId: '7', input: 'text' });
+  });
+
+  it('leaves a text link to a node that is fed by another node unbound, so a style prefix is never the prompt', () => {
+    const graph = structuredClone(GRAPH);
+    graph['6']!.inputs['text'] = ['21', 0];
+    graph['21'] = { class_type: 'StringConcatenate', inputs: { string_a: 'Pixel art style,', string_b: ['22', 0] } };
+    graph['22'] = { class_type: 'PrimitiveStringMultiline', inputs: { value: 'a pig' } };
+    expect(detectBindings(graph).prompt).toBeUndefined();
+  });
+
+  it('binds a seed fed by a PrimitiveInt with control_after_generate', () => {
+    const graph = structuredClone(GRAPH);
+    graph['3']!.inputs['seed'] = ['20', 0];
+    graph['20'] = { class_type: 'PrimitiveInt', inputs: { value: 5, control_after_generate: 'randomize' } };
+    expect(detectBindings(graph).seed).toEqual({ nodeId: '20', input: 'value' });
+  });
+
+  it('binds a checkpoint fed by a primitive string to the primitive', () => {
+    const graph = structuredClone(GRAPH);
+    graph['4']!.inputs['ckpt_name'] = ['23', 0];
+    graph['23'] = { class_type: 'PrimitiveString', inputs: { value: 'base.safetensors' } };
+    expect(detectBindings(graph).checkpoint).toEqual({ nodeId: '23', input: 'value' });
+  });
+
+  it('flags one primitive feeding both encoders', () => {
+    const graph = structuredClone(GRAPH);
+    graph['6']!.inputs['text'] = ['22', 0];
+    graph['7']!.inputs['text'] = ['22', 0];
+    graph['22'] = { class_type: 'PrimitiveStringMultiline', inputs: { value: 'x' } };
+    const bindings = detectBindings(graph);
+    expect(bindings.prompt).toEqual({ nodeId: '22', input: 'value' });
+    expect(bindings.negativePrompt).toEqual({ nodeId: '22', input: 'value' });
+    expect(workflowProblem({ graph, bindings })).toBe("The prompt and the negative prompt are the same input, so they can't be filled separately.");
+  });
+});
+
+describe('workflowLimits', () => {
+  it('has no size when width and height are not bound, and takes a frame_rate from any node', () => {
+    const graph: MediaWorkflow['graph'] = { '1': { class_type: 'X', inputs: { frame_rate: 16 } } };
+    expect(workflowLimits({ graph, bindings: { prompt: { nodeId: '1', input: 'text' } } })).toEqual({ size: null, maxFrames: null, fps: 16 });
+  });
+
+  it("prefers the video output node's frame rate to another node's", () => {
+    const graph: MediaWorkflow['graph'] = {
+      '1': { class_type: 'SomeInterpolator', inputs: { fps: 60 } },
+      '2': { class_type: 'CreateVideo', inputs: { fps: 16, images: ['3', 0] } },
+      '3': { class_type: 'VAEDecode', inputs: {} },
+    };
+    expect(workflowLimits({ graph, bindings: {} }).fps).toBe(16);
+    const combine: MediaWorkflow['graph'] = { '1': { class_type: 'X', inputs: { fps: 60 } }, '2': { class_type: 'VHS_VideoCombine', inputs: { frame_rate: 12 } } };
+    expect(workflowLimits({ graph: combine, bindings: {} }).fps).toBe(12);
+  });
+
+  it('follows a primitive that feeds the frame rate', () => {
+    const graph: MediaWorkflow['graph'] = {
+      '1': { class_type: 'CreateVideo', inputs: { fps: ['2', 0], images: ['3', 0] } },
+      '2': { class_type: 'PrimitiveFloat', inputs: { value: 16 } },
+      '3': { class_type: 'VAEDecode', inputs: {} },
+    };
+    expect(workflowLimits({ graph, bindings: {} }).fps).toBe(16);
+  });
+
+  it('has no native size when the width or height is 0 or less', () => {
+    const graph: MediaWorkflow['graph'] = { '5': { class_type: 'EmptyLatentImage', inputs: { width: 0, height: 1024 } } };
+    const bindings = { width: { nodeId: '5', input: 'width' }, height: { nodeId: '5', input: 'height' } };
+    expect(workflowLimits({ graph, bindings }).size).toBeNull();
+    graph['5']!.inputs['width'] = -512;
+    expect(workflowLimits({ graph, bindings }).size).toBeNull();
+  });
+});
+
+describe('checkpointLoaderOf', () => {
+  const zimage = JSON.parse(readFileSync(new URL('./fixtures/zimage-turbo-api.json', import.meta.url), 'utf8')) as MediaWorkflow['graph'];
+
+  it('names the loader the checkpoint binding is on, whatever the media', () => {
+    expect(checkpointLoaderOf({ graph: zimage, bindings: detectBindings(zimage) }, 'image')).toBe('UNETLoader');
+    expect(checkpointLoaderOf(WF, 'video')).toBe('CheckpointLoaderSimple');
+  });
+
+  it('finds the loader a primitive feeds', () => {
+    const graph = structuredClone(GRAPH);
+    graph['4']!.inputs['ckpt_name'] = ['23', 0];
+    graph['23'] = { class_type: 'PrimitiveString', inputs: { value: 'base.safetensors' } };
+    expect(checkpointLoaderOf({ graph, bindings: detectBindings(graph) }, 'video')).toBe('CheckpointLoaderSimple');
+  });
+
+  it("falls back to the media's usual loader with no checkpoint binding", () => {
+    expect(checkpointLoaderOf({ graph: GRAPH, bindings: {} }, 'image')).toBe('CheckpointLoaderSimple');
+    expect(checkpointLoaderOf({ graph: GRAPH, bindings: {} }, 'video')).toBe('UNETLoader');
+  });
+});
+
+describe('shapeSizes', () => {
+  it('keeps a wide native size and turns it for portrait', () => {
+    const s = shapeSizes({ width: 1280, height: 704 }, 32);
+    expect(s.wide).toEqual([1280, 704]);
+    expect(s.portrait).toEqual([704, 1280]);
+    expect(s.square).toEqual([960, 960]);
+    expect(s.landscape).toEqual([1152, 768]);
+  });
+
+  it('sizes the other shapes of a square native by area', () => {
+    const s = shapeSizes({ width: 1024, height: 1024 }, 16);
+    expect(s.square).toEqual([1024, 1024]);
+    expect(s.portrait).toEqual([832, 1248]);
+    expect(s.landscape).toEqual([1248, 832]);
+    expect(s.wide).toEqual([1360, 768]);
+  });
+
+  it('turns a portrait native for landscape', () => {
+    const s = shapeSizes({ width: 768, height: 1344 }, 16);
+    expect(s.portrait).toEqual([768, 1344]);
+    expect(s.landscape).toEqual([1344, 768]);
+  });
+});
+
+describe('workflowShapeKey', () => {
+  const zimage = JSON.parse(readFileSync(new URL('./fixtures/zimage-turbo-api.json', import.meta.url), 'utf8')) as MediaWorkflow['graph'];
+
+  it('ignores primitive values and tells a different graph apart', () => {
+    const other = structuredClone(zimage);
+    (other['58']!.inputs as Record<string, unknown>)['value'] = 'a different prompt';
+    (other['57:3']!.inputs as Record<string, unknown>)['seed'] = 99;
+    expect(workflowShapeKey(other)).toBe(workflowShapeKey(zimage));
+    other['999'] = { class_type: 'Note', inputs: {} };
+    expect(workflowShapeKey(other)).not.toBe(workflowShapeKey(zimage));
   });
 });

@@ -67,6 +67,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const connections = allConnections.filter((c) => !isGenerationKind(c.kind));
   const models = useOtherBenchStore((s) => s.models);
   const chats = useOtherBenchStore((s) => s.chats);
+  const machines = useOtherBenchStore((s) => s.machines);
 
   const [name, setName] = useState(profile?.name ?? '');
   const [description, setDescription] = useState(profile?.description ?? '');
@@ -126,6 +127,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     videoModel: profile?.toolPolicy.media?.video?.model ?? '',
     videoCheckpoint: profile?.toolPolicy.media?.video?.checkpoint ?? '',
     confirmPrompts: profile?.toolPolicy.media?.confirmPrompts !== false,
+    unloadChatModel: profile?.toolPolicy.media?.unloadChatModel !== false,
   }));
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
   const [useGlobalMemory, setUseGlobalMemory] = useState(profile?.useGlobalMemory !== false);
@@ -201,7 +203,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       ...(generation.videoConnectionId ? { video: choice(generation.videoConnectionId, generation.videoModel, generation.videoCheckpoint) } : {}),
     };
     const mediaFields: Pick<ToolPolicyBody, 'media'> =
-      media.image || media.video || profile?.toolPolicy.media !== undefined ? { media: { ...media, confirmPrompts: generation.confirmPrompts } } : {};
+      media.image || media.video || profile?.toolPolicy.media !== undefined ? { media: { ...media, confirmPrompts: generation.confirmPrompts, ...(generation.unloadChatModel ? {} : { unloadChatModel: false }) } } : {};
 
     const hosts = hostsText
       .split(/\r?\n/)
@@ -616,7 +618,14 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         )}
       </div>
 
-      <GenerationSection connections={allConnections} value={generation} onChange={setGeneration} />
+      <GenerationSection
+        connections={allConnections}
+        value={generation}
+        onChange={setGeneration}
+        chatConnection={allConnections.find((c) => c.id === connectionId)}
+        chatModel={modelsForConnection.find((m) => m.modelId === modelId)}
+        selfNodeId={machines?.self.id}
+      />
 
       {/* Claude Code profiles too: OtherBench relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
       <div>

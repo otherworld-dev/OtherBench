@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@otherbench/core/domain/availability.js';
 import { hasUserinfo, isGenerationKind, withoutUserinfo } from '@otherbench/core/domain/media.js';
+import { CHECKPOINT_LOADERS, mediaCheckpointLoader, type CheckpointLoader } from '@otherbench/core/domain/media-workflows.js';
 import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
@@ -10,7 +11,8 @@ import type { Connection, ConnectionKind, ModelInfo } from '@otherbench/core/typ
 import { classifyProviderError } from '@otherbench/core/types/errors.js';
 import type { ErrorKind } from '@otherbench/core/types/messages.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
-import { comfyCheckpoints } from '@otherbench/tools/media/comfyui.js';
+import { comfyCheckpoints, comfySystemSummary } from '@otherbench/tools/media/comfyui.js';
+import { findComfyUI, recentWorkflows, textTemplates } from '../comfy-library.js';
 import type { Container } from '../container.js';
 import { backendOf, mediaConnectionOf } from '../media.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
@@ -175,15 +177,38 @@ function mediaCall(conn: Connection, request: AbortSignal): { signal: AbortSigna
   };
 }
 
-/** A generation connection's Test: its backend's own check, reported as a chat test's is. */
+/** `ComfyUI 0.8.2 · NVIDIA GeForce RTX 3090, 24 GB`, leaving out what `/system_stats` didn't say. */
+function comfyTestMessage(summary: { version: string; gpu: string | null; vramGb: number | null }): string {
+  const card = summary.gpu === null ? null : summary.vramGb === null ? summary.gpu : `${summary.gpu}, ${summary.vramGb} GB`;
+  return [`ComfyUI${summary.version ? ` ${summary.version}` : ''}`, card].filter((t) => t !== null).join(' · ');
+}
+
+/** A generation connection's Test: its backend's own check, reported as a chat test's is. ComfyUI also says its version and card. */
 async function testGeneration(container: Container, conn: Connection, request: AbortSignal): Promise<ConnectionTestResult> {
   const startedAt = Date.now();
   const { signal, failure } = mediaCall(conn, request);
+  let mc: MediaConnection;
   try {
-    await backendOf(container.store, await mediaConnectionOf(container, conn)).test(signal);
-    return { ok: true, message: 'Connected.', latencyMs: Date.now() - startedAt };
+    mc = await mediaConnectionOf(container, conn);
+    await backendOf(container.store, mc).test(signal);
   } catch (err) {
     return { ok: false, message: failure(err), latencyMs: Date.now() - startedAt };
+  }
+  let message = 'Connected.';
+  if (mc.kind === 'comfyui') {
+    // It answered like ComfyUI; the details are extra, so missing ones don't fail the test.
+    message = await comfySystemSummary(mc, signal).then(comfyTestMessage, () => message);
+  }
+  return { ok: true, message, latencyMs: Date.now() - startedAt };
+}
+
+/** A ComfyUI connection as the adapters take it, for a ComfyUI-only route. */
+async function comfyConnectionOf(container: Container, conn: Connection, what: string): Promise<MediaConnection> {
+  if (conn.kind !== 'comfyui') throw new HTTPException(400, { message: `Only a ComfyUI connection has ${what}.` });
+  try {
+    return await mediaConnectionOf(container, conn);
+  } catch (err) {
+    throw new HTTPException(400, { message: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -224,6 +249,12 @@ export function connectionsRoutes(container: Container): Hono {
       syncSecret: body.syncSecret !== undefined ? parseSyncSecret(body.syncSecret) : true,
     });
     return c.json(created, 201);
+  });
+
+  // Find ComfyUI: only when the user clicks, only the two fixed loopback addresses, and nothing is created.
+  app.post('/find-comfyui', async (c) => {
+    const found = await findComfyUI(c.req.raw.signal);
+    return c.json(found ?? { found: false });
   });
 
   app.get('/:id', (c) => c.json(getConnectionOrThrow(container, c.req.param('id'))));
@@ -333,6 +364,12 @@ export function connectionsRoutes(container: Container): Hono {
     if (!isGenerationKind(conn.kind)) throw new HTTPException(400, { message: 'Only a generation connection has generation models.' });
     const media = c.req.query('media');
     if (media !== 'image' && media !== 'video') throw new HTTPException(400, { message: '"media" must be "image" or "video".' });
+    // The loader the workflow's model file is on (`checkpointLoaderOf`), else the media's usual one.
+    const asked = c.req.query('loader');
+    if (asked !== undefined && !Object.hasOwn(CHECKPOINT_LOADERS, asked)) {
+      throw new HTTPException(400, { message: `"loader" must be one of: ${Object.keys(CHECKPOINT_LOADERS).join(', ')}.` });
+    }
+    const loader: CheckpointLoader = (asked as CheckpointLoader | undefined) ?? mediaCheckpointLoader(media);
     const { signal, failure } = mediaCall(conn, c.req.raw.signal);
     let models: { id: string; label: string }[];
     let mc: MediaConnection;
@@ -345,9 +382,33 @@ export function connectionsRoutes(container: Container): Hono {
     if (mc.kind !== 'comfyui') return c.json({ models, checkpoints: [] });
     // The workflows are OtherBench's own: they are listed even when ComfyUI can't say which files it has.
     try {
-      return c.json({ models, checkpoints: await comfyCheckpoints(mc, signal, media) });
+      return c.json({ models, checkpoints: await comfyCheckpoints(mc, signal, loader) });
     } catch (err) {
       return c.json({ models, checkpoints: [], checkpointsError: failure(err) });
+    }
+  });
+
+  // What ComfyUI already has: the workflows run from its own page, and its text-only templates. Read-only.
+  app.get('/:id/comfy/recent', async (c) => {
+    const conn = getConnectionOrThrow(container, c.req.param('id'));
+    const mc = await comfyConnectionOf(container, conn, 'recently run workflows');
+    const { signal, failure } = mediaCall(conn, c.req.raw.signal);
+    try {
+      return c.json(await recentWorkflows(mc, container.store.mediaWorkflows.list(), signal));
+    } catch (err) {
+      throw new HTTPException(502, { message: failure(err) });
+    }
+  });
+
+  app.get('/:id/comfy/templates', async (c) => {
+    const conn = getConnectionOrThrow(container, c.req.param('id'));
+    const mc = await comfyConnectionOf(container, conn, 'templates');
+    const { signal, failure } = mediaCall(conn, c.req.raw.signal);
+    try {
+      const templates = await textTemplates(mc, signal);
+      return c.json(templates === 'unsupported' ? { unsupported: true } : { templates });
+    } catch (err) {
+      throw new HTTPException(502, { message: failure(err) });
     }
   });
 

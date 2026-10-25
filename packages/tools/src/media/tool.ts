@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
-import { confirmPromptsOf } from '@otherbench/core/domain/media.js';
+import { confirmPromptsOf, unloadChatModelOf } from '@otherbench/core/domain/media.js';
+import { shapeSizes, SHAPE_RATIOS, type Aspect, type WorkflowLimits } from '@otherbench/core/domain/media-workflows.js';
 import { GENERATION_PROMPT_MAX_CHARS, type AskFn } from '@otherbench/core/domain/thread-tools.js';
 import { MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, sniffToolMediaMime } from '@otherbench/core/domain/tool-images.js';
 import type { MediaApplies, MediaBackend, MediaOutput, MediaProgress, MediaRequest } from '@otherbench/core/ports/media.js';
@@ -11,7 +12,6 @@ import type { MediaChoice, ToolPolicy } from '@otherbench/core/types/config.js';
 // prompt ask comes after the broker allows the call, inside the tool.
 
 type Media = 'image' | 'video';
-type Aspect = 'square' | 'portrait' | 'landscape' | 'wide';
 
 export const IMAGE_TOOL = 'generate_image';
 export const VIDEO_TOOL = 'generate_video';
@@ -41,6 +41,17 @@ export interface MediaHost {
    * deleted workflow).
    */
   backendFor(connectionId: string, use: { media: Media; model: string }): Promise<ResolvedMedia>;
+  /**
+   * The size and length a workflow is built for, which the tool keeps to. Null
+   * when the backend has no workflow limits (A1111, OpenAI-style): the tool
+   * keeps its fixed image sizes then.
+   */
+  limitsFor(use: { connectionId: string; media: Media; model: string }): Promise<WorkflowLimits | null>;
+  /**
+   * Frees the GPU for the generation by unloading the profile's chat model,
+   * when that applies. Never throws; does nothing when it doesn't apply.
+   */
+  freeGpu(use: { profileId: string; generationConnectionId: string }, signal: AbortSignal): Promise<void>;
 }
 
 /** What a generation call actually sent, by the result it returned: the audit records these, not the model's. */
@@ -54,16 +65,11 @@ export function mediaAuditArgs(args: unknown, result: unknown): unknown {
 /** A setting the backend doesn't use: a ComfyUI workflow runs its own, others leave it out. */
 const WORKFLOW_DEFAULT = 'workflow default';
 
-const ASPECTS: readonly Aspect[] = ['square', 'portrait', 'landscape', 'wide'];
+const ASPECTS = Object.keys(SHAPE_RATIOS) as Aspect[];
 
-const SIZES: Record<Media, Record<Aspect, [number, number]>> = {
-  image: { square: [1024, 1024], portrait: [832, 1216], landscape: [1216, 832], wide: [1344, 768] },
-  video: { square: [640, 640], portrait: [480, 832], landscape: [832, 480], wide: [1280, 704] },
-};
+/** The sizes of a backend with no workflow limits; a ComfyUI workflow takes its own (`shapeSizes`). */
+const IMAGE_SIZES: Record<Aspect, [number, number]> = { square: [1024, 1024], portrait: [832, 1216], landscape: [1216, 832], wide: [1344, 768] };
 
-/** Wan 2.2's frame rate; a clip is `seconds * FPS + 1` frames. */
-const FPS = 24;
-const MAX_SECONDS = 10;
 const DEFAULT_SECONDS = 5;
 /** At most one progress event per call this often; a stage change always goes out. */
 const PROGRESS_MS = 500;
@@ -91,7 +97,21 @@ interface Parsed {
   seconds: number;
 }
 
-function parseArgs(media: Media, args: unknown): Parsed | { invalid: string } {
+/** What a call can choose: a shape only where there is a size to shape, seconds only where the workflow holds a length. */
+interface Shape {
+  sizes: Record<Aspect, [number, number]> | null;
+  /** The longest clip, whole seconds; null when there is no length to choose. */
+  maxSeconds: number | null;
+  fps: number;
+}
+
+function shapeOf(media: Media, limits: WorkflowLimits | null): Shape {
+  const sizes = limits ? (limits.size ? shapeSizes(limits.size, media === 'video' ? 32 : 16) : null) : media === 'image' ? IMAGE_SIZES : null;
+  const max = media === 'video' && limits?.maxFrames ? Math.floor((limits.maxFrames - 1) / limits.fps) : 0;
+  return { sizes, maxSeconds: max >= 1 ? max : null, fps: limits?.fps ?? 24 };
+}
+
+function parseArgs(media: Media, shape: Shape, args: unknown): Parsed | { invalid: string } {
   const a = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
   const prompt = a['prompt'];
   if (typeof prompt !== 'string' || prompt.trim() === '') return { invalid: '"prompt" must be a non-empty string.' };
@@ -99,13 +119,15 @@ function parseArgs(media: Media, args: unknown): Parsed | { invalid: string } {
   const negative = a['negative_prompt'];
   if (negative !== undefined && negative !== null && typeof negative !== 'string') return { invalid: '"negative_prompt" must be a string.' };
   if (typeof negative === 'string' && negative.length > GENERATION_PROMPT_MAX_CHARS) return { invalid: `"negative_prompt" can be at most ${GENERATION_PROMPT_MAX_CHARS} characters.` };
-  const aspect = a['aspect'] ?? 'square';
+  // With no size to shape, `aspect` isn't offered and a stray one is ignored.
+  const aspect = shape.sizes ? (a['aspect'] ?? 'square') : 'square';
   if (!ASPECTS.includes(aspect as Aspect)) return { invalid: `"aspect" must be one of: ${ASPECTS.join(', ')}.` };
   const seed = a['seed'];
   if (seed !== undefined && seed !== null && !(typeof seed === 'number' && Number.isSafeInteger(seed) && seed >= 0)) return { invalid: '"seed" must be a whole number, 0 or more.' };
-  const seconds = media === 'video' ? (a['seconds'] ?? DEFAULT_SECONDS) : 0;
-  if (media === 'video' && !(typeof seconds === 'number' && Number.isInteger(seconds) && seconds >= 1 && seconds <= MAX_SECONDS)) {
-    return { invalid: `"seconds" must be a whole number from 1 to ${MAX_SECONDS}.` };
+  const max = shape.maxSeconds;
+  const seconds = max === null ? 0 : (a['seconds'] ?? Math.min(DEFAULT_SECONDS, max));
+  if (max !== null && !(typeof seconds === 'number' && Number.isInteger(seconds) && seconds >= 1 && seconds <= max)) {
+    return { invalid: `"seconds" must be a whole number from 1 to ${max}.` };
   }
   return {
     prompt,
@@ -116,27 +138,31 @@ function parseArgs(media: Media, args: unknown): Parsed | { invalid: string } {
   };
 }
 
-function parameters(media: Media): Record<string, unknown> {
+function parameters(shape: Shape): Record<string, unknown> {
   const properties: Record<string, unknown> = {
     prompt: { type: 'string', description: 'The full generation prompt: subject, style, lighting, composition.' },
     negative_prompt: { type: 'string', description: 'What to keep out of it, where the backend takes one.' },
-    aspect: { type: 'string', enum: ASPECTS, default: 'square', description: 'The shape of the frame.' },
-    seed: { type: 'integer', minimum: 0, description: 'Repeat a seed to repeat a result; leave it out for a new one.' },
   };
-  if (media === 'video') properties['seconds'] = { type: 'integer', minimum: 1, maximum: MAX_SECONDS, default: DEFAULT_SECONDS, description: 'How long the clip is.' };
+  if (shape.sizes) properties['aspect'] = { type: 'string', enum: ASPECTS, default: 'square', description: 'The shape of the frame.' };
+  properties['seed'] = { type: 'integer', minimum: 0, description: 'Repeat a seed to repeat a result; leave it out for a new one.' };
+  if (shape.maxSeconds !== null) {
+    properties['seconds'] = { type: 'integer', minimum: 1, maximum: shape.maxSeconds, default: Math.min(DEFAULT_SECONDS, shape.maxSeconds), description: 'How long the clip is.' };
+  }
   return { type: 'object', properties, required: ['prompt'], additionalProperties: false };
 }
 
-function description(media: Media, confirm: boolean): string {
+function description(media: Media, confirm: boolean, shape: Shape): string {
   const what = media === 'image' ? 'an image' : 'a short video clip';
   const time = media === 'video' ? ' A clip takes minutes, so make one only when asked.' : '';
+  const own =
+    (shape.maxSeconds !== null ? ` Video from this workflow is up to ${shape.maxSeconds} s.` : '') + (shape.sizes === null ? ' This workflow uses its own size.' : '');
   const seen = confirm
     ? 'The user sees your prompt first and may edit or cancel it; the result tells you what was actually sent.'
     : 'It runs straight away, and the user sees the prompt you sent.';
   return (
     `Generates ${what} on the user's own generator. Write a full prompt from the user's words: the subject, ` +
     `the style or medium, the lighting, the composition and framing, in plain descriptive phrases. Add a negative ` +
-    `prompt for what to keep out. ${seen} For a follow-up ("darker", "same again"), reuse the earlier prompt and seed.${time}`
+    `prompt for what to keep out. ${seen} For a follow-up ("darker", "same again"), reuse the earlier prompt and seed.${time}${own}`
   );
 }
 
@@ -190,19 +216,27 @@ function pick(media: Media, outputs: MediaOutput[]): { kept: { mime: string; byt
   return { kept, notes };
 }
 
-function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: ToolPolicy, askUser: AskFn, progress: (ctx: ToolContext, p: MediaProgress) => void): ToolSpec {
+function mediaTool(media: Media, choice: MediaChoice, limits: WorkflowLimits | null, host: MediaHost, policy: ToolPolicy, askUser: AskFn, progress: (ctx: ToolContext, p: MediaProgress) => void): ToolSpec {
   const name = media === 'image' ? IMAGE_TOOL : VIDEO_TOOL;
   const confirm = confirmPromptsOf(policy);
   return {
     name,
-    description: description(media, confirm),
-    parameters: parameters(media),
+    description: description(media, confirm, shapeOf(media, limits)),
+    parameters: parameters(shapeOf(media, limits)),
     risk: 'execute',
     source: 'media',
     async execute(args: unknown, ctx: ToolContext): Promise<unknown> {
-      const parsed = parseArgs(media, args);
+      // The workflow is read again now: it may have changed since the tools were listed, and nothing outside its limits is sent.
+      let shape: Shape;
+      try {
+        shape = shapeOf(media, await host.limitsFor({ connectionId: choice.connectionId, media, model: choice.model }));
+      } catch (err) {
+        return fail('generation_unavailable', (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR));
+      }
+      const parsed = parseArgs(media, shape, args);
       if ('invalid' in parsed) return fail('invalid_input', parsed.invalid);
-      const [width, height] = SIZES[media][parsed.aspect];
+      // No size to shape: none is sent, so the workflow keeps its own and nothing is reported.
+      const size = shape.sizes ? shape.sizes[parsed.aspect] : null;
 
       let resolved: ResolvedMedia;
       try {
@@ -216,8 +250,8 @@ function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: T
       // negative prompt always gets one (`''` for none), so a workflow's own is never sent unseen.
       const unapplied = (what: string): string | null => (resolved.workflowDefaults ? `${what}: ${WORKFLOW_DEFAULT}` : null);
       const seedText = applies.seed ? `seed ${parsed.seed}` : unapplied('seed');
-      const sizeText = applies.size ? `${width}×${height}` : unapplied('size');
-      const lengthText = media !== 'video' ? null : applies.frames ? `${parsed.seconds} s` : unapplied('length');
+      const sizeText = applies.size && size ? `${size[0]}×${size[1]}` : unapplied('size');
+      const lengthText = media !== 'video' ? null : applies.frames && shape.maxSeconds !== null ? `${parsed.seconds} s` : unapplied('length');
 
       let prompt = parsed.prompt;
       let negativePrompt = applies.negativePrompt ? (parsed.negativePrompt ?? resolved.defaultNegativePrompt ?? '') : null;
@@ -237,8 +271,24 @@ function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: T
       if (negativePrompt !== null && negativePrompt.trim() === '') negativePrompt = '';
       if (ctx.signal.aborted) return fail('cancelled', STOPPED);
 
-      const req: MediaRequest = { media, model: choice.model, prompt, negativePrompt, width, height, seed: parsed.seed };
-      if (media === 'video') req.frames = parsed.seconds * FPS + 1;
+      // The prompt is settled and the user said Generate (or wasn't asked): make room on the GPU first.
+      // It is best effort, so a failure here never stops the generation.
+      if (unloadChatModelOf(policy)) {
+        try {
+          await host.freeGpu({ profileId: ctx.profileId, generationConnectionId: choice.connectionId }, ctx.signal);
+        } catch {
+          // generation goes ahead
+        }
+        if (ctx.signal.aborted) return fail('cancelled', STOPPED);
+      }
+
+      const req: MediaRequest = { media, model: choice.model, prompt, negativePrompt, seed: parsed.seed };
+      if (size) {
+        req.width = size[0];
+        req.height = size[1];
+      }
+      // A rate that isn't whole (23.976) still sends a whole frame count, and never more than the workflow holds.
+      if (media === 'video' && shape.maxSeconds !== null) req.frames = Math.round(parsed.seconds * shape.fps) + 1;
       if (choice.checkpoint !== undefined) req.checkpoint = choice.checkpoint;
       const sent: Record<string, unknown> = { ...(args as Record<string, unknown>), prompt };
       if (negativePrompt === null) delete sent['negative_prompt'];
@@ -276,10 +326,21 @@ function mediaTool(media: Media, choice: MediaChoice, host: MediaHost, policy: T
   };
 }
 
-/** `generate_image` when the profile has an image choice, `generate_video` when it has a video one. */
-export function mediaTools(host: MediaHost, policy: ToolPolicy, askUser: AskFn, progress: (ctx: ToolContext, p: MediaProgress) => void): ToolSpec[] {
+/**
+ * `generate_image` when the profile has an image choice, `generate_video` when it has a video one.
+ * Each is built from its workflow's own limits, read now: the host has them for the connection and model chosen.
+ */
+export async function mediaTools(host: MediaHost, policy: ToolPolicy, askUser: AskFn, progress: (ctx: ToolContext, p: MediaProgress) => void): Promise<ToolSpec[]> {
   const tools: ToolSpec[] = [];
-  if (policy.media?.image) tools.push(mediaTool('image', policy.media.image, host, policy, askUser, progress));
-  if (policy.media?.video) tools.push(mediaTool('video', policy.media.video, host, policy, askUser, progress));
+  const limitsOf = async (media: Media, choice: MediaChoice): Promise<WorkflowLimits | null> => {
+    // A workflow that can't be read now is reported by the call itself, so the tool is still offered.
+    try {
+      return await host.limitsFor({ connectionId: choice.connectionId, media, model: choice.model });
+    } catch {
+      return null;
+    }
+  };
+  if (policy.media?.image) tools.push(mediaTool('image', policy.media.image, await limitsOf('image', policy.media.image), host, policy, askUser, progress));
+  if (policy.media?.video) tools.push(mediaTool('video', policy.media.video, await limitsOf('video', policy.media.video), host, policy, askUser, progress));
   return tools;
 }

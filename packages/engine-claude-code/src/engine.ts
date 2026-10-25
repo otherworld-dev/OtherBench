@@ -100,7 +100,7 @@ export interface ClaudeCodeEngineDeps {
    * first, and a tool that describes its calls (the browser) runs only with
    * the arguments the gate approved. Without it, no relay.
    */
-  relayTools?: (policy: ToolPolicy) => ToolSpec[];
+  relayTools?: (policy: ToolPolicy) => ToolSpec[] | Promise<ToolSpec[]>;
   /** Builds OtherBench's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: OtherBenchServerTool[]) => McpServerConfig;
 }
@@ -510,7 +510,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const backend = backendOf(req.profile.connection);
     const clean = !req.workspaceRoot;
     const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
-    const prepared = this.prepareReply(req, backend, clean);
+    // This process is already running the turn, and until `live.binding` is set its hooks refuse the
+    // turn's calls ("No OtherBench reply is waiting"). So prepareReply's awaits (relayTools, and the media tools'
+    // `limitsFor` under it) must stay store reads that settle at once: no network or disk I/O before the
+    // binding is set. The binding is built by prepareReply itself, so it can't be set any sooner.
+    const prepared = await this.prepareReply(req, backend, clean);
     prepared.proc.live = live;
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
@@ -664,7 +668,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return 'done';
     }
     const content = this.userContent(req, plan.mode === 'fresh', images);
-    const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = this.prepareReply(req, backend, clean);
+    const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = await this.prepareReply(req, backend, clean);
     const compaction: Compaction | null = compacting ? { summary: null } : null;
     if (compaction) binding.compacted = (summary) => (compaction.summary = summary);
     const options = this.processOptions(req, cwd, autoMode, clean);
@@ -699,11 +703,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * context, policy and auto mode), its own tools and relay, and the switches
    * the process key needs. A user's reply and a self-started one build it the same way.
    */
-  private prepareReply(
+  private async prepareReply(
     req: EngineRequest,
     backend: string,
     clean: boolean
-  ): { gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding; proc: { live: LiveProcess | null } } {
+  ): Promise<{ gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding; proc: { live: LiveProcess | null } }> {
     const profile = req.profile;
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
@@ -722,7 +726,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // runs in the sandbox, and the browser when it is on, relayed through the
     // same server (relay.ts). A clean chat has no folder for a command to run
     // in, so it gets no run_command; it does get the browser, which needs none.
-    const relayed = this.deps.relayTools ? this.deps.relayTools(profile.toolPolicy).filter((s) => !(clean && s.source === 'sandbox')) : [];
+    const relayed = this.deps.relayTools ? (await this.deps.relayTools(profile.toolPolicy)).filter((s) => !(clean && s.source === 'sandbox')) : [];
     const relay = buildRelay(relayed);
     const own: OtherBenchServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,

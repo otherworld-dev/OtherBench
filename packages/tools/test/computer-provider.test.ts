@@ -65,22 +65,22 @@ describe('the computer tool in OtherBenchToolProvider', () => {
     expect((await without.listTools(policy())).map((t) => t.name)).not.toContain('computer');
   });
 
-  it('relays the computer tool to Claude Code under the same rule', () => {
+  it('relays the computer tool to Claude Code under the same rule', async () => {
     const { provider, driver } = gated();
-    expect(provider.relayOtherBenchTools(policy()).map((t) => t.name)).toEqual(['computer']);
-    expect(provider.relayOtherBenchTools(policy({ computer: false }))).toEqual([]);
-    expect(provider.relayOtherBenchTools(policy({ computer: undefined }))).toEqual([]);
+    expect((await provider.relayOtherBenchTools(policy())).map((t) => t.name)).toEqual(['computer']);
+    expect((await provider.relayOtherBenchTools(policy({ computer: false })))).toEqual([]);
+    expect((await provider.relayOtherBenchTools(policy({ computer: undefined })))).toEqual([]);
     driver.isAvailable = false;
-    expect(provider.relayOtherBenchTools(policy())).toEqual([]);
+    expect((await provider.relayOtherBenchTools(policy()))).toEqual([]);
   });
 
   it('shows no native dialog for a profile with computer use off: the tool is absent, and a kept spec is refused before it is asked anything', async () => {
     const { provider, driver, store, requests } = gated();
     const off = policy({ computer: false });
     expect((await provider.listTools(off)).map((t) => t.name)).not.toContain('computer');
-    expect(provider.relayOtherBenchTools(off)).toEqual([]);
+    expect((await provider.relayOtherBenchTools(off))).toEqual([]);
     // A Claude Code process keeps the specs it was started with: one listed while computer use was on, called after it was turned off.
-    const kept = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const kept = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     const calls = recordCalls(driver);
     for (const args of [{ action: 'type', text: 'x' }, { action: 'left_click', coordinate: [1, 1] }, { action: 'screenshot' }]) {
       expect(await provider.requestApproval(kept, args, off, ctx())).toEqual({ allowed: false, reason: COMPUTER_OFF_REASON });
@@ -161,7 +161,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
         expect(out.message).toContain('OtherBench asks every time for this app');
       }
       // The relayed call (Claude Code) is denied the same way.
-      const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+      const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
       const outcome = provider.requestApproval(spec, { action: 'left_click', coordinate: [5, 5] }, policy(), ctx());
       await vi.waitFor(() => expect(requests).toHaveLength(3));
       provider.resolveApproval(requests[2]!.id, { choice: 'chat' });
@@ -255,7 +255,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
   it('approves a relayed call with the app OtherBench worked out, not the one Claude Code sent', async () => {
     const made = await gatedReady();
     const { provider, driver } = made;
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     const outcome = await answer(
       made,
       provider.requestApproval(spec, { action: 'left_click', coordinate: [1, 2], app: 'C:\\Program Files\\Trusted\\ok.exe', appWindow: 'hwnd-evil', appShellView: false }, policy(), ctx()),
@@ -301,7 +301,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
       for (const args of [{ action: 'type', text: 'x' }, { action: 'left_click', coordinate: [1, 2] }, { action: 'key', text: 'ctrl+s' }, { action: 'screenshot' }, { action: 'wait' }]) {
         expect(await tool.execute(args, unattendedCtx(value))).toEqual(refusal);
       }
-      const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+      const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
       expect(await provider.requestApproval(spec, { action: 'type', text: 'x' }, policy(), unattendedCtx(value))).toEqual({ allowed: false, reason: COMPUTER_UNATTENDED_REASON });
       expect(store.audit.list('chat-1').map((r) => r.grantedBy)).toEqual(Array(6).fill('deny:unattended'));
       expect(calls).toEqual([]);
@@ -342,7 +342,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
       again.abort();
       return { ok: true };
     };
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     expect(await provider.requestApproval(spec, { action: 'type', text: 'hunter2' }, policy(), ctx({ signal: again.signal }))).toEqual({ allowed: false, reason: stopped.message });
     expect(store.audit.list('chat-1').map((r) => r.grantedBy)).toEqual(['deny:cancelled', 'deny:cancelled']);
     expect(requests).toEqual([]);
@@ -416,7 +416,7 @@ describe('screen-derived text at each place the provider puts it', () => {
   it("answers a describeCall that throws with one clean line, labelled, on both paths", async () => {
     const { provider, store, driver } = gated();
     // Whatever the tool is handed that makes it throw outside its own handling.
-    const bad: ToolSpec = { ...provider.relayOtherBenchTools(policy())[0]!, describeCall: async () => { throw new Error(HOSTILE); } };
+    const bad: ToolSpec = { ...(await provider.relayOtherBenchTools(policy()))[0]!, describeCall: async () => { throw new Error(HOSTILE); } };
     const gate = (provider as unknown as { gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec }).gate(bad, policy());
     expect(await gate.execute({ action: 'screenshot' }, ctx())).toEqual({ about: ABOUT.text, error: true, code: 'permission_denied', message: `OtherBench couldn't check this call: ${CLEAN}` });
     expect(await provider.requestApproval(bad, { action: 'screenshot' }, policy(), ctx())).toEqual({ allowed: false, reason: `OtherBench couldn't check this call: ${CLEAN}`, about: ABOUT.text });
@@ -426,7 +426,7 @@ describe('screen-derived text at each place the provider puts it', () => {
 
   it("hands Claude Code's path the same line for a refusal in the desktop app's words, and none for OtherBench's own", async () => {
     const { provider, driver } = await gatedReady();
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     driver.pointTarget = { refuse: HOSTILE };
     expect(await provider.requestApproval(spec, { action: 'left_click', coordinate: [1, 1] }, policy(), ctx())).toEqual({ allowed: false, reason: CLEAN, about: ABOUT.text });
     expect(await provider.requestApproval(spec, { action: 'left_click', coordinate: [1, 1] }, policy(), unattendedCtx(true))).toEqual({ allowed: false, reason: COMPUTER_UNATTENDED_REASON });
@@ -481,7 +481,7 @@ describe('screen-derived text at each place the provider puts it', () => {
   it('answers a tool that throws while it runs with one clean labelled line, and audits it', async () => {
     const { store, driver } = setup();
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
-    const real = provider.relayOtherBenchTools(policy())[0]!;
+    const real = (await provider.relayOtherBenchTools(policy()))[0]!;
     // The tool answers its own failures; this is for one that ever got out of it.
     const throwing: ToolSpec = { ...real, describeCall: async () => ({ args: { action: 'screenshot', app: null }, risk: 'read' }), execute: async () => { throw new Error(HOSTILE); } };
     const gate = (provider as unknown as { gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec }).gate(throwing, policy());
@@ -515,7 +515,7 @@ describe("the spec handed to Claude Code's relay", () => {
   it('runs nothing that requestApproval did not approve: not the model\'s arguments, not described-looking ones, not a copy, not twice', async () => {
     const made = await gatedReady();
     const { provider, driver, store } = made;
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     const click = { action: 'left_click', coordinate: [1, 2] };
     expect(await spec.execute(click, ctx())).toEqual(NO_APPROVAL);
     expect(await spec.execute({ ...click, ...APP }, ctx())).toEqual(NO_APPROVAL);
@@ -544,7 +544,7 @@ describe("the spec handed to Claude Code's relay", () => {
     const made = await gatedReady();
     const { provider, driver, store } = made;
     store.chats.create({ id: 'chat-2', title: 'Other', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     const approve = async (): Promise<object> => ((await answer(made, provider.requestApproval(spec, { action: 'left_click', coordinate: [1, 2] }, policy(), ctx()), { choice: 'once' })) as { args: object }).args;
     for (const other of [{ chatId: 'chat-2' }, { messageId: 'msg-2' }, { profileId: 'profile-2' }]) {
       expect(await spec.execute(await approve(), ctx(other)), JSON.stringify(other)).toEqual(NO_APPROVAL);
@@ -565,7 +565,7 @@ describe("the spec handed to Claude Code's relay", () => {
   it('runs nothing for a reply stopped between the approval and the call, and audits the stop', async () => {
     const made = await gatedReady();
     const { provider, driver, store } = made;
-    const spec = provider.relayOtherBenchTools(policy()).find((t) => t.name === 'computer')!;
+    const spec = (await provider.relayOtherBenchTools(policy())).find((t) => t.name === 'computer')!;
     const turn = new AbortController();
     const outcome = (await answer(made, provider.requestApproval(spec, { action: 'type', text: 'hunter2' }, policy(), ctx({ signal: turn.signal })), { choice: 'once' })) as { args: object };
     turn.abort();

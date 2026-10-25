@@ -20,6 +20,9 @@ vi.mock('../../state/api.js', async (importOriginal) => {
         test: vi.fn(),
         discoverModels: vi.fn(),
         mediaModels: vi.fn(),
+        findComfyui: vi.fn(),
+        comfyRecent: vi.fn(async () => []),
+        comfyTemplates: vi.fn(async () => ({ templates: [] })),
       },
       mediaWorkflows: { list: vi.fn(async () => []), detect: vi.fn(), create: vi.fn(), delete: vi.fn() },
     },
@@ -175,6 +178,45 @@ describe('ConnectionsPanel', () => {
     render(<ConnectionsPanel />);
     await user.click(screen.getByText('Comfy'));
     expect(await screen.findByTestId('workflows-section')).toBeInTheDocument();
+  });
+
+  it('Find ComfyUI fills the base URL and says which ComfyUI it found; only ComfyUI forms have it', async () => {
+    vi.mocked(api.connections.findComfyui).mockResolvedValue({ baseUrl: 'http://127.0.0.1:8000', version: '0.8.2', gpu: 'RTX 3090', vramGb: 24 });
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    expect(screen.queryByRole('button', { name: 'Find ComfyUI' })).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Connection kind'), 'comfyui');
+    expect(api.connections.findComfyui).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Find ComfyUI' }));
+    expect(await screen.findByText('Found ComfyUI 0.8.2 at http://127.0.0.1:8000')).toBeInTheDocument();
+    expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:8000');
+  });
+
+  it("Find ComfyUI says plainly when neither address answers, and leaves the URL alone", async () => {
+    vi.mocked(api.connections.findComfyui).mockResolvedValue({ found: false });
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    await user.selectOptions(screen.getByLabelText('Connection kind'), 'comfyui');
+    await user.type(screen.getByLabelText('Base URL'), 'http://10.0.0.5:8188');
+    await user.click(screen.getByRole('button', { name: 'Find ComfyUI' }));
+    expect(await screen.findByText("Couldn't find ComfyUI on this PC (tried 8188 and 8000). Is it running?")).toBeInTheDocument();
+    expect(screen.getByLabelText('Base URL')).toHaveValue('http://10.0.0.5:8188');
+  });
+
+  it('treats an empty base URL on a saved ComfyUI connection as the default address', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cu', name: 'Comfy', kind: 'comfyui', baseUrl: '' })]);
+    vi.mocked(api.connections.comfyTemplates).mockResolvedValue({ templates: [{ name: 'image_x', title: 'X', category: 'Image', media: 'image', models: [], sizeBytes: null }] });
+    const opened = vi.fn();
+    vi.stubGlobal('open', opened);
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByText('Comfy'));
+    await user.click(await screen.findByRole('tab', { name: 'Templates' }));
+    await user.click(await screen.findByRole('button', { name: 'Open X in ComfyUI' }));
+    expect(opened).toHaveBeenCalledWith('http://127.0.0.1:8188/?template=image_x', '_blank', 'noopener,noreferrer');
+    vi.unstubAllGlobals();
   });
 
   it('rejects an openai_compatible connection with no base URL client-side, without calling the API', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GENERATION_KINDS, confirmPromptsOf, hasUserinfo, isGenerationKind, withoutUserinfo } from '../src/domain/media.js';
+import { GENERATION_KINDS, confirmPromptsOf, hasUserinfo, isGenerationKind, sharesLocalGpu, unloadChatModelOf, withoutUserinfo } from '../src/domain/media.js';
 import { subagentPolicy } from '../src/domain/subagent.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
@@ -49,5 +49,28 @@ describe('userinfo in base URLs', () => {
       "Couldn't reach https://host/v1: Request cannot be constructed from a URL that includes credentials: https://host/v1/models",
     );
     expect(withoutUserinfo('http://127.0.0.1:8188 said no')).toBe('http://127.0.0.1:8188 said no');
+  });
+});
+
+describe('sharesLocalGpu', () => {
+  const comfy = { baseUrl: 'http://127.0.0.1:8000' };
+
+  it('is true for a local Ollama (default URL or loopback) and a local generator', () => {
+    expect(sharesLocalGpu({ kind: 'ollama', baseUrl: null }, comfy)).toBe(true);
+    expect(sharesLocalGpu({ kind: 'ollama', baseUrl: 'http://localhost:11434' }, comfy)).toBe(true);
+  });
+
+  it('is false for a remote Ollama, a remote generator or another chat kind', () => {
+    expect(sharesLocalGpu({ kind: 'ollama', baseUrl: 'http://192.168.1.5:11434' }, comfy)).toBe(false);
+    expect(sharesLocalGpu({ kind: 'ollama', baseUrl: null }, { baseUrl: 'http://192.168.1.9:8188' })).toBe(false);
+    expect(sharesLocalGpu({ kind: 'openai', baseUrl: null }, comfy)).toBe(false);
+  });
+});
+
+describe('unloadChatModelOf', () => {
+  it('is true unless the policy turns it off', () => {
+    expect(unloadChatModelOf(BASE)).toBe(true);
+    expect(unloadChatModelOf({ ...BASE, media: { unloadChatModel: true } })).toBe(true);
+    expect(unloadChatModelOf({ ...BASE, media: { unloadChatModel: false } })).toBe(false);
   });
 });

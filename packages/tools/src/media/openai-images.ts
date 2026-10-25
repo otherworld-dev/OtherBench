@@ -28,7 +28,7 @@ export function createOpenAIImagesBackend(conn: MediaConnection): MediaBackend {
           body: JSON.stringify({
             model: req.model,
             prompt: req.prompt,
-            size: `${req.width}x${req.height}`,
+            ...(req.width !== undefined && req.height !== undefined ? { size: `${req.width}x${req.height}` } : {}),
             response_format: 'b64_json',
             n: 1,
           }),

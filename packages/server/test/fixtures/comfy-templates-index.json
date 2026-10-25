@@ -1,0 +1,194 @@
+[
+  {
+    "moduleName": "default",
+    "category": "Foundation",
+    "title": "Image",
+    "icon": "icon-[lucide--image]",
+    "type": "image",
+    "templates": [
+      {
+        "name": "image_sdxl_simple",
+        "title": "SDXL1.0: Text to Image (Simple)",
+        "description": "Generate high-quality images from text prompts using the SDXL 1.0 model, offering a straightforward text-to-image generation workflow. Ideal for quick concept visualization, creative brainstorming, and rapid prototyping of visual ideas.",
+        "mediaType": "image",
+        "mediaSubtype": "webp",
+        "tags": [
+          "Image",
+          "Text to Image"
+        ],
+        "models": [
+          "SDXL"
+        ],
+        "date": "2024-02-22",
+        "openSource": true,
+        "size": 6979321856,
+        "usage": 412,
+        "searchRank": 0,
+        "username": "ComfyUI",
+        "io": {
+          "outputs": [
+            {
+              "nodeId": 7,
+              "nodeType": "SaveImage",
+              "file": "image_sdxl_simple.png",
+              "mediaType": "image"
+            }
+          ]
+        },
+        "minComfyUIVersion": "0.0.1"
+      },
+      {
+        "name": "api_nano_banana_2_1_t2i",
+        "title": "Nano Banana 2.1: Text to Image",
+        "description": "Generate images from text prompts using Nano Banana 2.1, Google's fast Gemini-based image model, delivering one finished image with no input files required. Ideal for brand marketing posters, e-commerce product visuals, and IP character series.",
+        "mediaType": "image",
+        "mediaSubtype": "webp",
+        "tags": [
+          "Text to Image",
+          "API",
+          "Image"
+        ],
+        "models": [
+          "Nano Banana"
+        ],
+        "logos": [
+          {
+            "provider": "Google"
+          }
+        ],
+        "minComfyUIVersion": "0.39.1",
+        "date": "2026-10-06",
+        "openSource": false,
+        "size": 0,
+        "usage": 5020,
+        "searchRank": 0,
+        "username": "ComfyUI",
+        "io": {
+          "outputs": [
+            {
+              "nodeId": 3,
+              "nodeType": "SaveImageAdvanced",
+              "file": "api_nano_banana_2_1_t2i.png",
+              "mediaType": "image"
+            }
+          ]
+        },
+        "thumbnail": [
+          "output/api_nano_banana_2_1_t2i.png"
+        ]
+      }
+    ]
+  },
+  {
+    "moduleName": "default",
+    "category": "Foundation",
+    "title": "Video",
+    "icon": "icon-[lucide--film]",
+    "type": "video",
+    "templates": [
+      {
+        "name": "video_ltx2_3_t2v",
+        "title": "LTX-2.3: Text to Video",
+        "description": "Generate a video from a text prompt, optionally using an image for reference. Receive a high-quality video with improved motion, audio, and detail, optimized for portrait or landscape formats.",
+        "mediaType": "image",
+        "mediaSubtype": "webp",
+        "tags": [
+          "Text to Video",
+          "Video"
+        ],
+        "models": [
+          "LTX-2.3",
+          "Lightricks"
+        ],
+        "date": "2026-03-05",
+        "openSource": true,
+        "size": 47244640256,
+        "usage": 605,
+        "searchRank": 0,
+        "io": {
+          "outputs": [
+            {
+              "nodeId": 75,
+              "nodeType": "SaveVideo",
+              "file": "video_ltx2_3_t2v.mp4",
+              "mediaType": "video"
+            }
+          ]
+        },
+        "username": "ComfyUI",
+        "thumbnail": [
+          "output/video_ltx2_3_t2v.mp4"
+        ],
+        "minComfyUIVersion": "0.16.4"
+      },
+      {
+        "name": "video_wan2_2_5B_ti2v",
+        "title": "Wan 2.2 5B Video Generation",
+        "description": "Fast text-to-video and image-to-video generation with 5B parameters. Optimized for rapid prototyping and creative exploration.",
+        "mediaType": "image",
+        "mediaSubtype": "webp",
+        "tags": [
+          "Text to Video",
+          "Video"
+        ],
+        "models": [
+          "Wan2.2",
+          "Wan"
+        ],
+        "date": "2025-07-29",
+        "size": 18146236826,
+        "usage": 247,
+        "io": {
+          "inputs": [
+            {
+              "nodeId": 56,
+              "nodeType": "LoadImage",
+              "file": "example.png",
+              "mediaType": "image",
+              "sourceRevision": "67984637eefcd4825dcf5c134e39034785be1682"
+            }
+          ]
+        },
+        "username": "ComfyUI",
+        "minComfyUIVersion": "0.3.46"
+      }
+    ]
+  },
+  {
+    "moduleName": "default",
+    "category": "Foundation",
+    "title": "3D Model",
+    "icon": "icon-[lucide--box]",
+    "type": "3d",
+    "templates": [
+      {
+        "name": "api_tripo_p2_text_to_model",
+        "title": "Tripo P2: Text to Model",
+        "description": "Generate production-ready 3D meshes from text prompts with Tripo P2, featuring native quad topology and mesh budgets up to 50,000 triangles or 25,000 quads. Ideal for game characters and props, hard-surface assets, and high-volume pipelines needing clean, rig-ready geometry.",
+        "mediaType": "image",
+        "mediaSubtype": "webp",
+        "tags": [
+          "API",
+          "Text to 3D"
+        ],
+        "models": [
+          "Tripo",
+          "Tripo P2"
+        ],
+        "logos": [
+          {
+            "provider": "Tripo"
+          }
+        ],
+        "minComfyUIVersion": "0.36.0",
+        "date": "2026-09-16",
+        "openSource": false,
+        "size": 0,
+        "usage": 21,
+        "searchRank": 0,
+        "username": "ComfyUI",
+        "thumbnailVariant": "compareSlider"
+      }
+    ]
+  }
+]

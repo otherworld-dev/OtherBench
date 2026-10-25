@@ -20,6 +20,24 @@ import { BASE_URL } from '../playwright.config.js';
 test.describe.configure({ mode: 'serial' });
 
 const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+/** A tiny image workflow, as ComfyUI keeps it in /history for a run from its own page (API format). */
+const TINY_IMAGE_GRAPH = {
+  '3': { class_type: 'KSampler', inputs: { seed: 7, steps: 4, cfg: 1, sampler_name: 'euler', scheduler: 'simple', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+  '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'tiny.safetensors' } },
+  '5': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+  '6': { class_type: 'CLIPTextEncode', inputs: { text: 'a cat', clip: ['4', 1] } },
+  '7': { class_type: 'CLIPTextEncode', inputs: { text: 'blurry', clip: ['4', 1] } },
+  '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+  '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'tiny', images: ['8', 0] } },
+};
+const TEMPLATE_INDEX = [
+  {
+    moduleName: 'default',
+    title: 'Image',
+    type: 'image',
+    templates: [{ name: 'image_tiny_text', title: 'Tiny text to image', mediaType: 'image', io: { inputs: [], outputs: [{ mediaType: 'image' }] }, models: ['tiny.safetensors'] }],
+  },
+];
 const MP4 = readFileSync(fileURLToPath(new URL('./fixtures/tiny.mp4', import.meta.url)));
 
 function json(res: ServerResponse, body: unknown, status = 200): void {
@@ -71,9 +89,24 @@ test.beforeAll(async () => {
     if (req.method === 'POST' && url === '/prompt') {
       void body(req).then((text) => {
         comfyPrompts.push(text);
-        json(res, { prompt_id: 'fake-job', number: 1 });
+        json(res, { prompt_id: text.includes('EmptyLatentImage') ? 'fake-image-job' : 'fake-job', number: 1 });
       });
       return;
+    }
+    if (req.method === 'GET' && url === '/history') {
+      return json(res, {
+        'run-from-comfy': {
+          prompt: [1, 'run-from-comfy', TINY_IMAGE_GRAPH, { create_time: 1_700_000_000_000, extra_pnginfo: { workflow: { nodes: [], links: [] } } }, ['9']],
+          outputs: { '9': { images: [{ filename: 'tiny.png', subfolder: '', type: 'output' }] } },
+          status: { status_str: 'success', messages: [] },
+        },
+      });
+    }
+    if (req.method === 'GET' && url === '/templates/index.json') return json(res, TEMPLATE_INDEX);
+    if (req.method === 'GET' && url === '/history/fake-image-job') {
+      return json(res, {
+        'fake-image-job': { status: { status_str: 'success', messages: [] }, outputs: { '9': { images: [{ filename: 'tiny.png', subfolder: '', type: 'output' }] } } },
+      });
     }
     if (req.method === 'GET' && url.startsWith('/history/')) {
       return json(res, {
@@ -82,7 +115,7 @@ test.beforeAll(async () => {
     }
     if (req.method === 'GET' && url === '/view') {
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
-      return void res.end(MP4);
+      return void res.end((req.url ?? '').includes('tiny.png') ? PNG_1X1 : MP4);
     }
     if (url === '/queue' || url === '/interrupt') return json(res, {});
     // /ws gets a plain 404: no websocket, so the client polls.
@@ -197,4 +230,65 @@ test('#video: the same flow through ComfyUI gives a playing video that stays aft
   const video = page.getByTestId('generated-video');
   await expect(video).toBeVisible();
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState >= 1 && v.videoWidth > 0)).toBe(true);
+});
+
+test('a workflow run from ComfyUI is added from Recently run, picked on a profile, and generates an image', async ({ page, request }) => {
+  test.setTimeout(90_000);
+  const suffix = randomUUID().slice(0, 8);
+  const connectionName = `ComfyUI fit ${suffix}`;
+  const workflowName = `Tiny image ${suffix}`;
+  const mock = (await (await request.post(`${BASE_URL}/api/connections`, { data: { name: `Mock ${suffix}`, kind: 'mock' } })).json()) as { id: string };
+  const comfy = (await (await request.post(`${BASE_URL}/api/connections`, { data: { name: connectionName, kind: 'comfyui', baseUrl: `http://127.0.0.1:${comfyPort}` } })).json()) as { id: string };
+  const profileRes = await request.post(`${BASE_URL}/api/profiles`, {
+    data: {
+      name: `Fit ${suffix}`,
+      connectionId: mock.id,
+      modelId: 'mock-standard',
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: comfy.id, model: 'builtin:sdxl-txt2img' } } },
+    },
+  });
+  expect(profileRes.ok()).toBeTruthy();
+  const profile = (await profileRes.json()) as { id: string };
+  const chatRes = await request.post(`${BASE_URL}/api/chats`, { data: { title: `Fit E2E ${suffix}`, profileId: profile.id, workspaceRoot: null } });
+  const { id: chatId } = (await chatRes.json()) as { id: string };
+
+  // Part 1: the run from ComfyUI's page is listed, added after a review, and then listed as added.
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('tab', { name: 'Connections' }).click();
+  await page.getByTestId('connections-list').getByText(connectionName).click();
+  const section = page.getByTestId('workflows-section');
+  await expect(section.getByRole('tab', { name: 'Recently run' })).toHaveAttribute('aria-selected', 'true');
+  const recent = section.getByTestId('recent-run-from-comfy');
+  await expect(recent).toBeVisible();
+  await recent.getByRole('button', { name: 'Add' }).click();
+  const review = page.getByTestId('workflow-review');
+  await review.getByRole('textbox', { name: 'Workflow name' }).fill(workflowName);
+  await review.getByRole('button', { name: 'Save workflow' }).click();
+  await expect(review).toHaveCount(0);
+  await expect(recent).toContainText('Added');
+  await section.getByRole('tab', { name: 'Added to OtherBench' }).click();
+  await expect(section).toContainText(workflowName);
+  // The text-only template is listed too (it is only opened in ComfyUI, never run from here).
+  await section.getByRole('tab', { name: 'Templates' }).click();
+  await expect(section).toContainText('Tiny text to image');
+
+  // Part 2: the profile uses it, and #image runs it.
+  await page.getByRole('tab', { name: 'Profiles' }).click();
+  await page.getByTestId(`profile-row-${profile.id}`).click();
+  await page.getByLabel('Image workflow').selectOption({ label: workflowName });
+  await page.getByTestId('profile-form').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect
+    .poll(async () => ((await (await request.get(`${BASE_URL}/api/profiles/${profile.id}`)).json()) as { toolPolicy: { media?: { image?: { model: string } } } }).toolPolicy.media?.image?.model)
+    .not.toBe('builtin:sdxl-txt2img');
+
+  const before = comfyPrompts.length;
+  await send(page, chatId, '#image a green cube');
+  const card = page.locator('[data-testid^="ask-card-"][data-kind="generation"]');
+  await expect(card).toHaveCount(1);
+  await card.getByRole('button', { name: 'Generate' }).click();
+  await expect(page.getByTestId('generated-image')).toBeVisible({ timeout: 30_000 });
+  expect(comfyPrompts).toHaveLength(before + 1);
+  expect(comfyPrompts[before]).toContain('a green cube');
+  expect(comfyPrompts[before]).toContain('tiny.safetensors');
 });

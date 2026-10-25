@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { Connection } from '@otherbench/core/types/config.js';
-import { isGenerationKind } from '@otherbench/core/domain/media.js';
-import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import type { Connection, ModelInfo } from '@otherbench/core/types/config.js';
+import { availableOn } from '@otherbench/core/domain/availability.js';
+import { isGenerationKind, sharesLocalGpu } from '@otherbench/core/domain/media.js';
+import { checkpointLoaderOf, mediaCheckpointLoader, type CheckpointLoader, type MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import { api, ApiError, type MediaModelsResult } from '../../state/api.js';
 
 /** A profile's image and video choices, as the form holds them. An empty connection means none; an empty checkpoint, the workflow's own model file. */
@@ -13,6 +14,8 @@ export interface GenerationState {
   videoModel: string;
   videoCheckpoint: string;
   confirmPrompts: boolean;
+  /** Free the graphics card before generating; ticked unless the profile says otherwise. */
+  unloadChatModel: boolean;
 }
 
 interface ChoiceProps {
@@ -39,7 +42,7 @@ function Choice({ media, connections, connectionId, model, checkpoint, onChange 
   const conn = connections.find((c) => c.id === connectionId);
   const comfy = conn?.kind === 'comfyui';
   const thing = comfy ? 'workflow' : 'model';
-  const [loaded, setLoaded] = useState<{ id: string; result: MediaModelsResult } | { id: string; error: string } | null>(null);
+  const [loaded, setLoaded] = useState<{ id: string; loader: CheckpointLoader | undefined; result: MediaModelsResult } | { id: string; error: string } | null>(null);
   // The workflows' bindings say which of them names a model file to choose.
   const [workflows, setWorkflows] = useState<MediaWorkflow[]>([]);
   useEffect(() => {
@@ -62,16 +65,19 @@ function Choice({ media, connections, connectionId, model, checkpoint, onChange 
     latest.current = { model, onChange };
   });
 
+  const workflow = comfy ? workflows.find((w) => w.id === model) : undefined;
+  // The model files come from the loader the workflow's model file is on: a Z-Image workflow makes images from a UNET file.
+  const loader = comfy ? (workflow ? checkpointLoaderOf(workflow, media) : mediaCheckpointLoader(media)) : undefined;
+
   // A connection that was deleted (or is not one of these) has nothing to ask.
   const known = conn !== undefined;
   useEffect(() => {
     if (!connectionId || !known) return;
     let cancelled = false;
-    api.connections
-      .mediaModels(connectionId, media)
+    (loader ? api.connections.mediaModels(connectionId, media, loader) : api.connections.mediaModels(connectionId, media))
       .then((result) => {
         if (cancelled) return;
-        setLoaded({ id: connectionId, result });
+        setLoaded({ id: connectionId, loader, result });
         // A connection just chosen has no model yet: start on its first. One already saved is left alone.
         if (!latest.current.model && result.models[0]) latest.current.onChange(connectionId, result.models[0].id, '');
       })
@@ -83,15 +89,15 @@ function Choice({ media, connections, connectionId, model, checkpoint, onChange 
     return () => {
       cancelled = true;
     };
-    // Only a different connection asks again.
+    // Only a different connection, or a workflow on another loader, asks again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, media, known]);
+  }, [connectionId, media, known, loader]);
 
   const current = loaded && loaded.id === connectionId ? loaded : null;
   const models = current && 'result' in current ? current.result.models : [];
   const error = current && 'error' in current ? current.error : null;
-  const checkpoints = current && 'result' in current ? current.result.checkpoints : [];
-  const workflow = comfy ? workflows.find((w) => w.id === model) : undefined;
+  // Another loader's files are never offered, even while this one's are on the way.
+  const checkpoints = current && 'result' in current && current.loader === loader ? current.result.checkpoints : [];
   const own = workflow ? ownCheckpoint(workflow) : null;
   const select = 'w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm';
 
@@ -153,10 +159,31 @@ export function generationProblem(connections: Connection[], value: GenerationSt
   return null;
 }
 
+const UNLOAD_LABEL = 'Unload the chat model before generating (frees the graphics card; the reply after the picture is slower)';
+
 /** The Generation part of a profile: which connection makes its images and its video, and whether it asks first. Claude Code profiles get it too, through the relay. */
-export function GenerationSection({ connections, value, onChange }: { connections: Connection[]; value: GenerationState; onChange: (next: GenerationState) => void }): JSX.Element {
+export function GenerationSection({
+  connections,
+  value,
+  onChange,
+  chatConnection,
+  chatModel,
+  selfNodeId,
+}: {
+  connections: Connection[];
+  value: GenerationState;
+  onChange: (next: GenerationState) => void;
+  /** The profile's chat connection and model, for the tools warning (Ollama only: other kinds default supportsTools to false) and the unload option. */
+  chatConnection?: Connection;
+  chatModel?: ModelInfo;
+  /** This machine's node id; unloading only happens for a chat connection available here. Unknown until machines load. */
+  selfNodeId?: string;
+}): JSX.Element {
   const generation = connections.filter((c) => isGenerationKind(c.kind));
   const video = generation.filter((c) => c.kind === 'comfyui');
+  const chosen = [value.imageConnectionId, value.videoConnectionId].map((id) => generation.find((c) => c.id === id)).filter((c): c is Connection => c !== undefined);
+  // The server frees the card only when the chat connection is on this machine too.
+  const canUnload = chatConnection !== undefined && (selfNodeId === undefined || availableOn(chatConnection, selfNodeId)) && chosen.some((g) => sharesLocalGpu(chatConnection, g));
   return (
     <div data-testid="generation-settings" className="space-y-2">
       <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Generation</span>
@@ -181,10 +208,21 @@ export function GenerationSection({ connections, value, onChange }: { connection
             onChange={(c, m, k) => onChange({ ...value, videoConnectionId: c, videoModel: m, videoCheckpoint: k })}
           />
           <p className="text-xs text-[var(--text-muted)]">Video needs ComfyUI.</p>
+          {chosen.length > 0 && chatConnection?.kind === 'ollama' && chatModel?.supportsTools === false && (
+            <p role="alert" className="text-xs text-[var(--danger)]">
+              ⚠ {chatModel.displayName} can't use tools, so this profile can't generate. Pick a model that can.
+            </p>
+          )}
           <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label="Show me the prompt before generating" checked={value.confirmPrompts} onChange={(e) => onChange({ ...value, confirmPrompts: e.target.checked })} />
             Show me the prompt before generating
           </label>
+          {canUnload && (
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
+              <input type="checkbox" aria-label={UNLOAD_LABEL} checked={value.unloadChatModel} onChange={(e) => onChange({ ...value, unloadChatModel: e.target.checked })} />
+              {UNLOAD_LABEL}
+            </label>
+          )}
         </>
       )}
     </div>
