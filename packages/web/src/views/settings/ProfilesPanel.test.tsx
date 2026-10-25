@@ -1040,6 +1040,34 @@ describe('ProfilesPanel generation', () => {
     );
   });
 
+  it("lists the model files of the loader a workflow's model file is on: UNET files for a Z-Image image workflow", async () => {
+    arrange();
+    mockedMediaModels.mockImplementation(async (_id, _media, loader) => ({
+      models: [{ id: 'zimage', label: 'Z-Image' }],
+      checkpoints: loader === 'UNETLoader' ? ['z_image_turbo_bf16.safetensors', 'flux1-dev.safetensors'] : ['sd_xl_base_1.0.safetensors'],
+    }));
+    mockedWorkflows.mockResolvedValue([
+      {
+        id: 'zimage', name: 'Z-Image', media: 'image', builtin: false,
+        graph: { '28': { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } } },
+        bindings: { checkpoint: { nodeId: '28', input: 'unet_name' } },
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await openNew(user);
+    await user.selectOptions(screen.getByLabelText('Image connection'), 'comfy');
+    const picker = await screen.findByLabelText('Image model file');
+    await waitFor(() =>
+      expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+        "Workflow's own (z_image_turbo_bf16.safetensors)",
+        'z_image_turbo_bf16.safetensors',
+        'flux1-dev.safetensors',
+      ])
+    );
+    expect(mockedMediaModels).toHaveBeenLastCalledWith('comfy', 'image', 'UNETLoader');
+  });
+
   it('shows the note when ComfyUI could not list its model files', async () => {
     arrange();
     mockedMediaModels.mockResolvedValue({ models: [{ id: 'w1', label: 'My flow' }], checkpoints: [], checkpointsError: 'ComfyUI did not answer.' });

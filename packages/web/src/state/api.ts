@@ -1,6 +1,6 @@
 import type { App, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
-import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
@@ -552,9 +552,12 @@ export const api = {
     findComfyui: () => post<{ baseUrl: string; version: string; gpu: string | null; vramGb: number | null } | { found: false }>('/connections/find-comfyui'),
     comfyRecent: (id: string) => request<RecentWorkflow[]>(`/connections/${encodeURIComponent(id)}/comfy/recent`),
     comfyTemplates: (id: string) => request<{ templates: ComfyTemplate[] } | { unsupported: true }>(`/connections/${encodeURIComponent(id)}/comfy/templates`),
-    /** A generation connection's models or workflows for the pickers; ComfyUI also lists the model files it has (`checkpointsError` when it couldn't say). */
-    mediaModels: (id: string, media: 'image' | 'video') =>
-      request<MediaModelsResult>(`/connections/${encodeURIComponent(id)}/media-models?media=${media}`),
+    /**
+     * A generation connection's models or workflows for the pickers; ComfyUI also lists the model files it has
+     * (`checkpointsError` when it couldn't say), from `loader` (the one a workflow's model file is on), else the media's usual one.
+     */
+    mediaModels: (id: string, media: 'image' | 'video', loader?: CheckpointLoader) =>
+      request<MediaModelsResult>(`/connections/${encodeURIComponent(id)}/media-models?media=${media}${loader ? `&loader=${encodeURIComponent(loader)}` : ''}`),
   },
 
   /** ComfyUI workflows, built-in (`builtin:` ids, read-only) and imported. */

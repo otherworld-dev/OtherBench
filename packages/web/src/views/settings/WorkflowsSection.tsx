@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import type { MediaWorkflow, WorkflowBinding, WorkflowRole } from '@otherbench/core/domain/media-workflows.js';
+import { checkpointLoaderOf, type MediaWorkflow, type WorkflowBinding, type WorkflowRole } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import { ApiError, api, type MediaModelsResult } from '../../state/api.js';
 import { openInBrowser } from '../../desktop/bridge.js';
@@ -117,6 +117,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   const [templates, setTemplates] = useState<ComfyTemplate[] | 'unsupported' | null>(null);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [openHint, setOpenHint] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const nameInput = useRef<HTMLInputElement>(null);
@@ -188,12 +189,14 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   }, []);
 
   const media = draft?.media;
+  // The model files come from the loader the bound model file is on, whatever the workflow makes.
+  const loader = draft ? checkpointLoaderOf(draft, draft.media) : undefined;
   useEffect(() => {
-    if (!media) return;
+    if (!media || !loader) return;
     let cancelled = false;
     setCheckpoints(null);
     api.connections
-      .mediaModels(connectionId, media)
+      .mediaModels(connectionId, media, loader)
       .then((r) => {
         if (!cancelled) setCheckpoints(r);
       })
@@ -203,7 +206,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
     return () => {
       cancelled = true;
     };
-  }, [connectionId, media]);
+  }, [connectionId, media, loader]);
 
   const inputs = useMemo(() => (draft ? primitiveInputs(draft.graph) : []), [draft?.graph]);
 
@@ -321,6 +324,18 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   }
 
   function openTemplate(t: ComfyTemplate): void {
+    // Only a web address is handed to the opener; anything else (a file: path, a typo) opens nothing.
+    let protocol = '';
+    try {
+      protocol = new URL(baseUrl).protocol;
+    } catch {
+      // not an address at all
+    }
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      setOpenHint(true);
+      return;
+    }
+    setOpenHint(false);
     const base = baseUrl.replace(/\/+$/, '');
     // ComfyUI's front end loads `?template=` only for plain names; any other opens its page and the hint says which to pick.
     const url = TEMPLATE_PARAM.test(t.name) ? `${base}/?template=${encodeURIComponent(t.name)}` : base;
@@ -413,6 +428,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
             {Array.isArray(templates) && (
               <>
                 <p className="text-xs text-[var(--text-muted)]">Run it once in ComfyUI, then add it from Recently run.</p>
+                {openHint && <p role="alert" className="text-xs text-[var(--danger)]">ComfyUI&apos;s address must start with http:// or https:// to open it. Set it above.</p>}
                 <input aria-label="Search templates" placeholder="Search templates" value={search} onChange={(e) => setSearch(e.target.value)} className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm" />
                 {templateGroups(templates, search).map(([category, rows]) => (
                   <div key={category}>

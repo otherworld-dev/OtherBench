@@ -294,6 +294,16 @@ describe('WorkflowsSection', () => {
     expect(opener).toHaveBeenCalledWith('http://127.0.0.1:8188');
   });
 
+  it('opens nothing for an address that is not http or https, and says why', async () => {
+    comfyTemplates.mockResolvedValue({ templates });
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" baseUrl="file:///C:/ComfyUI" />);
+    await user.click(screen.getByRole('tab', { name: 'Templates' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Z-Image Turbo in ComfyUI' }));
+    expect(opener).not.toHaveBeenCalled();
+    expect(screen.getByText(/ComfyUI's address must start with http:\/\/ or https:\/\//)).toBeInTheDocument();
+  });
+
   it('says templates need a newer ComfyUI when it has none', async () => {
     comfyTemplates.mockResolvedValue({ unsupported: true });
     const user = userEvent.setup();
@@ -401,6 +411,23 @@ describe('WorkflowsSection', () => {
     });
     expect(screen.queryByText('flow old')).toBeNull();
     expect(screen.getByText('flow new')).toBeInTheDocument();
+  });
+
+  it("lists the model files of the loader the model file is on: UNET files for a Z-Image image workflow", async () => {
+    const zimage = {
+      '28': { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } },
+      '27': { class_type: 'CLIPTextEncode', inputs: { text: 'a pig' } },
+    };
+    mediaModels.mockImplementation(async (_id, _media, loader) => ({ models: [], checkpoints: loader === 'UNETLoader' ? ['z_image_turbo_bf16.safetensors'] : ['sd_xl_base_1.0.safetensors'] }));
+    comfyRecent.mockResolvedValue([
+      { promptId: 'z', name: 'Z-Image', media: 'image', ranAt: null, models: [], graph: zimage, bindings: { prompt: { nodeId: '27', input: 'text' }, checkpoint: { nodeId: '28', input: 'unet_name' } }, problem: null, added: false },
+    ]);
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await user.click(await screen.findByRole('button', { name: 'Add' }));
+    const picker = screen.getByLabelText('Model file');
+    await waitFor(() => expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(["Keep the workflow's own", 'z_image_turbo_bf16.safetensors']));
+    expect(mediaModels).toHaveBeenLastCalledWith('c1', 'image', 'UNETLoader');
   });
 
   it('moves focus to the review form after Add', async () => {
