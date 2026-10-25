@@ -10,6 +10,7 @@ import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { normaliseBaseUrl, NextcloudError, type NextcloudClient, type RawBoard } from '../nextcloud/client.js';
 import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings, storedNextcloudSettings } from '../nextcloud/config.js';
 import { archiveCard, changeLabels, completeCard, deleteCard, findCard, moveCard, reopenCard, updateCard } from '../nextcloud/deck.js';
+import { collectivePagePaths } from '../nextcloud/wiki.js';
 
 /**
  * `/api/nextcloud` (spec 2026-10-22-nextcloud-tabs): this machine's Nextcloud
@@ -168,6 +169,12 @@ export function nextcloudRoutes(container: Container): Hono {
   app.get('/collectives', async (c) => {
     const collectives = await withClient((client) => client.collectives());
     return c.json(collectives.map((col) => col.name));
+  });
+
+  /** `GET /collectives/:name/pages`: the collective's page paths, for picking an app's Collectives page. */
+  app.get('/collectives/:name/pages', async (c) => {
+    const name = c.req.param('name');
+    return c.json(await withClient((client) => collectivePagePaths(client, name)));
   });
 
   /** `GET /detect-links?path=<abs>`: the folder's CLAUDE.md "Project links", with the board resolved to an id when it can be. */

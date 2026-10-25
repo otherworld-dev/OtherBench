@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NextcloudError } from '../../src/nextcloud/client.js';
-import { wikiPage, wikiTree } from '../../src/nextcloud/wiki.js';
+import { collectivePagePaths, wikiPage, wikiTree } from '../../src/nextcloud/wiki.js';
 import { FakeNextcloudClient } from './fake-client.js';
 
 const page = (id: number, title: string, parentId: number, text = '') => ({ id, title, parentId, collectiveId: 1, text });
@@ -34,6 +34,21 @@ describe('wiki', () => {
     expect(tree.pages.find((p) => p.id === 3)?.parentId).toBeNull();
     expect(tree.pages.find((p) => p.id === 4)?.parentId).toBe(3);
     expect(tree.url).toBe('https://nc.example/index.php/apps/collectives/Otherworld%20Dev/Products/OtherBench');
+  });
+
+  it('collectivePagePaths lists every page under the landing page as a path, parents first', async () => {
+    expect(await collectivePagePaths(fake(), 'otherworld dev')).toEqual([
+      'Products',
+      'Products/Other',
+      'Products/OtherBench',
+      'Products/OtherBench/Design',
+      'Products/OtherBench/Design/Specs',
+      'Products/OtherBench/Design/Specs/X',
+    ]);
+  });
+
+  it('collectivePagePaths on a missing collective is nextcloud-not-found', async () => {
+    await rejectsWith(collectivePagePaths(fake(), 'Nope'), 'nextcloud-not-found');
   });
 
   it('wikiTree resolves case-insensitively', async () => {

@@ -23,12 +23,18 @@ interface Resolved {
   chain: RawPage[];
 }
 
-async function resolve(client: NextcloudClient, collective: string, pagePath: string): Promise<Resolved> {
+/** The collective's pages and its landing page, by the collective's name (case-insensitive). */
+async function collectiveLanding(client: NextcloudClient, collective: string): Promise<{ pages: RawPage[]; landing: RawPage }> {
   const found = (await client.collectives()).find((c) => c.name.toLowerCase() === collective.trim().toLowerCase());
   if (!found) throw notFound('The collective');
   const pages = await client.collectivePages(found.id);
   const landing = landingPage(pages);
   if (!landing) throw notFound('The landing page');
+  return { pages, landing };
+}
+
+async function resolve(client: NextcloudClient, collective: string, pagePath: string): Promise<Resolved> {
+  const { pages, landing } = await collectiveLanding(client, collective);
   const chain: RawPage[] = [];
   let parent = landing;
   for (const seg of pagePath.split('/').filter((s) => s.trim())) {
@@ -38,6 +44,25 @@ async function resolve(client: NextcloudClient, collective: string, pagePath: st
     parent = next;
   }
   return { pages, root: parent, chain };
+}
+
+/**
+ * Every page under the collective's landing page as the path an app's Collectives page is set to (`Products/MyApp`),
+ * parents before their children and siblings by title, for the app form's page list.
+ */
+export async function collectivePagePaths(client: NextcloudClient, collective: string): Promise<string[]> {
+  const { pages, landing } = await collectiveLanding(client, collective);
+  const out: string[] = [];
+  const walk = (parent: RawPage, prefix: string, seen: Set<number>): void => {
+    const children = pages.filter((p) => p.parentId === parent.id && !seen.has(p.id)).sort((a, b) => a.title.localeCompare(b.title));
+    for (const child of children) {
+      const path = prefix ? `${prefix}/${child.title}` : child.title;
+      out.push(path);
+      walk(child, path, new Set([...seen, child.id]));
+    }
+  };
+  walk(landing, '', new Set([landing.id]));
+  return out;
 }
 
 /** `root` and every page below it, root first. */
