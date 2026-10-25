@@ -409,7 +409,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         </div>
       </div>
 
-      {connection && connection.kind === 'comfyui' && kind === 'comfyui' && <WorkflowsSection connectionId={connection.id} baseUrl={connection.baseUrl ?? BASE_URL_PLACEHOLDERS['comfyui'] ?? ''} />}
+      {connection && connection.kind === 'comfyui' && kind === 'comfyui' && <WorkflowsSection connectionId={connection.id} baseUrl={connection.baseUrl || (BASE_URL_PLACEHOLDERS['comfyui'] ?? '')} />}
 
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
 

@@ -1,8 +1,8 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
-import type { ComfyTemplate } from '@otherbench/core/types/media-library.js';
+import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
@@ -354,5 +354,60 @@ describe('WorkflowsSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Import from file…' }));
     expect(click).toHaveBeenCalled();
     click.mockRestore();
+  });
+
+  it('reloads Recently run when its tab is selected, when the window regains focus, and on Refresh', async () => {
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await screen.findByText('Run a workflow in ComfyUI and it will show up here.');
+    expect(comfyRecent).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Templates' }));
+    // Not on that tab: focus must not poll ComfyUI.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(comfyRecent).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Recently run' }));
+    await waitFor(() => expect(comfyRecent).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(comfyRecent).toHaveBeenCalledTimes(3));
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(comfyRecent).toHaveBeenCalledTimes(4));
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(comfyRecent).toHaveBeenCalledTimes(5));
+  });
+
+  it('applies only the latest of overlapping Recently run loads', async () => {
+    let resolveFirst!: (v: RecentWorkflow[]) => void;
+    const entry = (id: string): RecentWorkflow => ({ promptId: id, name: `flow ${id}`, media: 'image', ranAt: null, models: [], graph, bindings: {}, problem: null, added: false });
+    comfyRecent.mockReset();
+    comfyRecent.mockImplementationOnce(() => new Promise<RecentWorkflow[]>((r) => { resolveFirst = r; }));
+    comfyRecent.mockResolvedValueOnce([entry('new')]);
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('flow new')).toBeInTheDocument();
+    await act(async () => {
+      resolveFirst([entry('old')]);
+    });
+    expect(screen.queryByText('flow old')).toBeNull();
+    expect(screen.getByText('flow new')).toBeInTheDocument();
+  });
+
+  it('moves focus to the review form after Add', async () => {
+    comfyRecent.mockResolvedValue([{ promptId: 'p1', name: 'Flow', media: 'image', ranAt: null, models: [], graph, bindings: { prompt: { nodeId: '6', input: 'text' } }, problem: null, added: false }]);
+    const user = userEvent.setup();
+    render(<WorkflowsSection connectionId="c1" />);
+    await user.click(await screen.findByRole('button', { name: 'Add' }));
+    expect(screen.getByLabelText('Workflow name')).toHaveFocus();
   });
 });

@@ -119,19 +119,43 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   const [search, setSearch] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
+  const nameInput = useRef<HTMLInputElement>(null);
+  const [formFocus, setFormFocus] = useState(0);
+  const recentLoad = useRef(0);
+
+  // Overlapping loads (tab, focus, Refresh) can finish out of order, so only the latest one applies.
   async function loadRecent(): Promise<void> {
+    const mine = ++recentLoad.current;
     try {
-      setRecent(await api.connections.comfyRecent(connectionId));
+      const rows = await api.connections.comfyRecent(connectionId);
+      if (mine !== recentLoad.current) return;
+      setRecent(rows);
       setRecentError(null);
     } catch (err) {
+      if (mine !== recentLoad.current) return;
       console.error('[otherbench-web] failed to list recent ComfyUI workflows:', err);
       setRecentError(errorMessage(err, 'Could not reach ComfyUI.'));
     }
   }
+  // Loads on open and whenever the tab is selected; while it shows, coming back to the window reloads it too
+  // (the usual flow is to run something in ComfyUI and switch back).
   useEffect(() => {
+    if (tab !== 'recent') return;
     void loadRecent();
+    const refresh = (): void => {
+      if (document.visibilityState !== 'hidden') void loadRecent();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId]);
+  }, [connectionId, tab]);
+  useEffect(() => {
+    if (formFocus > 0) nameInput.current?.focus();
+  }, [formFocus]);
 
   useEffect(() => {
     if (tab !== 'templates' || templates !== null) return;
@@ -196,6 +220,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
     try {
       const detected = await api.mediaWorkflows.detect(graph);
       setDraft(newDraft(graph as Graph, detected.bindings, file.name.replace(/\.json$/i, ''), 'image', detected.problem));
+      setFormFocus((n) => n + 1);
     } catch (err) {
       console.error('[otherbench-web] failed to read workflow:', err);
       setImportError(errorMessage(err, 'Could not read that workflow.'));
@@ -213,6 +238,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   function startAdd(r: RecentWorkflow): void {
     setImportError(null);
     setDraft(newDraft(r.graph, r.bindings, r.name, r.media, r.problem));
+    setFormFocus((n) => n + 1);
   }
 
   function setBinding(role: WorkflowRole, index: string): void {
@@ -230,6 +256,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   function startEdit(wf: MediaWorkflow): void {
     setImportError(null);
     setDraft(newDraft(wf.graph, wf.bindings, wf.name, wf.media, null, { checkpoint: wf.checkpoint ?? '', editingId: wf.id }));
+    setFormFocus((n) => n + 1);
   }
 
   async function handleSave(): Promise<void> {
@@ -325,6 +352,9 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
       <div role="tabpanel" id="workflows-panel" aria-labelledby={`workflows-tab-${tab}`} className="space-y-1">
         {tab === 'recent' && (
           <>
+            <button type="button" onClick={() => void loadRecent()} className="btn px-2 py-0.5 text-xs">
+              Refresh
+            </button>
             {recentError && (
               <p className="text-xs text-[var(--danger)]">
                 {recentError} Check the address and Test it above.
@@ -463,7 +493,7 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
               Workflow name
-              <input aria-label="Workflow name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className={select} />
+              <input ref={nameInput} aria-label="Workflow name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className={select} />
             </label>
             <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
               Makes

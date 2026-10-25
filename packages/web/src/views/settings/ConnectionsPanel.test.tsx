@@ -205,6 +205,20 @@ describe('ConnectionsPanel', () => {
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://10.0.0.5:8188');
   });
 
+  it('treats an empty base URL on a saved ComfyUI connection as the default address', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection({ id: 'cu', name: 'Comfy', kind: 'comfyui', baseUrl: '' })]);
+    vi.mocked(api.connections.comfyTemplates).mockResolvedValue({ templates: [{ name: 'image_x', title: 'X', category: 'Image', media: 'image', models: [], sizeBytes: null }] });
+    const opened = vi.fn();
+    vi.stubGlobal('open', opened);
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByText('Comfy'));
+    await user.click(await screen.findByRole('tab', { name: 'Templates' }));
+    await user.click(await screen.findByRole('button', { name: 'Open X in ComfyUI' }));
+    expect(opened).toHaveBeenCalledWith('http://127.0.0.1:8188/?template=image_x', '_blank', 'noopener,noreferrer');
+    vi.unstubAllGlobals();
+  });
+
   it('rejects an openai_compatible connection with no base URL client-side, without calling the API', async () => {
     const user = userEvent.setup();
     render(<ConnectionsPanel />);
