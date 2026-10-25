@@ -627,6 +627,8 @@ export const api = {
     test: () => post<NextcloudTestResult>('/nextcloud/test'),
     boards: () => request<{ id: number; title: string }[]>('/nextcloud/boards'),
     collectives: () => request<string[]>('/nextcloud/collectives'),
+    /** The collective's page paths (`Products/MyApp`), parents first, for picking an app's Collectives page. */
+    collectivePages: (collective: string) => request<string[]>(`/nextcloud/collectives/${encodeURIComponent(collective)}/pages`),
     detectLinks: (path: string) => request<ProjectLinksSuggestion>(`/nextcloud/detect-links?path=${encodeURIComponent(path)}`),
     card: (cardId: number, board?: number | null) => request<DeckCardDetail>(`/nextcloud/cards/${cardId}${boardQuery(board)}`),
     updateCard: (cardId: number, change: { title?: string; description?: string; duedate?: string | null }, board?: number | null) =>

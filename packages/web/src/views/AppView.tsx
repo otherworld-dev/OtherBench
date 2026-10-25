@@ -132,6 +132,8 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const [boardNotFound, setBoardNotFound] = useState<string | null>(null);
   const [collectiveNotFound, setCollectiveNotFound] = useState<string | null>(null);
   const [linksFailed, setLinksFailed] = useState(false);
+  // The chosen collective's page paths, to pick the Collectives page from; null while loading or when Nextcloud couldn't say.
+  const [collectivePages, setCollectivePages] = useState<{ collective: string; paths: string[] } | null>(null);
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const beforeQuestion = useRef<HTMLElement | null>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -145,6 +147,21 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const parentOf = (p: Project): string | null => projectParentOf(p, lookup)?.id ?? null;
   const orderedProjects = sorted.filter((p) => parentOf(p) === null).flatMap((p) => [p, ...sorted.filter((c) => parentOf(c) === p.id)]);
   const linkedListed = orderedProjects.some((p) => p.id === draft.linkedProjectId);
+
+  const chosenCollective = draft.wikiCollective.trim();
+  useEffect(() => {
+    setCollectivePages(null);
+    if (chosenCollective === '') return;
+    let live = true;
+    api.nextcloud.collectivePages(chosenCollective).then(
+      (paths) => live && setCollectivePages({ collective: chosenCollective, paths }),
+      // No list: the path can still be typed, as before.
+      () => undefined
+    );
+    return () => {
+      live = false;
+    };
+  }, [chosenCollective]);
 
   useEffect(() => {
     let live = true;
@@ -530,6 +547,25 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
                 className={FIELD}
               />
             </div>
+            {collectivePages && collectivePages.collective === chosenCollective && collectivePages.paths.length > 0 && (
+              <select
+                aria-label={`Pick a page in ${chosenCollective}`}
+                value={collectivePages.paths.includes(draft.wikiPagePath.trim()) ? draft.wikiPagePath.trim() : ''}
+                onChange={(e) => {
+                  if (e.target.value === '') return;
+                  typed.current.wikiPagePath = true;
+                  set('wikiPagePath', e.target.value);
+                }}
+                className={`${FIELD} mt-1`}
+              >
+                <option value="">Pick a page in {chosenCollective}…</option>
+                {collectivePages.paths.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            )}
             {collectiveNotFound !== null && (
               <p data-testid="app-collective-not-found" className="mt-1 text-xs text-[var(--warn)]">
                 CLAUDE.md names the collective "{collectiveNotFound}", which wasn't found.

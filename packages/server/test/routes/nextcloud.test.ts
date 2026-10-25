@@ -254,6 +254,18 @@ describe('boards and collectives', () => {
     expect(await json(await send('GET', '/api/nextcloud/collectives'))).toEqual(['Otherworld Dev', 'PhD']);
   });
 
+  it("lists a collective's page paths", async () => {
+    await setUp();
+    fake.data.pages = [
+      { id: 1, title: 'Landing', parentId: 0, collectiveId: 1, text: '', fileName: 'Readme.md' },
+      { id: 2, title: 'Products', parentId: 1, collectiveId: 1, text: '' },
+      { id: 3, title: 'OtherBench', parentId: 2, collectiveId: 1, text: '' },
+    ];
+    const res = await send('GET', `/api/nextcloud/collectives/${encodeURIComponent('Otherworld Dev')}/pages`);
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual(['Products', 'Products/OtherBench']);
+  });
+
   it('a Nextcloud failure is a 409 with its code, never a 500', async () => {
     await setUp();
     fake.failOn = { call: 'deckBoards', error: new NextcloudError('nextcloud-unreachable', "Couldn't reach Nextcloud at https://nc.example.") };

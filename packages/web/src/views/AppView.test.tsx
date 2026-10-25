@@ -12,7 +12,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     api: {
       ...actual.api,
       apps: { ...actual.api.apps, create: vi.fn(), patch: vi.fn(), detectRepo: vi.fn() },
-      nextcloud: { ...actual.api.nextcloud, boards: vi.fn(), collectives: vi.fn(), detectLinks: vi.fn() },
+      nextcloud: { ...actual.api.nextcloud, boards: vi.fn(), collectives: vi.fn(), collectivePages: vi.fn(), detectLinks: vi.fn() },
       health: vi.fn(async () => ({ status: 'ok', time: '', platform: 'linux' })),
     },
   };
@@ -29,6 +29,7 @@ const mockedDetect = vi.mocked(api.apps.detectRepo);
 const mockedPick = vi.mocked(pickFolder);
 const mockedBoards = vi.mocked(api.nextcloud.boards);
 const mockedCollectives = vi.mocked(api.nextcloud.collectives);
+const mockedCollectivePages = vi.mocked(api.nextcloud.collectivePages);
 const mockedLinks = vi.mocked(api.nextcloud.detectLinks);
 const NO_LINKS = { deckBoard: null, collective: null, pagePath: null, bookmarkTag: null, deckBoardId: null };
 const NC = { deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null };
@@ -68,6 +69,7 @@ beforeEach(() => {
   mockedPick.mockReset();
   mockedBoards.mockReset().mockResolvedValue([{ id: 7, title: 'OtherBench' }]);
   mockedCollectives.mockReset().mockResolvedValue(['Otherworld Dev', 'PhD']);
+  mockedCollectivePages.mockReset().mockResolvedValue([]);
   mockedLinks.mockReset().mockResolvedValue(NO_LINKS);
 });
 afterEach(cleanup);
@@ -281,6 +283,24 @@ describe('AppView, Nextcloud fields', () => {
         expect.objectContaining({ deckBoardId: 7, wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/OtherBench', bookmarkTag: 'otherbench' })
       )
     );
+  });
+
+  it("lists the chosen collective's pages, and picking one fills the path", async () => {
+    const user = userEvent.setup();
+    mockedCollectivePages.mockResolvedValue(['Products', 'Products/OtherBench', 'Products/OtherBench/Design']);
+    mockedCreate.mockResolvedValue(app({ id: 'a-new' }));
+    render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    await user.type(screen.getByRole('textbox', { name: 'Folder' }), '/home/me/otherbench');
+    await user.tab();
+    await waitFor(() => expect(within(screen.getByRole('combobox', { name: 'Collectives page' })).getAllByRole('option')).toHaveLength(3));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Collectives page' }), 'Otherworld Dev');
+    expect(mockedCollectivePages).toHaveBeenCalledWith('Otherworld Dev');
+    const pick = await screen.findByRole('combobox', { name: 'Pick a page in Otherworld Dev' });
+    await waitFor(() => expect(within(pick).getByRole('option', { name: 'Products/OtherBench' })).toBeInTheDocument());
+    await user.selectOptions(pick, 'Products/OtherBench');
+    expect(screen.getByRole('textbox', { name: 'Collectives page path' })).toHaveValue('Products/OtherBench');
+    await user.click(screen.getByRole('button', { name: 'Create app' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ wikiCollective: 'Otherworld Dev', wikiPagePath: 'Products/OtherBench' })));
   });
 
   it('a typed field is not overwritten by detection', async () => {
