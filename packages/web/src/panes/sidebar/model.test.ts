@@ -162,6 +162,11 @@ describe('buildCodeSidebar with app folders', () => {
     expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit']);
     expect(model.folders[0]!.total).toBe(2);
   });
+
+  it('while searching, an empty folder whose name matches still shows', () => {
+    const model = buildCodeSidebar([], apps, [...folders, folder('e', 'Games')], new Set(), 'games');
+    expect(model.folders.map((f) => [f.folder.id, f.groups.length])).toEqual([['e', 0]]);
+  });
 });
 
 describe('app folder order helpers', () => {

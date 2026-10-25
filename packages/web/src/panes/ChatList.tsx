@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
+import { APP_FOLDER_NAME_MAX, APP_NAME_MAX, compareAppFolders } from '@otherbench/core/domain/apps.js';
 import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
@@ -20,7 +20,7 @@ import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
-import { appMenuItems, chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
+import { appMenuItems, chatMenuItems, folderMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
   AGE_BUCKET_LABELS,
   allGroups,
@@ -29,19 +29,24 @@ import {
   buildCodeSidebar,
   buildSidebar,
   capRows,
+  fileAppPatches,
+  folderKey,
   GROUP_ROW_CAP,
   moveAppPatches,
+  moveFolderPatches,
   moveProjectPatches,
   moveTarget,
   placeChatPatches,
   placeAppPatches,
+  placeFolderPatches,
   placeProjectPatches,
   projectSiblings,
   titleMatches,
+  type CodeSidebarFolder,
   type CodeSidebarGroup,
   type SidebarGroup,
 } from './sidebar/model.js';
-import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
+import { PROJECT_DRAG_MIME, ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
 
 /** A sidebar error line: the server's own message when there is one. */
 function errorText(err: unknown, action: string): string {
@@ -122,6 +127,9 @@ function headingSelector(projectId: string): string {
  * Edit…, Delete…); each app's list ends with a "+ New chat" row, and "+ New
  * app" takes the place of "+ New chat" at the bottom. In Code mode there is no
  * Pinned section and no reordering by hand: a pinned app chat leads its group.
+ * Apps can sit in folders (plan 2026-10-25-app-folders): foldable headings
+ * above the top-level apps, made with "+ New folder" beside "+ New app", and
+ * filed into by dragging an app's heading or its menu's Move to folder….
  *
  * `footer` renders at the end of the New chat / New project row, for
  * app-level controls the caller owns (Settings, Usage). `wrapFooter` lets
@@ -154,6 +162,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
   const setApps = useOtherBenchStore((s) => s.setApps);
   const removeApp = useOtherBenchStore((s) => s.removeApp);
+  const upsertAppFolder = useOtherBenchStore((s) => s.upsertAppFolder);
+  const setAppFolders = useOtherBenchStore((s) => s.setAppFolders);
+  const removeAppFolder = useOtherBenchStore((s) => s.removeAppFolder);
   const codeMode = mode === 'code';
   const collapsedGroups = useCollapsedGroups();
   const groupSorts = useGroupSorts();
@@ -184,6 +195,10 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // Dragging an app's heading in Code mode, as with project headings in Chat mode.
   const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
   const [appDrop, setAppDrop] = useState<{ appId: string; position: DropPosition } | null>(null);
+  // Dragging a folder's heading; and the folder heading a dragged folder or app is over (an app ignores `position`).
+  const [draggingFolderId, setDraggingFolderId] = useState<string | null>(null);
+  const [folderDrop, setFolderDrop] = useState<{ folderId: string; position: DropPosition } | null>(null);
+  const [topLevelZoneActive, setTopLevelZoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -195,6 +210,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [appMenu, setAppMenu] = useState<{ appId: string; position: { x: number; y: number } } | null>(null);
   const [renamingAppId, setRenamingAppId] = useState<string | null>(null);
   const [deletingAppId, setDeletingAppId] = useState<string | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ folderId: string; position: { x: number; y: number } } | null>(null);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
 
   const trimmedQuery = query.trim();
   // A chip left on for a machine since unpaired would hide everything, with no chip shown to turn it off.
@@ -217,6 +235,10 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
   const deletingApp = deletingAppId ? (apps.find((a) => a.id === deletingAppId) ?? null) : null;
+  const sortedFolders = useMemo(() => [...appFolders].sort(compareAppFolders), [appFolders]);
+  const menuFolder = folderMenu ? (appFolders.find((f) => f.id === folderMenu.folderId) ?? null) : null;
+  const deletingFolder = deletingFolderId ? (appFolders.find((f) => f.id === deletingFolderId) ?? null) : null;
+  const draggingApp = draggingAppId ? (apps.find((a) => a.id === draggingAppId) ?? null) : null;
   const lookup = useMemo(() => projectLookup(projects), [projects]);
   /** Sidebar order: each top-level project, then its sub-projects. */
   const orderedProjects = useMemo(() => {
@@ -451,6 +473,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setProjectMenu(null);
     setNoProjectMenu(null);
     setAppMenu(null);
+    setFolderMenu(null);
     if (source === 'button' && chatMenu?.chatId === chatId) {
       setChatMenu(null);
       focusLater(chatRowSelector(chatId), LIST_SELECTOR);
@@ -605,14 +628,17 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setNoProjectMenu(position);
   }
 
-  /** Sends app order PATCHes one by one; on a failure says so and shows the server's order, since part may have landed. */
-  async function sendAppOrder(patches: { id: string; sortOrder: number }[], focusId: string): Promise<void> {
+  /**
+   * Sends app order PATCHes one by one (a patch with `folderId` also files that app); on a failure says so and shows
+   * the server's apps, since part may have landed.
+   */
+  async function sendAppOrder(patches: { id: string; folderId?: string | null; sortOrder: number }[], focusId: string, action = "Couldn't reorder the apps"): Promise<void> {
     setError(null);
     try {
-      for (const { id, sortOrder } of patches) upsertApp(await api.apps.patch(id, { sortOrder }));
+      for (const { id, folderId, sortOrder } of patches) upsertApp(await api.apps.patch(id, folderId === undefined ? { sortOrder } : { folderId, sortOrder }));
     } catch (err) {
       console.error('[otherbench-web] failed to reorder apps:', err);
-      setError(errorText(err, "Couldn't reorder the apps"));
+      setError(errorText(err, action));
       try {
         setApps(await api.apps.list());
       } catch {
@@ -622,17 +648,43 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     focusLater(headingSelector(focusId), LIST_SELECTOR);
   }
 
-  /** Puts a dragged app above or below app `targetId` (a drop on its heading). */
+  /**
+   * Puts a dragged app above or below app `targetId` (a drop on its heading). An app from another group, a folder or
+   * the top level, is filed into the target's group at that place.
+   */
   async function placeApp(movingId: string, targetId: string, position: DropPosition): Promise<void> {
-    const siblings = appSiblings(apps, movingId, appFolders);
-    if (movingId === targetId || !siblings.some((a) => a.id === targetId)) return;
-    let beforeId: string | null = targetId;
-    if (position === 'after') {
-      const rest = siblings.filter((a) => a.id !== movingId);
-      beforeId = rest[rest.findIndex((a) => a.id === targetId) + 1]?.id ?? null;
+    const group = appSiblings(apps, targetId, appFolders);
+    if (movingId === targetId || group.length === 0) return;
+    const rest = group.filter((a) => a.id !== movingId);
+    const beforeId = position === 'before' ? targetId : (rest[rest.findIndex((a) => a.id === targetId) + 1]?.id ?? null);
+    if (!group.some((a) => a.id === movingId)) {
+      await fileApp(movingId, loadedFolderOf(group[0]!), beforeId);
+      return;
     }
-    const patches = placeAppPatches(siblings, movingId, beforeId);
+    const patches = placeAppPatches(group, movingId, beforeId);
     if (patches.length > 0) await sendAppOrder(patches, movingId);
+  }
+
+  /** The app's folder when that folder is loaded, else null: the top level, where the sidebar shows it. */
+  function loadedFolderOf(app: App): string | null {
+    return app.folderId !== null && appFolders.some((f) => f.id === app.folderId) ? app.folderId : null;
+  }
+
+  /**
+   * Files an app in a folder (null = the top level) just above `beforeId` (null = last), renumbering only that group.
+   * Filing into a folded folder opens it, so the app stays in view (plan 2026-10-25-app-folders).
+   */
+  async function fileApp(appId: string, folderId: string | null, beforeId: string | null): Promise<void> {
+    const patches = fileAppPatches(apps, appFolders, appId, folderId, beforeId);
+    if (patches.length === 0) return;
+    if (folderId !== null) setGroupCollapsed(folderKey(folderId), false);
+    await sendAppOrder(patches, appId, "Couldn't move the app");
+  }
+
+  /** "Move to folder…": last in that folder, or (null) the top level; nothing when it's there already. */
+  async function moveAppToFolder(appId: string, folderId: string | null): Promise<void> {
+    const app = apps.find((a) => a.id === appId);
+    if (app && loadedFolderOf(app) !== folderId) await fileApp(appId, folderId, null);
   }
 
   /** The app's place among its siblings in the Code sidebar's order. */
@@ -642,6 +694,89 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   async function moveApp(appId: string, dir: -1 | 1): Promise<void> {
     await sendAppOrder(moveAppPatches(appSiblings(apps, appId, appFolders), appId, dir), appId);
+  }
+
+  /** "+ New folder": the server names it "New folder", and its name opens for editing, as a project rename works. */
+  async function createFolder(): Promise<void> {
+    setError(null);
+    try {
+      const folder = await api.appFolders.create({});
+      upsertAppFolder(folder);
+      setRenamingFolderId(folder.id);
+    } catch (err) {
+      console.error('[otherbench-web] failed to create a folder:', err);
+      setError(errorText(err, "Couldn't create the folder"));
+    }
+  }
+
+  async function renameFolder(folderId: string, name: string): Promise<void> {
+    setRenamingFolderId(null);
+    setError(null);
+    try {
+      upsertAppFolder(await api.appFolders.patch(folderId, { name }));
+    } catch (err) {
+      console.error(`[otherbench-web] failed to rename folder ${folderId}:`, err);
+      setError(errorText(err, "Couldn't rename the folder"));
+    }
+    focusLater(headingSelector(folderKey(folderId)), LIST_SELECTOR);
+  }
+
+  /** As `sendAppOrder`, for folders. */
+  async function sendFolderOrder(patches: { id: string; sortOrder: number }[], focusId: string): Promise<void> {
+    setError(null);
+    try {
+      for (const { id, sortOrder } of patches) upsertAppFolder(await api.appFolders.patch(id, { sortOrder }));
+    } catch (err) {
+      console.error('[otherbench-web] failed to reorder folders:', err);
+      setError(errorText(err, "Couldn't reorder the folders"));
+      try {
+        setAppFolders(await api.appFolders.list());
+      } catch {
+        // the error line above already says something went wrong.
+      }
+    }
+    focusLater(headingSelector(folderKey(focusId)), LIST_SELECTOR);
+  }
+
+  /** Puts a dragged folder above or below folder `targetId` (a drop on its heading). */
+  async function placeFolder(movingId: string, targetId: string, position: DropPosition): Promise<void> {
+    if (movingId === targetId) return;
+    const rest = sortedFolders.filter((f) => f.id !== movingId);
+    const beforeId = position === 'before' ? targetId : (rest[rest.findIndex((f) => f.id === targetId) + 1]?.id ?? null);
+    const patches = placeFolderPatches(appFolders, movingId, beforeId);
+    if (patches.length > 0) await sendFolderOrder(patches, movingId);
+  }
+
+  async function moveFolder(folderId: string, dir: -1 | 1): Promise<void> {
+    await sendFolderOrder(moveFolderPatches(appFolders, folderId, dir), folderId);
+  }
+
+  function openFolderMenu(folderId: string, position: { x: number; y: number }, source: MenuSource): void {
+    setChatMenu(null);
+    setAppMenu(null);
+    if (source === 'button' && folderMenu?.folderId === folderId) {
+      setFolderMenu(null);
+      focusLater(headingSelector(folderKey(folderId)), LIST_SELECTOR);
+      return;
+    }
+    setFolderMenu({ folderId, position });
+  }
+
+  /**
+   * Rejects on failure, which keeps the confirmation dialog open with the message. Its apps move to the top level
+   * (`removeAppFolder` clears their `folderId` here as the server does); nothing else changes, the open app included.
+   */
+  async function deleteFolder(folderId: string): Promise<void> {
+    const next = neighbourHeadingSelector(folderKey(folderId));
+    try {
+      await api.appFolders.delete(folderId);
+    } catch (err) {
+      // Already gone (deleted in another tab): same end state the user asked for.
+      if (!(err instanceof ApiError && err.status === 404)) throw err;
+    }
+    removeAppFolder(folderId);
+    setDeletingFolderId(null);
+    focusLater(next, LIST_SELECTOR);
   }
 
   /** Opens a capped group in full (focus goes to the first chat it revealed), or caps it again. */
@@ -718,6 +853,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   function openAppMenu(appId: string, position: { x: number; y: number }, source: MenuSource): void {
     setChatMenu(null);
+    setFolderMenu(null);
     if (source === 'button' && appMenu?.appId === appId) {
       setAppMenu(null);
       focusLater(headingSelector(appId), LIST_SELECTOR);
@@ -934,7 +1070,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }
 
-  /** The app-only props of a Code mode group heading. */
+  /** The app-only props of a Code mode group heading. It takes a dragged app from any group, but not a folder. */
   function appGroupProps(app: App): Partial<ProjectGroupProps> {
     const target = draggingAppId !== null && draggingAppId !== app.id;
     return {
@@ -944,6 +1080,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         onDragEnd: () => {
           setDraggingAppId(null);
           setAppDrop(null);
+          setFolderDrop(null);
+          setTopLevelZoneActive(false);
         },
         target,
         indicator: target && appDrop?.appId === app.id ? appDrop.position : null,
@@ -969,6 +1107,86 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       onRenameCancel: () => {
         setRenamingAppId(null);
         focusLater(headingSelector(app.id), LIST_SELECTOR);
+      },
+    };
+  }
+
+  /**
+   * An app folder in Code mode (plan 2026-10-25-app-folders): a group heading whose list holds its apps' groups, nested
+   * as sub-projects nest in Chat mode. The heading's dot sums every chat in its apps, so a folded folder still shows
+   * that something is replying or waiting.
+   */
+  function renderFolder(entry: CodeSidebarFolder): JSX.Element {
+    const statuses = entry.groups.flatMap((g) => g.chats).map(statusOf);
+    return (
+      <ProjectGroup
+        key={entry.key}
+        groupKey={entry.key}
+        name={entry.folder.name}
+        count={entry.total}
+        countNoun="app"
+        empty={entry.total === 0}
+        emptyText="No apps yet"
+        collapsed={!searching && collapsedGroups.has(entry.key)}
+        status={groupStatus(statuses)}
+        statusSummary={groupStatusSummary(statuses)}
+        dropActive={draggingAppId !== null && folderDrop?.folderId === entry.folder.id}
+        onToggle={() => setGroupCollapsed(entry.key, !collapsedGroups.has(entry.key))}
+        // A folder holds apps, not chats: a chat goes on an app's heading.
+        onDragTarget={() => {}}
+        onDropChat={() => {}}
+        {...folderGroupProps(entry.folder)}
+      >
+        {entry.groups.map((group) => (
+          <li key={`sub-${group.key}`} data-testid={`subgroup-${group.key}`}>
+            {renderAppGroup(group)}
+          </li>
+        ))}
+      </ProjectGroup>
+    );
+  }
+
+  /**
+   * The folder-only props of a Code mode group heading. It takes a dragged folder (placed above or below it) and a
+   * dragged app (filed last in it). Both drags carry `PROJECT_DRAG_MIME`, so which one is under way tells them apart.
+   */
+  function folderGroupProps(folder: AppFolder): Partial<ProjectGroupProps> {
+    const folderTarget = draggingFolderId !== null && draggingFolderId !== folder.id;
+    const over = folderDrop?.folderId === folder.id ? folderDrop.position : null;
+    return {
+      reorder: {
+        draggable: !searching,
+        onDragStart: () => setDraggingFolderId(folder.id),
+        onDragEnd: () => {
+          setDraggingFolderId(null);
+          setFolderDrop(null);
+        },
+        target: folderTarget || draggingAppId !== null,
+        // An app lands in the folder, not beside it, so it lights the heading (dropActive) rather than drawing a line.
+        indicator: folderTarget ? over : null,
+        onOver: (position) => setFolderDrop((current) => (current?.folderId === folder.id && current.position === position ? current : { folderId: folder.id, position })),
+        onLeave: () => setFolderDrop((current) => (current?.folderId === folder.id ? null : current)),
+        onDrop: (position) => {
+          const movingFolder = draggingFolderId;
+          const movingApp = draggingAppId;
+          setDraggingFolderId(null);
+          setDraggingAppId(null);
+          setFolderDrop(null);
+          setAppDrop(null);
+          if (movingFolder) void placeFolder(movingFolder, folder.id, position);
+          else if (movingApp) void fileApp(movingApp, folder.id, null);
+        },
+      },
+      menuOpen: folderMenu?.folderId === folder.id,
+      menuLabel: 'Folder actions',
+      renaming: renamingFolderId === folder.id,
+      renameLabel: 'Folder name',
+      renameMaxLength: APP_FOLDER_NAME_MAX,
+      onOpenMenu: (position, source) => openFolderMenu(folder.id, position, source),
+      onRename: (name) => void renameFolder(folder.id, name),
+      onRenameCancel: () => {
+        setRenamingFolderId(null);
+        focusLater(headingSelector(folderKey(folder.id)), LIST_SELECTOR);
       },
     };
   }
@@ -1113,12 +1331,51 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           </div>
         )}
 
-        {searching && (codeMode ? codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) && archived.length === 0 && otherMode.length === 0 && (
+        {searching &&
+          (codeMode ? codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) &&
+          archived.length === 0 &&
+          otherMode.length === 0 && (
           <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
         )}
 
-        {codeMode && !searching && apps.length === 0 && codeSidebar.groups.length === 0 && (
+        {codeMode && !searching && apps.length === 0 && codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 && (
           <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No apps yet. An app is a repo folder; its chats show here, under it.</p>
+        )}
+
+        {codeMode && codeSidebar.folders.map(renderFolder)}
+
+        {/* While a filed app is dragged: the way out of its folder, after the last folder (where the top level
+            starts). Only then, and below the folders, so what moves is the list under it, not the rows under the pointer. */}
+        {codeMode && draggingApp !== null && loadedFolderOf(draggingApp) !== null && (
+          <div
+            data-testid="app-top-level-drop-zone"
+            data-drop-active={topLevelZoneActive ? 'true' : undefined}
+            onDragOver={(e) => {
+              if (!Array.from(e.dataTransfer.types).includes(PROJECT_DRAG_MIME)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (!topLevelZoneActive) setTopLevelZoneActive(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+              setTopLevelZoneActive(false);
+            }}
+            onDrop={(e) => {
+              const moving = draggingAppId;
+              setTopLevelZoneActive(false);
+              setDraggingAppId(null);
+              setAppDrop(null);
+              if (!moving) return;
+              e.preventDefault();
+              void fileApp(moving, null, null);
+            }}
+            // The Pinned drop zone's look.
+            className={`mb-1.5 flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
+              topLevelZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
+            }`}
+          >
+            No folder
+          </div>
         )}
 
         {codeMode ? codeSidebar.groups.map(renderAppGroup) : sidebar.groups.map(renderGroup)}
@@ -1157,9 +1414,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       <div className={`flex items-center gap-1 border-t border-[var(--border)] p-2${wrapFooter ? ' flex-wrap' : ''}`}>
         {codeMode ? (
           // In Code mode a new chat starts from its app's "+ New chat" row, so the main button makes an app.
-          <button type="button" onClick={() => openAppPage({ mode: 'create' })} className="btn btn-primary flex-1 px-2 py-1.5">
-            + New app
-          </button>
+          <>
+            <button type="button" onClick={() => openAppPage({ mode: 'create' })} className="btn btn-primary flex-1 px-2 py-1.5">
+              + New app
+            </button>
+            <button type="button" onClick={() => void createFolder()} className="btn btn-primary flex-1 px-2 py-1.5">
+              + New folder
+            </button>
+          </>
         ) : (
           <>
             <button
@@ -1288,12 +1550,19 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           key={`app:${menuApp.id}`}
           label="App actions"
           position={appMenu.position}
-          items={appMenuItems(appIndex(menuApp.id), appSiblings(apps, menuApp.id, appFolders).length, {
-            rename: () => setRenamingAppId(menuApp.id),
-            edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
-            move: (dir) => void moveApp(menuApp.id, dir),
-            requestDelete: () => setDeletingAppId(menuApp.id),
-          })}
+          items={appMenuItems(
+            appIndex(menuApp.id),
+            appSiblings(apps, menuApp.id, appFolders).length,
+            {
+              rename: () => setRenamingAppId(menuApp.id),
+              edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
+              move: (dir) => void moveApp(menuApp.id, dir),
+              moveToFolder: (folderId) => void moveAppToFolder(menuApp.id, folderId),
+              requestDelete: () => setDeletingAppId(menuApp.id),
+            },
+            sortedFolders,
+            loadedFolderOf(menuApp)
+          )}
           onClose={(reason) => {
             setAppMenu(null);
             if (reason === 'dismiss') focusLater(headingSelector(menuApp.id), LIST_SELECTOR);
@@ -1310,6 +1579,36 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           onCancel={() => {
             setDeletingAppId(null);
             focusLater(headingSelector(deletingApp.id), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {folderMenu && menuFolder && (
+        <Menu
+          key={`folder:${menuFolder.id}`}
+          label="Folder actions"
+          position={folderMenu.position}
+          items={folderMenuItems(sortedFolders.findIndex((f) => f.id === menuFolder.id), sortedFolders.length, {
+            rename: () => setRenamingFolderId(menuFolder.id),
+            move: (dir) => void moveFolder(menuFolder.id, dir),
+            requestDelete: () => setDeletingFolderId(menuFolder.id),
+          })}
+          onClose={(reason) => {
+            setFolderMenu(null);
+            if (reason === 'dismiss') focusLater(headingSelector(folderKey(menuFolder.id)), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {deletingFolder && (
+        <ConfirmDialog
+          title={`Delete ${deletingFolder.name}?`}
+          message="Its apps move out of the folder; nothing is deleted."
+          confirmLabel="Delete"
+          onConfirm={() => deleteFolder(deletingFolder.id)}
+          onCancel={() => {
+            setDeletingFolderId(null);
+            focusLater(headingSelector(folderKey(deletingFolder.id)), LIST_SELECTOR);
           }}
         />
       )}

@@ -67,6 +67,10 @@ export interface ProjectGroupProps {
   renameMaxLength?: number;
   /** The name's hover text when it opens a page. */
   openTitle?: string;
+  /** What `count` counts: chats, or an app folder's apps (Code mode). */
+  countNoun?: 'chat' | 'app';
+  /** Shown under the heading when `empty`. */
+  emptyText?: string;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -78,13 +82,15 @@ function carriesProject(e: DragEvent): boolean {
 }
 
 /**
- * A collapsible sidebar group (a project, or No project; in Code mode an app, or Unknown app) whose heading is also
- * a drop target for chat rows.
+ * A collapsible sidebar group (a project, or No project; in Code mode an app folder, an app, or Unknown app) whose
+ * heading is also a drop target for chat rows.
  */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, statusSummary, onOpen, active = false } = props;
   const { menuLabel = 'Project actions', reorder, renameLabel = 'Project name', renameMaxLength = PROJECT_NAME_MAX, openTitle = 'Open the project page' } = props;
+  const { countNoun = 'chat', emptyText = 'No chats yet' } = props;
+  const counted = count === 1 ? countNoun : `${countNoun}s`;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -195,12 +201,12 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             <span className="truncate">{name}</span>{' '}
             {/* The count first and the dot well clear of it, so the two don't read as "27 unread". */}
             <span className="ml-auto flex items-center gap-2.5 pl-1">
-              <span className="font-normal tabular-nums" title={`${count} ${count === 1 ? 'chat' : 'chats'}`} data-testid={`group-count-${groupKey}`}>
+              <span className="font-normal tabular-nums" title={`${count} ${counted}`} data-testid={`group-count-${groupKey}`}>
                 {count}
               </span>
               {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden {...(statusSummary ? { title: statusSummary } : {})} />}
             </span>
-            <span className="sr-only">{count === 1 ? ' chat' : ' chats'}</span>
+            <span className="sr-only"> {counted}</span>
             {status && <span className="sr-only">, {statusSummary || STATUS_LABELS[status]}</span>}
           </button>
           </h3>
@@ -239,7 +245,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
       </div>
       {!collapsed &&
         (empty ? (
-          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>
+          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">{emptyText}</p>
         ) : (
           // The guide line sits under the heading's chevron, marking the chats as the group's.
           <ul id={listId} className="ml-3 border-l border-[var(--border)] pl-1">

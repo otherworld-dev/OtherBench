@@ -268,10 +268,10 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[
 
   const folderModels = [...folders].sort(compareAppFolders).flatMap((folder): CodeSidebarFolder[] => {
     const members = sortedApps.filter((a) => a.folderId === folder.id);
-    // A matching folder name keeps every app and chat in view.
+    // A matching folder name keeps every app and chat in view, and the folder itself even when it's empty.
     const nameHit = matches !== null && titleMatches(folder.name, query);
     const folderGroups = members.map((a) => group(a.id, a, nameHit)).filter((g) => matches === null || nameHit || g.chats.length > 0);
-    if (matches !== null && folderGroups.length === 0) return [];
+    if (matches !== null && !nameHit && folderGroups.length === 0) return [];
     return [{ folder, key: folderKey(folder.id), groups: folderGroups, total: members.length }];
   });
 
