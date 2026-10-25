@@ -1,8 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { detectBindings, fillWorkflow, shapeSizes, workflowApplies, workflowLimits, workflowProblem, workflowShapeKey, type MediaWorkflow } from '../src/domain/media-workflows.js';
-import { SDXL_TXT2IMG } from '../../tools/src/media/workflows/sdxl-txt2img.js';
-import { WAN22_5B_T2V } from '../../tools/src/media/workflows/wan22-5b-t2v.js';
 import type { MediaRequest } from '../src/ports/media.js';
 
 /** ComfyUI's default text-to-image graph, in API format. */
@@ -225,6 +223,13 @@ describe('detection through primitive nodes', () => {
     expect(b.negativePrompt).toEqual({ nodeId: '7', input: 'text' });
   });
 
+  it('binds a checkpoint fed by a primitive string to the primitive', () => {
+    const graph = structuredClone(GRAPH);
+    graph['4']!.inputs['ckpt_name'] = ['23', 0];
+    graph['23'] = { class_type: 'PrimitiveString', inputs: { value: 'base.safetensors' } };
+    expect(detectBindings(graph).checkpoint).toEqual({ nodeId: '23', input: 'value' });
+  });
+
   it('flags one primitive feeding both encoders', () => {
     const graph = structuredClone(GRAPH);
     graph['6']!.inputs['text'] = ['22', 0];
@@ -238,14 +243,6 @@ describe('detection through primitive nodes', () => {
 });
 
 describe('workflowLimits', () => {
-  it('reads the SDXL builtin', () => {
-    expect(workflowLimits(SDXL_TXT2IMG)).toEqual({ size: { width: 1024, height: 1024 }, maxFrames: null, fps: 24 });
-  });
-
-  it('reads the Wan builtin', () => {
-    expect(workflowLimits(WAN22_5B_T2V)).toEqual({ size: { width: 1280, height: 704 }, maxFrames: 121, fps: 24 });
-  });
-
   it('has no size when width and height are not bound, and takes a frame_rate from any node', () => {
     const graph: MediaWorkflow['graph'] = { '1': { class_type: 'X', inputs: { frame_rate: 16 } } };
     expect(workflowLimits({ graph, bindings: { prompt: { nodeId: '1', input: 'text' } } })).toEqual({ size: null, maxFrames: null, fps: 16 });

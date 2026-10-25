@@ -176,9 +176,9 @@ export function detectBindings(graph: Graph): Bindings {
   }
 
   for (const input of ['ckpt_name', 'unet_name']) {
-    const id = ids.find((i) => typeof inputsOf(graph, i)?.[input] === 'string');
-    if (id) {
-      out.checkpoint = { nodeId: id, input };
+    const b = ids.map((i) => bindingFor(graph, i, input, 'string')).find((x) => x !== null);
+    if (b) {
+      out.checkpoint = b;
       break;
     }
   }
