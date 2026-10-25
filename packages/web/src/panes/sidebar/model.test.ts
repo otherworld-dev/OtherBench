@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, fileAppPatches, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -152,6 +152,14 @@ describe('buildCodeSidebar with app folders', () => {
     expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit', 'miss']);
     expect(ids(model.folders[0]!.groups[1]!.chats)).toEqual(['bchat']);
     expect(model.groups).toEqual([]);
+  });
+
+  it('while searching, a folder-name hit still obeys the status and machine chips', () => {
+    const chats = [chat('hit', { appId: 'a' }), chat('miss', { appId: 'a' }), chat('bchat', { appId: 'b' })];
+    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'play', new Set(['hit', 'bchat']));
+    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
+    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit']);
+    expect(ids(model.folders[0]!.groups[1]!.chats)).toEqual(['bchat']);
   });
 
   it('while searching, an app match inside a folder shows that folder with just that app; folders with no match drop', () => {
@@ -573,5 +581,13 @@ describe('placeProjectPatches', () => {
       { id: 'a', sortOrder: 1 },
       { id: 'b', sortOrder: 2 },
     ]);
+  });
+});
+
+describe('codeSidebarAppOrder', () => {
+  it('is the sidebar order: folders in order, the apps of each folder, then the top level and apps in a missing folder', () => {
+    const folders = [folder('f2', 'Work', 1), folder('f1', 'Play', 0)];
+    const apps = [app('t', 'T', 0), app('lost', 'Lost', 1, 'gone'), app('c', 'C', 0, 'f2'), app('b', 'B', 1, 'f1'), app('a', 'A', 0, 'f1')];
+    expect(codeSidebarAppOrder(apps, folders).map((x) => x.id)).toEqual(['a', 'b', 'c', 't', 'lost']);
   });
 });

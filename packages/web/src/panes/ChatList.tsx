@@ -183,6 +183,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [noProjectMenu, setNoProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const [creating, setCreating] = useState(false);
+  // A ref, not state: a double-click's second click runs before a re-render could show the first is in flight.
+  const creatingFolder = useRef(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
   // The chat being dragged, while it is: with nothing pinned yet, a "Drop here to pin" target takes the search
@@ -218,19 +220,28 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // A chip left on for a machine since unpaired would hide everything, with no chip shown to turn it off.
   const machineFilter = machines?.peers.length ? machine : null;
   const searching = trimmedQuery !== '' || statusOnly || machineFilter !== null;
+  // The chats the status and machine chips allow (null with neither on); the open chat is never hidden by them:
+  // reading a reply clears its dot, and a new chat runs here.
+  const chipMatches = useMemo(() => {
+    if (!statusOnly && machineFilter === null) return null;
+    return new Set(
+      chats
+        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working, background) !== null)
+        .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
+        .map((c) => c.id)
+    );
+  }, [chats, statusOnly, machineFilter, activeChatId, waiting, working, background]);
   const matches = useMemo(() => {
     if (!searching) return null;
     return new Set(
       chats
         .filter((c) => trimmedQuery === '' || titleMatches(c.title, trimmedQuery) || searchChatIds?.has(c.id) === true)
-        // The chips never hide the open chat: reading a reply clears its dot, and a new chat runs here.
-        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working, background) !== null)
-        .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
+        .filter((c) => chipMatches === null || chipMatches.has(c.id))
         .map((c) => c.id)
     );
-  }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working, background]);
+  }, [searching, chats, trimmedQuery, searchChatIds, chipMatches]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
-  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery), [chats, apps, appFolders, matches, trimmedQuery]);
+  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches), [chats, apps, appFolders, matches, trimmedQuery, chipMatches]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
@@ -684,7 +695,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   /** "Move to folder…": last in that folder, or (null) the top level; nothing when it's there already. */
   async function moveAppToFolder(appId: string, folderId: string | null): Promise<void> {
     const app = apps.find((a) => a.id === appId);
-    if (app && loadedFolderOf(app) !== folderId) await fileApp(appId, folderId, null);
+    if (!app) return;
+    if (loadedFolderOf(app) !== folderId) await fileApp(appId, folderId, null);
+    else focusLater(headingSelector(appId), LIST_SELECTOR);
   }
 
   /** The app's place among its siblings in the Code sidebar's order. */
@@ -698,7 +711,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** "+ New folder": the server names it "New folder", and its name opens for editing, as a project rename works. */
   async function createFolder(): Promise<void> {
+    if (creatingFolder.current) return;
+    creatingFolder.current = true;
     setError(null);
+    // A search would hide the new folder (and its rename) unless its name happened to match.
+    if (query !== '') void runSearch('');
     try {
       const folder = await api.appFolders.create({});
       upsertAppFolder(folder);
@@ -706,6 +723,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     } catch (err) {
       console.error('[otherbench-web] failed to create a folder:', err);
       setError(errorText(err, "Couldn't create the folder"));
+    } finally {
+      creatingFolder.current = false;
     }
   }
 
@@ -1367,7 +1386,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               setAppDrop(null);
               if (!moving) return;
               e.preventDefault();
-              void fileApp(moving, null, null);
+              // First, where the zone sits: just above the top-level apps.
+              void fileApp(moving, null, codeSidebar.groups.find((g) => g.app !== null)?.app?.id ?? null);
             }}
             // The Pinned drop zone's look.
             className={`mb-1.5 flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
@@ -1418,8 +1438,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
             <button type="button" onClick={() => openAppPage({ mode: 'create' })} className="btn btn-primary flex-1 px-2 py-1.5">
               + New app
             </button>
-            <button type="button" onClick={() => void createFolder()} className="btn btn-primary flex-1 px-2 py-1.5">
-              + New folder
+            <button type="button" onClick={() => void createFolder()} aria-label="New folder" title="New folder" className="btn px-2 py-1.5">
+              <FolderPlusIcon />
             </button>
           </>
         ) : (
@@ -1469,7 +1489,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
             },
             menuPosition(menuChat),
             paneTabs.includes(menuChat.id),
-            apps
+            apps,
+            appFolders
           )}
           onClose={(reason) => {
             setChatMenu(null);

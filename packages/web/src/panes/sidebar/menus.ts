@@ -1,7 +1,7 @@
-import { compareApps } from '@otherbench/core/domain/apps.js';
 import { projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { MenuItem } from '../../components/Menu.js';
+import { codeSidebarAppOrder } from './model.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 
@@ -52,7 +52,8 @@ export function chatMenuItems(
   h: ChatMenuHandlers,
   position: { index: number; count: number } | null = null,
   isTab = false,
-  apps: App[] = []
+  apps: App[] = [],
+  folders: AppFolder[] = []
 ): MenuItem[] {
   const inApp = chat.appId !== null;
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
@@ -103,7 +104,7 @@ export function chatMenuItems(
           {
             id: 'move-app',
             label: 'Move to app…',
-            submenu: [...apps].sort(compareApps).map((a) => ({ id: a.id, label: a.name, checked: chat.appId === a.id, onSelect: () => h.moveToApp(a.id) })),
+            submenu: codeSidebarAppOrder(apps, folders).map((a) => ({ id: a.id, label: a.name, checked: chat.appId === a.id, onSelect: () => h.moveToApp(a.id) })),
           },
         ]),
     ...(inApp ? [{ id: 'move-out-app', label: 'Move out of app', onSelect: h.moveOutOfApp }] : []),

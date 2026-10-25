@@ -110,6 +110,17 @@ describe('AppHome', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
   });
 
+  it('still lists the chats of an app that sits in a folder', () => {
+    useOtherBenchStore.setState({
+      apps: [app({ folderId: 'f1' })],
+      appFolders: [{ id: 'f1', name: 'Games', sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+      appsLoaded: true,
+      chats: [chat('c1'), chat('c2', { appId: 'other' })],
+    });
+    render(<AppHome appId="a1" />);
+    expect(within(screen.getByTestId('app-home-chats')).getAllByRole('listitem').map((r) => r.getAttribute('data-chat-id'))).toEqual(['c1']);
+  });
+
   it('shows the open issues', async () => {
     useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
     render(<AppHome appId="a1" />);

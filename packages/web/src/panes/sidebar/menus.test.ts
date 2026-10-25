@@ -35,6 +35,13 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
     expect(h.moveToApp).toHaveBeenCalledWith('A');
   });
 
+  it('lists apps in the Code sidebar order, so filing one does not reshuffle the submenu', () => {
+    const f = [folder('f', 'F')];
+    const list = [{ ...app('A', 'A'), sortOrder: 0 }, { ...app('B', 'B'), sortOrder: 1 }, { ...app('C', 'C'), sortOrder: 2 }, { ...app('D', 'D'), sortOrder: 0, folderId: 'f' }];
+    const items = chatMenuItems(chat(), [], chatHandlers(), null, false, list, f);
+    expect(items.find((i) => i.id === 'move-app')!.submenu!.map((i) => i.label)).toEqual(['D', 'A', 'B', 'C']);
+  });
+
   it('has no Move to app… while there are no apps', () => {
     expect(chatMenuItems(chat(), [], chatHandlers()).some((i) => i.id === 'move-app')).toBe(false);
   });

@@ -33,7 +33,7 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   await expect(nav.getByTestId(`group-${ids.two}`)).toBeVisible();
 
   // + New folder opens its name for editing.
-  await nav.getByRole('button', { name: '+ New folder' }).click();
+  await nav.getByRole('button', { name: 'New folder', exact: true }).click();
   const nameBox = nav.getByRole('textbox');
   await expect(nameBox).toBeVisible();
   await nameBox.fill(folderName);

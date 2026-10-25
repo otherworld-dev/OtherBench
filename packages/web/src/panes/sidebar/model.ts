@@ -245,10 +245,10 @@ export interface CodeSidebarModel {
  *
  * Apps sit in folders (plan 2026-10-25-app-folders): `folders` holds each loaded folder with its apps' groups, and
  * `groups` the top-level ones. While searching, a folder whose name matches `query` shows all its apps, each with
- * all its chats; any other folder shows only the app groups with a match and is dropped when it has none. Without a
+ * all its chats, narrowed by the status and machine chips (`chipMatches`: the chats they allow, null with none on); any other folder shows only the app groups with a match and is dropped when it has none. Without a
  * search every folder shows, empty ones too.
  */
-export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = ''): CodeSidebarModel {
+export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = '', chipMatches: ReadonlySet<string> | null = null): CodeSidebarModel {
   const appChats = chats.filter((c) => c.appId !== null);
   const live = appChats.filter((c) => c.archivedAt === null);
   const known = new Set(apps.map((a) => a.id));
@@ -256,9 +256,11 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
   const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
 
-  const group = (key: string, app: App | null, all = false): CodeSidebarGroup => {
+  const chipShown = (c: Chat): boolean => chipMatches === null || chipMatches.has(c.id);
+
+  const group = (key: string, app: App | null, visible = shown): CodeSidebarGroup => {
     const members = live.filter((c) => keyOf(c) === key);
-    return { app, key, chats: (all ? members : members.filter(shown)).sort(pinnedFirst), total: members.length };
+    return { app, key, chats: members.filter(visible).sort(pinnedFirst), total: members.length };
   };
   const knownFolders = new Set(folders.map((f) => f.id));
   const sortedApps = [...apps].sort(compareApps);
@@ -270,7 +272,8 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[
     const members = sortedApps.filter((a) => a.folderId === folder.id);
     // A matching folder name keeps every app and chat in view, and the folder itself even when it's empty.
     const nameHit = matches !== null && titleMatches(folder.name, query);
-    const folderGroups = members.map((a) => group(a.id, a, nameHit)).filter((g) => matches === null || nameHit || g.chats.length > 0);
+    // The name waives the text query only: the status and machine chips (`chipMatches`) still narrow its chats.
+    const folderGroups = members.map((a) => group(a.id, a, nameHit ? chipShown : shown)).filter((g) => matches === null || nameHit || g.chats.length > 0);
     if (matches !== null && !nameHit && folderGroups.length === 0) return [];
     return [{ folder, key: folderKey(folder.id), groups: folderGroups, total: members.length }];
   });
@@ -303,6 +306,19 @@ export function moveAppPatches(apps: App[], id: string, dir: -1 | 1): { id: stri
 /** As `moveProjectPatches`, for folders in the Code sidebar (in `compareAppFolders` order). */
 export function moveFolderPatches(folders: AppFolder[], id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
   return moveOrderPatches(folders, compareAppFolders, id, dir);
+}
+
+/**
+ * Every app in the order the Code sidebar shows them: folders in `compareAppFolders` order, each one's apps in
+ * `compareApps` order, then the top-level apps (including any whose folder isn't loaded).
+ */
+export function codeSidebarAppOrder(apps: App[], folders: AppFolder[]): App[] {
+  const known = new Set(folders.map((f) => f.id));
+  const sorted = [...apps].sort(compareApps);
+  return [
+    ...[...folders].sort(compareAppFolders).flatMap((f) => sorted.filter((a) => a.folderId === f.id)),
+    ...sorted.filter((a) => a.folderId === null || !known.has(a.folderId)),
+  ];
 }
 
 /**

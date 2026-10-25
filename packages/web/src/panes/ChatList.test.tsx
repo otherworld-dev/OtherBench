@@ -1909,12 +1909,16 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByText('No chats match your search.')).toBeNull();
     });
 
-    it('+ New folder sits beside + New app, styled the same; it creates a folder and opens its rename', async () => {
+    it('the footer has one primary button, + New app, and New folder is an icon button like the New project button in Chat mode', async () => {
       const created = makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 });
       mockedFolderCreate.mockResolvedValue(created);
       const user = setupFolders();
-      const button = screen.getByRole('button', { name: '+ New folder' });
-      expect(button.className).toBe(screen.getByRole('button', { name: '+ New app' }).className);
+      const button = screen.getByRole('button', { name: 'New folder' });
+      expect(button).toHaveAttribute('title', 'New folder');
+      expect(button.className).not.toContain('btn-primary');
+      expect(button.querySelector('svg')).not.toBeNull();
+      expect(screen.getByRole('button', { name: '+ New app' }).className).toContain('btn-primary');
+      expect(button.parentElement!.querySelectorAll('.btn-primary')).toHaveLength(1);
       await user.click(button);
       expect(mockedFolderCreate).toHaveBeenCalledWith({});
       const input = await screen.findByRole('textbox', { name: 'Folder name' });
@@ -1923,6 +1927,50 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       await user.type(input, 'PhD{Enter}');
       expect(mockedFolderPatch).toHaveBeenCalledWith('F9', { name: 'PhD' });
       await waitFor(() => expect(within(screen.getByTestId('group-heading-folder:F9')).getByText('PhD')).toBeInTheDocument());
+    });
+
+    it('a double-click on New folder makes one folder', async () => {
+      let release: (f: AppFolder) => void = () => {};
+      mockedFolderCreate.mockReset();
+      mockedFolderCreate.mockReturnValue(new Promise<AppFolder>((resolve) => (release = resolve)));
+      const user = setupFolders();
+      await user.dblClick(screen.getByRole('button', { name: 'New folder' }));
+      release(makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 }));
+      await screen.findByRole('textbox', { name: 'Folder name' });
+      expect(mockedFolderCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('New folder while searching clears the search so the new folder and its rename show', async () => {
+      mockedSearch.mockResolvedValue([]);
+      mockedFolderCreate.mockReset();
+      mockedFolderCreate.mockResolvedValue(makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 }));
+      const user = setupFolders();
+      const search = screen.getByRole('searchbox', { name: 'Search chats' });
+      await user.type(search, 'sse');
+      await waitFor(() => expect(screen.queryByTestId('group-G')).toBeNull());
+      await user.click(screen.getByRole('button', { name: 'New folder' }));
+      expect(await screen.findByRole('textbox', { name: 'Folder name' })).toBeInTheDocument();
+      expect(search).toHaveValue('');
+      expect(screen.getByTestId('group-G')).toBeInTheDocument();
+    });
+
+    it('picking the current folder in Move to folder… files nothing and returns focus to the app heading', async () => {
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
+      await user.click(within(screen.getByRole('menu', { name: 'Move to folder…' })).getByRole('menuitemradio', { name: 'Games' }));
+      expect(mockedAppPatch).not.toHaveBeenCalled();
+      await waitFor(() => expect(nameButton('A')).toHaveFocus());
+    });
+
+    it('a 404 on deleting a folder counts as already gone: the folder leaves and its apps show at the top level', async () => {
+      mockedFolderDelete.mockRejectedValue(new ApiError(404, 'Folder "F1" not found.'));
+      const user = setupFolders();
+      await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+      await user.click(within(screen.getByRole('alertdialog', { name: 'Delete Games?' })).getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(screen.queryByTestId('group-folder:F1')).toBeNull());
+      expect(headingOrder()).toEqual(['folder:F2', 'W', 'G', 'A', 'B']);
     });
 
     it("a folder's menu offers Rename, Move up, Move down and Delete…; Rename saves the name", async () => {
@@ -2079,7 +2127,7 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedAppPatch.mock.calls).toEqual([['A', { folderId: null, sortOrder: 1 }]]);
     });
 
-    it('dragging a filed app shows a top-level drop zone after the last folder; dropping there puts it at the top level, last', async () => {
+    it('dragging a filed app shows a top-level drop zone after the last folder; dropping there puts it first among the top-level apps', async () => {
       setupFolders();
       expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
       // A top-level app's drag has no zone: it is at the top level already.
@@ -2097,8 +2145,11 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(zone).toHaveAttribute('data-drop-active', 'true');
       fireEvent.drop(zone, { dataTransfer: headingTransfer('A') });
 
-      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'G', 'A']));
-      expect(mockedAppPatch.mock.calls).toEqual([['A', { folderId: null, sortOrder: 1 }]]);
+      await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'A', 'G']));
+      expect(mockedAppPatch.mock.calls).toEqual([
+        ['A', { folderId: null, sortOrder: 0 }],
+        ['G', { sortOrder: 1 }],
+      ]);
       expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
     });
 
