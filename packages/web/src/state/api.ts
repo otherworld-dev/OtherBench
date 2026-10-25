@@ -653,12 +653,6 @@ export const api = {
     deleteCard: (cardId: number, board?: number | null) => del(`/nextcloud/cards/${cardId}${boardQuery(board)}`),
   },
 
-  /**
-   * Apps and their git, GitHub issues and files (spec 2026-10-20-code-tab-design; server `routes/apps.ts`).
-   * Each failure's `code` (a `CodeErrorCode`) and, for git-failed/gh-failed, `stderr` are on the ApiError.
-   * The git and files routes answer 409 `not-on-this-machine` when the app's folder isn't here; the issue routes
-   * work wherever the folder is, and answer 409 `no-github-repo` for an app with none.
-   */
   /** Folders for apps in the Code sidebar (plan 2026-10-25-app-folders; server `routes/app-folders.ts`). */
   appFolders: {
     /** In sidebar order. */
@@ -669,6 +663,12 @@ export const api = {
     delete: (id: string) => del(`/app-folders/${encodeURIComponent(id)}`),
   },
 
+  /**
+   * Apps and their git, GitHub issues and files (spec 2026-10-20-code-tab-design; server `routes/apps.ts`).
+   * Each failure's `code` (a `CodeErrorCode`) and, for git-failed/gh-failed, `stderr` are on the ApiError.
+   * The git and files routes answer 409 `not-on-this-machine` when the app's folder isn't here; the issue routes
+   * work wherever the folder is, and answer 409 `no-github-repo` for an app with none.
+   */
   apps: {
     /** In sidebar order. */
     list: () => request<App[]>('/apps'),
