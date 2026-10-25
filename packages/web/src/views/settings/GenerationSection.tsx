@@ -170,7 +170,7 @@ export function GenerationSection({
   connections: Connection[];
   value: GenerationState;
   onChange: (next: GenerationState) => void;
-  /** The profile's chat connection and model, for the tools warning and the unload option. */
+  /** The profile's chat connection and model, for the tools warning (Ollama only: other kinds default supportsTools to false) and the unload option. */
   chatConnection?: Connection;
   chatModel?: ModelInfo;
   /** This machine's node id; unloading only happens for a chat connection available here. Unknown until machines load. */
@@ -205,7 +205,7 @@ export function GenerationSection({
             onChange={(c, m, k) => onChange({ ...value, videoConnectionId: c, videoModel: m, videoCheckpoint: k })}
           />
           <p className="text-xs text-[var(--text-muted)]">Video needs ComfyUI.</p>
-          {chosen.length > 0 && chatModel?.supportsTools === false && (
+          {chosen.length > 0 && chatConnection?.kind === 'ollama' && chatModel?.supportsTools === false && (
             <p role="alert" className="text-xs text-[var(--danger)]">
               ⚠ {chatModel.displayName} can't use tools, so this profile can't generate. Pick a model that can.
             </p>

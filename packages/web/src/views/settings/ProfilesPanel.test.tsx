@@ -905,11 +905,13 @@ describe('ProfilesPanel generation', () => {
       expect(screen.getByText("⚠ llama3.2 can't use tools, so this profile can't generate. Pick a model that can.")).toBeInTheDocument();
     });
 
-    it('does not warn for a model that can use tools, or one not known either way', async () => {
+    it('does not warn for a model that can use tools', async () => {
       await pickComfy(makeConnection(), local, makeModel({ supportsTools: true }));
       expect(screen.queryByText(/can't use tools/)).toBeNull();
-      cleanup();
-      await pickComfy(makeConnection(), local, makeModel({ supportsTools: null as unknown as boolean }));
+    });
+
+    it("does not warn for a non-Ollama model, whose supportsTools is only a default", async () => {
+      await pickComfy(makeConnection({ id: 'ant', kind: 'anthropic' }), local, makeModel({ connectionId: 'ant', modelId: 'sonnet', supportsTools: false }));
       expect(screen.queryByText(/can't use tools/)).toBeNull();
     });
 
