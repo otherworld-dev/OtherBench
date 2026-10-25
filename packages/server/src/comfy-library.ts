@@ -2,7 +2,7 @@ import { detectBindings, workflowGraphProblem, workflowProblem, workflowShapeKey
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import { comfySummaryOf } from '@otherbench/tools/media/comfyui.js';
-import { httpError, mediaFetch, readCapped, shownBase } from '@otherbench/tools/media/http.js';
+import { AnswerTooLargeError, httpError, mediaFetch, readCapped, shownBase } from '@otherbench/tools/media/http.js';
 
 // What a ComfyUI connection already has (comfyui-fit spec, Goals 1, 2 and 4).
 // Every read is a GET: listing never submits, edits or deletes anything in ComfyUI.
@@ -15,8 +15,9 @@ export const COMFY_ADDRESSES = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'
 const FIND_TIMEOUT_MS = 2000;
 /** `/system_stats` is a few KB; anything much bigger isn't ComfyUI. */
 const MAX_STATS_BYTES = 1024 * 1024;
-/** How many of ComfyUI's most recent jobs are read. */
+/** How many of ComfyUI's most recent jobs are read, and how many when those are over the cap (big graphs, long status logs). */
 const MAX_HISTORY = 200;
+const FEWER_HISTORY = 50;
 const MAX_NAME = 200;
 /** The most a history or template index read may be: well past a big one, well short of the video cap. */
 const MAX_LIST_BYTES = 16 * 1024 * 1024;
@@ -113,12 +114,27 @@ const stem = (file: string) => file.replace(/^.*[\\/]/, '').replace(MODEL_FILE, 
  * left out), the newest run of each shape, newest first.
  */
 export async function recentWorkflows(conn: MediaConnection, stored: MediaWorkflow[], signal: AbortSignal): Promise<RecentWorkflow[]> {
-  const res = await mediaFetch(conn, `/history?max_items=${MAX_HISTORY}`, {}, signal);
-  if (!res.ok) {
-    await res.body?.cancel().catch(() => {});
-    throw httpError(conn, res, 'Reading the history');
+  const read = async (items: number): Promise<unknown> => {
+    const res = await mediaFetch(conn, `/history?max_items=${items}`, {}, signal);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      throw httpError(conn, res, 'Reading the history');
+    }
+    return readList(res, conn);
+  };
+  let raw: unknown;
+  try {
+    raw = await read(MAX_HISTORY);
+  } catch (err) {
+    if (!(err instanceof AnswerTooLargeError)) throw err;
+    try {
+      raw = await read(FEWER_HISTORY);
+    } catch (again) {
+      if (!(again instanceof AnswerTooLargeError)) throw again;
+      throw new Error(`${shownBase(conn)}'s history was larger than ${MAX_LIST_BYTES / (1024 * 1024)} MB even for its last ${FEWER_HISTORY} runs, so it couldn't be read.`);
+    }
   }
-  const history = obj(await readList(res, conn));
+  const history = obj(raw);
   const added = new Set(stored.map((w) => workflowShapeKey(w.graph)));
   const newest = new Map<string, { run: RecentWorkflow; order: number }>();
   for (const [promptId, raw] of Object.entries(history)) {

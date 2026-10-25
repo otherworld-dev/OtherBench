@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@otherbench/core/domain/availability.js';
 import { hasUserinfo, isGenerationKind, withoutUserinfo } from '@otherbench/core/domain/media.js';
+import { CHECKPOINT_LOADERS, mediaCheckpointLoader, type CheckpointLoader } from '@otherbench/core/domain/media-workflows.js';
 import { connectionSecretRef } from '@otherbench/core/domain/sync.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@otherbench/core/ports/chat-engine.js';
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
@@ -363,6 +364,12 @@ export function connectionsRoutes(container: Container): Hono {
     if (!isGenerationKind(conn.kind)) throw new HTTPException(400, { message: 'Only a generation connection has generation models.' });
     const media = c.req.query('media');
     if (media !== 'image' && media !== 'video') throw new HTTPException(400, { message: '"media" must be "image" or "video".' });
+    // The loader the workflow's model file is on (`checkpointLoaderOf`), else the media's usual one.
+    const asked = c.req.query('loader');
+    if (asked !== undefined && !Object.hasOwn(CHECKPOINT_LOADERS, asked)) {
+      throw new HTTPException(400, { message: `"loader" must be one of: ${Object.keys(CHECKPOINT_LOADERS).join(', ')}.` });
+    }
+    const loader: CheckpointLoader = (asked as CheckpointLoader | undefined) ?? mediaCheckpointLoader(media);
     const { signal, failure } = mediaCall(conn, c.req.raw.signal);
     let models: { id: string; label: string }[];
     let mc: MediaConnection;
@@ -375,7 +382,7 @@ export function connectionsRoutes(container: Container): Hono {
     if (mc.kind !== 'comfyui') return c.json({ models, checkpoints: [] });
     // The workflows are OtherBench's own: they are listed even when ComfyUI can't say which files it has.
     try {
-      return c.json({ models, checkpoints: await comfyCheckpoints(mc, signal, media) });
+      return c.json({ models, checkpoints: await comfyCheckpoints(mc, signal, loader) });
     } catch (err) {
       return c.json({ models, checkpoints: [], checkpointsError: failure(err) });
     }

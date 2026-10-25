@@ -788,6 +788,19 @@ describe('generation connection kinds', () => {
       expect(String((await json(res))['error'])).toMatch(/HTTP 500/);
     });
 
+    it("media-models lists the files of the loader a workflow's model file is on, so a Z-Image image workflow gets UNET files", async () => {
+      const baseUrl = await startComfy();
+      const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;
+      const zimage = (await (await app().request(`/api/connections/${id}/media-models?media=image&loader=UNETLoader`)).json()) as { models: { id: string }[]; checkpoints: string[] };
+      expect(zimage.models.map((m) => m.id)).toEqual(['builtin:sdxl-txt2img']);
+      expect(zimage.checkpoints).toEqual(['wan2.2_ti2v_5B_fp16.safetensors']);
+      const sdxlVideo = (await (await app().request(`/api/connections/${id}/media-models?media=video&loader=CheckpointLoaderSimple`)).json()) as { checkpoints: string[] };
+      expect(sdxlVideo.checkpoints).toEqual(['sd_xl_base_1.0.safetensors', 'juggernaut.safetensors']);
+      const bad = await app().request(`/api/connections/${id}/media-models?media=image&loader=LoadImage`);
+      expect(bad.status).toBe(400);
+      expect(hits).not.toContain('/object_info/LoadImage');
+    });
+
     it('media-models refuses a bad media and a chat connection', async () => {
       const baseUrl = await startComfy();
       const id = (await json(await post({ name: 'Comfy', kind: 'comfyui', baseUrl })))['id'] as string;

@@ -9,12 +9,13 @@ import { COMFY_ADDRESSES, findComfyUI, recentWorkflows, textTemplates } from '..
 let server: Server | undefined;
 let hits: { method: string; url: string }[] = [];
 
-/** A fake ComfyUI answering `routes` by path; anything else is a 404. */
+/** A fake ComfyUI answering `routes` by the whole URL, else by path; anything else is a 404. */
 async function fakeComfy(routes: Record<string, unknown>): Promise<MediaConnection> {
   hits = [];
   server = createServer((req, res) => {
     hits.push({ method: req.method ?? '', url: req.url ?? '' });
-    const path = (req.url ?? '').split('?')[0]!;
+    const url = req.url ?? '';
+    const path = Object.hasOwn(routes, url) ? url : url.split('?')[0]!;
     if (!Object.hasOwn(routes, path)) {
       res.writeHead(404, { 'content-type': 'application/json' });
       return res.end('{}');
@@ -162,9 +163,22 @@ describe('recentWorkflows', () => {
     expect((await recentWorkflows(conn, [], signal())).map((r) => r.promptId)).toEqual(['b']);
   });
 
-  it('refuses a history over 16 MB', async () => {
+  it('reads the last 50 runs when the full history is over 16 MB', async () => {
+    const conn = await fakeComfy({
+      '/history?max_items=200': { pad: 'x'.repeat(16 * 1024 * 1024) },
+      '/history?max_items=50': Object.fromEntries([entry('a', { number: 1, graph: imageGraph('a fox') })]),
+    });
+    expect((await recentWorkflows(conn, [], signal())).map((r) => r.promptId)).toEqual(['a']);
+    expect(hits).toEqual([
+      { method: 'GET', url: '/history?max_items=200' },
+      { method: 'GET', url: '/history?max_items=50' },
+    ]);
+  });
+
+  it('refuses a history over 16 MB even for its last 50 runs, and says so', async () => {
     const conn = await fakeComfy({ '/history': { pad: 'x'.repeat(16 * 1024 * 1024) } });
-    await expect(recentWorkflows(conn, [], signal())).rejects.toThrow(/larger than 16 MB/);
+    await expect(recentWorkflows(conn, [], signal())).rejects.toThrow(/larger than 16 MB even for its last 50 runs/);
+    expect(hits.map((h) => h.url)).toEqual(['/history?max_items=200', '/history?max_items=50']);
   });
 
   it('reports a failed read', async () => {
