@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, bucketRuns, buildCodeSidebar, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, fileAppPatches, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -11,8 +11,12 @@ function project(id: string, name: string, sortOrder = 0): Project {
   return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
-function app(id: string, name: string, sortOrder = 0): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+function app(id: string, name: string, sortOrder = 0, folderId: string | null = null): App {
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId, sortOrder, createdAt: 1, updatedAt: 1 };
+}
+
+function folder(id: string, name: string, sortOrder = 0): AppFolder {
+  return { id, name, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
@@ -60,6 +64,7 @@ describe('buildCodeSidebar', () => {
     const model = buildCodeSidebar(
       [chat('low', { appId: 'A', sortOrder: 1 }), chat('high', { appId: 'A', sortOrder: 2 }), chat('stray', { appId: 'gone' }), chat('plain')],
       [app('A', 'Alpha')],
+      [],
       null
     );
     expect(model.groups.map((g) => g.key)).toEqual(['A', UNKNOWN_APP_KEY]);
@@ -71,7 +76,7 @@ describe('buildCodeSidebar', () => {
   });
 
   it('orders apps with compareApps, shows an app with no chats, and has no Unknown app group when every app is loaded', () => {
-    const model = buildCodeSidebar([chat('a1', { appId: 'a' })], [app('b', 'beta', 1), app('a', 'Alpha', 1), app('z', 'Zed', 0)], null);
+    const model = buildCodeSidebar([chat('a1', { appId: 'a' })], [app('b', 'beta', 1), app('a', 'Alpha', 1), app('z', 'Zed', 0)], [], null);
     expect(model.groups.map((g) => g.key)).toEqual(['z', 'a', 'b']);
     expect(model.groups[0]!.chats).toEqual([]);
     expect(model.groups[0]!.total).toBe(0);
@@ -86,6 +91,7 @@ describe('buildCodeSidebar', () => {
         chat('plain-archived', { archivedAt: 7 }),
       ],
       [app('A', 'Alpha')],
+      [],
       null
     );
     expect(model.groups.map((g) => g.key)).toEqual(['A']);
@@ -95,7 +101,7 @@ describe('buildCodeSidebar', () => {
   });
 
   it('lists a pinned app chat first in its own group (there is no Pinned section in Code mode)', () => {
-    const model = buildCodeSidebar([chat('top', { appId: 'A', sortOrder: 9 }), chat('kept', { appId: 'A', pinned: true, sortOrder: 1 })], [app('A', 'Alpha')], null);
+    const model = buildCodeSidebar([chat('top', { appId: 'A', sortOrder: 9 }), chat('kept', { appId: 'A', pinned: true, sortOrder: 1 })], [app('A', 'Alpha')], [], null);
     expect(ids(model.groups[0]!.chats)).toEqual(['kept', 'top']);
   });
 
@@ -103,6 +109,7 @@ describe('buildCodeSidebar', () => {
     const model = buildCodeSidebar(
       [chat('hit', { appId: 'A' }), chat('miss', { appId: 'A' }), chat('other', { appId: 'B' }), chat('gone-miss', { appId: 'gone' }), chat('arch', { appId: 'B', archivedAt: 3 })],
       [app('A', 'Alpha'), app('B', 'Beta')],
+      [],
       new Set(['hit', 'arch'])
     );
     expect(model.groups.map((g) => g.key)).toEqual(['A']);
@@ -113,10 +120,103 @@ describe('buildCodeSidebar', () => {
 
   it("while searching, lists Chat mode's matching chats apart, newest activity first, archived ones included (I3)", () => {
     const chats = [chat('plain-old', { updatedAt: 1 }), chat('plain-new', { projectId: 'p', archivedAt: 5, updatedAt: 9 }), chat('plain-miss'), chat('hit', { appId: 'A' })];
-    expect(buildCodeSidebar(chats, [app('A', 'Alpha')], null).otherMode).toEqual([]);
-    const model = buildCodeSidebar(chats, [app('A', 'Alpha')], new Set(['plain-old', 'plain-new', 'hit']));
+    expect(buildCodeSidebar(chats, [app('A', 'Alpha')], [], null).otherMode).toEqual([]);
+    const model = buildCodeSidebar(chats, [app('A', 'Alpha')], [], new Set(['plain-old', 'plain-new', 'hit']));
     expect(ids(model.otherMode)).toEqual(['plain-new', 'plain-old']);
     expect(ids(model.groups[0]!.chats)).toEqual(['hit']);
+  });
+});
+
+describe('buildCodeSidebar with app folders', () => {
+  const folders = [folder('f2', 'Work', 1), folder('f1', 'Play', 0)];
+  const apps = [app('a', 'Alpha', 0, 'f1'), app('b', 'Beta', 1, 'f1'), app('c', 'Gamma', 0, 'f2'), app('t', 'Top', 0), app('lost', 'Lost', 1, 'gone')];
+
+  it('lists folders in order, each with its apps in sortOrder, then unfiled apps, then Unknown app', () => {
+    const model = buildCodeSidebar([chat('x', { appId: 'ghost' })], apps, folders, null);
+    expect(model.folders.map((f) => [f.key, f.folder.id, f.total])).toEqual([[folderKey('f1'), 'f1', 2], [folderKey('f2'), 'f2', 1]]);
+    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
+    expect(model.groups.map((g) => g.key)).toEqual(['t', 'lost', UNKNOWN_APP_KEY]);
+  });
+
+  it('puts an app whose folder is not loaded at the top level, and shows an empty folder', () => {
+    const model = buildCodeSidebar([], [app('lost', 'Lost', 0, 'gone')], [folder('e', 'Empty')], null);
+    expect(model.groups.map((g) => g.key)).toEqual(['lost']);
+    expect(model.folders.map((f) => [f.folder.id, f.groups.length, f.total])).toEqual([['e', 0, 0]]);
+  });
+
+  it('while searching, a folder whose name matches shows all its apps, chats unfiltered', () => {
+    const chats = [chat('hit', { appId: 'a' }), chat('miss', { appId: 'a' }), chat('bchat', { appId: 'b' })];
+    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'play');
+    expect(model.folders.map((f) => f.folder.id)).toEqual(['f1']);
+    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
+    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit', 'miss']);
+    expect(ids(model.folders[0]!.groups[1]!.chats)).toEqual(['bchat']);
+    expect(model.groups).toEqual([]);
+  });
+
+  it('while searching, an app match inside a folder shows that folder with just that app; folders with no match drop', () => {
+    const chats = [chat('hit', { appId: 'a' }), chat('bchat', { appId: 'b' }), chat('cchat', { appId: 'c' })];
+    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'hit');
+    expect(model.folders.map((f) => f.folder.id)).toEqual(['f1']);
+    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a']);
+    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit']);
+    expect(model.folders[0]!.total).toBe(2);
+  });
+});
+
+describe('app folder order helpers', () => {
+  const folders = [folder('f1', 'Play'), folder('f2', 'Work', 1)];
+  const apps = [app('t1', 'T1', 0), app('t2', 'T2', 5), app('a', 'A', 3, 'f1'), app('b', 'B', 4, 'f1'), app('c', 'C', 0, 'f2'), app('lost', 'Lost', 9, 'gone')];
+
+  it('appSiblings returns the apps of the same loaded folder, or the top level, in order', () => {
+    expect(appSiblings(apps, 'b', folders).map((a) => a.id)).toEqual(['a', 'b']);
+    expect(appSiblings(apps, 't1', folders).map((a) => a.id)).toEqual(['t1', 't2', 'lost']);
+    expect(appSiblings(apps, 'lost', folders).map((a) => a.id)).toEqual(['t1', 't2', 'lost']);
+    expect(appSiblings(apps, 'nope', folders)).toEqual([]);
+  });
+
+  it('moving the first app in a folder up gives no patches, even with an unfiled app of lower sortOrder', () => {
+    expect(moveAppPatches(appSiblings(apps, 'a', folders), 'a', -1)).toEqual([]);
+    expect(moveAppPatches(appSiblings(apps, 'a', folders), 'a', 1)).toEqual([{ id: 'b', sortOrder: 0 }, { id: 'a', sortOrder: 1 }]);
+  });
+
+  it('fileAppPatches files an app into the middle of a folder, renumbering only that folder', () => {
+    expect(fileAppPatches(apps, folders, 't1', 'f1', 'b')).toEqual([
+      { id: 'a', sortOrder: 0 },
+      { id: 't1', folderId: 'f1', sortOrder: 1 },
+      { id: 'b', sortOrder: 2 },
+    ]);
+  });
+
+  it('fileAppPatches files an app to the end of a folder (an empty one too)', () => {
+    expect(fileAppPatches(apps, folders, 't1', 'f1', null)).toEqual([
+      { id: 'a', sortOrder: 0 },
+      { id: 'b', sortOrder: 1 },
+      { id: 't1', folderId: 'f1', sortOrder: 2 },
+    ]);
+    expect(fileAppPatches([app('x', 'X', 7)], [folder('e', 'E')], 'x', 'e', null)).toEqual([{ id: 'x', folderId: 'e', sortOrder: 0 }]);
+  });
+
+  it('fileAppPatches takes an app out to the top level, above a given app', () => {
+    expect(fileAppPatches(apps, folders, 'a', null, 't2')).toEqual([
+      { id: 'a', folderId: null, sortOrder: 1 },
+      { id: 't2', sortOrder: 2 },
+      { id: 'lost', sortOrder: 3 },
+    ]);
+  });
+
+  it('fileAppPatches refuses an unknown app, a beforeId outside the target group, or a missing folder', () => {
+    expect(fileAppPatches(apps, folders, 'nope', 'f1', null)).toEqual([]);
+    expect(fileAppPatches(apps, folders, 't1', 'f1', 'c')).toEqual([]);
+    expect(fileAppPatches(apps, folders, 't1', 'gone', null)).toEqual([]);
+  });
+
+  it('moveFolderPatches and placeFolderPatches renumber the folders', () => {
+    const fs = [folder('x', 'X', 5), folder('y', 'Y', 5), folder('z', 'Z', 5)];
+    expect(moveFolderPatches(fs, 'x', -1)).toEqual([]);
+    expect(moveFolderPatches(fs, 'x', 1)).toEqual([{ id: 'y', sortOrder: 0 }, { id: 'x', sortOrder: 1 }, { id: 'z', sortOrder: 2 }]);
+    expect(placeFolderPatches(fs, 'z', 'x')).toEqual([{ id: 'z', sortOrder: 0 }, { id: 'x', sortOrder: 1 }, { id: 'y', sortOrder: 2 }]);
+    expect(placeFolderPatches(fs, 'x', null)).toEqual([{ id: 'y', sortOrder: 0 }, { id: 'z', sortOrder: 1 }, { id: 'x', sortOrder: 2 }]);
   });
 });
 

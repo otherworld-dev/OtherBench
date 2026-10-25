@@ -1,4 +1,4 @@
-import type { App, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
@@ -280,6 +280,8 @@ export interface CreateAppBody {
   defaultProfileId?: string | null;
   /** Left out: the new app goes to the bottom. */
   sortOrder?: number;
+  /** The app folder it sits in; null for the top level. */
+  folderId?: string | null;
   /** A Nextcloud Deck board id; null for none. */
   deckBoardId?: number | null;
   /** The Collectives collective and page path holding the app's wiki; null for none. */
@@ -657,6 +659,16 @@ export const api = {
    * The git and files routes answer 409 `not-on-this-machine` when the app's folder isn't here; the issue routes
    * work wherever the folder is, and answer 409 `no-github-repo` for an app with none.
    */
+  /** Folders for apps in the Code sidebar (plan 2026-10-25-app-folders; server `routes/app-folders.ts`). */
+  appFolders: {
+    /** In sidebar order. */
+    list: () => request<AppFolder[]>('/app-folders'),
+    create: (body: { name?: string; sortOrder?: number } = {}) => post<AppFolder>('/app-folders', body),
+    patch: (id: string, body: { name?: string; sortOrder?: number }) => patch<AppFolder>(`/app-folders/${encodeURIComponent(id)}`, body),
+    /** Its apps move to the top level; none are deleted. */
+    delete: (id: string) => del(`/app-folders/${encodeURIComponent(id)}`),
+  },
+
   apps: {
     /** In sidebar order. */
     list: () => request<App[]>('/apps'),

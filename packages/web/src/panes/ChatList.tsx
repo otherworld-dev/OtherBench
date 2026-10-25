@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import { APP_NAME_MAX, compareApps } from '@otherbench/core/domain/apps.js';
+import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
@@ -25,6 +25,7 @@ import {
   AGE_BUCKET_LABELS,
   allGroups,
   bucketRuns,
+  appSiblings,
   buildCodeSidebar,
   buildSidebar,
   capRows,
@@ -145,6 +146,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const paneTabs = useOtherBenchStore((s) => s.paneState.tabs);
   const machines = useOtherBenchStore((s) => s.machines);
   const apps = useOtherBenchStore((s) => s.apps);
+  const appFolders = useOtherBenchStore((s) => s.appFolders);
   const mode = useOtherBenchStore((s) => s.mode);
   const setMode = useOtherBenchStore((s) => s.setMode);
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
@@ -210,7 +212,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working, background]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
-  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, matches), [chats, apps, matches]);
+  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery), [chats, apps, appFolders, matches, trimmedQuery]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
@@ -622,23 +624,24 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** Puts a dragged app above or below app `targetId` (a drop on its heading). */
   async function placeApp(movingId: string, targetId: string, position: DropPosition): Promise<void> {
-    if (movingId === targetId || !apps.some((a) => a.id === targetId)) return;
+    const siblings = appSiblings(apps, movingId, appFolders);
+    if (movingId === targetId || !siblings.some((a) => a.id === targetId)) return;
     let beforeId: string | null = targetId;
     if (position === 'after') {
-      const rest = [...apps].sort(compareApps).filter((a) => a.id !== movingId);
+      const rest = siblings.filter((a) => a.id !== movingId);
       beforeId = rest[rest.findIndex((a) => a.id === targetId) + 1]?.id ?? null;
     }
-    const patches = placeAppPatches(apps, movingId, beforeId);
+    const patches = placeAppPatches(siblings, movingId, beforeId);
     if (patches.length > 0) await sendAppOrder(patches, movingId);
   }
 
-  /** The app's place in the Code sidebar's order. */
+  /** The app's place among its siblings in the Code sidebar's order. */
   function appIndex(appId: string): number {
-    return [...apps].sort(compareApps).findIndex((a) => a.id === appId);
+    return appSiblings(apps, appId, appFolders).findIndex((a) => a.id === appId);
   }
 
   async function moveApp(appId: string, dir: -1 | 1): Promise<void> {
-    await sendAppOrder(moveAppPatches(apps, appId, dir), appId);
+    await sendAppOrder(moveAppPatches(appSiblings(apps, appId, appFolders), appId, dir), appId);
   }
 
   /** Opens a capped group in full (focus goes to the first chat it revealed), or caps it again. */
@@ -1285,7 +1288,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           key={`app:${menuApp.id}`}
           label="App actions"
           position={appMenu.position}
-          items={appMenuItems(appIndex(menuApp.id), apps.length, {
+          items={appMenuItems(appIndex(menuApp.id), appSiblings(apps, menuApp.id, appFolders).length, {
             rename: () => setRenamingAppId(menuApp.id),
             edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
             move: (dir) => void moveApp(menuApp.id, dir),

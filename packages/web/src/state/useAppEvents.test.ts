@@ -17,11 +17,28 @@ describe('refreshAfterSync', () => {
     vi.spyOn(api.projects, 'list').mockResolvedValue([]);
     vi.spyOn(api.profiles, 'list').mockResolvedValue([]);
     vi.spyOn(api.connections, 'list').mockResolvedValue([]);
+    vi.spyOn(api.appFolders, 'list').mockResolvedValue([]);
     const apps = vi.spyOn(api.apps, 'list').mockResolvedValue([app]);
 
     refreshAfterSync();
 
     await vi.waitFor(() => expect(useOtherBenchStore.getState().apps).toEqual([app]));
     expect(apps).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads the app folders too', async () => {
+    const folder = { id: 'f1', name: 'Work', sortOrder: 0, createdAt: 1, updatedAt: 1 };
+    vi.spyOn(api.chats, 'list').mockResolvedValue([]);
+    vi.spyOn(api.projects, 'list').mockResolvedValue([]);
+    vi.spyOn(api.profiles, 'list').mockResolvedValue([]);
+    vi.spyOn(api.connections, 'list').mockResolvedValue([]);
+    vi.spyOn(api.apps, 'list').mockResolvedValue([]);
+    const folders = vi.spyOn(api.appFolders, 'list').mockResolvedValue([folder]);
+
+    refreshAfterSync();
+
+    await vi.waitFor(() => expect(useOtherBenchStore.getState().appFolders).toEqual([folder]));
+    expect(folders).toHaveBeenCalledTimes(1);
+    useOtherBenchStore.getState().setAppFolders([]);
   });
 });

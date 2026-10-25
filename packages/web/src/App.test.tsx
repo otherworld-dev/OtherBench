@@ -14,6 +14,7 @@ vi.mock('./state/api.js', () => ({
     chats: { list: vi.fn() },
     projects: { list: vi.fn() },
     apps: { list: vi.fn() },
+    appFolders: { list: vi.fn() },
     usage: { get: vi.fn() },
     mcpServers: { list: vi.fn(), refresh: vi.fn() },
     grants: { list: vi.fn(), revoke: vi.fn() },
@@ -36,6 +37,7 @@ const mockedProfiles = vi.mocked(api.profiles.list);
 const mockedChats = vi.mocked(api.chats.list);
 const mockedProjects = vi.mocked(api.projects.list);
 const mockedApps = vi.mocked(api.apps.list);
+const mockedAppFolders = vi.mocked(api.appFolders.list);
 const mockedUsage = vi.mocked(api.usage.get);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
 const mockedGrantsList = vi.mocked(api.grants.list);
@@ -52,6 +54,7 @@ function reset(): void {
   mockedChats.mockReset();
   mockedProjects.mockReset().mockResolvedValue([]);
   mockedApps.mockReset().mockResolvedValue([]);
+  mockedAppFolders.mockReset().mockResolvedValue([]);
   mockedUsage.mockReset();
   // The Inspector's honest-state sections (task 26) mount alongside every
   // other App view regardless of which one the test is exercising -- give
@@ -148,6 +151,7 @@ describe('App bootstrap', () => {
     mockedChats.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedProjects.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedApps.mockRejectedValue(new TypeError('Failed to fetch'));
+    mockedAppFolders.mockRejectedValue(new TypeError('Failed to fetch'));
 
     render(<App />);
 

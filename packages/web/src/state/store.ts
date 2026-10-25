@@ -4,7 +4,7 @@ import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherben
 import { chatsWorkingElsewhere } from './peerActivity.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
 import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
@@ -213,6 +213,13 @@ export interface OtherBenchState {
    * DELETE: they go back to Chat mode, never deleted. Its home tab and its chats leave Code mode's pane state.
    */
   removeApp(id: string): void;
+  /** Folders for apps in the Code sidebar, in `compareAppFolders` order as the server sends them. */
+  appFolders: AppFolder[];
+  setAppFolders(folders: AppFolder[]): void;
+  /** Inserts or replaces one folder by id. */
+  upsertAppFolder(folder: AppFolder): void;
+  /** Removes a folder and, in the same update, frees its apps (`folderId: null`), as the server's DELETE does. */
+  removeAppFolder(id: string): void;
   /** Which half of the window is showing. Remembered per browser, never synced. */
   mode: Mode;
   /** The pane state of the mode NOT showing, put away until `setMode` swaps it back with `paneState`. */
@@ -985,6 +992,21 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         ...inPanesOf(state, 'code', (panes) => moved.reduce((next, chatId) => forgetChat(next, chatId), forgetApp(panes, id))),
       };
     }),
+  appFolders: [],
+  setAppFolders: (appFolders) => set({ appFolders }),
+  upsertAppFolder: (folder) =>
+    set((state) => {
+      const idx = state.appFolders.findIndex((f) => f.id === folder.id);
+      if (idx === -1) return { appFolders: [...state.appFolders, folder] };
+      const next = [...state.appFolders];
+      next[idx] = folder;
+      return { appFolders: next };
+    }),
+  removeAppFolder: (id) =>
+    set((state) => ({
+      appFolders: state.appFolders.filter((f) => f.id !== id),
+      apps: state.apps.map((a) => (a.folderId === id ? { ...a, folderId: null } : a)),
+    })),
   mode: initialMode,
   otherPaneState: initialOtherPanes,
   setMode: (mode) => set((state) => inMode(state, mode)),

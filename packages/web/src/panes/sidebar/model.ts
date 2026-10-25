@@ -1,6 +1,6 @@
-import { compareApps } from '@otherbench/core/domain/apps.js';
+import { compareAppFolders, compareApps } from '@otherbench/core/domain/apps.js';
 import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
-import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 
@@ -203,8 +203,27 @@ export interface CodeSidebarGroup {
   total: number;
 }
 
+/** The collapse-state key of an app folder's heading (per-machine collapsed-groups store). */
+export const folderKey = (id: string): string => `folder:${id}`;
+
+/** One app folder in Code mode's sidebar, with its apps' groups. */
+export interface CodeSidebarFolder {
+  folder: AppFolder;
+  /** `folderKey(folder.id)`: also the heading's collapse-state key. */
+  key: string;
+  /** Its apps in `compareApps` order; while searching, only those with a match unless the folder's name matched. */
+  groups: CodeSidebarGroup[];
+  /** The folder's app count, matched or not. */
+  total: number;
+}
+
 export interface CodeSidebarModel {
-  /** Every loaded app in `compareApps` order (while searching, only those with a match), then Unknown app when it has chats. */
+  /** Folders in `compareAppFolders` order; while searching, only those with a match (or whose name matches). */
+  folders: CodeSidebarFolder[];
+  /**
+   * The top-level apps (no folder, or a folder that isn't loaded) in `compareApps` order (while searching, only
+   * those with a match), then Unknown app when it has chats.
+   */
   groups: CodeSidebarGroup[];
   /** Archived app chats, newest activity first; only search matches while searching. */
   archived: Chat[];
@@ -223,8 +242,13 @@ export interface CodeSidebarModel {
  * filtered to those ids and groups left with no match are dropped; otherwise
  * an app with no chats still shows, so it can be opened and given one. While
  * searching, matching chats outside an app come back in `otherMode`.
+ *
+ * Apps sit in folders (plan 2026-10-25-app-folders): `folders` holds each loaded folder with its apps' groups, and
+ * `groups` the top-level ones. While searching, a folder whose name matches `query` shows all its apps, each with
+ * all its chats; any other folder shows only the app groups with a match and is dropped when it has none. Without a
+ * search every folder shows, empty ones too.
  */
-export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySet<string> | null): CodeSidebarModel {
+export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = ''): CodeSidebarModel {
   const appChats = chats.filter((c) => c.appId !== null);
   const live = appChats.filter((c) => c.archivedAt === null);
   const known = new Set(apps.map((a) => a.id));
@@ -232,15 +256,27 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySe
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
   const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
 
-  const group = (key: string, app: App | null): CodeSidebarGroup => {
+  const group = (key: string, app: App | null, all = false): CodeSidebarGroup => {
     const members = live.filter((c) => keyOf(c) === key);
-    return { app, key, chats: members.filter(shown).sort(pinnedFirst), total: members.length };
+    return { app, key, chats: (all ? members : members.filter(shown)).sort(pinnedFirst), total: members.length };
   };
-  const groups = [...apps].sort(compareApps).map((a) => group(a.id, a));
+  const knownFolders = new Set(folders.map((f) => f.id));
+  const sortedApps = [...apps].sort(compareApps);
+  const groups = sortedApps.filter((a) => a.folderId === null || !knownFolders.has(a.folderId)).map((a) => group(a.id, a));
   const unknown = group(UNKNOWN_APP_KEY, null);
   if (unknown.total > 0) groups.push(unknown);
 
+  const folderModels = [...folders].sort(compareAppFolders).flatMap((folder): CodeSidebarFolder[] => {
+    const members = sortedApps.filter((a) => a.folderId === folder.id);
+    // A matching folder name keeps every app and chat in view.
+    const nameHit = matches !== null && titleMatches(folder.name, query);
+    const folderGroups = members.map((a) => group(a.id, a, nameHit)).filter((g) => matches === null || nameHit || g.chats.length > 0);
+    if (matches !== null && folderGroups.length === 0) return [];
+    return [{ folder, key: folderKey(folder.id), groups: folderGroups, total: members.length }];
+  });
+
   return {
+    folders: folderModels,
     // Unknown app shows only with chats; while searching, any group only with a match.
     groups: groups.filter((g) => (matches === null ? g.app !== null || g.total > 0 : g.chats.length > 0)),
     archived: appChats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
@@ -259,9 +295,53 @@ export function moveProjectPatches(projects: Project[], id: string, dir: -1 | 1)
   return moveOrderPatches(projects, compareProjects, id, dir);
 }
 
-/** As `moveProjectPatches`, for apps in the Code sidebar (in `compareApps` order). */
+/** As `moveProjectPatches`, for apps in the Code sidebar (in `compareApps` order). Pass `appSiblings(...)`, not every app. */
 export function moveAppPatches(apps: App[], id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
   return moveOrderPatches(apps, compareApps, id, dir);
+}
+
+/** As `moveProjectPatches`, for folders in the Code sidebar (in `compareAppFolders` order). */
+export function moveFolderPatches(folders: AppFolder[], id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
+  return moveOrderPatches(folders, compareAppFolders, id, dir);
+}
+
+/**
+ * The apps that sit beside `appId` in the Code sidebar, itself included, in `compareApps` order: those in its
+ * folder, or the top-level ones (no folder, or one that isn't loaded). What Move up / Move down and drops reorder among.
+ */
+export function appSiblings(apps: App[], appId: string, folders: AppFolder[]): App[] {
+  const self = apps.find((a) => a.id === appId);
+  if (!self) return [];
+  const known = new Set(folders.map((f) => f.id));
+  const home = (a: App): string | null => (a.folderId !== null && known.has(a.folderId) ? a.folderId : null);
+  return apps.filter((a) => home(a) === home(self)).sort(compareApps);
+}
+
+/**
+ * The PATCHes that file app `appId` in a group, a loaded folder or (null) the top level, just above `beforeId`
+ * (null = last). Renumbers only that group 0..n-1 and returns just the apps that change, in display order; the moved
+ * app's entry carries `folderId`. Empty for an unknown app or folder, or a `beforeId` that isn't in the group.
+ */
+export function fileAppPatches(
+  apps: App[],
+  folders: AppFolder[],
+  appId: string,
+  folderId: string | null,
+  beforeId: string | null
+): { id: string; folderId?: string | null; sortOrder: number }[] {
+  const moving = apps.find((a) => a.id === appId);
+  if (!moving) return [];
+  const known = new Set(folders.map((f) => f.id));
+  if (folderId !== null && !known.has(folderId)) return [];
+  const home = (a: App): string | null => (a.folderId !== null && known.has(a.folderId) ? a.folderId : null);
+  const rest = apps.filter((a) => a.id !== appId && home(a) === folderId).sort(compareApps);
+  const at = beforeId === null ? rest.length : rest.findIndex((a) => a.id === beforeId);
+  if (at === -1) return [];
+  const ordered = [...rest.slice(0, at), moving, ...rest.slice(at)];
+  return ordered.flatMap((a, sortOrder) => {
+    if (a.id === appId) return a.folderId === folderId && a.sortOrder === sortOrder ? [] : [{ id: a.id, folderId, sortOrder }];
+    return a.sortOrder === sortOrder ? [] : [{ id: a.id, sortOrder }];
+  });
 }
 
 interface Ordered {
@@ -295,9 +375,14 @@ export function placeProjectPatches(siblings: Project[], movingId: string, befor
   return placeOrderPatches(siblings, compareProjects, movingId, beforeId);
 }
 
-/** As `placeProjectPatches`, for dragging an app's heading in the Code sidebar. */
+/** As `placeProjectPatches`, for dragging an app's heading in the Code sidebar. Pass `appSiblings(...)`, not every app. */
 export function placeAppPatches(apps: App[], movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
   return placeOrderPatches(apps, compareApps, movingId, beforeId);
+}
+
+/** As `placeProjectPatches`, for dragging a folder's heading in the Code sidebar. */
+export function placeFolderPatches(folders: AppFolder[], movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
+  return placeOrderPatches(folders, compareAppFolders, movingId, beforeId);
 }
 
 function placeOrderPatches<T extends Ordered>(items: T[], compare: (a: T, b: T) => number, movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
