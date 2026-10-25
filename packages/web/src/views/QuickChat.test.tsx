@@ -8,7 +8,7 @@ vi.mock('../state/api.js', () => ({
   api: {
     profiles: { list: vi.fn() },
     chats: { create: vi.fn(), patch: vi.fn() },
-    turns: { create: vi.fn() },
+    turns: { create: vi.fn(), cancel: vi.fn(async () => {}) },
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -102,6 +102,20 @@ describe('QuickChat', () => {
     });
     expect(api.chats.patch).toHaveBeenCalledTimes(2);
     hasFocus.mockRestore();
+  });
+
+  it('Esc stops a running reply instead of hiding the window', async () => {
+    const user = userEvent.setup();
+    render(<QuickChat />);
+    await screen.findByText(/Quick chat · Profile p-default/);
+    await user.type(screen.getByRole('textbox', { name: 'Quick message' }), 'hello{Enter}');
+    await waitFor(() => expect(api.turns.create).toHaveBeenCalled());
+    act(() => {
+      useOtherBenchStore.getState().registerMessage({ id: 'a-run', chatId: 'q1', parentId: null, role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null, createdAt: 2 } as never);
+    });
+    await user.keyboard('{Escape}');
+    expect(api.turns.cancel).toHaveBeenCalledWith('a-run');
+    expect(hideQuick).not.toHaveBeenCalled();
   });
 
   it('Expand hands the chat to the main window and starts afresh; Esc hides the window', async () => {
