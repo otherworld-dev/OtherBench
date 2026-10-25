@@ -24,6 +24,7 @@ vi.mock('../state/api.js', () => ({
       retry: vi.fn(),
       regenerate: vi.fn(),
       create: vi.fn(),
+      cancel: vi.fn(async () => {}),
     },
     chats: { patch: vi.fn(), stopComputer: vi.fn(async () => {}) },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
@@ -100,6 +101,7 @@ function reset(): void {
   mockedRetry.mockReset();
   mockedRegenerate.mockReset();
   mockedCreate.mockReset();
+  vi.mocked(api.turns.cancel).mockClear();
 }
 
 /**
@@ -417,6 +419,45 @@ describe('Thread auto-scroll', () => {
     });
     render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
     expect(screen.getByText('Generating… step 12 of 30')).toBeInTheDocument();
+  });
+
+  describe('Escape stops the running reply', () => {
+    const streamingReply = (): void => {
+      const root = makeMessage('root', 'chat-1', { role: 'user' });
+      const reply = variantMessage('reply', 'root', { status: 'streaming', parts: [{ type: 'text', text: 'working' }] });
+      useOtherBenchStore.getState().loadMessages('chat-1', [root, reply], null);
+    };
+
+    it('from the message box', async () => {
+      streamingReply();
+      const user = userEvent.setup();
+      render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+      await user.click(screen.getByRole('textbox', { name: /message/i }));
+      await user.keyboard('{Escape}');
+      expect(vi.mocked(api.turns.cancel)).toHaveBeenCalledWith('reply');
+    });
+
+    it('from the conversation', () => {
+      streamingReply();
+      render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+      fireEvent.keyDown(screen.getByTestId('thread-scroll'), { key: 'Escape' });
+      expect(vi.mocked(api.turns.cancel)).toHaveBeenCalledWith('reply');
+    });
+
+    it('does nothing when no reply is running, or when another text box has the Escape', () => {
+      useOtherBenchStore.getState().loadMessages('chat-1', [makeMessage('root', 'chat-1')], null);
+      const { unmount } = render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+      fireEvent.keyDown(screen.getByTestId('thread-scroll'), { key: 'Escape' });
+      expect(vi.mocked(api.turns.cancel)).not.toHaveBeenCalled();
+      unmount();
+
+      streamingReply();
+      render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+      const other = document.createElement('textarea');
+      screen.getByTestId('thread-scroll').appendChild(other);
+      fireEvent.keyDown(other, { key: 'Escape' });
+      expect(vi.mocked(api.turns.cancel)).not.toHaveBeenCalled();
+    });
   });
 
   it('opens a chat at the bottom', () => {

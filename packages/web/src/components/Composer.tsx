@@ -2,7 +2,9 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Clip
 import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
+import { ESCAPE_STOPS_REPLY_ATTR } from '../lib/escapeStopsReply.js';
 import { promptHistory } from '../lib/promptHistory.js';
+import { useStopReply } from '../state/useStopReply.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
@@ -202,14 +204,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
-  const inFlightIds = useMemo(
-    () =>
-      Object.values(messages)
-        .filter((m) => m.chatId === chat.id && m.status === 'streaming')
-        .map((m) => m.id),
-    [messages, chat.id]
-  );
-  const isStreaming = inFlightIds.length > 0;
+  const { streaming: isStreaming, stop: stopReplies } = useStopReply(chat.id);
   // While a reply runs, or messages sent during one still wait, Send makes a note (spec 2026-10-18-send-while-replying-design).
   const waitingCount = useOtherBenchStore((s) => s.chatNotes[chat.id]?.length ?? 0);
   const busy = isStreaming || waitingCount > 0;
@@ -251,7 +246,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   }, [hasPrefill, chat.id]);
 
   async function handleStop(): Promise<void> {
-    await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[otherbench-web] failed to cancel ${id}:`, err))));
+    await stopReplies();
   }
 
   /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies at once, to a reply already running too (its Claude Code is switched). */
@@ -693,6 +688,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           {menuOpen && <CommandMenu id={menuId} commands={chatCommands.commands} query={text.slice(1)} activeIndex={Math.min(menuIndex, menuRows.length - 1)} onPick={pickCommand} warning={chatCommands.warning} />}
         <textarea
           ref={textareaRef}
+          // Escape here stops a running reply (Thread), unless the slash-command list takes it first.
+          {...{ [ESCAPE_STOPS_REPLY_ATTR]: '' }}
           value={text}
           onChange={(e) => {
             setText(e.target.value);

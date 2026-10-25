@@ -15,8 +15,10 @@ import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
+import { escapeStopsReply } from '../lib/escapeStopsReply.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { useStopReply } from '../state/useStopReply.js';
 import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
 import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
 import { ViewerPanel } from '../viewer/ViewerPanel.js';
@@ -60,6 +62,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const markKept = useOtherBenchStore((s) => s.markKept);
   const registerMessage = useOtherBenchStore((s) => s.registerMessage);
   const profiles = useOtherBenchStore((s) => s.profiles);
+  // The chat's running replies, for Escape (the section's onKeyDown) as well as the composer's Stop.
+  const replies = useStopReply(chat?.id ?? null);
   const resetMessageForRetry = useOtherBenchStore((s) => s.resetMessageForRetry);
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat?.id ?? ''));
   const setViewerOpen = useViewerStore((s) => s.setOpen);
@@ -339,7 +343,17 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     <ViewerContext.Provider value={viewerActions}>
       <div className="flex h-full min-h-0 w-full min-w-0 flex-1">
         {/* A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads. */}
-        <section aria-label={chat.title} style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0' }} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+        <section
+          aria-label={chat.title}
+          style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0' }}
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+          // Escape anywhere in this chat stops its running reply, as Stop does (lib/escapeStopsReply.ts).
+          onKeyDown={(e) => {
+            if (!replies.streaming || !escapeStopsReply({ key: e.key, defaultPrevented: e.defaultPrevented, isComposing: e.nativeEvent.isComposing, target: e.target })) return;
+            e.preventDefault();
+            void replies.stop();
+          }}
+        >
           {switchError && (
             <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
               <span>{switchError}</span>

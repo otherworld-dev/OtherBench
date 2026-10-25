@@ -9,12 +9,13 @@ import { StartChatError, startChat } from '../state/startChat.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
+import { useStopReply } from '../state/useStopReply.js';
 
 /**
  * The quick-chat window (v2 plan, Task 37), opened by the global hotkey: a
  * message box and the reply, in a new chat with the default profile. Follow-ups
  * stay in the same chat. **Expand** hands the chat to the main window and
- * starts afresh next time; `Esc` just hides the window, keeping the chat.
+ * starts afresh next time; `Esc` stops a running reply, and otherwise hides the window, keeping the chat.
  */
 export function QuickChat(): JSX.Element {
   const profiles = useOtherBenchStore((s) => s.profiles);
@@ -28,6 +29,10 @@ export function QuickChat(): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useChatSync(chat?.id ?? null);
+  // Esc stops a running reply first; with nothing running it hides the window. Read through a ref by the key listener.
+  const replies = useStopReply(chat?.id ?? null);
+  const repliesRef = useRef(replies);
+  repliesRef.current = replies;
 
   useEffect(() => {
     api.profiles
@@ -45,10 +50,14 @@ export function QuickChat(): JSX.Element {
       if (disposed) unlisten();
       else off = unlisten;
     });
-    // Esc hides the window wherever focus is in it.
+    // Esc wherever focus is in the window: stops a running reply, or else hides the window.
     const onKey = (e: globalThis.KeyboardEvent): void => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
       e.preventDefault();
+      if (repliesRef.current.streaming) {
+        void repliesRef.current.stop();
+        return;
+      }
       hideQuick().catch((err: unknown) => console.error('[otherbench-web] failed to hide quick chat:', err));
     };
     window.addEventListener('keydown', onKey);
