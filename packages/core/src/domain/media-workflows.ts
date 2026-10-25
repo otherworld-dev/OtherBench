@@ -110,7 +110,8 @@ const SEED_INPUTS = new Map([
  * The input a role should bind for `inputs[name]` on node `id`: the input itself
  * when it holds a value of `type`, else, when it is a link, the one input of
  * that type on the node it links to (a primitive node), else null. A node with
- * two such inputs is ambiguous, so it binds nothing.
+ * two such inputs is ambiguous, and one fed by another node (a `StringConcatenate`
+ * adding a style to the prompt) only passes a value on, so neither binds anything.
  */
 function bindingFor(graph: Graph, id: string, name: string, type: 'string' | 'number'): WorkflowBinding | null {
   const v = inputsOf(graph, id)?.[name];
@@ -118,7 +119,8 @@ function bindingFor(graph: Graph, id: string, name: string, type: 'string' | 'nu
   const target = linkTarget(v);
   const inputs = target === null ? null : inputsOf(graph, target);
   if (target === null || !inputs) return null;
-  const own = Object.keys(inputs).filter((k) => linkTarget(inputs[k]) === null && typeof inputs[k] === type);
+  if (Object.values(inputs).some((x) => linkTarget(x) !== null)) return null;
+  const own = Object.keys(inputs).filter((k) => typeof inputs[k] === type);
   return own.length === 1 ? { nodeId: target, input: own[0]! } : null;
 }
 
@@ -226,28 +228,64 @@ export interface WorkflowLimits {
   fps: number;
 }
 
+/** A bound input's number; 0 or less is no size or length at all. */
 function boundNumber(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>, role: WorkflowRole): number | null {
   const b = wf.bindings[role];
   const v = b ? inputsOf(wf.graph, b.nodeId)?.[b.input] : undefined;
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** Nodes that write the video, whose frame rate is the clip's. */
+const VIDEO_OUTPUT = /CreateVideo|SaveVideo|VideoCombine/;
+
+/** The frame rate on node `id`, held there or by a primitive that feeds it; null when it has none. */
+function fpsOn(graph: Graph, id: string): number | null {
+  for (const k of ['fps', 'frame_rate']) {
+    const b = bindingFor(graph, id, k, 'number');
+    const v = b ? inputsOf(graph, b.nodeId)?.[b.input] : undefined;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
 }
 
 /** The size, length and frame rate a workflow is built for, read from its own graph. */
 export function workflowLimits(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>): WorkflowLimits {
   const width = boundNumber(wf, 'width');
   const height = boundNumber(wf, 'height');
-  let fps = 24;
-  outer: for (const id of Object.keys(wf.graph)) {
-    const inputs = inputsOf(wf.graph, id);
-    for (const k of ['fps', 'frame_rate']) {
-      const v = inputs?.[k];
-      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
-        fps = v;
-        break outer;
-      }
-    }
-  }
+  // The node that writes the video knows the clip's rate; another node's (an interpolator's, say) is a guess.
+  const ids = Object.keys(wf.graph);
+  const ordered = [...ids.filter((id) => VIDEO_OUTPUT.test(classOf(wf.graph, id))), ...ids.filter((id) => !VIDEO_OUTPUT.test(classOf(wf.graph, id)))];
+  const fps = ordered.map((id) => fpsOn(wf.graph, id)).find((v) => v !== null) ?? 24;
   return { size: width !== null && height !== null ? { width, height } : null, maxFrames: boundNumber(wf, 'frames'), fps };
+}
+
+/** The ComfyUI loaders whose model files OtherBench can list, by the input that names the file. */
+export const CHECKPOINT_LOADERS = { CheckpointLoaderSimple: 'ckpt_name', UNETLoader: 'unet_name' } as const;
+
+export type CheckpointLoader = keyof typeof CHECKPOINT_LOADERS;
+
+const isLoader = (c: string): c is CheckpointLoader => Object.hasOwn(CHECKPOINT_LOADERS, c);
+
+/** The usual loader for a media: checkpoints for images, diffusion models for video. */
+export function mediaCheckpointLoader(media: 'image' | 'video'): CheckpointLoader {
+  return media === 'video' ? 'UNETLoader' : 'CheckpointLoaderSimple';
+}
+
+/**
+ * The loader whose files the `checkpoint` binding chooses from: the bound node's
+ * own class, or the loader a bound primitive feeds, else the media's usual one.
+ */
+export function checkpointLoaderOf(wf: Pick<MediaWorkflow, 'graph' | 'bindings'>, media: 'image' | 'video'): CheckpointLoader {
+  const fallback = mediaCheckpointLoader(media);
+  const b = wf.bindings.checkpoint;
+  if (!b) return fallback;
+  const own = classOf(wf.graph, b.nodeId);
+  if (isLoader(own)) return own;
+  for (const id of Object.keys(wf.graph)) {
+    const c = classOf(wf.graph, id);
+    if (isLoader(c) && linkTarget(inputsOf(wf.graph, id)?.[CHECKPOINT_LOADERS[c]]) === b.nodeId) return c;
+  }
+  return fallback;
 }
 
 export type Aspect = 'square' | 'portrait' | 'landscape' | 'wide';
