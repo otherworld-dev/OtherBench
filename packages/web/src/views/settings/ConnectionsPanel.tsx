@@ -90,6 +90,8 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
   const [discovering, setDiscovering] = useState(false);
   const [discoverMessage, setDiscoverMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [findMessage, setFindMessage] = useState<{ ok: boolean; text: string } | null>(null);
   // Where it works (v2 spec §5): left to the server (decided from the address) until changed here.
   const [availability, setAvailability] = useState<string | null>(connection?.availability ?? null);
   const [keepKeyHere, setKeepKeyHere] = useState(connection?.syncSecret === false);
@@ -169,6 +171,25 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       setTestResult({ ok: false, message: errorMessage(err, 'Test failed -- please try again.'), latencyMs: 0 });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function handleFind(): Promise<void> {
+    setFinding(true);
+    setFindMessage(null);
+    try {
+      const found = await api.connections.findComfyui();
+      if ('baseUrl' in found) {
+        setBaseUrl(found.baseUrl);
+        setFindMessage({ ok: true, text: `Found ComfyUI ${found.version} at ${found.baseUrl}` });
+      } else {
+        setFindMessage({ ok: false, text: "Couldn't find ComfyUI on this PC (tried 8188 and 8000). Is it running?" });
+      }
+    } catch (err) {
+      console.error('[otherbench-web] failed to look for ComfyUI:', err);
+      setFindMessage({ ok: false, text: errorMessage(err, 'Could not look for ComfyUI -- please try again.') });
+    } finally {
+      setFinding(false);
     }
   }
 
@@ -270,6 +291,14 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
           placeholder={BASE_URL_PLACEHOLDERS[kind] ?? 'https://api.example.com'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
         />
+        {kind === 'comfyui' && (
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => void handleFind()} disabled={finding} className="btn px-2 py-1 text-xs">
+              {finding ? 'Looking…' : 'Find ComfyUI'}
+            </button>
+            {findMessage && <span role="status" className={`text-xs ${findMessage.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>{findMessage.text}</span>}
+          </div>
+        )}
         {kind === 'openai_compatible' && (
           <p className="mt-1 text-xs text-[var(--text-muted)]">Required -- an OpenAI-compatible connection has no default host to talk to.</p>
         )}
@@ -380,7 +409,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         </div>
       </div>
 
-      {connection && connection.kind === 'comfyui' && kind === 'comfyui' && <WorkflowsSection connectionId={connection.id} />}
+      {connection && connection.kind === 'comfyui' && kind === 'comfyui' && <WorkflowsSection connectionId={connection.id} baseUrl={connection.baseUrl ?? BASE_URL_PLACEHOLDERS['comfyui'] ?? ''} />}
 
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
 

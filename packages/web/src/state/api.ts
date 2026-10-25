@@ -1,6 +1,7 @@
 import type { App, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
+import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
@@ -547,6 +548,10 @@ export const api = {
     delete: (id: string) => del(`/connections/${id}`),
     test: (id: string) => post<{ ok: boolean; message: string; latencyMs: number }>(`/connections/${id}/test`),
     discoverModels: (id: string) => post<ModelInfo[]>(`/connections/${id}/discover-models`),
+    /** Looks for ComfyUI on this PC's two usual addresses; only when asked. */
+    findComfyui: () => post<{ baseUrl: string; version: string; gpu: string | null; vramGb: number | null } | { found: false }>('/connections/find-comfyui'),
+    comfyRecent: (id: string) => request<RecentWorkflow[]>(`/connections/${encodeURIComponent(id)}/comfy/recent`),
+    comfyTemplates: (id: string) => request<{ templates: ComfyTemplate[] } | { unsupported: true }>(`/connections/${encodeURIComponent(id)}/comfy/templates`),
     /** A generation connection's models or workflows for the pickers; ComfyUI also lists the model files it has (`checkpointsError` when it couldn't say). */
     mediaModels: (id: string, media: 'image' | 'video') =>
       request<MediaModelsResult>(`/connections/${encodeURIComponent(id)}/media-models?media=${media}`),
@@ -559,7 +564,7 @@ export const api = {
     create: (body: { name: string; media: 'image' | 'video'; graph: unknown; bindings: MediaWorkflow['bindings']; checkpoint?: string }) =>
       post<MediaWorkflow>('/media/workflows', body),
     /** An imported workflow's name, media, bindings or model file (`checkpoint: null` goes back to the graph's own). */
-    update: (id: string, body: { name?: string; media?: 'image' | 'video'; bindings?: MediaWorkflow['bindings']; checkpoint?: string | null }) =>
+    update: (id: string, body: { name?: string; media?: 'image' | 'video'; graph?: unknown; bindings?: MediaWorkflow['bindings']; checkpoint?: string | null }) =>
       patch<MediaWorkflow>(`/media/workflows/${encodeURIComponent(id)}`, body),
     delete: (id: string) => del(`/media/workflows/${encodeURIComponent(id)}`),
   },
