@@ -128,14 +128,21 @@ export interface AppMenuHandlers {
   rename(): void;
   /** Opens the app form on this app. */
   edit(): void;
+  /** Moves the app one place up (-1) or down (+1) in the Code sidebar. */
+  move(dir: -1 | 1): void;
   requestDelete(): void;
 }
 
-/** An app heading's ⋯ menu in Code mode (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit, delete. */
-export function appMenuItems(h: AppMenuHandlers): MenuItem[] {
+/**
+ * An app heading's ⋯ menu in Code mode (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit, move, delete.
+ * `index` and `count`: the app's place in the Code sidebar, for Move up / Move down.
+ */
+export function appMenuItems(index: number, count: number, h: AppMenuHandlers): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'edit', label: 'Edit…', onSelect: h.edit },
+    { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
+    { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
   ];
 }

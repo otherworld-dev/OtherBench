@@ -256,14 +256,32 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], matches: ReadonlySe
  * either end or for an unknown id.
  */
 export function moveProjectPatches(projects: Project[], id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
-  const ordered = [...projects].sort(compareProjects);
+  return moveOrderPatches(projects, compareProjects, id, dir);
+}
+
+/** As `moveProjectPatches`, for apps in the Code sidebar (in `compareApps` order). */
+export function moveAppPatches(apps: App[], id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
+  return moveOrderPatches(apps, compareApps, id, dir);
+}
+
+interface Ordered {
+  id: string;
+  sortOrder: number;
+}
+
+function renumbered<T extends Ordered>(ordered: T[]): { id: string; sortOrder: number }[] {
+  return ordered.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
+}
+
+function moveOrderPatches<T extends Ordered>(items: T[], compare: (a: T, b: T) => number, id: string, dir: -1 | 1): { id: string; sortOrder: number }[] {
+  const ordered = [...items].sort(compare);
   const i = ordered.findIndex((p) => p.id === id);
   const j = i + dir;
   if (i === -1 || j < 0 || j >= ordered.length) return [];
   const moving = ordered[i]!;
   ordered[i] = ordered[j]!;
   ordered[j] = moving;
-  return ordered.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
+  return renumbered(ordered);
 }
 
 /**
@@ -274,14 +292,22 @@ export function moveProjectPatches(projects: Project[], id: string, dir: -1 | 1)
  * project or `beforeId` isn't among them.
  */
 export function placeProjectPatches(siblings: Project[], movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
-  const ordered = [...siblings].sort(compareProjects);
+  return placeOrderPatches(siblings, compareProjects, movingId, beforeId);
+}
+
+/** As `placeProjectPatches`, for dragging an app's heading in the Code sidebar. */
+export function placeAppPatches(apps: App[], movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
+  return placeOrderPatches(apps, compareApps, movingId, beforeId);
+}
+
+function placeOrderPatches<T extends Ordered>(items: T[], compare: (a: T, b: T) => number, movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
+  const ordered = [...items].sort(compare);
   const moving = ordered.find((p) => p.id === movingId);
   if (!moving) return [];
   const rest = ordered.filter((p) => p.id !== movingId);
   const at = beforeId === null ? rest.length : rest.findIndex((p) => p.id === beforeId);
   if (at === -1) return [];
-  const placed = [...rest.slice(0, at), moving, ...rest.slice(at)];
-  return placed.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
+  return renumbered([...rest.slice(0, at), moving, ...rest.slice(at)]);
 }
 
 /** Gap below which a new sortOrder can't sit strictly between two neighbours, so the section is renumbered. */

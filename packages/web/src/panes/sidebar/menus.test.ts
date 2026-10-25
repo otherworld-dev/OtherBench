@@ -52,15 +52,24 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
 });
 
 describe('appMenuItems', () => {
-  it('offers Rename, Edit… and Delete…, each calling its handler', () => {
-    const h = { rename: vi.fn(), edit: vi.fn(), requestDelete: vi.fn() };
-    const items = appMenuItems(h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Delete…']);
-    expect(items[2]!.danger).toBe(true);
+  it('offers Rename, Edit…, Move up, Move down and Delete…, each calling its handler', () => {
+    const h = { rename: vi.fn(), edit: vi.fn(), move: vi.fn(), requestDelete: vi.fn() };
+    const items = appMenuItems(1, 3, h);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Move up', 'Move down', 'Delete…']);
+    expect(items[4]!.danger).toBe(true);
     for (const item of items) item.onSelect!();
     expect(h.rename).toHaveBeenCalled();
     expect(h.edit).toHaveBeenCalled();
+    expect(h.move.mock.calls).toEqual([[-1], [1]]);
     expect(h.requestDelete).toHaveBeenCalled();
+  });
+
+  it('disables Move up for the first app and Move down for the last', () => {
+    const h = { rename: vi.fn(), edit: vi.fn(), move: vi.fn(), requestDelete: vi.fn() };
+    const first = appMenuItems(0, 2, h);
+    expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
+    expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
+    expect(appMenuItems(1, 2, h).find((i) => i.id === 'down')!.disabled).toBe(true);
   });
 });
 

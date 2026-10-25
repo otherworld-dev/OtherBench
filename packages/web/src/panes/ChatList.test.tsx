@@ -1732,13 +1732,58 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
     const user = setup({ mode: 'code' });
     await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
     const menu = screen.getByRole('menu', { name: 'App actions' });
-    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Delete…']);
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Move up', 'Move down', 'Delete…']);
     await user.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
     const input = screen.getByRole('textbox', { name: 'App name' });
     await user.clear(input);
     await user.type(input, 'Renamed{Enter}');
     expect(mockedAppPatch).toHaveBeenCalledWith('A', { name: 'Renamed' });
     await waitFor(() => expect(within(screen.getByTestId('group-heading-A')).getByText('Renamed')).toBeInTheDocument());
+  });
+
+  it("an app's menu moves it up and down, saving the new order; the ends are disabled", async () => {
+    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+    const user = setup({ mode: 'code', apps: [{ ...alpha, sortOrder: 0 }, { ...beta, sortOrder: 1 }] });
+    expect(headingOrder()).toEqual(['A', 'B']);
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+    await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+    await waitFor(() => expect(headingOrder()).toEqual(['B', 'A']));
+    expect(mockedAppPatch.mock.calls).toEqual([
+      ['B', { sortOrder: 0 }],
+      ['A', { sortOrder: 1 }],
+    ]);
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
+  });
+
+  it("dragging an app's heading onto another's top half puts it above, and saves the order", async () => {
+    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+    const gamma = makeApp({ id: 'G', name: 'Gamma', workspaceRoot: '/gamma', sortOrder: 2 });
+    setup({ mode: 'code', apps: [{ ...alpha, sortOrder: 0 }, { ...beta, sortOrder: 1 }, gamma] });
+    const transfer = { types: [PROJECT_DRAG_MIME], getData: (t: string) => (t === PROJECT_DRAG_MIME ? 'G' : ''), setData: vi.fn(), dropEffect: 'none', effectAllowed: 'all' };
+    fireEvent.dragStart(screen.getByTestId('group-heading-G').querySelector<HTMLElement>('[data-heading-main]')!, { dataTransfer: transfer });
+    const target = screen.getByTestId('group-heading-A');
+    target.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+    fireEvent(target, Object.defineProperty(createEvent.dragOver(target, { dataTransfer: transfer }), 'clientY', { value: 105 }));
+    expect(target).toHaveAttribute('data-drop-position', 'before');
+    fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: transfer }), 'clientY', { value: 105 }));
+    await waitFor(() => expect(headingOrder()).toEqual(['G', 'A', 'B']));
+    expect(mockedAppPatch.mock.calls).toEqual([
+      ['G', { sortOrder: 0 }],
+      ['A', { sortOrder: 1 }],
+      ['B', { sortOrder: 2 }],
+    ]);
+  });
+
+  it("a failed reorder says so and shows the server's app order", async () => {
+    mockedAppPatch.mockRejectedValue(new Error('offline'));
+    vi.mocked(api.apps.list).mockResolvedValue([{ ...alpha, sortOrder: 0 }, { ...beta, sortOrder: 1 }]);
+    const user = setup({ mode: 'code', apps: [{ ...alpha, sortOrder: 0 }, { ...beta, sortOrder: 1 }] });
+    await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+    expect(await screen.findByText(/Couldn't reorder the apps/)).toBeInTheDocument();
+    expect(headingOrder()).toEqual(['A', 'B']);
   });
 
   it('Edit… opens the app form on that app', async () => {
