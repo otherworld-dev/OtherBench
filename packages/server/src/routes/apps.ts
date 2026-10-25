@@ -286,8 +286,8 @@ export function appsRoutes(container: Container): Hono {
     const nextcloud = nextcloudFields(null, body);
     const linkedProjectId = optionalLinkedProjectId(container, body.linkedProjectId) ?? null;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
-    // New apps go to the bottom of the sidebar unless the request places them.
     const folderId = optionalFolderId(container, body.folderId) ?? null;
+    // New apps go to the bottom of the sidebar unless the request places them.
     const sortOrder = optionalSortOrder(body.sortOrder) ?? container.store.apps.list().reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1;
     const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, folderId, sortOrder, ...nextcloud });
     return c.json(appView(container, created), 201);
