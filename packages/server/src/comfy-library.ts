@@ -2,7 +2,7 @@ import { detectBindings, workflowGraphProblem, workflowProblem, workflowShapeKey
 import type { MediaConnection } from '@otherbench/core/ports/media.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import { comfySummaryOf } from '@otherbench/tools/media/comfyui.js';
-import { httpError, mediaFetch, readCapped, readJson, shownBase } from '@otherbench/tools/media/http.js';
+import { httpError, mediaFetch, readCapped, shownBase } from '@otherbench/tools/media/http.js';
 
 // What a ComfyUI connection already has (comfyui-fit spec, Goals 1, 2 and 4).
 // Every read is a GET: listing never submits, edits or deletes anything in ComfyUI.
@@ -18,6 +18,8 @@ const MAX_STATS_BYTES = 1024 * 1024;
 /** How many of ComfyUI's most recent jobs are read. */
 const MAX_HISTORY = 200;
 const MAX_NAME = 200;
+/** The most a history or template index read may be: well past a big one, well short of the video cap. */
+const MAX_LIST_BYTES = 16 * 1024 * 1024;
 
 const VIDEO_OUTPUTS = new Set(['SaveVideo', 'SaveWEBM', 'SaveAnimatedWEBP', 'VHS_VideoCombine']);
 const VIDEO_FILE = /\.(mp4|webm)$/i;
@@ -25,6 +27,16 @@ const MODEL_FILE = /\.(safetensors|gguf|ckpt|pt)$/i;
 
 function obj(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/** A capped body as JSON, with `readJson`'s words for one that isn't. */
+async function readList(res: Response, conn: MediaConnection): Promise<unknown> {
+  const body = (await readCapped(res, MAX_LIST_BYTES)).toString('utf8');
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`${shownBase(conn)} answered with something that isn't JSON.`);
+  }
 }
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -106,7 +118,7 @@ export async function recentWorkflows(conn: MediaConnection, stored: MediaWorkfl
     await res.body?.cancel().catch(() => {});
     throw httpError(conn, res, 'Reading the history');
   }
-  const history = obj(await readJson(res, conn));
+  const history = obj(await readList(res, conn));
   const added = new Set(stored.map((w) => workflowShapeKey(w.graph)));
   const newest = new Map<string, { run: RecentWorkflow; order: number }>();
   for (const [promptId, raw] of Object.entries(history)) {
@@ -158,8 +170,9 @@ function templateMedia(template: Record<string, unknown>, category: Record<strin
 
 /**
  * ComfyUI's own text-to-image and text-to-video templates: those that need
- * nothing but a prompt (no `io.inputs`). `'unsupported'` for a ComfyUI too old
- * to serve `/templates/index.json`.
+ * nothing but a prompt (no `io.inputs`) and run on local models, so not the
+ * paid cloud ones (`api_…` or `openSource: false`), which need a Comfy account
+ * and credits. `'unsupported'` for a ComfyUI too old to serve `/templates/index.json`.
  */
 export async function textTemplates(conn: MediaConnection, signal: AbortSignal): Promise<ComfyTemplate[] | 'unsupported'> {
   const res = await mediaFetch(conn, '/templates/index.json', {}, signal);
@@ -171,7 +184,7 @@ export async function textTemplates(conn: MediaConnection, signal: AbortSignal):
     await res.body?.cancel().catch(() => {});
     throw httpError(conn, res, 'Reading the templates');
   }
-  const index = await readJson(res, conn);
+  const index = await readList(res, conn);
   if (!Array.isArray(index)) throw new Error(`${shownBase(conn)} answered the template list with something that isn't one.`);
   const out: ComfyTemplate[] = [];
   for (const rawCategory of index) {
@@ -183,6 +196,7 @@ export async function textTemplates(conn: MediaConnection, signal: AbortSignal):
       const name = text(t['name']);
       const inputs = obj(t['io'])['inputs'];
       if (name === null || (Array.isArray(inputs) && inputs.length > 0)) continue;
+      if (name.startsWith('api_') || t['openSource'] === false) continue;
       const media = templateMedia(t, category);
       if (media === null) continue;
       const models = t['models'];

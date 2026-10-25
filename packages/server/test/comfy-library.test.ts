@@ -162,6 +162,11 @@ describe('recentWorkflows', () => {
     expect((await recentWorkflows(conn, [], signal())).map((r) => r.promptId)).toEqual(['b']);
   });
 
+  it('refuses a history over 16 MB', async () => {
+    const conn = await fakeComfy({ '/history': { pad: 'x'.repeat(16 * 1024 * 1024) } });
+    await expect(recentWorkflows(conn, [], signal())).rejects.toThrow(/larger than 16 MB/);
+  });
+
   it('reports a failed read', async () => {
     const conn = await fakeComfy({});
     await expect(recentWorkflows(conn, [], signal())).rejects.toThrow(/HTTP 404/);
@@ -183,6 +188,15 @@ describe('textTemplates', () => {
       { name: 'video_ltx2_3_t2v', title: 'LTX-2.3: Text to Video', category: 'Video', media: 'video', models: ['LTX-2.3', 'Lightricks'], sizeBytes: 47244640256 },
     ]);
     expect(hits).toEqual([{ method: 'GET', url: '/templates/index.json' }]);
+  });
+
+  it('leaves out the paid cloud templates', async () => {
+    // The fixture's `api_nano_banana_2_1_t2i` is one (`api_` and `openSource: false`); so is any `openSource: false`.
+    const template = (name: string, openSource?: boolean) => ({ name, title: name, mediaType: 'image', models: [], ...(openSource === undefined ? {} : { openSource }) });
+    const conn = await fakeComfy({
+      '/templates/index.json': [{ title: 'Image', type: 'image', templates: [template('local'), template('api_cloud'), template('closed', false), template('open', true)] }],
+    });
+    expect(((await textTemplates(conn, signal())) as { name: string }[]).map((t) => t.name)).toEqual(['local', 'open']);
   });
 });
 
