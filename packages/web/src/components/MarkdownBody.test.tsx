@@ -80,6 +80,36 @@ describe('MarkdownBody without remote images', () => {
   });
 });
 
+describe('MarkdownBody copy sections', () => {
+  const reply = "I've toned it down:\n\n---\n\nHi Toni,\n\nA few things:\n\n1. **One**\n2. Two\n\nThanks, Adam\n";
+
+  it('copies only the text under the rule, as its markdown', async () => {
+    const user = userEvent.setup();
+    render(<MarkdownBody text={reply} copySections />);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await navigator.clipboard.readText()).toBe('Hi Toni,\n\nA few things:\n\n1. **One**\n2. Two\n\nThanks, Adam');
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('gives each later section its own button, and leaves a trailing rule as a rule', () => {
+    const { container } = render(<MarkdownBody text={'Intro\n\n---\n\nDraft\n\n---\n\nNote\n\n---\n'} copySections />);
+    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(2);
+    expect(container.querySelectorAll('hr')).toHaveLength(1);
+  });
+
+  it('without copySections a rule is just a rule', () => {
+    const { container } = render(<MarkdownBody text={reply} />);
+    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull();
+    expect(container.querySelector('hr')).not.toBeNull();
+  });
+
+  it('renders footnotes as a plain section', () => {
+    render(<MarkdownBody text={'Text[^1]\n\n---\n\nMore\n\n[^1]: The note.'} copySections />);
+    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(1);
+    expect(screen.getByText(/The note\./)).toBeInTheDocument();
+  });
+});
+
 describe('MarkdownBody deck links', () => {
   it('turns Deck #967 and Deck card #12 into links', () => {
     render(<MarkdownBody text={'Fixed in Deck #967, see also deck card #12.'} deckLinks />);

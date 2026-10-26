@@ -321,7 +321,7 @@ function ToolResultBlock({ name, result, isError, scope }: { name: string; resul
 function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element | null {
   switch (part.type) {
     case 'text':
-      return <MarkdownBody key={key} text={part.text} deckLinks />;
+      return <MarkdownBody key={key} text={part.text} deckLinks copySections />;
     case 'reasoning':
       return <ReasoningBlock key={key} text={part.text} />;
     case 'tool-call':

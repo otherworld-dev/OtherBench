@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ComponentPropsWithoutRef, type JSX } from 'react';
-import type { Link as LinkNode, Parent, PhrasingContent, Root, Text } from 'mdast';
+import type { Link as LinkNode, Parent, PhrasingContent, Root, RootContent, Text } from 'mdast';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -33,12 +33,117 @@ function CodeBlock(props: ComponentPropsWithoutRef<'pre'>): JSX.Element {
       <button
         type="button"
         onClick={() => void handleCopy()}
+        data-copy-chrome=""
         className="btn absolute top-1.5 right-1.5 bg-[var(--bg-raised)] px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[var(--bg-sunken)] focus-visible:opacity-100"
       >
         {copied ? 'Copied' : 'Copy'}
       </button>
       <pre ref={ref} {...props} />
     </div>
+  );
+}
+
+/**
+ * A remark plugin: each top-level `---` and what follows it, up to the next
+ * one, becomes a section whose rule carries a Copy button (`CopySection`).
+ * Replies put a draft (an email, a message) under a rule after their own
+ * preamble, and the button copies the draft alone. The section's markdown
+ * source rides along as its plain text. A rule with nothing after it stays a
+ * rule.
+ */
+export function remarkCopySections(): (tree: Root, file: { value?: unknown }) => void {
+  return (tree, file) => {
+    if (!tree.children.some((c) => c.type === 'thematicBreak')) return;
+    const source = typeof file.value === 'string' ? file.value : undefined;
+    const out: RootContent[] = [];
+    let rule: RootContent | null = null;
+    let section: RootContent[] = [];
+    const close = (): void => {
+      if (rule === null) return;
+      if (section.length === 0) {
+        out.push(rule);
+      } else {
+        const from = section[0]!.position?.start.offset;
+        const to = section[section.length - 1]!.position?.end.offset;
+        const text = source !== undefined && from !== undefined && to !== undefined ? source.slice(from, to) : undefined;
+        const wrapped = {
+          type: 'copySection',
+          data: { hName: 'section', hProperties: { dataCopySection: '', ...(text !== undefined ? { dataCopyText: text } : {}) } },
+          children: section,
+        };
+        out.push(wrapped as unknown as RootContent);
+      }
+      rule = null;
+      section = [];
+    };
+    for (const child of tree.children) {
+      if (child.type === 'thematicBreak') {
+        close();
+        rule = child;
+      } else if (rule !== null) section.push(child);
+      else out.push(child);
+    }
+    close();
+    tree.children = out;
+  };
+}
+
+/**
+ * The text under a rule, with a Copy button on the rule. Copies it as HTML
+ * (for a mail or document editor) and as its markdown source (for anything
+ * that only takes plain text). Any other section (GFM's footnotes) renders
+ * as usual.
+ */
+function CopySection({
+  node: _node,
+  children,
+  'data-copy-section': marker,
+  'data-copy-text': source,
+  ...rest
+}: FromMarkdown<'section'> & { 'data-copy-section'?: string; 'data-copy-text'?: string }): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  if (marker === undefined) return <section {...rest}>{children}</section>;
+
+  async function handleCopy(): Promise<void> {
+    const el = ref.current;
+    if (!el) return;
+    const clone = el.cloneNode(true) as HTMLElement;
+    for (const chrome of clone.querySelectorAll('[data-copy-chrome]')) chrome.remove();
+    const plain = source ?? el.innerText;
+    try {
+      if (typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard.write === 'function') {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': new Blob([plain], { type: 'text/plain' }),
+            'text/html': new Blob([clone.innerHTML], { type: 'text/html' }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(plain);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('[otherbench-web] copy to clipboard failed:', err);
+    }
+  }
+
+  return (
+    <section {...rest}>
+      <div className="my-[1em] flex items-center gap-2">
+        <span aria-hidden="true" className="h-px flex-1 bg-[var(--border)]" />
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          title="Copy the text below this line"
+          className="label-caps text-xs text-[var(--text-faint)] hover:text-[var(--text)] focus-visible:text-[var(--text)]"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <div ref={ref}>{children}</div>
+    </section>
   );
 }
 
@@ -181,9 +286,6 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
   );
 }
 
-/** With `deckLinks`, "Deck #N" references become links too; plugin lists are module constants so react-markdown sees the same ones each render. */
-const REMARK_PLUGINS = [remarkGfm];
-const REMARK_PLUGINS_WITH_DECK = [remarkGfm, remarkDeckLinks];
 
 /**
  * Renders assistant (and user) message text as Markdown: GFM tables/strikethrough/task
@@ -193,18 +295,27 @@ const REMARK_PLUGINS_WITH_DECK = [remarkGfm, remarkDeckLinks];
  * `remoteImages={false}` shows each image as its alt text instead, for
  * untrusted text such as a Nextcloud card or page. `deckLinks` makes each
  * "Deck #N" a link that opens the card (`openDeckCard`), for message text.
+ * `copySections` puts a Copy button on each `---` for the text under it
+ * (`remarkCopySections`), for a reply's drafts.
  */
 export function MarkdownBody({
   text,
   files,
   remoteImages = true,
   deckLinks = false,
+  copySections = false,
 }: {
   text: string;
   files?: MarkdownFiles;
   remoteImages?: boolean;
   deckLinks?: boolean;
+  copySections?: boolean;
 }): JSX.Element {
+  // The same list each render while the flags hold.
+  const remarkPlugins = useMemo(
+    () => [remarkGfm, ...(deckLinks ? [remarkDeckLinks] : []), ...(copySections ? [remarkCopySections] : [])],
+    [deckLinks, copySections]
+  );
   // Stable component types: new ones each render would remount every link and
   // image as a reply streams (and refetch a viewed file's images).
   const chatId = files?.chatId;
@@ -216,12 +327,13 @@ export function MarkdownBody({
       a: (props: FromMarkdown<'a'>) => <Link {...props} files={at} />,
       img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} remote={remoteImages} />,
       code: InlineCode,
+      section: CopySection,
     };
   }, [chatId, base, remoteImages]);
   return (
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown
-        remarkPlugins={deckLinks ? REMARK_PLUGINS_WITH_DECK : REMARK_PLUGINS}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeHighlight]}
         urlTransform={urlTransform}
         components={components}
