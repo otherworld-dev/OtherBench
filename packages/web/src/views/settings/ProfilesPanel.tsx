@@ -490,71 +490,78 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
               <option value="ask_on_mutate">ask on mutate</option>
             </select>
           </label>
-          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+        </div>
+        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label={isClaudeCode ? 'Bash' : 'Shell access'} checked={shell} onChange={(e) => setShell(e.target.checked)} />
             {isClaudeCode ? 'Bash' : 'Shell access'}
           </label>
-          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label="Artifacts" checked={artifacts} onChange={(e) => setArtifacts(e.target.checked)} />
             Artifacts
           </label>
-          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label="Search past chats" checked={recall} onChange={(e) => setRecall(e.target.checked)} />
             Search past chats
           </label>
           {!isClaudeCode && (
-            <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title={SUBAGENTS_HELP}>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title={SUBAGENTS_HELP}>
               <input type="checkbox" aria-label="Sub-agents" checked={subagents} onChange={(e) => setSubagents(e.target.checked)} />
               Sub-agents
             </label>
           )}
-          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
             <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
             Browser
           </label>
-          {computerUse && (
-            <label className="flex flex-col gap-0.5 self-end pb-1 text-xs text-[var(--text)]">
-              <span className="flex items-center gap-1.5">
-                <input type="checkbox" aria-label="Computer use" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
-                Computer use
-              </span>
-              <span className="text-[var(--text-muted)]">
-                Lets the model see your screen and use apps you approve, while you&apos;re at this computer. Desktop app on Windows only.
-              </span>
+          {isClaudeCode && (
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
+              <input type="checkbox" aria-label="Web tools" checked={agentWeb} onChange={(e) => setAgentWeb(e.target.checked)} />
+              Web tools
             </label>
           )}
-          {isClaudeCode && (
-            <>
-              <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
-                <input type="checkbox" aria-label="Web tools" checked={agentWeb} onChange={(e) => setAgentWeb(e.target.checked)} />
-                Web tools
-              </label>
-              <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
-                <input
-                  type="checkbox"
-                  aria-label="MCP servers from your Claude Code config (folder chats only)"
-                  checked={agentMcp}
-                  onChange={(e) => setAgentMcp(e.target.checked)}
-                />
-                MCP servers from your Claude Code config (folder chats only)
-              </label>
-              <label className="flex flex-col gap-0.5 self-end pb-1 text-xs text-[var(--text)]">
-                <span className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    aria-label="Your own Claude Code settings (folder chats only)"
-                    checked={agentUserSettings}
-                    onChange={(e) => setAgentUserSettings(e.target.checked)}
-                  />
-                  Your own Claude Code settings (folder chats only)
-                </span>
-                <span className="text-[var(--text-muted)]">
-                  Your CLAUDE.md, skills, plugins, hooks and MCP servers from ~/.claude. Off, a chat gets only its folder&apos;s own settings, which saves tokens on every session.
-                </span>
-              </label>
-            </>
-          )}
         </div>
+        {computerUse && (
+          <label className="mt-3 flex items-start gap-1.5 text-xs text-[var(--text)]">
+            <input type="checkbox" className="mt-0.5" aria-label="Computer use" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+            <span className="max-w-prose">
+              <span className="block">Computer use</span>
+              <span className="block text-[var(--text-muted)]">
+                Lets the model see your screen and use apps you approve, while you&apos;re at this computer. Desktop app on Windows only.
+              </span>
+            </span>
+          </label>
+        )}
+        {isClaudeCode && (
+          <div className="mt-3 space-y-2">
+            <span className="block text-xs text-[var(--text-muted)]">Folder chats only</span>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
+              <input
+                type="checkbox"
+                aria-label="MCP servers from your Claude Code config (folder chats only)"
+                checked={agentMcp}
+                onChange={(e) => setAgentMcp(e.target.checked)}
+              />
+              MCP servers from your Claude Code config
+            </label>
+            <label className="flex items-start gap-1.5 text-xs text-[var(--text)]">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                aria-label="Your own Claude Code settings (folder chats only)"
+                checked={agentUserSettings}
+                onChange={(e) => setAgentUserSettings(e.target.checked)}
+              />
+              <span className="max-w-prose">
+                <span className="block">Your own Claude Code settings</span>
+                <span className="block text-[var(--text-muted)]">
+                  Your CLAUDE.md, skills, plugins, hooks and MCP servers from ~/.claude. Off, a chat gets only its folder&apos;s own settings, which saves tokens on
+                  every session.
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
         {!isClaudeCode && <p className="mt-1 text-xs text-[var(--text-muted)]">{SUBAGENTS_HELP}</p>}
         {shell && (
           <div data-testid="sandbox-shell-settings" className="mt-3 space-y-2">
