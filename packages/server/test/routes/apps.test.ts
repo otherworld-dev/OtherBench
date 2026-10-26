@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
@@ -12,6 +12,7 @@ import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import { GhError, githubService } from '../../src/code/github.js';
 import type { Container } from '../../src/container.js';
+import type { OverviewService } from '../../src/overview/service.js';
 import { forwardedApi } from '../../src/peer/forward.js';
 import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -332,6 +333,63 @@ describe('apps CRUD', () => {
     const res = await send('PATCH', '/api/profiles/profile-coder', { archivedAt: 5 });
     expect(res.status).toBe(200);
     expect(store.apps.get('a1')?.defaultProfileId).toBeNull();
+  });
+});
+
+describe('linking a repo or a board checks the Overview straight away', () => {
+  let refresh: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    refresh = vi.fn(() => Promise.resolve());
+    container.overview = { refresh } as unknown as OverviewService;
+  });
+
+  it('POST refreshes when the new app has a repo or a board, and not when it has neither', async () => {
+    await send('POST', '/api/apps', { name: 'A', workspacePath: tmp() });
+    expect(refresh).not.toHaveBeenCalled();
+    await send('POST', '/api/apps', { name: 'B', workspacePath: tmp(), githubRepo: 'o/r' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await send('POST', '/api/apps', { name: 'C', workspacePath: tmp(), deckBoardId: 5 });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('PATCH refreshes when the repo or the board changes, and not on an unrelated or same-value change', async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    await send('PATCH', '/api/apps/a1', { name: 'Renamed' });
+    await send('PATCH', '/api/apps/a1', { githubRepo: 'o/r' });
+    expect(refresh).not.toHaveBeenCalled();
+    await send('PATCH', '/api/apps/a1', { githubRepo: 'o/other' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await send('PATCH', '/api/apps/a1', { deckBoardId: 7 });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await send('PATCH', '/api/apps/a1', { deckBoardId: 7 });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await send('PATCH', '/api/apps/a1', { deckBoardId: null });
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it('a failed check does not fail the PATCH', async () => {
+    refresh.mockImplementation(() => Promise.reject(new Error('gh broke')));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    newApp('a1', tmp());
+    const res = await send('PATCH', '/api/apps/a1', { githubRepo: 'o/r' });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(error).toHaveBeenCalled());
+    error.mockRestore();
+  });
+});
+
+describe("changing an app's repo forgets the old repo's issue ticks", () => {
+  it('drops the ticks when the repo changes, keeps them otherwise', async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    newApp('a2', tmp(), { githubRepo: 'o/r' });
+    store.issueTicks.set('a1', 7, '2026-10-01T00:00:00Z');
+    store.issueTicks.set('a2', 7, '2026-10-01T00:00:00Z');
+    await send('PATCH', '/api/apps/a1', { name: 'Renamed' });
+    await send('PATCH', '/api/apps/a1', { githubRepo: 'o/r' });
+    expect(store.issueTicks.list().map((t) => t.appId).sort()).toEqual(['a1', 'a2']);
+    const res = await send('PATCH', '/api/apps/a1', { githubRepo: 'o/other' });
+    expect(res.status).toBe(200);
+    expect(store.issueTicks.list().map((t) => t.appId)).toEqual(['a2']);
   });
 });
 

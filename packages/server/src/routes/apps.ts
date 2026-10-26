@@ -199,6 +199,14 @@ export function appRootOrThrow(container: Container, app: App): string {
 }
 
 /** The app's GitHub repo, or a 409 `no-github-repo` (spec "Creating an app": the Issues tab explains why it's empty). */
+/**
+ * Checks the Overview now rather than on its next 15-minute round, so an app just given a repo or a board doesn't
+ * read as all clear meanwhile (spec 2026-10-26-overview-design). Not awaited: the request doesn't wait on gh or Nextcloud.
+ */
+function refreshOverview(container: Container): void {
+  container.overview?.refresh().catch((err: unknown) => console.error('[otherbench-server] the overview check failed:', err));
+}
+
 function githubRepoOrThrow(app: App): string {
   if (app.githubRepo === null) throw new CodeRouteError(409, 'no-github-repo', "This app has no GitHub repository set. Add one in the app's settings to see its issues.");
   return app.githubRepo;
@@ -290,6 +298,7 @@ export function appsRoutes(container: Container): Hono {
     // New apps go to the bottom of the sidebar unless the request places them.
     const sortOrder = optionalSortOrder(body.sortOrder) ?? container.store.apps.list().reduce((max, a) => Math.max(max, a.sortOrder), -1) + 1;
     const created = container.store.apps.create({ id: randomUUID(), name, workspace, githubRepo, linkedProjectId, defaultProfileId, folderId, sortOrder, ...nextcloud });
+    if (created.githubRepo !== null || created.deckBoardId !== null) refreshOverview(container);
     return c.json(appView(container, created), 201);
   });
 
@@ -318,7 +327,12 @@ export function appsRoutes(container: Container): Hono {
     if (sortOrder !== undefined) patch.sortOrder = sortOrder;
     patch.updatedAt = Date.now();
 
+    const repoChanged = patch.githubRepo !== undefined && patch.githubRepo !== current.githubRepo;
+    const boardChanged = patch.deckBoardId !== undefined && patch.deckBoardId !== current.deckBoardId;
+    // Ticks say how far the old repo's issues were dealt with; issue numbers mean nothing in another repo.
+    if (repoChanged) container.store.issueTicks.deleteForApp(id);
     const updated = container.store.apps.update(id, patch);
+    if (repoChanged || boardChanged) refreshOverview(container);
     // Spec "Calls I made": an app chat's folder is the app's folder, so a new folder moves every chat in the app,
     // through the chat repo so the change syncs (and the evented repo announces each chat-updated). A Claude Code
     // chat whose folder changed starts a fresh session on its next turn (engine-claude-code session.ts compares cwd).
