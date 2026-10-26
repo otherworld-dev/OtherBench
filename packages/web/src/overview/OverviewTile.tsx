@@ -168,7 +168,21 @@ export function OverviewTile({ tile }: { tile: Tile }): JSX.Element {
       className={`rounded-md border border-[var(--border-strong)] bg-[var(--bg-raised)] p-3 ${appId === null ? '' : 'cursor-pointer hover:border-[var(--accent)]'} ${tile.faded ? 'opacity-50' : ''}`}
     >
       <div className="flex items-center justify-between gap-2 text-sm font-bold">
-        <span className="truncate">{tile.name}</span>
+        {appId === null ? (
+          <span className="truncate">{tile.name}</span>
+        ) : (
+          <button
+            type="button"
+            data-testid={`overview-open-${tile.key}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              openApp(appId);
+            }}
+            className="truncate text-left font-bold hover:underline"
+          >
+            {tile.name}
+          </button>
+        )}
         {tile.count > 0 && <span className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">{tile.count}</span>}
       </div>
       {tile.chats.length > 0 && <ChatsSection chats={tile.chats} />}

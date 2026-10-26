@@ -106,6 +106,14 @@ describe('OverviewView', () => {
     expect(openApp).toHaveBeenCalledWith('a');
   });
 
+  it('the tile name is a button that opens the app', () => {
+    show(overview([tile('a')]));
+    render(<OverviewView />);
+    fireEvent.click(screen.getByRole('button', { name: 'A' }));
+    expect(openApp).toHaveBeenCalledTimes(1);
+    expect(openApp).toHaveBeenCalledWith('a');
+  });
+
   it('renders errors as one line in their section', () => {
     show(overview([tile('a', { issues: [], issuesError: 'gh failed', deck: null })]));
     render(<OverviewView />);
