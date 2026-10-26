@@ -8,14 +8,18 @@
 # root can change. A WSLInterop registration can be visible here even with interop off, because WSL
 # distros share one kernel and another distro (Docker Desktop's, say) registers it; so the check doesn't
 # look for the registration. It tries to start a Windows program: once as it is, and once pointed at each
-# socket under /run/WSL, since a command can set WSL_INTEROP itself. Only two failures are accepted, as
-# seen with interop off on WSL 2.7.3 (2026-10-14):
+# socket under /run/WSL, since a command can set WSL_INTEROP itself. Only three failures are accepted, as
+# seen with interop off on WSL 2.7.3 (2026-10-14, 2026-10-26):
 #   - the shell's own refusal, "<script>: <line>: <program>: Exec format error", exit 126: no interop
 #     registration was active, so the kernel refused the file. That exercises nothing beyond the kernel,
 #     and the script says so ("note: no-registration").
 #   - WSL's "UtilAcceptVsock ... accept4 failed", exit 1, after about 10 s: a registration was active and
 #     its handler waited for Windows, which never answered for this distro. Interop on can produce this
 #     too when Windows is slow to answer; the attempts through each socket are what separate on from off.
+#   - WSL's "UtilConnectUnix:<line>: socket failed 1", exit 1, on an attempt through a socket: the handler
+#     runs in the command's own process, and inside the sandbox runtime its seccomp filter refuses any new
+#     Unix socket (errno 1, EPERM), so the handler couldn't even open one to reach Windows. Only errno 1 is
+#     accepted; any other errno there is a failure this script hasn't seen and fails closed.
 # With interop on, Windows answers at once ("<program>: Invalid argument" for this file), which counts as
 # reached, as does a success. Running /init directly isn't tried: it exits 1 silently with interop on or
 # off (checked on both), so it tells nothing and starts nothing. Re-check these texts after WSL updates;
@@ -51,6 +55,7 @@ try() {
   case "$code:$out" in
     126:*[0-9]": $probe: Exec format error") refused_by_kernel=$((refused_by_kernel + 1)) ;;
     1:*"UtilAcceptVsock"*"accept4 failed"*) ;;
+    1:*"UtilConnectUnix:"*": socket failed 1") ;;
     0:*) reached="$how succeeded: $out" ;;
     *"$probe: Invalid argument"*) reached="$how reached Windows (exit $code): $out" ;;
     *) unknown="$how gave exit $code: $out" ;;
