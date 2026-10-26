@@ -45,7 +45,9 @@ export type AppEvent =
   /** How many background tasks a chat's agent has running now (spec 2026-10-17-claude-background-helpers-design); 0 when none. */
   | { type: 'background-tasks'; chatId: string; count: number }
   /** An app's terminals were opened, renamed, ended or closed (spec 2026-10-21-code-terminal-design): re-read its list. */
-  | { type: 'terminals-changed'; appId: string };
+  | { type: 'terminals-changed'; appId: string }
+  /** The Overview's GitHub and Deck check started or finished, or something was ticked off: re-read it (spec 2026-10-26-overview-design). */
+  | { type: 'overview-changed' };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {

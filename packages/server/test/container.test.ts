@@ -168,6 +168,26 @@ describe('createContainer', () => {
     container.close();
   });
 
+  it("wires the overview: checked at startup, and each check's gh login told to paired machines", async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    const overview = container.overview!;
+    await overview.refresh();
+    expect(overview.view()).toMatchObject({ checking: false, githubLogin: null });
+    expect(overview.view().checkedAt).not.toBeNull();
+
+    // The same github the issue routes use: the container's own when set.
+    container.github = { activity: async () => [], login: async () => 'adam' } as unknown as NonNullable<Container['github']>;
+    container.store.apps.create({ id: 'a1', name: 'OtherBench', githubRepo: 'o/ob', deckBoardId: 1 });
+    const announce = vi.spyOn(container.peers!, 'announceActivity');
+    await overview.refresh();
+    expect(overview.githubLogin()).toBe('adam');
+    expect(container.peers!.activity().githubLogin).toBe('adam');
+    expect(announce).toHaveBeenCalled();
+    // Nextcloud isn't set up here: the tile says so.
+    expect(overview.view().tiles.find((t) => t.key === 'a1')).toMatchObject({ issues: [], issuesError: null, deckError: "Nextcloud isn't set up" });
+    container.close();
+  });
+
   it('wires scheduled tasks: a run left running by the previous process is marked as an error at startup', async () => {
     const dbPath = join(dir, 'otherbench.db');
     const secretsPath = join(dir, 'secrets.json');

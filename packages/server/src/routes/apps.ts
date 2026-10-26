@@ -244,8 +244,8 @@ async function bodyOf<T>(c: { req: { json(): Promise<unknown> } }): Promise<T> {
 }
 
 let realGithub: GithubService | null = null;
-/** The container's github service, else the machine's own gh (created once). */
-function githubOf(container: Container): GithubService {
+/** The container's github service, else the machine's own gh (created once). The Overview's checks use it too. */
+export function githubOf(container: Container): GithubService {
   if (container.github) return container.github;
   realGithub ??= githubService(ghRunner());
   return realGithub;

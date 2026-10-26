@@ -61,6 +61,10 @@ import { NotesService } from './notes/service.js';
 import { workspaceResolver } from './workspace-view.js';
 import type { GithubService } from './code/github.js';
 import type { NextcloudClient, NextcloudConfig } from './nextcloud/client.js';
+import { nextcloudOrThrow } from './nextcloud/config.js';
+import { CodeRouteError } from './code/route-errors.js';
+import { OverviewService } from './overview/service.js';
+import { githubOf } from './routes/apps.js';
 import { toolImageSaver } from './tool-images.js';
 import { killTree } from './terminal/kill-tree.js';
 import { killTerminalsOfGoneApps, TerminalManager } from './terminal/manager.js';
@@ -173,6 +177,12 @@ export interface Container {
    * routes exist is app.ts's `terminals` option. Optional so route tests can leave it out or pass one with a fake PTY.
    */
   terminals?: TerminalManager;
+  /**
+   * The Overview (spec 2026-10-26-overview-design): checks GitHub and Deck
+   * every 15 minutes and builds the Overview on request. Always set by
+   * `createContainer`; optional so route tests can leave it out or pass a stub.
+   */
+  overview?: OverviewService;
   close(): void;
   /**
    * After close(): settles (never rejects) once the shutdown work close() starts without waiting has finished:
@@ -615,6 +625,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       memory.dispose();
       // Before the engine and store go: stops the schedule timer and its reply listeners.
       container.schedules?.dispose();
+      // Before the store goes: stops the Overview's check timer.
+      container.overview?.dispose();
       // Computer use ends with the server: the driver is told, and nothing starts afterwards.
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
@@ -706,6 +718,42 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   forwarded = forwardedApi(container);
   peers.startMonitoring();
   syncer.start();
+  // The Overview: checks GitHub and Deck now and every 15 minutes, once paired machines are being watched (their
+  // waiting chats and gh logins feed it). Each check's gh login goes to paired machines for their mismatch warning.
+  const overview = new OverviewService({
+    store,
+    github: () => githubOf(container),
+    nextcloud: async () => {
+      try {
+        return await nextcloudOrThrow(container);
+      } catch (err) {
+        if (err instanceof CodeRouteError && err.code === 'nextcloud-not-configured') return null;
+        throw err;
+      }
+    },
+    waitingChatIds: () => events.pendingApprovals().map((p) => p.chatId),
+    machines: () => {
+      const paired = container.peers;
+      if (!paired) return [];
+      return paired.list().map((p) => ({
+        nodeId: p.nodeId,
+        name: p.name,
+        reachable: paired.status(p.nodeId).status === 'reachable',
+        waitingChatIds: paired.waitingChats(p.nodeId),
+        githubLogin: paired.githubLogin(p.nodeId),
+      }));
+    },
+    emit: (e) => events.emit(e),
+    onLoginChanged: () => container.peers?.announceActivity(),
+  });
+  container.overview = overview;
+  container.peers?.setGithubLogin(() => overview.githubLogin());
+  try {
+    overview.start();
+  } catch (err) {
+    // Never let the overview stop the server starting.
+    console.warn('[otherbench-server] the overview failed to start:', err);
+  }
   // Work Claude Code does between replies: its helpers, their cards, and turns it starts by itself.
   engine.onBackground?.((event) => handleBackground(container, event));
   // A chat that goes takes its Claude Code processes and background helpers with it.
