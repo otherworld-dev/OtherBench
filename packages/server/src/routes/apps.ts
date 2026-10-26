@@ -198,7 +198,6 @@ export function appRootOrThrow(container: Container, app: App): string {
   throw new CodeRouteError(409, 'not-on-this-machine', message);
 }
 
-/** The app's GitHub repo, or a 409 `no-github-repo` (spec "Creating an app": the Issues tab explains why it's empty). */
 /**
  * Checks the Overview now rather than on its next 15-minute round, so an app just given a repo or a board doesn't
  * read as all clear meanwhile (spec 2026-10-26-overview-design). Not awaited: the request doesn't wait on gh or Nextcloud.
@@ -207,6 +206,7 @@ function refreshOverview(container: Container): void {
   container.overview?.refresh().catch((err: unknown) => console.error('[otherbench-server] the overview check failed:', err));
 }
 
+/** The app's GitHub repo, or a 409 `no-github-repo` (spec "Creating an app": the Issues tab explains why it's empty). */
 function githubRepoOrThrow(app: App): string {
   if (app.githubRepo === null) throw new CodeRouteError(409, 'no-github-repo', "This app has no GitHub repository set. Add one in the app's settings to see its issues.");
   return app.githubRepo;
