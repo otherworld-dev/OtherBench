@@ -66,6 +66,12 @@ test('a replied chat is listed and ticked off, and a due Deck card opens the Dec
   const before = Number(await count.textContent());
   expect(before).toBeGreaterThanOrEqual(1);
 
+  // The row's actions take no room until the row has focus or hover; a Tab from the row reaches them.
+  await expect(chatsTile.getByRole('button', { name: /^Tick off / })).toHaveCount(0);
+  await row.focus();
+  await page.keyboard.press('Tab');
+  await expect(chatsTile.getByRole('button', { name: /^Tick off / })).toBeFocused();
+
   // Ticking it off removes the row and lowers the count.
   await row.hover();
   await chatsTile.getByRole('button', { name: /^Tick off / }).click();

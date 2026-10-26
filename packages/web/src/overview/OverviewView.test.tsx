@@ -146,6 +146,19 @@ describe('OverviewView', () => {
     expect(openChat).toHaveBeenCalledWith('c1');
     expect(openApp).not.toHaveBeenCalled();
   });
+
+  it("lists an app tile's chats flat, with no project sub-headings", () => {
+    const chats = [
+      { chatId: 'c1', title: 'One', waiting: false, at: 1, projectId: null, projectName: null },
+      { chatId: 'c2', title: 'Two', waiting: false, at: 1, projectId: 'p', projectName: 'Plan' },
+    ];
+    show(overview([tile('a', { chats })]));
+    render(<OverviewView />);
+    expect(screen.getByTestId('overview-chat-c1')).toBeInTheDocument();
+    expect(screen.getByTestId('overview-chat-c2')).toBeInTheDocument();
+    expect(screen.queryByText('No project')).toBeNull();
+    expect(screen.queryByText('Plan')).toBeNull();
+  });
 });
 
 describe('OverviewView tick-off', () => {
@@ -155,7 +168,24 @@ describe('OverviewView tick-off', () => {
     vi.restoreAllMocks();
   });
 
-  const chats = [{ chatId: 'c1', title: 'One', waiting: true, at: 1, projectId: null, projectName: null }];
+  const chats = [{ chatId: 'c1', title: 'One', waiting: false, at: 1, projectId: null, projectName: null }];
+
+  it('a waiting chat has Archive but no Tick off: the reply it waits on would land before the tick and never show', () => {
+    show(overview([tile('chats', { chats: [{ ...chats[0]!, waiting: true }], issues: null, deck: null })]));
+    render(<OverviewView />);
+    expect(screen.queryByRole('button', { name: 'Tick off One' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Archive One' })).toBeInTheDocument();
+  });
+
+  it('row actions take no room until the row is hovered or has focus', () => {
+    show(overview([tile('chats', { chats, issues: null, deck: null }), tile('a', { issues: [issue(7)] })]));
+    render(<OverviewView />);
+    for (const name of ['Tick off One', 'Archive One', 'Tick off #7']) {
+      const button = screen.getByRole('button', { name });
+      expect(button, name).toHaveClass('hidden', 'group-hover:inline-flex', 'group-focus-within:inline-flex');
+      expect(button, name).not.toHaveClass('opacity-0');
+    }
+  });
 
   it('Tick off on a chat sets dealtWithAt; Archive sets archivedAt', () => {
     vi.spyOn(Date, 'now').mockReturnValue(1234);

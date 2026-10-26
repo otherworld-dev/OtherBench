@@ -16,8 +16,11 @@ const MUTED = 'text-xs text-[var(--text-muted)]';
 /** A row's button when its actions sit beside it: the wrapper carries the rule and the hover. */
 const ROW_BUTTON = 'flex min-w-0 flex-1 items-baseline justify-between gap-2 py-0.5 text-left text-sm';
 const ROW_WRAP = 'group flex items-baseline gap-1 border-t border-[var(--border)] hover:bg-[var(--bg-sunken)]';
-/** Shown on hover or focus of the row, so the list stays quiet. */
-const ACTION = 'btn shrink-0 px-1.5 py-0 text-xs opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100';
+/**
+ * Shown on hover or focus of the row, so the list stays quiet, and taking no room until then so titles get the
+ * tile's width. Focus on the row's button shows them before the next Tab, so they stay reachable from the keyboard.
+ */
+const ACTION = 'btn hidden shrink-0 px-1.5 py-0 text-xs group-hover:inline-flex group-focus-within:inline-flex';
 
 /** A section heading inside a tile: more prominent than `.label-caps`, with an accent underline. */
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
@@ -29,7 +32,11 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
   );
 }
 
-/** One chat needing you, with its tick-off and archive actions beside it (a button can't hold another). */
+/**
+ * One chat needing you, with its tick-off and archive actions beside it (a button can't hold another). A waiting
+ * chat has no tick-off: it stays listed while it waits, and the reply it waits on started before the tick, so
+ * ticking it would hide that reply when it lands.
+ */
 export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
   const patch = (body: { dealtWithAt: number } | { archivedAt: number }, what: string): void => {
     api.chats.patch(chat.chatId, body).catch((err: unknown) => console.error(`[otherbench-web] failed to ${what} chat ${chat.chatId}:`, err));
@@ -48,17 +55,19 @@ export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
         <span className="truncate">{chat.title}</span>
         {chat.waiting && <span className={`${MUTED} shrink-0`}>waiting</span>}
       </button>
-      <button
-        type="button"
-        aria-label={`Tick off ${chat.title}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          patch({ dealtWithAt: Date.now() }, 'tick off');
-        }}
-        className={ACTION}
-      >
-        Tick off
-      </button>
+      {!chat.waiting && (
+        <button
+          type="button"
+          aria-label={`Tick off ${chat.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            patch({ dealtWithAt: Date.now() }, 'tick off');
+          }}
+          className={ACTION}
+        >
+          Tick off
+        </button>
+      )}
       <button
         type="button"
         aria-label={`Archive ${chat.title}`}
@@ -131,7 +140,17 @@ export function OverviewCardRow({ appId, card }: { appId: string; card: Overview
   );
 }
 
-function ChatsSection({ chats }: { chats: OverviewChat[] }): JSX.Element {
+/** The Chats tile groups its chats by project; an app's chats are all the app's, so its tile lists them flat. */
+function ChatsSection({ chats, byProject }: { chats: OverviewChat[]; byProject: boolean }): JSX.Element {
+  if (!byProject) {
+    return (
+      <Section title="Chats">
+        {chats.map((chat) => (
+          <OverviewChatRow key={chat.chatId} chat={chat} />
+        ))}
+      </Section>
+    );
+  }
   const groups = new Map<string, { name: string; chats: OverviewChat[] }>();
   for (const chat of chats) {
     const key = chat.projectId ?? '';
@@ -236,7 +255,7 @@ export function OverviewTile({ tile }: { tile: Tile }): JSX.Element {
         )}
         {tile.count > 0 && <span className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">{tile.count}</span>}
       </div>
-      {tile.chats.length > 0 && <ChatsSection chats={tile.chats} />}
+      {tile.chats.length > 0 && <ChatsSection chats={tile.chats} byProject={appId === null} />}
       {appId !== null && tile.issues !== null && <IssuesSection tile={tile} appId={appId} />}
       {appId !== null && tile.deck !== null && <DeckSection tile={tile} appId={appId} />}
       {tile.faded && <p className={`${MUTED} pt-1`}>Nothing needs you</p>}
