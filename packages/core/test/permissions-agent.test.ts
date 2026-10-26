@@ -209,6 +209,12 @@ describe('isDeferrableInAutoMode', () => {
     expect(isDeferrableInAutoMode(spec('mcp__nextcloud__deck_add_card'), {})).toBe(true);
     expect(isDeferrableInAutoMode(spec('SendMessage'), { to: 'helper', message: 'carry on' })).toBe(true);
   });
+  it('defers a write to the scratch folder, judged on every path key', () => {
+    const file_path = 'E:\\Git\\app\\.claude\\scratch\\check.php';
+    expect(isDeferrableInAutoMode(spec('Write'), { file_path, path: '.claude/scratch/check.php' })).toBe(true);
+    // Through a junction, `path` is where the write lands.
+    expect(isDeferrableInAutoMode(spec('Write'), { file_path, path: '.claude/skills/evil/SKILL.md' })).toBe(false);
+  });
   it('never defers a write to Claude Code config, or a write with no usable path', () => {
     for (const path of ['.claude/settings.local.json', 'sub/CLAUDE.md', '.mcp.json', 'CLAUDE~1/settings.json']) {
       expect(isDeferrableInAutoMode(spec('Write'), { path })).toBe(false);

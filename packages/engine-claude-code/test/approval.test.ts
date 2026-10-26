@@ -70,6 +70,11 @@ describe("the claude-setup standard's secret files", () => {
     symlinkSync(join(ws, '.claude', 'skills'), join(ws, '.claude', 'private'), 'junction');
     expect(normaliseAgentArgs('Write', { file_path: '.claude/private/evil/SKILL.md', content: 'x' }, ws)).toMatchObject({ args: { path: '.claude/skills/evil/SKILL.md' } });
   });
+  it('judges a write through a junctioned scratch folder by where it lands', () => {
+    mkdirSync(join(ws, '.claude', 'skills'), { recursive: true });
+    symlinkSync(join(ws, '.claude', 'skills'), join(ws, '.claude', 'scratch'), 'junction');
+    expect(normaliseAgentArgs('Write', { file_path: '.claude/scratch/evil/SKILL.md', content: 'x' }, ws)).toMatchObject({ args: { path: '.claude/skills/evil/SKILL.md' } });
+  });
   it('refuses a Windows short name with its own reason', () => {
     expect(normaliseAgentArgs('Read', { file_path: '.claude/CERTIF~1/k.pem' }, ws)).toEqual({ shortName: '.claude/CERTIF~1/k.pem' });
     expect(normaliseAgentArgs('Read', { file_path: 'notes~1.txt.bak' }, ws)).toHaveProperty('args');

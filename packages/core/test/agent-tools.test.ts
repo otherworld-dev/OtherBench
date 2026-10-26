@@ -65,12 +65,13 @@ describe('isProtectedAgentPath', () => {
     expect(isProtectedAgentPath(p)).toBe(false);
   });
 
-  // The claude-setup standard's data folders: Claude Code never loads private/,
-  // and memory/ holds plain notes. Everything else under .claude stays protected.
+  // The claude-setup standard's data folders: Claude Code never loads private/
+  // or scratch/, and memory/ holds plain notes. Everything else under .claude stays protected.
   it.each([
     '.claude/private/plan.md', '.claude/private/specs/2026-10-18-x-design.md',
     '.claude/memory/MEMORY.md', '.claude/memory/user_role.md', '.Claude/Private/x.md', 'sub/.claude/private/x.md',
     '.claude/private./x.md',
+    '.claude/scratch/unlink-check.php', '.claude/scratch/probe/run.sh', '.Claude/Scratch/x.png', 'sub/.claude/scratch/x.txt',
   ])('treats %s as data', (p) => {
     expect(isProtectedAgentPath(p)).toBe(false);
   });
@@ -84,6 +85,9 @@ describe('isProtectedAgentPath', () => {
     // A raw path key isn't resolved: a `..` after the data folder fails closed.
     '.claude/private/../settings.json', '.claude/private/x/../../hooks/h.sh', '.claude/memory/../x.md', '.claude\\private\\..\\settings.json',
     '.claude/private/.../x.md', '.claude/private/.. /settings.json',
+    // scratch/ gets the same limits as private/.
+    '.claude/scratch', '.claude/scratch/.claude/settings.json', '.claude/scratch/CLAUDE.md', '.claude/scratch/.mcp.json',
+    '.claude/SCRATC~1/x.php', '.claude/scratch/../settings.json', '.claude/tmp/x.txt',
   ])('still protects %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(true);
   });

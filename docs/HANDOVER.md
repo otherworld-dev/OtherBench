@@ -1340,7 +1340,8 @@ There's no spend cap; usage rows are written as normal.
   answer stores none, because a hook, skill or MCP command written there would
   run on a later turn with no Bash card. The claude-setup standard's data
   folders are the exception and follow the usual rules (Auto, grants):
-  anything in `.claude/private/`, which Claude Code never loads, and plain
+  anything in `.claude/private/` or `.claude/scratch/` (throwaway scripts and
+  probes), which Claude Code never loads, and plain
   `.md` notes directly in `.claude/memory/`. Memory is loaded into every new
   session, so a bad note there steers later turns as `CLAUDE.md` would; it is
   let through deliberately, because auto memory writes there all the time,

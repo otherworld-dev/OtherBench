@@ -75,7 +75,8 @@ export function isProtectedAgentPath(relPath: string): boolean {
 
 /**
  * The folders of the claude-setup standard that Claude Code never reads as
- * configuration: `.claude/private/` (plans, specs), anything inside it; and
+ * configuration: `.claude/private/` (plans, specs) and `.claude/scratch/`
+ * (throwaway scripts and probes), anything inside either; and
  * plain `.md` notes directly in `.claude/memory/` (auto memory). A write
  * there follows the usual rules (Auto, grants) instead of always asking.
  * `.claude/history/` is NOT one: the standard's /pull copies it back into
@@ -88,7 +89,7 @@ export function isProtectedAgentPath(relPath: string): boolean {
 function isClaudeDataPath(segments: readonly string[], at: number): boolean {
   const folder = segments[at + 1];
   const rest = segments.length - (at + 2);
-  if (folder === 'private') return rest >= 1;
+  if (folder === 'private' || folder === 'scratch') return rest >= 1;
   return folder === 'memory' && rest === 1 && (segments[at + 2] ?? '').endsWith('.md');
 }
 
