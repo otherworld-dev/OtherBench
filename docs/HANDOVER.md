@@ -1903,6 +1903,22 @@ Spec: `docs/superpowers/specs/2026-10-22-media-generation-design.md`. A chat mod
   - ~~A local chat model and ComfyUI on one card stall.~~ Warned in Generation, and the Ollama model is unloaded before the job (see above).
   - ~~A profile whose model can't use tools only fails after sending.~~ Generation warns for an Ollama model that can't use tools.
 
+### Overview
+
+Spec: `docs/superpowers/specs/2026-10-26-overview-design.md`. The mode switch has a third button, **Overview**, with a count badge, that lists everything waiting on Adam in one place: chats whose last word is Claude's reply (or that wait on an approval card or a question), GitHub issues on app repos where someone else has had the last word, and Deck cards that are overdue or due today. There is one tile per app, plus a "Chats" tile for chats outside any app, and a jump list to them.
+
+- **Synced state.** Migration `033-overview` adds `chat.dealt_with_at` (when a chat was ticked off, a synced chat field, `dealtWithAt`) and the `issue_tick` table (how far an app's issue has been ticked, `through` being the ISO time of the activity ticked through; keyed `${app_id}#${number}` and with no foreign key, as sync applies rows in no fixed order). Both sync, so ticking something off on one machine clears it on the others. A chat comes back when a newer reply lands; archiving it also clears it.
+- **Server.** `packages/server/src/overview/service.ts` builds the view (`buildOverview` in core) from the store as it is now plus the last check's GitHub and Deck results. The check reads each app's issues with `gh` and each linked board (`app.deckBoardId`) from Nextcloud, at start-up and every 15 minutes, and on `POST /api/overview/refresh`. `GET /api/overview` never runs `gh` or reaches Nextcloud. A failure shows on the tile ("couldn't check issues", Nextcloud not set up) and doesn't hide it. Other routes: `POST /api/overview/issues/:appId/:n/tick` and a bulk "Tick off older than…" (`tickOlder`). A chat is ticked off or archived with `PATCH /api/chats/:id` (`dealtWithAt`, `archivedAt`).
+- **Web.** `packages/web/src/overview/`: `OverviewView`, `OverviewTile`, `OverviewJumpList` and `openFromOverview.ts` (open a chat, an issue in the Issues tab, an app, or a Deck card in the Deck tab). The badge is `overview-count` in `ChatList`.
+- **Across machines.** Each machine fetches its own GitHub and Deck data with its own `gh` login, and says so on the Overview if the logins differ. A chat that runs on a paired machine is waiting when that machine says so: the peer `activity` announcement now carries `waitingChatIds` (and `githubLogin`), kept per peer in `peer/service.ts`. A paired machine that can't be reached is listed as unreachable rather than dropping its chats silently.
+- **Known gaps.**
+  - **Pull requests aren't covered**, nor GitHub notifications other than issues on app repos, nor Deck boards not linked to an app.
+  - **Only the 100 most recently updated issues per repo are read.** An older issue that gets a reply is seen as soon as it is one of those 100.
+  - **A paired machine shows as unreachable until its first probe**, so for a short while after start-up its waiting chats are missing and it is listed as unreachable.
+  - **The check is every 15 minutes**, so a Deck card or issue changed elsewhere shows up on the next check or on a refresh.
+  - **gh isn't available in CI**, so the e2e covers chats and Deck only; issues are unit-tested.
+- **Tests.** Core: `buildOverview` and `chatNeedsYou`. Server: the service, the routes and the peer announcement. Web: unit tests beside each file in `web/src/overview/`. e2e: `packages/web/e2e/overview.spec.ts` against the fake Nextcloud, which has a card due now (`#104`, in Doing).
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
