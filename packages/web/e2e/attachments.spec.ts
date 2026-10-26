@@ -110,7 +110,8 @@ function escapeRegExp(s: string): string {
 }
 
 async function chooseProfile(page: import('@playwright/test').Page, profileName: string): Promise<void> {
-  await page.getByRole('button', { name: /choose a profile|·/ }).click();
+  // Inside the composer: a sidebar group heading's status ("2 replies ready · 1 replying") also has a "·" in its name.
+  await page.getByTestId('composer-dropzone').getByRole('button', { name: /choose a profile|·/ }).click();
   // Anchored at the start: "Vision Profile <suffix>" would otherwise also
   // match as a SUBSTRING of "No-Vision Profile <suffix>" (Playwright's
   // getByRole name-as-regex is unanchored by default), hitting Playwright's
