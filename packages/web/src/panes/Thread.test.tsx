@@ -157,6 +157,30 @@ describe('Thread', () => {
     expect(screen.queryByTestId('git-bar')).toBeNull();
   });
 
+  it("keeps showing the conversation while its new head hasn't loaded yet, instead of blanking the thread", () => {
+    useOtherBenchStore.setState({
+      chats: [makeChat({ headMessageId: 'r1' })],
+      messages: { u1: makeMessage('u1', 'chat-1'), r1: variantMessage('r1', 'u1', { parts: [{ type: 'text', text: 'the first reply' }] }) },
+    });
+    render(<ThreadForChat chatId="chat-1" />);
+    const thread = (): ReturnType<typeof within> => within(screen.getByTestId('thread-scroll'));
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+
+    // A message sent while a reply ran goes out on the server: the chat's head moves to it before its messages arrive.
+    act(() => useOtherBenchStore.setState((s) => ({ chats: s.chats.map((c) => ({ ...c, headMessageId: 'u2' })) })));
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+    expect(thread().getByText('the first reply')).toBeInTheDocument();
+
+    // Once they arrive, the thread follows the new head.
+    act(() =>
+      useOtherBenchStore.setState((s) => ({
+        messages: { ...s.messages, u2: makeMessage('u2', 'chat-1', { parentId: 'r1', parts: [{ type: 'text', text: 'the waiting message' }] }) },
+      }))
+    );
+    expect(thread().getByText('the waiting message')).toBeInTheDocument();
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+  });
+
   it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
@@ -376,6 +400,28 @@ describe('Thread auto-scroll', () => {
     expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
     addReply('r2', 'again');
     expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('keeps following when the thread shrinks under a scroll it caused, and stops only when the user scrolls up', () => {
+    const scroller = setup();
+    stubScroller(scroller, 600); // at the bottom
+    fireEvent.scroll(scroller);
+    // In one frame a streamed delta is pinned (scrollTop 669 for the old 400px view) and the message box grows,
+    // shrinking the thread to 240px, so the pin's scroll event lands 160px short of the bottom.
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1069 });
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 240 });
+    scroller.scrollTop = 669;
+    fireEvent.scroll(scroller);
+    expect(scroller.scrollTop).toBe(1069);
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+    addReply('r1', 'more');
+    expect(scroller.scrollTop).toBe(1069);
+
+    scroller.scrollTop = 200; // the user scrolls up
+    fireEvent.scroll(scroller);
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
+    addReply('r2', 'again');
+    expect(scroller.scrollTop).toBe(200);
   });
 
   it('follows a streamed delta appended to an existing message while near the bottom', () => {

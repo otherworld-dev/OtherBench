@@ -93,14 +93,23 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   useBrowserAutoOpen(chatId, chatMessages, viewer.open);
   // The viewer bar's Browser button: shown once the model has used the browser in this chat.
   const browserUsed = useMemo(() => chatMessages.some((m) => m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser')), [chatMessages]);
+  // The path last drawn for this chat. The head can move to a message the store hasn't loaded yet (a message sent
+  // while a reply ran goes out on the server, and the chat's new head arrives before its messages): until they
+  // arrive the thread keeps showing this, rather than going blank for a moment, which scrolled a long chat to the top.
+  const lastPathRef = useRef<{ chatId: string | null; path: CanonMessage[] }>({ chatId: null, path: [] });
   const path = useMemo(() => {
     if (!chat?.headMessageId) return [];
+    const held = lastPathRef.current.chatId === chatId ? lastPathRef.current.path : [];
+    if (!chatMessages.some((m) => m.id === chat.headMessageId)) return held;
     try {
       return activePath(chatMessages, chat.headMessageId);
     } catch {
-      return []; // an inconsistent/partially-loaded slice -- render nothing rather than throw.
+      return held; // an inconsistent/partially-loaded slice -- keep what was shown rather than throw.
     }
-  }, [chat?.headMessageId, chatMessages]);
+  }, [chat?.headMessageId, chatMessages, chatId]);
+  useLayoutEffect(() => {
+    lastPathRef.current = { chatId, path };
+  }, [chatId, path]);
 
   const displayPath = useMemo(() => {
     if (path.length === 0) return [];
@@ -118,10 +127,20 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const nearBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const lastChatIdRef = useRef<string | null>(null);
+  // The scroller's height when last measured. A scroll event can land after the thread has shrunk (the message box
+  // grew in the same frame as a streamed delta was pinned) but before the ResizeObserver re-pins it; judged on the
+  // gap alone that read as the user scrolling away, and left a long chat stuck short of its bottom.
+  const lastClientHeightRef = useRef<number | null>(null);
 
   const onScroll = useCallback((): void => {
     const el = scrollRef.current;
     if (!el) return;
+    const resized = lastClientHeightRef.current !== null && lastClientHeightRef.current !== el.clientHeight;
+    lastClientHeightRef.current = el.clientHeight;
+    if (resized && nearBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
     const near = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     nearBottomRef.current = near;
     setShowJump(!near);
@@ -160,6 +179,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
+      lastClientHeightRef.current = el.clientHeight;
       if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
