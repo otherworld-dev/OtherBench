@@ -141,3 +141,49 @@ describe('ghRunner (M5)', () => {
     expect(resolved).toBe(2);
   });
 });
+
+describe('githubService activity and login', () => {
+  const ACTIVITY_ARGV = ['issue', 'list', '--repo', 'o/r', '--state', 'all', '--limit', '100', '--search', 'sort:updated-desc', '--json', 'number,title,state,author,comments,createdAt,closedAt,url'];
+
+  it('activity runs the exact argv and maps authors, bots and closedAt', async () => {
+    const sample = [
+      {
+        number: 1, title: 'a', state: 'OPEN', author: { login: 'adam' }, createdAt: '2026-01-01T00:00:00Z', closedAt: null, url: 'u1',
+        comments: [
+          { author: { login: 'helper', is_bot: true }, createdAt: '2026-01-02T00:00:00Z' },
+          { author: { login: 'dependabot[bot]' }, createdAt: '2026-01-03T00:00:00Z' },
+          { author: { login: 'adam' }, createdAt: '2026-01-04T00:00:00Z' },
+        ],
+      },
+      { number: 2, title: 'b', state: 'CLOSED', author: { login: 'x', is_bot: true }, createdAt: '2026-02-01T00:00:00Z', closedAt: '2026-02-02T00:00:00Z', url: 'u2', comments: [] },
+    ];
+    const f = fake(ok(JSON.stringify(sample)));
+    const out = await githubService(f.run).activity('o/r');
+    expect(f.calls[0]!.args).toEqual(ACTIVITY_ARGV);
+    expect(out[0]).toMatchObject({ number: 1, state: 'open', author: 'adam', authorIsBot: false, closedAt: null, url: 'u1' });
+    expect(out[0]!.comments).toEqual([
+      { author: 'helper', authorIsBot: true, createdAt: '2026-01-02T00:00:00Z' },
+      { author: 'dependabot[bot]', authorIsBot: true, createdAt: '2026-01-03T00:00:00Z' },
+      { author: 'adam', authorIsBot: false, createdAt: '2026-01-04T00:00:00Z' },
+    ]);
+    expect(out[1]).toMatchObject({ state: 'closed', authorIsBot: true, closedAt: '2026-02-02T00:00:00Z', comments: [] });
+  });
+
+  it('activity maps a signed-out gh and refuses a bad repo without running gh', async () => {
+    expect(await code(githubService(fake(fail('To get started with GitHub CLI, please run:  gh auth login')).run).activity('o/r'))).toBe('gh-signed-out');
+    const f = fake(ok('[]'));
+    expect(await code(githubService(f.run).activity('not a repo'))).toBe('repo-not-found');
+    expect(f.calls).toEqual([]);
+  });
+
+  it('login runs gh api user and trims the output', async () => {
+    const f = fake(ok('adam\n'));
+    expect(await githubService(f.run).login()).toBe('adam');
+    expect(f.calls[0]!.args).toEqual(['api', 'user', '--jq', '.login']);
+  });
+
+  it('login with empty output is gh-failed, and a signed-out gh is gh-signed-out', async () => {
+    expect(await code(githubService(fake(ok('\n')).run).login())).toBe('gh-failed');
+    expect(await code(githubService(fake(fail('not logged in')).run).login())).toBe('gh-signed-out');
+  });
+});

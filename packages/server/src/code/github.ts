@@ -1,6 +1,8 @@
 import { tmpdir } from 'node:os';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { isGithubRepo, ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
+import { isBotLogin } from '@otherbench/core/domain/overview.js';
+import type { IssueActivity } from '@otherbench/core/types/overview.js';
 import type { GhErrorCode, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 import { redactUrls } from './git-parse.js';
@@ -90,14 +92,19 @@ export function ghRunner(resolve: (command: string) => string = resolveExecutabl
   };
 }
 
+const ACTIVITY_FIELDS = 'number,title,state,author,comments,createdAt,closedAt,url';
 const SUMMARY_FIELDS = 'number,title,state,author,labels,comments,createdAt,updatedAt,url';
 
 function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
 }
 
+interface RawAuthor {
+  login?: string;
+  is_bot?: boolean;
+}
 interface RawComment {
-  author?: { login?: string } | null;
+  author?: RawAuthor | null;
   body?: string;
   createdAt?: string;
 }
@@ -105,7 +112,8 @@ interface RawIssue {
   number: number;
   title: string;
   state: string;
-  author?: { login?: string } | null;
+  author?: RawAuthor | null;
+  closedAt?: string | null;
   labels?: { name: string }[];
   comments?: RawComment[];
   createdAt: string;
@@ -126,6 +134,11 @@ function summary(r: RawIssue): IssueSummary {
     updatedAt: r.updatedAt,
     url: r.url,
   };
+}
+
+function who(a: RawAuthor | null | undefined): { author: string; authorIsBot: boolean } {
+  const author = a?.login ?? '';
+  return { author, authorIsBot: a?.is_bot === true || isBotLogin(author) };
 }
 
 /** What githubService returns; the container's `github` is one of these. */
@@ -177,6 +190,26 @@ export function githubService(run: Runner) {
       return parse<RawIssue[]>(out)
         .map(summary)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    },
+    async activity(repo: string): Promise<IssueActivity[]> {
+      checkRepo(repo);
+      const out = await gh(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', String(ISSUE_LIST_LIMIT), '--search', 'sort:updated-desc', '--json', ACTIVITY_FIELDS]);
+      return parse<RawIssue[]>(out).map((r) => ({
+        number: r.number,
+        title: r.title,
+        state: r.state.toLowerCase() === 'closed' ? ('closed' as const) : ('open' as const),
+        url: r.url,
+        ...who(r.author),
+        createdAt: r.createdAt,
+        closedAt: r.closedAt ?? null,
+        comments: (r.comments ?? []).map((c) => ({ ...who(c.author), createdAt: c.createdAt ?? '' })),
+      }));
+    },
+    /** The account gh is signed in as. */
+    async login(): Promise<string> {
+      const login = (await gh(['api', 'user', '--jq', '.login'])).trim();
+      if (login === '') throw new GhError('gh-failed', 'gh did not report a signed-in user.');
+      return login;
     },
     async view(repo: string, n: number): Promise<IssueDetail> {
       checkRepo(repo);
