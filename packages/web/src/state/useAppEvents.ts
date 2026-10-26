@@ -51,7 +51,11 @@ export function useAppEvents(): void {
     const client = new SseClient<AppEventsHello, AppEvent>({
       url: api.eventsUrl(),
       readHello: (payload) => payload as AppEventsHello,
-      onHello: applyAppHello,
+      // A hello comes on every connect, so after a reconnect too: events may have been missed meanwhile.
+      onHello: (hello) => {
+        applyAppHello(hello);
+        emitAppEvent({ type: 'overview-changed' });
+      },
       onEvent: (event) => {
         applyAppEvent(event);
         emitAppEvent(event);

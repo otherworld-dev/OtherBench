@@ -52,6 +52,28 @@ describe('useOverview', () => {
     expect(api.overview.get).toHaveBeenCalledTimes(1);
   });
 
+  it('a steady stream of events still refetches within 2 s of the first', async () => {
+    renderHook(() => useOverview());
+    await act(async () => {});
+    vi.mocked(api.overview.get).mockClear();
+    // An event every 300 ms, at 0 to 1500 ms: the 500 ms debounce on its own would never fire.
+    for (let t = 0; t < 1800; t += 300) {
+      act(() => emitAppEvent({ type: 'overview-changed' }));
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+    }
+    act(() => emitAppEvent({ type: 'overview-changed' }));
+    await act(async () => {
+      vi.advanceTimersByTime(199);
+    });
+    expect(api.overview.get).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(api.overview.get).toHaveBeenCalledTimes(1);
+  });
+
   it.each([['peer-status'], ['peers-changed']] as const)('refetches on %s', async (type) => {
     renderHook(() => useOverview());
     await act(async () => {});

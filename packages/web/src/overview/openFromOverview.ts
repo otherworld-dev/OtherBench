@@ -4,7 +4,7 @@ import { useOtherBenchStore, type IssueState } from '../state/store.js';
 
 /**
  * Where a click in the Overview goes. Each closes the Overview (the store's
- * navigation actions do) and, for an issue or card, brings the Code panel into
+ * navigation actions do) and, for an app, an issue or a card, brings the Code panel into
  * view on it, as `code/openDeckCard.ts` does: expanded if collapsed, or the
  * overlay on a narrow window.
  */
@@ -16,6 +16,7 @@ export function openApp(appId: string): void {
   const state = useOtherBenchStore.getState();
   state.openAppHome(appId);
   state.setCodePanelTab('issues');
+  showPanel();
 }
 
 function showPanel(): void {

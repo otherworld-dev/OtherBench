@@ -18,8 +18,10 @@ describe('openFromOverview', () => {
     expect(s().overviewOpen).toBe(false);
   });
 
-  it('openApp opens the app home on the Issues tab', () => {
+  it('openApp opens the app home on the Issues tab and uncollapses the panel', () => {
+    s().setInspectorCollapsed(true);
     openApp('a1');
+    expect(s().inspectorCollapsed).toBe(false);
     expect(s().mode).toBe('code');
     expect(s().activeChatId).toBe(appTabId('a1'));
     expect(s().codePanelTab).toBe('issues');

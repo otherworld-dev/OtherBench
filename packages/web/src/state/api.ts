@@ -630,10 +630,6 @@ export const api = {
     delete: (id: string) => del(`/projects/${id}`),
   },
 
-  /**
-   * Nextcloud settings and cards (spec 2026-10-22-nextcloud-tabs; server `routes/nextcloud.ts`). The password is only
-   * ever sent, never returned. `board` is optional on the card calls: without it the card is found on whichever board holds it.
-   */
   /** The Overview: what needs you across apps (server `routes/overview.ts`). Each call answers the whole Overview. */
   overview: {
     get: () => request<Overview>('/overview'),
@@ -641,6 +637,11 @@ export const api = {
     tickIssue: (appId: string, n: number) => post<Overview>(`/overview/issues/${encodeURIComponent(appId)}/${n}/tick`),
     tickOlder: (before: number) => post<{ chats: number; issues: number }>('/overview/tick-older', { before }),
   },
+
+  /**
+   * Nextcloud settings and cards (spec 2026-10-22-nextcloud-tabs; server `routes/nextcloud.ts`). The password is only
+   * ever sent, never returned. `board` is optional on the card calls: without it the card is found on whichever board holds it.
+   */
   nextcloud: {
     get: () => request<NextcloudSettingsView>('/nextcloud'),
     put: (body: { baseUrl: string; user: string; password?: string | null }) => put<NextcloudSettingsView>('/nextcloud', body),

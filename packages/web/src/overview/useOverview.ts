@@ -11,16 +11,21 @@ const REFETCH_ON: ReadonlySet<AppEvent['type']> = new Set<AppEvent['type']>([
 ]);
 
 const DEBOUNCE_MS = 500;
+/** However steady the events, a refetch comes within this long of the first one waiting. */
+const MAX_WAIT_MS = 2000;
 
 /**
  * Keeps the store's Overview current (spec 2026-10-26-overview). Mounted once
  * in `App`: fetches on mount, then again, debounced, after any event that may
- * change it. A failed fetch keeps what was showing.
+ * change it, and at most MAX_WAIT_MS after the first of a run of events, so a
+ * steady stream doesn't put it off for good. A failed fetch keeps what was showing.
  */
 export function useOverview(): void {
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    /** When the first event since the last refetch came. */
+    let waitingSince: number | null = null;
     const fetchOverview = (): void => {
       api.overview
         .get()
@@ -32,11 +37,17 @@ export function useOverview(): void {
     fetchOverview();
     const off = onAppEvent((event) => {
       if (!REFETCH_ON.has(event.type)) return;
+      const now = Date.now();
+      waitingSince ??= now;
       if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        fetchOverview();
-      }, DEBOUNCE_MS);
+      timer = setTimeout(
+        () => {
+          timer = null;
+          waitingSince = null;
+          fetchOverview();
+        },
+        Math.max(0, Math.min(DEBOUNCE_MS, waitingSince + MAX_WAIT_MS - now)),
+      );
     });
     return () => {
       disposed = true;
