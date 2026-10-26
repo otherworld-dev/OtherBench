@@ -162,6 +162,8 @@ describe('ChatList desktop integration', () => {
 
     await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('chat-new'));
     expect(mockedCreate).toHaveBeenCalledWith({ profileId: 'profile-1' });
+    // Its box takes the cursor, so typing can start at once.
+    expect(useOtherBenchStore.getState().composerFocus).toBe('chat-new');
   });
 
   it('skips archived profiles when picking the app default profile', async () => {

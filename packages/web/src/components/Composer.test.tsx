@@ -1358,3 +1358,70 @@ describe('Composer prefill (spec 2026-10-20-code-tab-design, Goal 7)', () => {
     expect(useOtherBenchStore.getState().composerPrefills).toEqual({ 'chat-2': 'not mine' });
   });
 });
+
+describe('Composer focus', () => {
+  const box = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: /message/i });
+  beforeEach(() => {
+    reset();
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
+    useOtherBenchStore.getState().setActiveChatId('chat-1');
+    mockedAttachmentList.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    document.body.replaceChildren();
+  });
+
+  /** Somewhere else to be, outside the composer, as the sidebar is. */
+  function outside(html: string): HTMLElement {
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    document.body.append(host);
+    return host.firstElementChild as HTMLElement;
+  }
+
+  it("a new chat's box takes the cursor once, and the request is used up", async () => {
+    useOtherBenchStore.getState().focusComposer('chat-1');
+    render(<Composer chat={makeChat()} />);
+    await waitFor(() => expect(box()).toHaveFocus());
+    expect(useOtherBenchStore.getState().composerFocus).toBeNull();
+  });
+
+  it("another chat's request leaves the cursor alone", () => {
+    useOtherBenchStore.getState().focusComposer('chat-2');
+    render(<Composer chat={makeChat()} />);
+    expect(box()).not.toHaveFocus();
+    expect(useOtherBenchStore.getState().composerFocus).toBe('chat-2');
+  });
+
+  it('coming back to the window puts the cursor in the box, from nowhere or from a button', () => {
+    render(<Composer chat={makeChat()} />);
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(box()).toHaveFocus();
+
+    const button = outside('<button type="button">Chat a</button>');
+    button.focus();
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(box()).toHaveFocus();
+  });
+
+  it('coming back leaves the cursor in another place to type, or in a dialog', () => {
+    render(<Composer chat={makeChat()} />);
+    const search = outside('<input type="search" aria-label="Search">');
+    search.focus();
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(search).toHaveFocus();
+
+    const cancel = outside('<div role="dialog"><button type="button">Cancel</button></div>').querySelector('button')!;
+    cancel.focus();
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(cancel).toHaveFocus();
+  });
+
+  it("coming back doesn't focus the box of a chat that isn't the active one", () => {
+    useOtherBenchStore.getState().setActiveChatId('chat-2');
+    render(<Composer chat={makeChat()} />);
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(box()).not.toHaveFocus();
+  });
+});

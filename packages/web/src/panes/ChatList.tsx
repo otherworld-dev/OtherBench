@@ -326,6 +326,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       upsertChat(chat);
       // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
       setActiveChatId(chat.id);
+      useOtherBenchStore.getState().focusComposer(chat.id);
     } catch (err) {
       console.error('[otherbench-web] failed to create chat:', err);
       setError(errorText(err, "Couldn't create the chat"));

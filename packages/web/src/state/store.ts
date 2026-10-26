@@ -297,6 +297,15 @@ export interface OtherBenchState {
   prefillComposer(chatId: string, text: string): void;
   /** The chat's handed-over text, removed from the store, or null when there is none. */
   takeComposerPrefill(chatId: string): string | null;
+  /**
+   * The chat whose box should take the cursor when it shows: one just made
+   * with "+" or started from a start box, so typing can begin at once. Taken
+   * by the composer like a prefill. Not persisted.
+   */
+  composerFocus: string | null;
+  focusComposer(chatId: string): void;
+  /** Clears the request when it's for this chat; true when it was. */
+  takeComposerFocus(chatId: string): boolean;
 
   // --- messages + the SSE reconciliation seam --------------------------------
   /** Every message the client has learned about, across whatever chat(s) have been loaded or streamed into, keyed by id. */
@@ -1104,6 +1113,13 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       return { composerPrefills };
     });
     return text;
+  },
+  composerFocus: null,
+  focusComposer: (chatId) => set({ composerFocus: chatId }),
+  takeComposerFocus: (chatId) => {
+    if (get().composerFocus !== chatId) return false;
+    set({ composerFocus: null });
+    return true;
   },
 
   messages: {},

@@ -1,4 +1,4 @@
-import { useState, type JSX, type KeyboardEvent } from 'react';
+import { useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { ApiError } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
@@ -48,14 +48,16 @@ function pendingStart(target: StartTarget): Chat | undefined {
  * focus wherever the user went while it was sending. A pane that has moved on
  * to something else is left alone: the chat waits in the sidebar.
  */
-function showInPagePane(tabId: string, chatId: string): void {
-  const { paneState, focusPane, setActiveChatId } = useOtherBenchStore.getState();
+function showInPagePane(tabId: string, chatId: string, stayed: boolean): void {
+  const { paneState, focusPane, setActiveChatId, focusComposer } = useOtherBenchStore.getState();
   const at = paneState.panes.indexOf(tabId);
   if (at === -1) return;
   const back = paneState.focusedPane;
   focusPane(at);
   setActiveChatId(chatId);
   focusPane(back);
+  // Still at the start box: the cursor follows into the chat's own box, for the next message.
+  if (stayed && back === at) focusComposer(chatId);
 }
 
 /**
@@ -66,6 +68,7 @@ export function StartBox({ target, placeholder, submitLabel }: { target: StartTa
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   async function send(): Promise<void> {
     const body = text.trim();
@@ -77,7 +80,9 @@ export function StartBox({ target, placeholder, submitLabel }: { target: StartTa
       const chat = await startChat({ ...target.create, ...(pending ? { chat: pending } : {}), text: body });
       pendingStarts.delete(target.pendingKey);
       setText('');
-      showInPagePane(target.tabId, chat.id);
+      // Focus still in the box (or let go, as a disabled button does) means the user didn't go elsewhere.
+      const active = document.activeElement;
+      showInPagePane(target.tabId, chat.id, active === null || active === document.body || (rootRef.current?.contains(active) ?? false));
     } catch (err) {
       if (err instanceof StartChatError) pendingStarts.set(target.pendingKey, err.chat.id);
       const cause = err instanceof StartChatError ? err.cause : err;
@@ -95,7 +100,7 @@ export function StartBox({ target, placeholder, submitLabel }: { target: StartTa
   }
 
   return (
-    <div>
+    <div ref={rootRef}>
       <div className="relative">
         <textarea
           aria-label={`Start a chat in ${target.name}`}

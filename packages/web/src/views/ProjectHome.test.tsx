@@ -213,6 +213,8 @@ describe('ProjectHome', () => {
 
       expect(startChat).toHaveBeenCalledWith({ projectId: 'p1', text: 'first line\nsecond' });
       await waitFor(() => expect(useOtherBenchStore.getState().activeChatId).toBe('c9'));
+      // The cursor follows into the chat's own box.
+      expect(useOtherBenchStore.getState().composerFocus).toBe('c9');
     });
 
     it('keeps the text and shows the error on failure, and a retry sends into the chat already made', async () => {
@@ -249,6 +251,7 @@ describe('ProjectHome', () => {
       const { paneState, activeChatId } = useOtherBenchStore.getState();
       expect(paneState.panes).toEqual(['c9', 'b']);
       expect(activeChatId).toBe('b');
+      expect(useOtherBenchStore.getState().composerFocus).toBeNull();
     });
 
     it("leaves a pane alone that moved on to something else while the send was going", async () => {

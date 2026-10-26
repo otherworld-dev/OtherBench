@@ -24,6 +24,14 @@ const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before send
 /** Said above the box when a message sent while a reply ran comes back into it. */
 const NOTE_RETURNED = "Not sent: the reply ended before it was read. It's back in the box.";
 
+/** Whether the focused element is a place to type, or sits in a dialog or menu, so coming back to the window leaves it there. */
+function keepsFocus(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement) || el === document.body) return false;
+  if (el.isContentEditable || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  if (el instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file'].includes(el.type)) return true;
+  return el.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null;
+}
+
 /** Whether typed text is a command: /clear or /compact (and their aliases), or a Claude Code command the `/` menu offers. */
 function isCommandText(text: string, commands: CommandRow[]): boolean {
   if (parseContextCommand(text)) return true;
@@ -244,6 +252,27 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     caretTo.current = 'end';
     textareaRef.current?.focus();
   }, [hasPrefill, chat.id]);
+
+  // A chat just made (the "+", a start box) puts the cursor here, so typing can start at once.
+  const focusWanted = useOtherBenchStore((s) => s.composerFocus === chat.id);
+  useEffect(() => {
+    if (focusWanted && useOtherBenchStore.getState().takeComposerFocus(chat.id)) textareaRef.current?.focus();
+  }, [focusWanted, chat.id]);
+
+  // Coming back to the window (Alt+Tab, the tray) puts the cursor in the active
+  // chat's box, unless it was left somewhere else to type or in a dialog.
+  useEffect(() => {
+    const onWindowFocus = (): void => {
+      const el = textareaRef.current;
+      if (!el || useOtherBenchStore.getState().activeChatId !== chat.id) return;
+      // A pane hidden behind a maximised one keeps its composer mounted.
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) return;
+      if (keepsFocus(document.activeElement)) return;
+      el.focus();
+    };
+    window.addEventListener('focus', onWindowFocus);
+    return () => window.removeEventListener('focus', onWindowFocus);
+  }, [chat.id]);
 
   async function handleStop(): Promise<void> {
     await stopReplies();
