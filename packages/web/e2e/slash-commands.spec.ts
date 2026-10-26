@@ -20,7 +20,7 @@ const FIRST = `alpha${RUN} one two three four five six seven eight nine`;
 const SECOND = `bravo${RUN} one two three four five six seven eight nine`;
 
 async function chooseProfile(page: Page, name: string): Promise<void> {
-  await page.getByRole('button', { name: /choose a profile|·/ }).click();
+  await page.getByTestId('composer-dropzone').getByRole('button', { name: /choose a profile|·/ }).click();
   await page.getByRole('option', { name: new RegExp(`^${name}`) }).click();
 }
 
