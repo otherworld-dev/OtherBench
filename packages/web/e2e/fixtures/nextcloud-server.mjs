@@ -39,8 +39,10 @@ const card = (id, title, stackId, extra = {}) => ({
 const cards = [
   card(101, '#101 First card', 1, { description: 'The first card.' }),
   card(102, '#102 Second card', 2, { labels: [label] }),
+  // Due now, for overview.spec.ts. It sits in Doing so To Do stays as nextcloud-tabs.spec.ts expects.
+  card(104, '#104 Due today', 2, { duedate: new Date().toISOString() }),
 ];
-let nextCardId = 103;
+let nextCardId = 105;
 
 const stackOut = (s, archived) => ({ ...s, boardId: board.id, cards: cards.filter((c) => c.stackId === s.id && c.archived === archived) });
 
