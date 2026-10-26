@@ -563,10 +563,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   };
   peers.attachActivity(
     () => ownChats(events.runningTurns().map((t) => t.chatId)),
-    () => ownChats(events.backgroundChats().map((c) => c.chatId))
+    () => ownChats(events.backgroundChats().map((c) => c.chatId)),
+    () => ownChats(events.pendingApprovals().map((p) => p.chatId))
   );
   events.subscribe((e) => {
-    if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks') peers.announce('activity', peers.activity());
+    if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' || e.type === 'approval-resolved') peers.announceActivity();
   });
 
   // The Code tab's terminals: the PTY loads and the shells are looked for on first use.
