@@ -92,7 +92,24 @@ export function ghRunner(resolve: (command: string) => string = resolveExecutabl
   };
 }
 
-const ACTIVITY_FIELDS = 'number,title,state,author,comments,createdAt,closedAt,url';
+/**
+ * The Overview's issue activity (spec 2026-10-26-overview-design), read with GraphQL rather than `gh issue list`:
+ * that one gives comment authors as a bare login (a bot's `github-actions` looks like anyone else) and only the
+ * first 100 comments, so a long issue's newest comments are missed. Here a bot is `__typename: 'Bot'`, an issue
+ * brings its last 100 comments, and the 100 most recently updated issues come back, open and closed. The text is
+ * a constant: the repo goes in as the `owner` and `name` variables, never into the query.
+ */
+export const ACTIVITY_QUERY = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    issues(first: ${ISSUE_LIST_LIMIT}, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN, CLOSED]) {
+      nodes {
+        number title state url createdAt closedAt
+        author { __typename login }
+        comments(last: ${ISSUE_LIST_LIMIT}) { nodes { author { __typename login } createdAt } }
+      }
+    }
+  }
+}`;
 const SUMMARY_FIELDS = 'number,title,state,author,labels,comments,createdAt,updatedAt,url';
 
 function firstLine(s: string): string {
@@ -101,7 +118,6 @@ function firstLine(s: string): string {
 
 interface RawAuthor {
   login?: string;
-  is_bot?: boolean;
 }
 interface RawComment {
   author?: RawAuthor | null;
@@ -136,9 +152,28 @@ function summary(r: RawIssue): IssueSummary {
   };
 }
 
-function who(a: RawAuthor | null | undefined): { author: string; authorIsBot: boolean } {
-  const author = a?.login ?? '';
-  return { author, authorIsBot: a?.is_bot === true || isBotLogin(author) };
+interface GqlAuthor {
+  __typename?: string;
+  login?: string;
+}
+interface GqlIssue {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  createdAt: string;
+  closedAt?: string | null;
+  author?: GqlAuthor | null;
+  comments?: { nodes?: { author?: GqlAuthor | null; createdAt?: string }[] };
+}
+interface GqlActivity {
+  data?: { repository?: { issues?: { nodes?: GqlIssue[] } } | null };
+}
+
+/** A GraphQL author: null is a deleted account, which GitHub shows as `ghost` and is not a bot. */
+function who(a: GqlAuthor | null | undefined): { author: string; authorIsBot: boolean } {
+  const author = a?.login ?? 'ghost';
+  return { author, authorIsBot: a?.__typename === 'Bot' || isBotLogin(author) };
 }
 
 /** What githubService returns; the container's `github` is one of these. */
@@ -193,16 +228,19 @@ export function githubService(run: Runner) {
     },
     async activity(repo: string): Promise<IssueActivity[]> {
       checkRepo(repo);
-      const out = await gh(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', String(ISSUE_LIST_LIMIT), '--search', 'sort:updated-desc', '--json', ACTIVITY_FIELDS]);
-      return parse<RawIssue[]>(out).map((r) => ({
+      const [owner, name] = repo.split('/') as [string, string];
+      const out = await gh(['api', 'graphql', '-f', `query=${ACTIVITY_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`]);
+      const repository = parse<GqlActivity>(out).data?.repository;
+      if (!repository) throw new GhError('repo-not-found', 'That repository was not found on GitHub.');
+      return (repository.issues?.nodes ?? []).map((r) => ({
         number: r.number,
         title: r.title,
-        state: r.state.toLowerCase() === 'closed' ? ('closed' as const) : ('open' as const),
+        state: r.state === 'CLOSED' ? ('closed' as const) : ('open' as const),
         url: r.url,
         ...who(r.author),
         createdAt: r.createdAt,
         closedAt: r.closedAt ?? null,
-        comments: (r.comments ?? []).map((c) => ({ ...who(c.author), createdAt: c.createdAt ?? '' })),
+        comments: (r.comments?.nodes ?? []).map((c) => ({ ...who(c.author), createdAt: c.createdAt ?? '' })),
       }));
     },
     /** The account gh is signed in as. */

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutableMissingError, type RunResult } from '../../src/code/process.js';
 import { ExecutableNotFoundError } from '@otherbench/tools/mcp/spawn.js';
-import { GhError, ghEnv, ghRunner, githubService, type Runner } from '../../src/code/github.js';
+import { issueNeed } from '@otherbench/core/domain/overview.js';
+import { ACTIVITY_QUERY, GhError, ghEnv, ghRunner, githubService, type Runner } from '../../src/code/github.js';
 
 const ok = (stdout: string): RunResult => ({ code: 0, stdout, stderr: '', timedOut: false, truncated: false });
 const fail = (stderr: string, code = 1): RunResult => ({ code, stdout: '', stderr, timedOut: false, truncated: false });
@@ -143,35 +144,66 @@ describe('ghRunner (M5)', () => {
 });
 
 describe('githubService activity and login', () => {
-  const ACTIVITY_ARGV = ['issue', 'list', '--repo', 'o/r', '--state', 'all', '--limit', '100', '--search', 'sort:updated-desc', '--json', 'number,title,state,author,comments,createdAt,closedAt,url'];
+  /** gh api graphql's real response shape (checked live against actions/stale): bots carry `__typename: 'Bot'`, no `[bot]`. */
+  const gql = (nodes: unknown[]) => JSON.stringify({ data: { repository: { issues: { nodes } } } });
+  const user = (login: string) => ({ __typename: 'User', login });
+  const bot = (login: string) => ({ __typename: 'Bot', login });
 
-  it('activity runs the exact argv and maps authors, bots and closedAt', async () => {
-    const sample = [
-      {
-        number: 1, title: 'a', state: 'OPEN', author: { login: 'adam' }, createdAt: '2026-01-01T00:00:00Z', closedAt: null, url: 'u1',
-        comments: [
-          { author: { login: 'helper', is_bot: true }, createdAt: '2026-01-02T00:00:00Z' },
-          { author: { login: 'dependabot[bot]' }, createdAt: '2026-01-03T00:00:00Z' },
-          { author: { login: 'adam' }, createdAt: '2026-01-04T00:00:00Z' },
-        ],
-      },
-      { number: 2, title: 'b', state: 'CLOSED', author: { login: 'x', is_bot: true }, createdAt: '2026-02-01T00:00:00Z', closedAt: '2026-02-02T00:00:00Z', url: 'u2', comments: [] },
-    ];
-    const f = fake(ok(JSON.stringify(sample)));
-    const out = await githubService(f.run).activity('o/r');
-    expect(f.calls[0]!.args).toEqual(ACTIVITY_ARGV);
-    expect(out[0]).toMatchObject({ number: 1, state: 'open', author: 'adam', authorIsBot: false, closedAt: null, url: 'u1' });
-    expect(out[0]!.comments).toEqual([
-      { author: 'helper', authorIsBot: true, createdAt: '2026-01-02T00:00:00Z' },
-      { author: 'dependabot[bot]', authorIsBot: true, createdAt: '2026-01-03T00:00:00Z' },
-      { author: 'adam', authorIsBot: false, createdAt: '2026-01-04T00:00:00Z' },
-    ]);
-    expect(out[1]).toMatchObject({ state: 'closed', authorIsBot: true, closedAt: '2026-02-02T00:00:00Z', comments: [] });
+  it('activity runs one constant GraphQL query with owner and name as variables', async () => {
+    const f = fake(ok(gql([])));
+    await githubService(f.run).activity('evil-owner/evil.name');
+    expect(f.calls[0]!.args).toEqual(['api', 'graphql', '-f', `query=${ACTIVITY_QUERY}`, '-f', 'owner=evil-owner', '-f', 'name=evil.name']);
+    expect(ACTIVITY_QUERY).not.toContain('evil');
+    expect(ACTIVITY_QUERY).toContain('issues(first: 100, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN, CLOSED])');
+    expect(ACTIVITY_QUERY).toContain('comments(last: 100)');
+    expect(ACTIVITY_QUERY).toContain('__typename');
   });
 
-  it('activity maps a signed-out gh and refuses a bad repo without running gh', async () => {
+  it('activity maps authors, bots by __typename or login, ghosts and closedAt', async () => {
+    const nodes = [
+      {
+        number: 1, title: 'a', state: 'OPEN', url: 'u1', createdAt: '2026-01-01T00:00:00Z', closedAt: null, author: user('adam'),
+        comments: {
+          nodes: [
+            { author: bot('github-actions'), createdAt: '2026-01-02T00:00:00Z' },
+            { author: user('dependabot[bot]'), createdAt: '2026-01-03T00:00:00Z' },
+            { author: user('adam'), createdAt: '2026-01-04T00:00:00Z' },
+            { author: null, createdAt: '2026-01-05T00:00:00Z' },
+          ],
+        },
+      },
+      { number: 2, title: 'b', state: 'CLOSED', url: 'u2', createdAt: '2026-02-01T00:00:00Z', closedAt: '2026-02-02T00:00:00Z', author: bot('renovate'), comments: { nodes: [] } },
+      { number: 3, title: 'c', state: 'OPEN', url: 'u3', createdAt: '2026-03-01T00:00:00Z', closedAt: null, author: null, comments: { nodes: [] } },
+    ];
+    const out = await githubService(fake(ok(gql(nodes))).run).activity('o/r');
+    expect(out[0]).toMatchObject({ number: 1, title: 'a', state: 'open', author: 'adam', authorIsBot: false, createdAt: '2026-01-01T00:00:00Z', closedAt: null, url: 'u1' });
+    expect(out[0]!.comments).toEqual([
+      { author: 'github-actions', authorIsBot: true, createdAt: '2026-01-02T00:00:00Z' },
+      { author: 'dependabot[bot]', authorIsBot: true, createdAt: '2026-01-03T00:00:00Z' },
+      { author: 'adam', authorIsBot: false, createdAt: '2026-01-04T00:00:00Z' },
+      { author: 'ghost', authorIsBot: false, createdAt: '2026-01-05T00:00:00Z' },
+    ]);
+    expect(out[1]).toMatchObject({ state: 'closed', author: 'renovate', authorIsBot: true, closedAt: '2026-02-02T00:00:00Z', comments: [] });
+    expect(out[2]).toMatchObject({ author: 'ghost', authorIsBot: false });
+  });
+
+  it("a github-actions comment (gh's real shape) does not make an issue need the user", async () => {
+    const nodes = [
+      {
+        number: 9, title: 'stale', state: 'OPEN', url: 'u9', createdAt: '2026-01-01T00:00:00Z', closedAt: null, author: user('me'),
+        comments: { nodes: [{ author: bot('github-actions'), createdAt: '2026-01-02T00:00:00Z' }] },
+      },
+    ];
+    const [activity] = await githubService(fake(ok(gql(nodes))).run).activity('o/r');
+    expect(issueNeed(activity!, 'me', null)).toBeNull();
+  });
+
+  it('activity maps a signed-out gh, an unknown repo, and refuses a bad repo without running gh', async () => {
     expect(await code(githubService(fake(fail('To get started with GitHub CLI, please run:  gh auth login')).run).activity('o/r'))).toBe('gh-signed-out');
-    const f = fake(ok('[]'));
+    expect(await code(githubService(fake(fail("gh: Could not resolve to a Repository with the name 'o/nope'.")).run).activity('o/nope'))).toBe('repo-not-found');
+    expect(await code(githubService(fake(ok(JSON.stringify({ data: { repository: null } }))).run).activity('o/r'))).toBe('repo-not-found');
+    expect(await code(githubService(fake(ok('not json')).run).activity('o/r'))).toBe('gh-failed');
+    const f = fake(ok(gql([])));
     expect(await code(githubService(f.run).activity('not a repo'))).toBe('repo-not-found');
     expect(f.calls).toEqual([]);
   });
