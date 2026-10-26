@@ -517,7 +517,7 @@ export interface MessageRepo {
    * died, found without reading every finished message.
    */
   listWithSubagentStatus(status: SubagentStatus): CanonMessage[];
-  /** One row per non-archived chat that has a head message: that message's role, status and time. For the Overview. */
+  /** One row per non-archived chat that has a head message: the tip of the current branch (newest message at or below the head, by time then id): its role, status and time. For the Overview. */
   heads(): ChatHead[];
   /** Stores engine-owned state on a message. Throws when the id does not exist. */
   updateEngineMeta(id: string, meta: EngineMeta): void;

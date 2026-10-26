@@ -1175,10 +1175,28 @@ class InMemoryMessageRepo implements MessageRepo {
   constructor(private readonly selfNodeId: string, private readonly chats: ChatRepo) {}
 
   heads(): ChatHead[] {
+    const children = new Map<string, CanonMessage[]>();
+    for (const m of this.byId.values()) {
+      if (m.parentId === null) continue;
+      const siblings = children.get(m.parentId);
+      if (siblings) siblings.push(m);
+      else children.set(m.parentId, [m]);
+    }
     const heads: ChatHead[] = [];
     for (const c of this.chats.list()) {
-      const m = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
-      if (m) heads.push({ chatId: c.id, role: m.role, status: m.status, createdAt: m.createdAt });
+      const head = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
+      if (!head) continue;
+      // The tip: the newest message (then the largest id) at or below the head.
+      let tip = head;
+      const seen = new Set<string>([head.id]);
+      const stack = [head];
+      for (let m = stack.pop(); m; m = stack.pop()) {
+        if (m.createdAt > tip.createdAt || (m.createdAt === tip.createdAt && m.id > tip.id)) tip = m;
+        for (const k of children.get(m.id) ?? []) {
+          if (!seen.has(k.id)) { seen.add(k.id); stack.push(k); }
+        }
+      }
+      heads.push({ chatId: c.id, role: tip.role, status: tip.status, createdAt: tip.createdAt });
     }
     return heads;
   }

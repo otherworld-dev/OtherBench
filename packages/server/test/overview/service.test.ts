@@ -152,6 +152,14 @@ describe('OverviewService checks', () => {
     expect(svc.githubLogin()).toBe('adam');
   });
 
+  it('shows a chat whose head is the user message with a completed reply below it', () => {
+    // A normal send leaves the head on the user's message; the reply is its child.
+    store.messages.create({ id: 'c9-u', chatId: 'c9', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null, createdAt: NOW - 2 * HOUR });
+    store.chats.create({ id: 'c9', title: 'c9', profileId: 'p', headMessageId: 'c9-u', workspaceRoot: null, pinned: false, archivedAt: null, appId: 'a1' });
+    store.messages.create({ id: 'c9-a', chatId: 'c9', parentId: 'c9-u', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: NOW - HOUR });
+    expect(tileOf(service(), 'a1').chats.map((c) => c.chatId)).toEqual(['c9']);
+  });
+
   it('shares one check between concurrent refreshes', async () => {
     const svc = service();
     const a = svc.refresh();

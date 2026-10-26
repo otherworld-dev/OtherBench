@@ -264,10 +264,23 @@ export class SqliteMessageRepo implements MessageRepo {
   }
 
   heads(): ChatHead[] {
+    // A send leaves the head on the user's message and the reply is its child, so the
+    // tip is the newest message at or below the head. UNION (not UNION ALL) stops a
+    // parent cycle from recursing forever.
     const rows = this.db
       .prepare(
-        `SELECT c.id AS chat_id, m.role, m.status, m.created_at FROM chat c
-           JOIN message m ON m.id = c.head_message_id WHERE c.archived_at IS NULL`
+        `WITH RECURSIVE below(chat_id, id) AS (
+           SELECT c.id, c.head_message_id FROM chat c
+            WHERE c.archived_at IS NULL AND c.head_message_id IS NOT NULL
+           UNION
+           SELECT b.chat_id, m.id FROM message m JOIN below b ON m.parent_id = b.id
+         ),
+         ranked AS (
+           SELECT b.chat_id, m.role, m.status, m.created_at,
+                  ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
+             FROM below b JOIN message m ON m.id = b.id
+         )
+         SELECT chat_id, role, status, created_at FROM ranked WHERE rn = 1`
       )
       .all() as Record<string, unknown>[];
     return rows.map((r) => ({ chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number }));

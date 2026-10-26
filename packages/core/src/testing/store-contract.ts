@@ -748,6 +748,56 @@ export function runStoreContract(
           { chatId: 'chat-b', role: 'user', status: 'complete', createdAt: 30 },
         ]);
       });
+
+      it('follows a user head to the completed reply below it', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20 }]);
+      });
+
+      it('gives a reply still streaming below the head', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'streaming', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'streaming', createdAt: 20 }]);
+      });
+
+      it('gives the newer of two replies to the head (a compare set)', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a-new', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'error', createdAt: 40 }));
+        store.messages.create(makeMessageInput({ id: 'a-old', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 40 }]);
+      });
+
+      it('walks below the head to a deeper descendant, and breaks a time tie by id', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
+        store.messages.create(makeMessageInput({ id: 'z2', chatId: 'chat-a', parentId: 'u2', role: 'assistant', status: 'error', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        // u2 and z2 share a time; the larger id wins.
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 30 }]);
+      });
+
+      it('can be a user message when a follow-up below the head is the newest', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'user', status: 'complete', createdAt: 30 }]);
+      });
     });
 
     describe('chats: unread', () => {
