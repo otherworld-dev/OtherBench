@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { App, Chat } from '@otherbench/core/ports/store.js';
+import type { Overview } from '@otherbench/core/types/overview.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -11,6 +12,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     api: {
       ...actual.api,
       apps: { ...actual.api.apps, issues: { list: vi.fn(), get: vi.fn(), comment: vi.fn(), close: vi.fn(), reopen: vi.fn() } },
+      overview: { ...actual.api.overview, tickIssue: vi.fn() },
     },
   };
 });
@@ -248,5 +250,50 @@ describe('IssuesTab', () => {
     expect(alert).toHaveTextContent('HTTP 502: bad gateway');
     expect(within(alert).getByText('Details')).toBeInTheDocument();
     expect(within(alert).getByText(/retry later/)).toBeInTheDocument();
+  });
+
+  describe('needs you', () => {
+    const needing = (): Overview => ({
+      checkedAt: 1, checking: false, githubLogin: 'me', loginMismatches: [], unreachableMachines: [], total: 1,
+      tiles: [{
+        key: 'a1', appId: 'a1', name: 'OtherBench', count: 1, faded: false, chats: [], issuesError: null, deck: null, deckError: null,
+        issues: [{ number: 48, title: 'x', state: 'open', kind: 'new', at: new Date().toISOString(), who: 'sam', url: '', through: 'x' }],
+      }],
+    });
+
+    it('marks only the issues that need him and ticks one off', async () => {
+      const next = { ...needing(), tiles: [{ ...needing().tiles[0]!, issues: [] }] };
+      vi.mocked(api.overview.tickIssue).mockResolvedValue(next);
+      useOtherBenchStore.setState({ overview: needing() });
+      const user = userEvent.setup();
+      render(<IssuesTab app={app()} owner="c1" />);
+      expect(await screen.findByTestId('issue-needs-48')).toBeInTheDocument();
+      expect(screen.queryByTestId('issue-needs-45')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Tick off #45' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Tick off #48' }));
+      expect(api.overview.tickIssue).toHaveBeenCalledWith('a1', 48);
+      await waitFor(() => expect(screen.queryByTestId('issue-needs-48')).toBeNull());
+      expect(useOtherBenchStore.getState().overview).toBe(next);
+    });
+
+    it('the issue view has a Tick off button only when it needs him', async () => {
+      useOtherBenchStore.setState({ overview: needing() });
+      useOtherBenchStore.getState().setIssueView('c1', { selected: 48 });
+      const user = userEvent.setup();
+      render(<IssuesTab app={app()} owner="c1" />);
+      await screen.findByTestId('issue-detail');
+      vi.mocked(api.overview.tickIssue).mockResolvedValue({ ...needing(), tiles: [] });
+      await user.click(screen.getByRole('button', { name: 'Tick off' }));
+      expect(api.overview.tickIssue).toHaveBeenCalledWith('a1', 48);
+    });
+
+    it('the issue view has no Tick off when the issue does not need him', async () => {
+      useOtherBenchStore.setState({ overview: needing() });
+      useOtherBenchStore.getState().setIssueView('c1', { selected: 45 });
+      vi.mocked(api.apps.issues.get).mockResolvedValue(detail({ number: 45 }));
+      render(<IssuesTab app={app()} owner="c1" />);
+      await screen.findByTestId('issue-detail');
+      expect(screen.queryByRole('button', { name: 'Tick off' })).toBeNull();
+    });
   });
 });

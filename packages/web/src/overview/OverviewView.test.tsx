@@ -5,7 +5,7 @@ import type { Overview, OverviewIssue, OverviewTile as Tile } from '@otherbench/
 vi.mock('./openFromOverview.js', () => ({ openChat: vi.fn(), openApp: vi.fn(), openIssue: vi.fn(), openCard: vi.fn() }));
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
-  return { ...actual, api: { ...actual.api, overview: { ...actual.api.overview, refresh: vi.fn() } } };
+  return { ...actual, api: { ...actual.api, overview: { ...actual.api.overview, refresh: vi.fn(), tickIssue: vi.fn(), tickOlder: vi.fn() }, chats: { ...actual.api.chats, patch: vi.fn() } } };
 });
 
 import { api } from '../state/api.js';
@@ -145,6 +145,74 @@ describe('OverviewView', () => {
     fireEvent.click(screen.getByTestId('overview-chat-c1'));
     expect(openChat).toHaveBeenCalledWith('c1');
     expect(openApp).not.toHaveBeenCalled();
+  });
+});
+
+describe('OverviewView tick-off', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const chats = [{ chatId: 'c1', title: 'One', waiting: true, at: 1, projectId: null, projectName: null }];
+
+  it('Tick off on a chat sets dealtWithAt; Archive sets archivedAt', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1234);
+    vi.mocked(api.chats.patch).mockResolvedValue({} as never);
+    show(overview([tile('chats', { chats, issues: null, deck: null })]));
+    render(<OverviewView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tick off One' }));
+    expect(api.chats.patch).toHaveBeenCalledWith('c1', { dealtWithAt: 1234 });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive One' }));
+    expect(api.chats.patch).toHaveBeenCalledWith('c1', { archivedAt: 1234 });
+    expect(openChat).not.toHaveBeenCalled();
+  });
+
+  it('Tick off on an issue stores the returned overview and the row goes', async () => {
+    const next = overview([tile('a', { issues: [] })]);
+    vi.mocked(api.overview.tickIssue).mockResolvedValue(next);
+    show(overview([tile('a', { issues: [issue(7)] })]));
+    render(<OverviewView />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tick off #7' }));
+    });
+    expect(api.overview.tickIssue).toHaveBeenCalledWith('a', 7);
+    expect(useOtherBenchStore.getState().overview).toBe(next);
+    expect(screen.queryByTestId('overview-issue-a-7')).toBeNull();
+    expect(openIssue).not.toHaveBeenCalled();
+  });
+
+  it('Tick off older than… sends now minus the span after a confirm step, then says what it did', async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    vi.mocked(api.overview.tickOlder).mockResolvedValue({ chats: 12, issues: 4 });
+    show(overview([tile('a')]));
+    render(<OverviewView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tick off older than…' }));
+    fireEvent.click(screen.getByRole('button', { name: '1 week' }));
+    expect(api.overview.tickOlder).not.toHaveBeenCalled();
+    expect(screen.getByText(/counts are unknown until it's done/i)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+    expect(api.overview.tickOlder).toHaveBeenCalledWith(now - 7 * 86_400_000);
+    expect(screen.getByText('Ticked off 12 chats and 4 issues')).toBeInTheDocument();
+  });
+
+  it('Everything sends now', async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    vi.mocked(api.overview.tickOlder).mockResolvedValue({ chats: 1, issues: 0 });
+    show(overview([]));
+    render(<OverviewView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tick off older than…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Everything' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+    expect(api.overview.tickOlder).toHaveBeenCalledWith(now);
+    expect(screen.getByText('Ticked off 1 chat and 0 issues')).toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,8 @@
 import { useState, type JSX, type ReactNode } from 'react';
 import type { OverviewChat, OverviewDueCard, OverviewIssue, OverviewTile as Tile } from '@otherbench/core/types/overview.js';
 import { formatAge } from '../lib/relativeTime.js';
+import { api } from '../state/api.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { openApp, openCard, openChat, openIssue } from './openFromOverview.js';
 
 /** Issues shown before "+N more". */
@@ -11,6 +13,11 @@ export const overviewTileDomId = (key: string): string => `overview-tile-${key}`
 
 const ROW = 'flex w-full items-baseline justify-between gap-2 border-t border-[var(--border)] py-0.5 text-left text-sm hover:bg-[var(--bg-sunken)]';
 const MUTED = 'text-xs text-[var(--text-muted)]';
+/** A row's button when its actions sit beside it: the wrapper carries the rule and the hover. */
+const ROW_BUTTON = 'flex min-w-0 flex-1 items-baseline justify-between gap-2 py-0.5 text-left text-sm';
+const ROW_WRAP = 'group flex items-baseline gap-1 border-t border-[var(--border)] hover:bg-[var(--bg-sunken)]';
+/** Shown on hover or focus of the row, so the list stays quiet. */
+const ACTION = 'btn shrink-0 px-1.5 py-0 text-xs opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100';
 
 /** A section heading inside a tile: more prominent than `.label-caps`, with an accent underline. */
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
@@ -22,43 +29,87 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
   );
 }
 
-/** One chat needing you. Task 10 adds its tick-off action here. */
+/** One chat needing you, with its tick-off and archive actions beside it (a button can't hold another). */
 export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
+  const patch = (body: { dealtWithAt: number } | { archivedAt: number }, what: string): void => {
+    api.chats.patch(chat.chatId, body).catch((err: unknown) => console.error(`[otherbench-web] failed to ${what} chat ${chat.chatId}:`, err));
+  };
   return (
-    <button
-      type="button"
-      data-testid={`overview-chat-${chat.chatId}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        openChat(chat.chatId);
-      }}
-      className={ROW}
-    >
-      <span className="truncate">{chat.title}</span>
-      {chat.waiting && <span className={`${MUTED} shrink-0`}>waiting</span>}
-    </button>
+    <div className={ROW_WRAP}>
+      <button
+        type="button"
+        data-testid={`overview-chat-${chat.chatId}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          openChat(chat.chatId);
+        }}
+        className={ROW_BUTTON}
+      >
+        <span className="truncate">{chat.title}</span>
+        {chat.waiting && <span className={`${MUTED} shrink-0`}>waiting</span>}
+      </button>
+      <button
+        type="button"
+        aria-label={`Tick off ${chat.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          patch({ dealtWithAt: Date.now() }, 'tick off');
+        }}
+        className={ACTION}
+      >
+        Tick off
+      </button>
+      <button
+        type="button"
+        aria-label={`Archive ${chat.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          patch({ archivedAt: Date.now() }, 'archive');
+        }}
+        className={ACTION}
+      >
+        Archive
+      </button>
+    </div>
   );
 }
 
-/** One issue needing you. Task 10 adds its tick-off action here. */
+/** One issue needing you, with its tick-off beside it. */
 export function OverviewIssueRow({ appId, issue }: { appId: string; issue: OverviewIssue }): JSX.Element {
+  const setOverview = useOtherBenchStore((s) => s.setOverview);
   const age = formatAge(Date.parse(issue.at));
   return (
-    <button
-      type="button"
-      data-testid={`overview-issue-${appId}-${issue.number}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        openIssue(appId, issue.number, issue.state);
-      }}
-      className={ROW}
-    >
-      <span className="min-w-0 truncate">
-        {issue.state === 'closed' && <span className="mr-1 rounded-[3px] border border-[var(--border-strong)] px-1 text-[0.65rem] text-[var(--text-muted)]">closed</span>}
-        #{issue.number} {issue.title}
-      </span>
-      <span className={`${MUTED} shrink-0 whitespace-nowrap`}>{issue.kind} · {age}</span>
-    </button>
+    <div className={ROW_WRAP}>
+      <button
+        type="button"
+        data-testid={`overview-issue-${appId}-${issue.number}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          openIssue(appId, issue.number, issue.state);
+        }}
+        className={ROW_BUTTON}
+      >
+        <span className="min-w-0 truncate">
+          {issue.state === 'closed' && <span className="mr-1 rounded-[3px] border border-[var(--border-strong)] px-1 text-[0.65rem] text-[var(--text-muted)]">closed</span>}
+          #{issue.number} {issue.title}
+        </span>
+        <span className={`${MUTED} shrink-0 whitespace-nowrap`}>{issue.kind} · {age}</span>
+      </button>
+      <button
+        type="button"
+        aria-label={`Tick off #${issue.number}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          api.overview
+            .tickIssue(appId, issue.number)
+            .then(setOverview)
+            .catch((err: unknown) => console.error(`[otherbench-web] failed to tick off issue #${issue.number}:`, err));
+        }}
+        className={ACTION}
+      >
+        Tick off
+      </button>
+    </div>
   );
 }
 

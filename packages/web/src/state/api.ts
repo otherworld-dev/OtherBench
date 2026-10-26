@@ -350,6 +350,8 @@ export type ChatPatchBody = Partial<{
   /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
   projectPinned: boolean;
   archivedAt: number | null;
+  /** Ticks the chat off the Overview until it needs him again (spec 2026-10-26-overview). */
+  dealtWithAt: number | null;
   autoMode: boolean;
   /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */
   effort: ClaudeEffort | null;
