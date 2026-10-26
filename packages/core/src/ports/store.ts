@@ -3,6 +3,7 @@ import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '.
 import type { PricingSnapshot } from '../types/usage.js';
 import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
 import type { MediaWorkflow } from '../domain/media-workflows.js';
+import type { ChatHead } from '../types/overview.js';
 import type { Peer } from '../types/peer.js';
 import type { ChangeBatch, ChangeRow } from '../domain/sync.js';
 import type { ScheduleRule, ScheduleRunStatus, ScheduleTarget, ScheduleTrigger } from '../domain/schedule.js';
@@ -77,6 +78,11 @@ export interface Chat {
    * complete or in error, cleared by the client once the chat is shown.
    */
   unread: boolean;
+  /**
+   * When the user ticked this chat off on the Overview ("dealt with"); it
+   * needs them again only once a newer reply arrives. Absent is null.
+   */
+  dealtWithAt?: number | null;
   archivedAt: number | null;
   /**
    * Claude Code auto mode for this chat's turns (spec
@@ -492,6 +498,8 @@ export interface MessageRepo {
    * died, found without reading every finished message.
    */
   listWithSubagentStatus(status: SubagentStatus): CanonMessage[];
+  /** One row per non-archived chat that has a head message: that message's role, status and time. For the Overview. */
+  heads(): ChatHead[];
   /** Stores engine-owned state on a message. Throws when the id does not exist. */
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */

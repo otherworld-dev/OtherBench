@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ChatHead } from '../types/overview.js';
 import type {
   ChatEngine,
   ConnectionTestResult,
@@ -1152,7 +1153,16 @@ const MAX_PATH_DEPTH = 10_000;
 
 class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
-  constructor(private readonly selfNodeId: string) {}
+  constructor(private readonly selfNodeId: string, private readonly chats: ChatRepo) {}
+
+  heads(): ChatHead[] {
+    const heads: ChatHead[] = [];
+    for (const c of this.chats.list()) {
+      const m = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
+      if (m) heads.push({ chatId: c.id, role: m.role, status: m.status, createdAt: m.createdAt });
+    }
+    return heads;
+  }
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
     if (this.byId.has(m.id)) {
@@ -1486,7 +1496,7 @@ export class InMemoryStore implements Store {
     this.schedules = schedules;
     const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));
     this.chats = chats;
-    this.messages = new InMemoryMessageRepo(selfNodeId);
+    this.messages = new InMemoryMessageRepo(selfNodeId, chats);
     this.audit = new InMemoryAuditRepo(selfNodeId);
     // The project and memory repos refer to each other lazily (existence check, cascade on delete).
     const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);

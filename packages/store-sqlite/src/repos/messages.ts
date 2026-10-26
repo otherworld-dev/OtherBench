@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { MessageRepo } from '@otherbench/core/ports/store.js';
+import type { ChatHead } from '@otherbench/core/types/overview.js';
 import type {
   CanonMessage,
   EngineMeta,
@@ -260,6 +261,16 @@ export class SqliteMessageRepo implements MessageRepo {
         this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) SELECT 'attachment', id, 'upsert' FROM attachment WHERE message_id = ?`).run(id);
       }
     });
+  }
+
+  heads(): ChatHead[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id AS chat_id, m.role, m.status, m.created_at FROM chat c
+           JOIN message m ON m.id = c.head_message_id WHERE c.archived_at IS NULL`
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({ chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number }));
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {

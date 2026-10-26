@@ -691,6 +691,37 @@ export function runStoreContract(
       });
     });
 
+    describe('chats: dealtWithAt', () => {
+      it('defaults to null and round-trips through update, get and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).dealtWithAt ?? null).toBeNull();
+        store.chats.update('chat-a', { dealtWithAt: 1234 });
+        expect(store.chats.get('chat-a')!.dealtWithAt).toBe(1234);
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.dealtWithAt).toBe(1234);
+        store.chats.update('chat-a', { dealtWithAt: null });
+        expect(store.chats.get('chat-a')!.dealtWithAt ?? null).toBeNull();
+      });
+    });
+
+    describe('messages: heads', () => {
+      it("returns each chat's head role, status and time, omitting archived chats and chats with no head", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        for (const id of ['chat-a', 'chat-b', 'chat-c', 'chat-d']) store.chats.create(makeChatInput({ id, profileId }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a2', chatId: 'chat-a', parentId: 'a1', role: 'assistant', status: 'error', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'user', createdAt: 30 }));
+        store.messages.create(makeMessageInput({ id: 'c1', chatId: 'chat-c', role: 'user', createdAt: 40 }));
+        store.chats.update('chat-a', { headMessageId: 'a2' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        store.chats.update('chat-c', { headMessageId: 'c1', archivedAt: 50 });
+        const heads = store.messages.heads().sort((x, y) => (x.chatId < y.chatId ? -1 : 1));
+        expect(heads).toEqual([
+          { chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 20 },
+          { chatId: 'chat-b', role: 'user', status: 'complete', createdAt: 30 },
+        ]);
+      });
+    });
+
     describe('chats: unread', () => {
       it('unread defaults to false and round-trips through update and list', () => {
         const { profileId } = seedProfile(store, 'profile-a');
