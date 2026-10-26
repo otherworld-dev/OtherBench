@@ -30,6 +30,7 @@ interface ChatBody {
   pinned?: unknown;
   projectPinned?: unknown;
   archivedAt?: unknown;
+  dealtWithAt?: unknown;
   autoMode?: unknown;
   planMode?: unknown;
   effort?: unknown;
@@ -43,7 +44,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
 
 /** Spec 2026-10-20-code-tab-design, "Calls I made": an app chat's folder is the app's folder, so it can't be set on the chat. */
 const APP_FOLDER_LOCKED = "An app chat uses its app's folder.";
@@ -253,6 +254,13 @@ export function chatsRoutes(container: Container): Hono {
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
+    }
+    // Ticked off the Overview at this moment (or back on it): not chat activity, so updatedAt stays.
+    if (body.dealtWithAt !== undefined) {
+      if (body.dealtWithAt !== null && (typeof body.dealtWithAt !== 'number' || !Number.isFinite(body.dealtWithAt))) {
+        throw new HTTPException(400, { message: '"dealtWithAt" must be a finite number or null.' });
+      }
+      patch.dealtWithAt = body.dealtWithAt;
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
     if (body.planMode !== undefined) patch.planMode = optionalBoolean(body.planMode, 'planMode', false);
