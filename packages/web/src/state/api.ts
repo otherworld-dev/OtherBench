@@ -19,6 +19,7 @@ import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, NextcloudErrorCode, NextcloudSettingsView, NextcloudTestResult, ProjectLinksSuggestion, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import type { TerminalInfo, TerminalStatus } from '@otherbench/core/types/terminal.js';
+import type { Overview } from '@otherbench/core/types/overview.js';
 import { apiFetch, apiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
@@ -631,6 +632,13 @@ export const api = {
    * Nextcloud settings and cards (spec 2026-10-22-nextcloud-tabs; server `routes/nextcloud.ts`). The password is only
    * ever sent, never returned. `board` is optional on the card calls: without it the card is found on whichever board holds it.
    */
+  /** The Overview: what needs you across apps (server `routes/overview.ts`). Each call answers the whole Overview. */
+  overview: {
+    get: () => request<Overview>('/overview'),
+    refresh: () => post<Overview>('/overview/refresh'),
+    tickIssue: (appId: string, n: number) => post<Overview>(`/overview/issues/${encodeURIComponent(appId)}/${n}/tick`),
+    tickOlder: (before: number) => post<{ chats: number; issues: number }>('/overview/tick-older', { before }),
+  },
   nextcloud: {
     get: () => request<NextcloudSettingsView>('/nextcloud'),
     put: (body: { baseUrl: string; user: string; password?: string | null }) => put<NextcloudSettingsView>('/nextcloud', body),

@@ -20,6 +20,7 @@ import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
+import { useOverview } from './overview/useOverview.js';
 import { useMarkRead } from './state/useMarkRead.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { AppView } from './views/AppView.js';
@@ -127,6 +128,7 @@ function MainApp(): JSX.Element {
   }, [setConnections, setModels, setProfiles, setChats, setProjects, setApps, setAppFolders]);
 
   useAppEvents();
+  useOverview();
   useTrayStatus();
   useOpenArgs(loaded);
   useDesktopShell();

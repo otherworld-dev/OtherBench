@@ -26,6 +26,7 @@ vi.mock('./state/api.js', () => ({
 
 // The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
 vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
+vi.mock('./overview/useOverview.js', () => ({ useOverview: () => {} }));
 vi.mock('./views/QuickChat.js', () => ({ QuickChat: () => <div data-testid="quick-chat-view" /> }));
 vi.mock('./views/IndicatorView.js', () => ({ IndicatorView: () => <div data-testid="indicator-view" /> }));
 

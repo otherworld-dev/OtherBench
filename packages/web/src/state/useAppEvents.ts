@@ -3,6 +3,7 @@ import type { AppEvent, AppEventsHello } from '@otherbench/core/types/events.js'
 import { isDesktop, isMainWindowFocused, onDesktopEvent, showNotification } from '../desktop/bridge.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
 import { api } from './api.js';
+import { emitAppEvent } from './appEventListeners.js';
 import { refreshMachines } from './machines.js';
 import { SseClient } from './sse.js';
 import { useOtherBenchStore } from './store.js';
@@ -53,6 +54,7 @@ export function useAppEvents(): void {
       onHello: applyAppHello,
       onEvent: (event) => {
         applyAppEvent(event);
+        emitAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
         if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[otherbench-web] failed to show a notification:', err));
