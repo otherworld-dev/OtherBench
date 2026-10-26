@@ -31,6 +31,7 @@ import { MIGRATION_029_APPS } from './029-apps.js';
 import { MIGRATION_030_APP_NEXTCLOUD } from './030-app-nextcloud.js';
 import { MIGRATION_031_MEDIA_WORKFLOWS } from './031-media-workflows.js';
 import { MIGRATION_032_APP_FOLDERS } from './032-app-folders.js';
+import { MIGRATION_033_OVERVIEW } from './033-overview.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -68,6 +69,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_030_APP_NEXTCLOUD,
   MIGRATION_031_MEDIA_WORKFLOWS,
   MIGRATION_032_APP_FOLDERS,
+  MIGRATION_033_OVERVIEW,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

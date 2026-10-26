@@ -26,6 +26,7 @@ vi.mock('./state/api.js', () => ({
 
 // The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
 vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
+vi.mock('./overview/useOverview.js', () => ({ useOverview: () => {} }));
 vi.mock('./views/QuickChat.js', () => ({ QuickChat: () => <div data-testid="quick-chat-view" /> }));
 vi.mock('./views/IndicatorView.js', () => ({ IndicatorView: () => <div data-testid="indicator-view" /> }));
 
@@ -269,6 +270,16 @@ describe('App view', () => {
     render(<App />);
     expect(await screen.findByRole('complementary', { name: 'Code panel' })).toBeInTheDocument();
     expect(screen.getByTestId('code-panel-empty')).toHaveTextContent('Pick an app or a chat');
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
+  });
+
+  it('the Overview replaces the tab bar, panes, and right column while it is open', async () => {
+    render(<App />);
+    expect(await screen.findByTestId('tab-bar')).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Overview' }));
+    expect(await screen.findByTestId('overview-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-bar')).toBeNull();
+    expect(screen.queryByTestId('pane-0')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
   });
 

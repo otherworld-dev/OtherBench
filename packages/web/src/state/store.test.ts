@@ -18,6 +18,9 @@ import {
   loadCodePanelTab,
   loadDeckViews,
   loadInspectorCollapsed,
+  loadOverviewOpen,
+  OVERVIEW_OPEN_STORAGE_KEY,
+  selectOverviewTotal,
   loadIssueViews,
   loadWikiViews,
   selectPendingApprovalCount,
@@ -1111,5 +1114,49 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(fresh.paneState).toEqual(code);
     expect(fresh.activeChatId).toBe('app-chat');
     expect(fresh.otherPaneState).toEqual(chatPanes);
+  });
+});
+
+describe('overview state', () => {
+  beforeEach(() => {
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    window.localStorage.clear();
+  });
+
+  it('holds the overview and its total', () => {
+    expect(selectOverviewTotal(useOtherBenchStore.getState())).toBe(0);
+    useOtherBenchStore.getState().setOverview({ checkedAt: 1, checking: false, githubLogin: null, loginMismatches: [], unreachableMachines: [], total: 4, tiles: [] });
+    expect(selectOverviewTotal(useOtherBenchStore.getState())).toBe(4);
+  });
+
+  it('loads the open flag, tolerating unreadable storage, and saves when it changes', () => {
+    expect(loadOverviewOpen()).toBe(false);
+    window.localStorage.setItem(OVERVIEW_OPEN_STORAGE_KEY, 'true');
+    expect(loadOverviewOpen()).toBe(true);
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(loadOverviewOpen()).toBe(false);
+    get.mockRestore();
+    useOtherBenchStore.getState().setOverviewOpen(true);
+    expect(window.localStorage.getItem(OVERVIEW_OPEN_STORAGE_KEY)).toBe('true');
+    useOtherBenchStore.getState().setOverviewOpen(false);
+    expect(window.localStorage.getItem(OVERVIEW_OPEN_STORAGE_KEY)).toBe('false');
+  });
+
+  it('closes when a chat, tab, mode or app home is chosen', () => {
+    const s = () => useOtherBenchStore.getState();
+    s().setOverviewOpen(true);
+    s().setActiveChatId('c1');
+    expect(s().overviewOpen).toBe(false);
+    s().setOverviewOpen(true);
+    s().openTab('c1');
+    expect(s().overviewOpen).toBe(false);
+    s().setOverviewOpen(true);
+    s().setMode('code');
+    expect(s().overviewOpen).toBe(false);
+    s().setOverviewOpen(true);
+    s().openAppHome('a1');
+    expect(s().overviewOpen).toBe(false);
   });
 });

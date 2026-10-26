@@ -1216,6 +1216,20 @@ describe('chats in projects', () => {
     expect((await json(bad))['error']).toBe('"unread" must be a boolean.');
   });
 
+  it('PATCH dealtWithAt ticks a chat off and back on without counting as activity, and refuses a non-number', async () => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    const updatedAt = container.store.chats.get(id)!.updatedAt;
+
+    const res = await patchChat(id, { dealtWithAt: 1234 });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ dealtWithAt: 1234, updatedAt });
+    expect(container.store.chats.get(id)!.dealtWithAt).toBe(1234);
+    expect(await json(await patchChat(id, { dealtWithAt: null }))).toMatchObject({ dealtWithAt: null, updatedAt });
+    const bad = await patchChat(id, { dealtWithAt: 'now' });
+    expect(bad.status).toBe(400);
+    expect((await json(bad))['error']).toBe('"dealtWithAt" must be a finite number or null.');
+  });
+
   it('refuses projectPinned on a chat with no project (after the patch), and a non-boolean, with 400', async () => {
     const loose = (await json(await post({ profileId: 'profile-1' })))['id'] as string;
     const res = await patchChat(loose, { projectPinned: true });

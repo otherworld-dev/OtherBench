@@ -2174,3 +2174,43 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
     });
   });
 });
+
+describe('ChatList Overview switch', () => {
+  beforeEach(() => {
+    useOtherBenchStore.setState({ overview: null, overviewOpen: false, mode: 'chat' });
+  });
+
+  it('has Chat, Code and Overview buttons; Overview shows the count and is pressed when open', async () => {
+    useOtherBenchStore.setState({
+      overview: { checkedAt: 1, checking: false, githubLogin: null, loginMismatches: [], unreachableMachines: [], total: 4, tiles: [] },
+    });
+    render(<ChatList />);
+    const sw = screen.getByTestId('mode-switch');
+    expect(within(sw).getAllByRole('button').map((b) => b.textContent?.replace(/\d+$/, ''))).toEqual(['Chat', 'Code', 'Overview']);
+    expect(within(sw).getByTestId('overview-count')).toHaveTextContent('4');
+    expect(within(sw).getByRole('button', { name: /^Chat/ })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.setup().click(within(sw).getByRole('button', { name: /^Overview/ }));
+    expect(useOtherBenchStore.getState().overviewOpen).toBe(true);
+    expect(within(sw).getByRole('button', { name: /^Overview/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(sw).getByRole('button', { name: /^Chat/ })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('no count pill when nothing needs you; the jump list replaces the chat list while open', () => {
+    useOtherBenchStore.setState({
+      overviewOpen: true,
+      overview: { checkedAt: 1, checking: false, githubLogin: null, loginMismatches: [], unreachableMachines: [], total: 0, tiles: [] },
+      chats: [makeChat({ id: 'cz', title: 'Zed' })],
+    });
+    render(<ChatList />);
+    expect(screen.queryByTestId('overview-count')).toBeNull();
+    expect(screen.queryByTestId('chat-row-cz')).toBeNull();
+    expect(screen.getByTestId('overview-jump-list')).toBeInTheDocument();
+  });
+
+  it('choosing Chat while the Overview is open closes it', async () => {
+    useOtherBenchStore.setState({ overviewOpen: true });
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('mode-switch')).getByRole('button', { name: /^Chat/ }));
+    expect(useOtherBenchStore.getState().overviewOpen).toBe(false);
+  });
+});

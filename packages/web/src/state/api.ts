@@ -19,6 +19,7 @@ import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, NextcloudErrorCode, NextcloudSettingsView, NextcloudTestResult, ProjectLinksSuggestion, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import type { TerminalInfo, TerminalStatus } from '@otherbench/core/types/terminal.js';
+import type { Overview } from '@otherbench/core/types/overview.js';
 import { apiFetch, apiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
@@ -349,6 +350,8 @@ export type ChatPatchBody = Partial<{
   /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
   projectPinned: boolean;
   archivedAt: number | null;
+  /** Ticks the chat off the Overview until it needs him again (spec 2026-10-26-overview). */
+  dealtWithAt: number | null;
   autoMode: boolean;
   /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */
   effort: ClaudeEffort | null;
@@ -625,6 +628,14 @@ export const api = {
     patch: (id: string, body: PatchProjectBody) => patch<Project>(`/projects/${id}`, body),
     /** Its chats move to No project; none are deleted. */
     delete: (id: string) => del(`/projects/${id}`),
+  },
+
+  /** The Overview: what needs you across apps (server `routes/overview.ts`). Each call answers the whole Overview. */
+  overview: {
+    get: () => request<Overview>('/overview'),
+    refresh: () => post<Overview>('/overview/refresh'),
+    tickIssue: (appId: string, n: number) => post<Overview>(`/overview/issues/${encodeURIComponent(appId)}/${n}/tick`),
+    tickOlder: (before: number) => post<{ chats: number; issues: number }>('/overview/tick-older', { before }),
   },
 
   /**

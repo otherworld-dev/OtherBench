@@ -1,6 +1,8 @@
 import { tmpdir } from 'node:os';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { isGithubRepo, ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
+import { isBotLogin } from '@otherbench/core/domain/overview.js';
+import type { IssueActivity } from '@otherbench/core/types/overview.js';
 import type { GhErrorCode, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 import { redactUrls } from './git-parse.js';
@@ -90,14 +92,35 @@ export function ghRunner(resolve: (command: string) => string = resolveExecutabl
   };
 }
 
+/**
+ * The Overview's issue activity (spec 2026-10-26-overview-design), read with GraphQL rather than `gh issue list`:
+ * that one gives comment authors as a bare login (a bot's `github-actions` looks like anyone else) and only the
+ * first 100 comments, so a long issue's newest comments are missed. Here a bot is `__typename: 'Bot'`, an issue
+ * brings its last 100 comments, and the 100 most recently updated issues come back, open and closed. The text is
+ * a constant: the repo goes in as the `owner` and `name` variables, never into the query.
+ */
+export const ACTIVITY_QUERY = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    issues(first: ${ISSUE_LIST_LIMIT}, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN, CLOSED]) {
+      nodes {
+        number title state url createdAt closedAt
+        author { __typename login }
+        comments(last: ${ISSUE_LIST_LIMIT}) { nodes { author { __typename login } createdAt } }
+      }
+    }
+  }
+}`;
 const SUMMARY_FIELDS = 'number,title,state,author,labels,comments,createdAt,updatedAt,url';
 
 function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
 }
 
+interface RawAuthor {
+  login?: string;
+}
 interface RawComment {
-  author?: { login?: string } | null;
+  author?: RawAuthor | null;
   body?: string;
   createdAt?: string;
 }
@@ -105,7 +128,8 @@ interface RawIssue {
   number: number;
   title: string;
   state: string;
-  author?: { login?: string } | null;
+  author?: RawAuthor | null;
+  closedAt?: string | null;
   labels?: { name: string }[];
   comments?: RawComment[];
   createdAt: string;
@@ -126,6 +150,30 @@ function summary(r: RawIssue): IssueSummary {
     updatedAt: r.updatedAt,
     url: r.url,
   };
+}
+
+interface GqlAuthor {
+  __typename?: string;
+  login?: string;
+}
+interface GqlIssue {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  createdAt: string;
+  closedAt?: string | null;
+  author?: GqlAuthor | null;
+  comments?: { nodes?: { author?: GqlAuthor | null; createdAt?: string }[] };
+}
+interface GqlActivity {
+  data?: { repository?: { issues?: { nodes?: GqlIssue[] } } | null };
+}
+
+/** A GraphQL author: null is a deleted account, which GitHub shows as `ghost` and is not a bot. */
+function who(a: GqlAuthor | null | undefined): { author: string; authorIsBot: boolean } {
+  const author = a?.login ?? 'ghost';
+  return { author, authorIsBot: a?.__typename === 'Bot' || isBotLogin(author) };
 }
 
 /** What githubService returns; the container's `github` is one of these. */
@@ -177,6 +225,29 @@ export function githubService(run: Runner) {
       return parse<RawIssue[]>(out)
         .map(summary)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    },
+    async activity(repo: string): Promise<IssueActivity[]> {
+      checkRepo(repo);
+      const [owner, name] = repo.split('/') as [string, string];
+      const out = await gh(['api', 'graphql', '-f', `query=${ACTIVITY_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`]);
+      const repository = parse<GqlActivity>(out).data?.repository;
+      if (!repository) throw new GhError('repo-not-found', 'That repository was not found on GitHub.');
+      return (repository.issues?.nodes ?? []).map((r) => ({
+        number: r.number,
+        title: r.title,
+        state: r.state === 'CLOSED' ? ('closed' as const) : ('open' as const),
+        url: r.url,
+        ...who(r.author),
+        createdAt: r.createdAt,
+        closedAt: r.closedAt ?? null,
+        comments: (r.comments?.nodes ?? []).map((c) => ({ ...who(c.author), createdAt: c.createdAt ?? '' })),
+      }));
+    },
+    /** The account gh is signed in as. */
+    async login(): Promise<string> {
+      const login = (await gh(['api', 'user', '--jq', '.login'])).trim();
+      if (login === '') throw new GhError('gh-failed', 'gh did not report a signed-in user.');
+      return login;
     },
     async view(repo: string, n: number): Promise<IssueDetail> {
       checkRepo(repo);

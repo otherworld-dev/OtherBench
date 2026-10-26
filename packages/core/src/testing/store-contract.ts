@@ -431,6 +431,34 @@ export function runStoreContract(
       });
     });
 
+    describe('issue ticks', () => {
+      it('set upserts a tick, a later through replaces an earlier one, and list returns them all', () => {
+        expect(store.issueTicks.list()).toEqual([]);
+        const first = store.issueTicks.set('a1', 7, '2026-10-01T00:00:00Z');
+        expect(first).toMatchObject({ appId: 'a1', number: 7, through: '2026-10-01T00:00:00Z' });
+        expectRecentTimestamp(first.updatedAt);
+        store.issueTicks.set('a1', 8, '2026-10-02T00:00:00Z');
+        store.issueTicks.set('a1', 7, '2026-10-05T00:00:00Z');
+        const list = store.issueTicks.list().map((t) => ({ appId: t.appId, number: t.number, through: t.through }));
+        expect(list).toHaveLength(2);
+        expect(list).toContainEqual({ appId: 'a1', number: 7, through: '2026-10-05T00:00:00Z' });
+        expect(list).toContainEqual({ appId: 'a1', number: 8, through: '2026-10-02T00:00:00Z' });
+      });
+
+      it("deleteForApp removes only that app's ticks, and deleting an app removes its ticks", () => {
+        store.apps.create({ id: 'a1', name: 'One' });
+        store.apps.create({ id: 'a2', name: 'Two' });
+        store.issueTicks.set('a1', 1, '2026-10-01T00:00:00Z');
+        store.issueTicks.set('a2', 1, '2026-10-01T00:00:00Z');
+        store.issueTicks.set('a2', 2, '2026-10-01T00:00:00Z');
+        store.issueTicks.deleteForApp('a1');
+        expect(store.issueTicks.list().map((t) => t.appId)).toEqual(['a2', 'a2']);
+        expect(() => store.issueTicks.deleteForApp('a1')).not.toThrow();
+        store.apps.delete('a2');
+        expect(store.issueTicks.list()).toEqual([]);
+      });
+    });
+
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
         return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };
@@ -688,6 +716,87 @@ export function runStoreContract(
 
         store.chats.update('chat-a', { projectId: null });
         expect(store.chats.get('chat-a')!.projectPinned).toBe(false);
+      });
+    });
+
+    describe('chats: dealtWithAt', () => {
+      it('defaults to null and round-trips through update, get and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).dealtWithAt ?? null).toBeNull();
+        store.chats.update('chat-a', { dealtWithAt: 1234 });
+        expect(store.chats.get('chat-a')!.dealtWithAt).toBe(1234);
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.dealtWithAt).toBe(1234);
+        store.chats.update('chat-a', { dealtWithAt: null });
+        expect(store.chats.get('chat-a')!.dealtWithAt ?? null).toBeNull();
+      });
+    });
+
+    describe('messages: heads', () => {
+      it("returns each chat's head role, status and time, omitting archived chats and chats with no head", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        for (const id of ['chat-a', 'chat-b', 'chat-c', 'chat-d']) store.chats.create(makeChatInput({ id, profileId }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a2', chatId: 'chat-a', parentId: 'a1', role: 'assistant', status: 'error', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'user', createdAt: 30 }));
+        store.messages.create(makeMessageInput({ id: 'c1', chatId: 'chat-c', role: 'user', createdAt: 40 }));
+        store.chats.update('chat-a', { headMessageId: 'a2' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        store.chats.update('chat-c', { headMessageId: 'c1', archivedAt: 50 });
+        const heads = store.messages.heads().sort((x, y) => (x.chatId < y.chatId ? -1 : 1));
+        expect(heads).toEqual([
+          { chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 20 },
+          { chatId: 'chat-b', role: 'user', status: 'complete', createdAt: 30 },
+        ]);
+      });
+
+      it('follows a user head to the completed reply below it', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20 }]);
+      });
+
+      it('gives a reply still streaming below the head', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'streaming', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'streaming', createdAt: 20 }]);
+      });
+
+      it('gives the newer of two replies to the head (a compare set)', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a-new', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'error', createdAt: 40 }));
+        store.messages.create(makeMessageInput({ id: 'a-old', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 40 }]);
+      });
+
+      it('walks below the head to a deeper descendant, and breaks a time tie by id', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
+        store.messages.create(makeMessageInput({ id: 'z2', chatId: 'chat-a', parentId: 'u2', role: 'assistant', status: 'error', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        // u2 and z2 share a time; the larger id wins.
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 30 }]);
+      });
+
+      it('can be a user message when a follow-up below the head is the newest', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'user', status: 'complete', createdAt: 30 }]);
       });
     });
 

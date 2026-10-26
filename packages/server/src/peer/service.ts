@@ -128,10 +128,17 @@ export class PeerService {
   /** This machine's chats with a reply running, as told to its peers (attached by the container). */
   private runningHere: () => string[] = () => [];
   private backgroundHere: () => string[] = () => [];
+  private waitingHere: () => string[] = () => [];
+  /** This machine's `gh` login, as told to its peers; the overview service supplies it. */
+  private githubLoginHere: () => string | null = () => null;
   /** Each peer's chats with a reply running there, as it last said. */
   private readonly activityByPeer = new Map<string, string[]>();
   /** The chats each paired machine last said have background tasks running there. */
   private readonly backgroundByPeer = new Map<string, string[]>();
+  /** The chats each paired machine last said wait on an approval card or a question there. */
+  private readonly waitingByPeer = new Map<string, string[]>();
+  /** Each paired machine's `gh` login, as it last said. */
+  private readonly loginByPeer = new Map<string, string | null>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -152,10 +159,12 @@ export class PeerService {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
         if (event === 'activity') {
-          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown } | null;
+          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; githubLogin?: unknown } | null;
           this.activityByPeer.set(nodeId, chatIdsOf(said?.chatIds));
           // An older machine doesn't say: none in the background, as far as we know.
           this.backgroundByPeer.set(nodeId, chatIdsOf(said?.backgroundChatIds));
+          this.waitingByPeer.set(nodeId, chatIdsOf(said?.waitingChatIds));
+          this.loginByPeer.set(nodeId, typeof said?.githubLogin === 'string' ? said.githubLogin : null);
           options.events?.emit({ type: 'peer-activity', nodeId });
         }
       },
@@ -174,14 +183,25 @@ export class PeerService {
    * Where this machine's activity comes from: the ids of its own chats with a reply running,
    * and of those with background tasks running.
    */
-  attachActivity(runningHere: () => string[], backgroundHere: () => string[] = () => []): void {
+  attachActivity(runningHere: () => string[], backgroundHere: () => string[] = () => [], waitingHere: () => string[] = () => []): void {
     this.runningHere = runningHere;
     this.backgroundHere = backgroundHere;
+    this.waitingHere = waitingHere;
+  }
+
+  /** Where this machine's `gh` login comes from (the overview service); until set, none is told. */
+  setGithubLogin(source: () => string | null): void {
+    this.githubLoginHere = source;
+  }
+
+  /** Tells every peer this machine's activity now; call it when something it reports changes. */
+  announceActivity(): void {
+    this.announce('activity', this.activity());
   }
 
   /** What this machine tells its peers about its running replies (#790's "also active" hint) and background tasks. */
-  activity(): { chatIds: string[]; backgroundChatIds: string[] } {
-    return { chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere() };
+  activity(): { chatIds: string[]; backgroundChatIds: string[]; waitingChatIds: string[]; githubLogin: string | null } {
+    return { chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere(), waitingChatIds: this.waitingHere(), githubLogin: this.githubLoginHere() };
   }
 
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
@@ -192,6 +212,16 @@ export class PeerService {
   /** The chats with background tasks running on `nodeId`, as it last said; none while it isn't reachable. */
   backgroundChats(nodeId: string): string[] {
     return this.status(nodeId).status === 'reachable' ? (this.backgroundByPeer.get(nodeId) ?? []) : [];
+  }
+
+  /** The chats on `nodeId` waiting on an approval card or a question, as it last said; none while it isn't reachable. */
+  waitingChats(nodeId: string): string[] {
+    return this.status(nodeId).status === 'reachable' ? (this.waitingByPeer.get(nodeId) ?? []) : [];
+  }
+
+  /** The `gh` login `nodeId` last said it has; null if none, unknown, or while it isn't reachable. */
+  githubLogin(nodeId: string): string | null {
+    return this.status(nodeId).status === 'reachable' ? (this.loginByPeer.get(nodeId) ?? null) : null;
   }
 
   /** The syncer, for the peer listener's sync routes. */

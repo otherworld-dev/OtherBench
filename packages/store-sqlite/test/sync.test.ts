@@ -301,6 +301,21 @@ describe('sync (Task 50)', () => {
     for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ projectPinned: true, pinned: true });
   });
 
+  it('dealtWithAt is a field of its own: ticked off on one machine while the other renames the chat, both stand', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+
+    a.store.chats.update('c', { dealtWithAt: 5000 });
+    b.store.chats.update('c', { title: 'Renamed on B' });
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ dealtWithAt: 5000, title: 'Renamed on B' });
+  });
+
   it('unread is a field of its own: read on one machine while the other renames the chat, both stand', () => {
     const a = node('a');
     const b = node('b');

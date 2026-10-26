@@ -11,6 +11,24 @@ import { startChatFromIssue } from './startChatFromIssue.js';
 import { stayInApp } from './stayInApp.js';
 import { useCodeRefresh } from './useCodeRefresh.js';
 
+/** The issue numbers of this app that are on the Overview, needing him. */
+function useNeedingIssues(appId: string): Set<number> {
+  const issues = useOtherBenchStore((s) => s.overview?.tiles.find((t) => t.appId === appId)?.issues);
+  return new Set((issues ?? []).map((i) => i.number));
+}
+
+/** Ticks an issue off the Overview and stores the result; a failure is logged and the marker simply stays. */
+function useTickIssue(appId: string): (n: number) => Promise<void> {
+  const setOverview = useOtherBenchStore((s) => s.setOverview);
+  return async (n) => {
+    try {
+      setOverview(await api.overview.tickIssue(appId, n));
+    } catch (err) {
+      console.error(`[otherbench-web] failed to tick off issue #${n}:`, err);
+    }
+  };
+}
+
 const MUTED = 'text-xs text-[var(--text-muted)]';
 const EMPTY = 'text-sm text-[var(--text-faint)]';
 
@@ -63,6 +81,8 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   const [starting, setStarting] = useState<number | null>(null);
   const [startError, setStartError] = useState<unknown>(null);
   const repo = app.githubRepo;
+  const needing = useNeedingIssues(app.id);
+  const tick = useTickIssue(app.id);
 
   // A row's Chat button: the issue's text is fetched, as the list carries only its title, then the chat starts as from the issue itself.
   async function startOn(n: number): Promise<void> {
@@ -173,8 +193,18 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
                       <span aria-hidden="true">💬 {issue.comments}</span>
                     </span>
                   )}
+                  {needing.has(issue.number) && (
+                    <span data-testid={`issue-needs-${issue.number}`} className="shrink-0 text-xs text-[var(--accent)]">
+                      needs you
+                    </span>
+                  )}
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{age(issue.createdAt)}</span>
                 </button>
+                {needing.has(issue.number) && (
+                  <button type="button" aria-label={`Tick off #${issue.number}`} onClick={() => void tick(issue.number)} className="btn my-1 mr-1 shrink-0 px-1.5 py-0 text-xs">
+                    Tick off
+                  </button>
+                )}
                 {/* Beside the row's button, not in it: a button can't hold another. */}
                 <button
                   type="button"
@@ -206,6 +236,8 @@ function IssueView({ app, owner, number, onBack }: { app: App; owner: string; nu
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState<'comment' | 'state' | 'chat' | null>(null);
   const [actionError, setActionError] = useState<{ error: unknown; fallback: string } | null>(null);
+  const needsYou = useNeedingIssues(app.id).has(number);
+  const tick = useTickIssue(app.id);
 
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
   useEffect(() => {
@@ -317,6 +349,11 @@ function IssueView({ app, owner, number, onBack }: { app: App; owner: string; nu
         >
           {open ? 'Close issue' : 'Reopen issue'}
         </button>
+        {needsYou && (
+          <button type="button" onClick={() => void tick(number)} className="btn px-2.5 py-1">
+            Tick off
+          </button>
+        )}
       </div>
       {actionError !== null && <CodeErrorLine error={actionError.error} fallback={actionError.fallback} />}
       <section aria-label="Comments" className="space-y-2 border-t border-[var(--border)] pt-2">

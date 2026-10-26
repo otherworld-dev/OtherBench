@@ -1,13 +1,12 @@
 import type {
   DeckBoardView, DeckCardDetail, DeckCardSummary, DeckLabel, DeckStack,
 } from '@otherbench/core/types/nextcloud.js';
+import { columnKind } from '@otherbench/core/domain/deck-columns.js';
 import { NextcloudError, type NextcloudClient, type RawCard, type RawCardPut, type RawLabel, type RawStack } from './client.js';
 
 /** Deck operations over a `NextcloudClient`, following nc.py's working code (deck_update_card, deck_move_card, _deck_done_one). */
 
 const PREFIX_RE = /^#(\d+)\s+/;
-/** Column titles that mean "work has started on this" (nc.py _DECK_DOING_TITLES). */
-const DOING_TITLES = new Set(['doing', 'in progress', 'in-progress', 'wip']);
 
 const hasOwnPrefix = (id: number, title: string): RegExpMatchArray | null => {
   const m = PREFIX_RE.exec(title);
@@ -26,10 +25,10 @@ export function withCardPrefix(id: number, title: string): string {
 }
 
 export function isDoingTitle(title: string): boolean {
-  return DOING_TITLES.has(title.trim().toLowerCase());
+  return columnKind(title) === 'doing';
 }
 
-const isDoneTitle = (title: string): boolean => title.trim().toLowerCase() === 'done';
+const isDoneTitle = (title: string): boolean => columnKind(title) === 'done';
 
 export function deckCardUrl(baseUrl: string, boardId: number, cardId: number): string {
   return `${baseUrl}/index.php/apps/deck/board/${boardId}/card/${cardId}`;

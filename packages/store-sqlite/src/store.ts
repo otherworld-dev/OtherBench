@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { SqliteArtifactRepo } from './repos/artifacts.js';
-import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, AppFolderRepo, MediaWorkflowRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo } from '@otherbench/core/ports/store.js';
+import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, AppFolderRepo, IssueTickRepo, MediaWorkflowRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo } from '@otherbench/core/ports/store.js';
 import { SqliteAttachmentRepo } from './repos/attachments.js';
 import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
@@ -19,6 +19,7 @@ import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteGlobalMemoryRepo } from './repos/global-memory.js';
 import { SqliteAppRepo } from './repos/apps.js';
 import { SqliteAppFolderRepo } from './repos/app-folders.js';
+import { SqliteIssueTickRepo } from './repos/issue-ticks.js';
 import { SqliteMediaWorkflowRepo } from './repos/media-workflows.js';
 import { SqliteProjectRepo } from './repos/projects.js';
 import { SqliteScheduleRepo } from './repos/schedules.js';
@@ -45,6 +46,7 @@ export class SqliteStore implements Store {
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
   readonly appFolders: AppFolderRepo;
+  readonly issueTicks: IssueTickRepo;
   readonly mediaWorkflows: MediaWorkflowRepo;
   readonly projectMemory: ProjectMemoryRepo;
   readonly globalMemory: GlobalMemoryRepo;
@@ -73,6 +75,7 @@ export class SqliteStore implements Store {
     this.projects = new SqliteProjectRepo(db, selfId, clock);
     this.apps = new SqliteAppRepo(db, selfId, clock);
     this.appFolders = new SqliteAppFolderRepo(db, selfId, clock);
+    this.issueTicks = new SqliteIssueTickRepo(db, clock);
     this.mediaWorkflows = new SqliteMediaWorkflowRepo(db, clock);
     this.projectMemory = new SqliteProjectMemoryRepo(db, clock);
     this.globalMemory = new SqliteGlobalMemoryRepo(db, clock);

@@ -18,7 +18,8 @@ import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
-import { useOtherBenchStore } from '../state/store.js';
+import { OverviewJumpList } from '../overview/OverviewJumpList.js';
+import { selectOverviewTotal, useOtherBenchStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { appMenuItems, chatMenuItems, folderMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
@@ -157,6 +158,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const appFolders = useOtherBenchStore((s) => s.appFolders);
   const mode = useOtherBenchStore((s) => s.mode);
   const setMode = useOtherBenchStore((s) => s.setMode);
+  const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
+  const setOverviewOpen = useOtherBenchStore((s) => s.setOverviewOpen);
+  const overviewTotal = useOtherBenchStore(selectOverviewTotal);
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
@@ -1261,20 +1265,35 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
-        <div role="group" aria-label="Mode" data-testid="mode-switch" className="mb-2 grid grid-cols-2 gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
+        <div role="group" aria-label="Mode" data-testid="mode-switch" className="mb-2 grid grid-cols-3 gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
           {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
             <button
               key={m}
               type="button"
-              aria-pressed={mode === m}
+              aria-pressed={mode === m && !overviewOpen}
               onClick={() => setMode(m)}
               className={`rounded-[3px] px-2 py-1 text-xs ${
-                mode === m ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                mode === m && !overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
               }`}
             >
               {m === 'chat' ? 'Chat' : 'Code'}
             </button>
           ))}
+          <button
+            type="button"
+            aria-pressed={overviewOpen}
+            onClick={() => setOverviewOpen(true)}
+            className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
+              overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+            }`}
+          >
+            Overview
+            {overviewTotal > 0 && (
+              <span data-testid="overview-count" className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
+                {overviewTotal}
+              </span>
+            )}
+          </button>
         </div>
         {!codeMode && draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
           <div
@@ -1343,91 +1362,97 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
       <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
-        {!codeMode && sidebar.pinned.length > 0 && (
-          <div className="mb-1.5" data-testid="group-pinned">
-            <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false }))}</ul>
-          </div>
-        )}
+        {overviewOpen ? (
+          <OverviewJumpList />
+        ) : (
+          <>
+          {!codeMode && sidebar.pinned.length > 0 && (
+            <div className="mb-1.5" data-testid="group-pinned">
+              <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
+              <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false }))}</ul>
+            </div>
+          )}
 
-        {searching &&
-          (codeMode ? codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) &&
-          archived.length === 0 &&
-          otherMode.length === 0 && (
-          <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
-        )}
+          {searching &&
+            (codeMode ? codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) &&
+            archived.length === 0 &&
+            otherMode.length === 0 && (
+            <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
+          )}
 
-        {codeMode && !searching && apps.length === 0 && codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 && (
-          <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No apps yet. An app is a repo folder; its chats show here, under it.</p>
-        )}
+          {codeMode && !searching && apps.length === 0 && codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 && (
+            <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No apps yet. An app is a repo folder; its chats show here, under it.</p>
+          )}
 
-        {codeMode && codeSidebar.folders.map(renderFolder)}
+          {codeMode && codeSidebar.folders.map(renderFolder)}
 
-        {/* While a filed app is dragged: the way out of its folder, after the last folder (where the top level
-            starts). Only then, and below the folders, so what moves is the list under it, not the rows under the pointer. */}
-        {codeMode && draggingApp !== null && loadedFolderOf(draggingApp) !== null && (
-          <div
-            data-testid="app-top-level-drop-zone"
-            data-drop-active={topLevelZoneActive ? 'true' : undefined}
-            onDragOver={(e) => {
-              if (!Array.from(e.dataTransfer.types).includes(PROJECT_DRAG_MIME)) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              if (!topLevelZoneActive) setTopLevelZoneActive(true);
-            }}
-            onDragLeave={(e) => {
-              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-              setTopLevelZoneActive(false);
-            }}
-            onDrop={(e) => {
-              const moving = draggingAppId;
-              setTopLevelZoneActive(false);
-              setDraggingAppId(null);
-              setAppDrop(null);
-              if (!moving) return;
-              e.preventDefault();
-              // First, where the zone sits: just above the top-level apps.
-              void fileApp(moving, null, codeSidebar.groups.find((g) => g.app !== null)?.app?.id ?? null);
-            }}
-            // The Pinned drop zone's look.
-            className={`mb-1.5 flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
-              topLevelZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
-            }`}
-          >
-            No folder
-          </div>
-        )}
-
-        {codeMode ? codeSidebar.groups.map(renderAppGroup) : sidebar.groups.map(renderGroup)}
-
-        {archived.length > 0 && (
-          <div className="mb-1.5" data-testid="archived-section">
-            <button
-              type="button"
-              aria-expanded={showArchived}
-              onClick={toggleArchived}
-              className="label-caps w-full rounded-sm px-2 py-1 text-left text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+          {/* While a filed app is dragged: the way out of its folder, after the last folder (where the top level
+              starts). Only then, and below the folders, so what moves is the list under it, not the rows under the pointer. */}
+          {codeMode && draggingApp !== null && loadedFolderOf(draggingApp) !== null && (
+            <div
+              data-testid="app-top-level-drop-zone"
+              data-drop-active={topLevelZoneActive ? 'true' : undefined}
+              onDragOver={(e) => {
+                if (!Array.from(e.dataTransfer.types).includes(PROJECT_DRAG_MIME)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (!topLevelZoneActive) setTopLevelZoneActive(true);
+              }}
+              onDragLeave={(e) => {
+                if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+                setTopLevelZoneActive(false);
+              }}
+              onDrop={(e) => {
+                const moving = draggingAppId;
+                setTopLevelZoneActive(false);
+                setDraggingAppId(null);
+                setAppDrop(null);
+                if (!moving) return;
+                e.preventDefault();
+                // First, where the zone sits: just above the top-level apps.
+                void fileApp(moving, null, codeSidebar.groups.find((g) => g.app !== null)?.app?.id ?? null);
+              }}
+              // The Pinned drop zone's look.
+              className={`mb-1.5 flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
+                topLevelZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
+              }`}
             >
-              {showArchived ? 'Hide archived' : `Show archived (${archived.length})`}
-            </button>
-            {showArchived && <ul>{archived.map((c) => renderRow(c, null))}</ul>}
-          </div>
-        )}
+              No folder
+            </div>
+          )}
 
-        {/* While searching, the other mode's matches, so a chat is found from either mode; opening one switches to
-            the mode it lives in (spec 2026-10-20-code-tab-design, "Decisions Adam made"). Dimmed and not draggable,
-            as rows outside a section are: they don't belong to this mode's groups. */}
-        {otherMode.length > 0 && (
-          <div className="mb-1.5" data-testid="other-mode-section">
-            <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">{codeMode ? 'In Chat mode' : 'In Code mode'}</h2>
-            <ul>{otherMode.map((c) => renderRow(c, null))}</ul>
-          </div>
-        )}
+          {codeMode ? codeSidebar.groups.map(renderAppGroup) : sidebar.groups.map(renderGroup)}
 
-        {error && (
-          <p role="alert" className="px-2 py-2 text-xs text-[var(--danger)]">
-            {error}
-          </p>
+          {archived.length > 0 && (
+            <div className="mb-1.5" data-testid="archived-section">
+              <button
+                type="button"
+                aria-expanded={showArchived}
+                onClick={toggleArchived}
+                className="label-caps w-full rounded-sm px-2 py-1 text-left text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+              >
+                {showArchived ? 'Hide archived' : `Show archived (${archived.length})`}
+              </button>
+              {showArchived && <ul>{archived.map((c) => renderRow(c, null))}</ul>}
+            </div>
+          )}
+
+          {/* While searching, the other mode's matches, so a chat is found from either mode; opening one switches to
+              the mode it lives in (spec 2026-10-20-code-tab-design, "Decisions Adam made"). Dimmed and not draggable,
+              as rows outside a section are: they don't belong to this mode's groups. */}
+          {otherMode.length > 0 && (
+            <div className="mb-1.5" data-testid="other-mode-section">
+              <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">{codeMode ? 'In Chat mode' : 'In Code mode'}</h2>
+              <ul>{otherMode.map((c) => renderRow(c, null))}</ul>
+            </div>
+          )}
+
+          {error && (
+            <p role="alert" className="px-2 py-2 text-xs text-[var(--danger)]">
+              {error}
+            </p>
+          )}
+          </>
         )}
       </div>
 

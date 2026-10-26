@@ -331,6 +331,20 @@ describe('running a chat on the machine it runs on', () => {
     await expect.poll(backgroundOnPc).toEqual([]);
   });
 
+  it("tells the laptop which of the PC's own chats wait on an approval card, until it is resolved", async () => {
+    const { pc, laptop, chatId } = await setup();
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    expect(laptop.container.peers!.waitingChats(pc.id)).toEqual([]);
+
+    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r1', toolName: 'shell' });
+    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r2', toolName: 'shell' });
+    await expect.poll(() => laptop.container.peers!.waitingChats(pc.id)).toEqual([chatId]);
+
+    pc.container.events!.emit({ type: 'approval-resolved', chatId, requestId: 'r1' });
+    pc.container.events!.emit({ type: 'approval-resolved', chatId, requestId: 'r2' });
+    await expect.poll(() => laptop.container.peers!.waitingChats(pc.id)).toEqual([]);
+  });
+
   it("shows the laptop a reply the PC is still writing in its chat, without keeping it", async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');

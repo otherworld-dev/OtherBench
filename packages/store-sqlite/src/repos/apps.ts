@@ -4,6 +4,7 @@ import { toStoredWorkspace } from '@otherbench/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { SqliteChatRepo } from './chats.js';
+import { SqliteIssueTickRepo } from './issue-ticks.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
 
@@ -36,6 +37,7 @@ export class SqliteAppRepo implements AppRepo {
   private readonly crud: SqliteCrudRepo<App>;
   private readonly mapping: CrudMapping<App>;
   private readonly chats: SqliteChatRepo;
+  private readonly issueTicks: SqliteIssueTickRepo;
 
   constructor(
     private readonly db: DatabaseSync,
@@ -45,6 +47,7 @@ export class SqliteAppRepo implements AppRepo {
     this.mapping = appMapping(selfId);
     this.crud = new SqliteCrudRepo(db, this.mapping, clock);
     this.chats = new SqliteChatRepo(db, selfId, clock);
+    this.issueTicks = new SqliteIssueTickRepo(db, clock);
   }
 
   create(a: NewApp): App {
@@ -90,6 +93,8 @@ export class SqliteAppRepo implements AppRepo {
   delete(id: string): void {
     const chats = this.db.prepare('SELECT id FROM chat WHERE app_id = ?').all(id) as { id: string }[];
     for (const chat of chats) this.chats.update(chat.id, { appId: null });
+    // Its issue ticks (migration 033) go too, each as a tombstone of its own.
+    this.issueTicks.deleteForApp(id);
     this.crud.delete(id);
   }
 }

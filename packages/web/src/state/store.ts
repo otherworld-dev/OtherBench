@@ -38,6 +38,7 @@ import {
 import { parseProjectTab } from './projectTab.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 import type { PeersOverview } from './api.js';
+import type { Overview } from '@otherbench/core/types/overview.js';
 
 /** One entry of an SSE `hello` reply's `inFlight` array (routes/turns.ts). */
 export interface HelloBuffer {
@@ -226,6 +227,12 @@ export interface OtherBenchState {
   otherPaneState: PaneState;
   /** Switches mode: the showing pane state is put away as it is, and the other mode's comes back with its own active chat. */
   setMode(mode: Mode): void;
+  /** The Overview (what needs you across apps), or null until the first fetch. */
+  overview: Overview | null;
+  setOverview(overview: Overview): void;
+  /** The Overview window is showing instead of the panes. Closed by choosing any chat, tab, mode or app home. Remembered per browser. */
+  overviewOpen: boolean;
+  setOverviewOpen(open: boolean): void;
   /** Shows the app's home (`appTabId`) in the focused pane in Code mode, switching to Code mode first. Not as a tab. */
   openAppHome(appId: string): void;
   /** The Code mode right panel's tab. Remembered per browser. */
@@ -555,6 +562,28 @@ function saveInspectorCollapsed(collapsed: boolean): void {
   }
 }
 
+/** localStorage key: whether the Overview window is showing. Per browser. */
+export const OVERVIEW_OPEN_STORAGE_KEY = 'otherbench.overviewOpen';
+
+export function loadOverviewOpen(): boolean {
+  try {
+    return window.localStorage.getItem(OVERVIEW_OPEN_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveOverviewOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(OVERVIEW_OPEN_STORAGE_KEY, String(open));
+  } catch {
+    // storage blocked or full -- the choice still applies for this session.
+  }
+}
+
+/** How many things need you across apps, for the badge: 0 until the Overview is first fetched. */
+export const selectOverviewTotal = (s: OtherBenchState): number => s.overview?.total ?? 0;
+
 /** localStorage key: the Code mode right panel's tab. Per browser. */
 export const CODE_PANEL_TAB_STORAGE_KEY = 'otherbench.codePanelTab';
 
@@ -786,7 +815,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   openTab: (chatId) =>
     set((state) => {
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
-      return { ...view, ...withPanes(openPaneTab(synced(view), chatId)) };
+      return { ...view, overviewOpen: false, ...withPanes(openPaneTab(synced(view), chatId)) };
     }),
   // A closed viewer tab can hand its pane back to its chat, so the active chat follows the pane.
   closeTab: (chatId) => set((state) => withPanes(closePaneTab(synced(state), chatId))),
@@ -823,7 +852,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   setActiveChatId: (chatId) =>
     set((state) => {
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
-      return { ...view, ...withPanes(showChat(synced(view), chatId)) };
+      return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), chatId)) };
     }),
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
@@ -1009,12 +1038,16 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     })),
   mode: initialMode,
   otherPaneState: initialOtherPanes,
-  setMode: (mode) => set((state) => inMode(state, mode)),
+  setMode: (mode) => set((state) => ({ ...inMode(state, mode), overviewOpen: false })),
+  overview: null,
+  setOverview: (overview) => set({ overview }),
+  overviewOpen: loadOverviewOpen(),
+  setOverviewOpen: (open) => set({ overviewOpen: open }),
   openAppHome: (appId) =>
     set((state) => {
       const view = inMode(state, 'code');
       // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
-      return { ...view, ...withPanes(showChat(synced(view), appTabId(appId))) };
+      return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), appTabId(appId))) };
     }),
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
@@ -1321,6 +1354,7 @@ useOtherBenchStore.subscribe((state, previous) => {
   if (switched || state.paneState !== previous.paneState) savePaneState(state.paneState, paneStateKey(state.mode));
   if (switched || state.otherPaneState !== previous.otherPaneState) savePaneState(state.otherPaneState, paneStateKey(otherMode(state.mode)));
   if (switched) saveMode(state.mode);
+  if (state.overviewOpen !== previous.overviewOpen) saveOverviewOpen(state.overviewOpen);
   if (state.codePanelTab !== previous.codePanelTab) saveCodePanelTab(state.codePanelTab);
   if (state.issueViews !== previous.issueViews) saveIssueViews(state.issueViews);
   if (state.deckViews !== previous.deckViews) saveViews(DECK_VIEWS_STORAGE_KEY, state.deckViews);

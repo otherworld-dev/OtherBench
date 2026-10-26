@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ChatHead } from '../types/overview.js';
 import type {
   ChatEngine,
   ConnectionTestResult,
@@ -47,6 +48,8 @@ import type {
   NewAppFolder,
   AppFolder,
   AppFolderRepo,
+  IssueTick,
+  IssueTickRepo,
   NewProject,
   NodeRepo,
   PeerRepo,
@@ -826,10 +829,26 @@ class InMemoryProjectRepo implements ProjectRepo {
   }
 }
 
+class InMemoryIssueTickRepo implements IssueTickRepo {
+  private readonly ticks = new Map<string, IssueTick>();
+  list(): IssueTick[] {
+    return [...this.ticks.values()].map((t) => ({ ...t }));
+  }
+  set(appId: string, number: number, through: string): IssueTick {
+    const tick = { appId, number, through, updatedAt: Date.now() };
+    this.ticks.set(`${appId}#${number}`, tick);
+    return { ...tick };
+  }
+  deleteForApp(appId: string): void {
+    for (const [key, t] of this.ticks) if (t.appId === appId) this.ticks.delete(key);
+  }
+}
+
 class InMemoryAppRepo implements AppRepo {
   private readonly repo = new InMemoryCrudRepo<App>();
   constructor(
     private readonly chats: ChatRepo,
+    private readonly issueTicks: IssueTickRepo,
     private readonly selfNodeId: string
   ) {}
   create(a: NewApp): App {
@@ -871,6 +890,7 @@ class InMemoryAppRepo implements AppRepo {
     for (const chat of this.chats.list()) {
       if (chat.appId === id) this.chats.update(chat.id, { appId: null });
     }
+    this.issueTicks.deleteForApp(id);
     this.repo.delete(id);
   }
 }
@@ -1152,7 +1172,34 @@ const MAX_PATH_DEPTH = 10_000;
 
 class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
-  constructor(private readonly selfNodeId: string) {}
+  constructor(private readonly selfNodeId: string, private readonly chats: ChatRepo) {}
+
+  heads(): ChatHead[] {
+    const children = new Map<string, CanonMessage[]>();
+    for (const m of this.byId.values()) {
+      if (m.parentId === null) continue;
+      const siblings = children.get(m.parentId);
+      if (siblings) siblings.push(m);
+      else children.set(m.parentId, [m]);
+    }
+    const heads: ChatHead[] = [];
+    for (const c of this.chats.list()) {
+      const head = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
+      if (!head) continue;
+      // The tip: the newest message (then the largest id) at or below the head.
+      let tip = head;
+      const seen = new Set<string>([head.id]);
+      const stack = [head];
+      for (let m = stack.pop(); m; m = stack.pop()) {
+        if (m.createdAt > tip.createdAt || (m.createdAt === tip.createdAt && m.id > tip.id)) tip = m;
+        for (const k of children.get(m.id) ?? []) {
+          if (!seen.has(k.id)) { seen.add(k.id); stack.push(k); }
+        }
+      }
+      heads.push({ chatId: c.id, role: tip.role, status: tip.status, createdAt: tip.createdAt });
+    }
+    return heads;
+  }
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
     if (this.byId.has(m.id)) {
@@ -1467,6 +1514,7 @@ export class InMemoryStore implements Store {
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
   readonly appFolders: AppFolderRepo;
+  readonly issueTicks: IssueTickRepo = new InMemoryIssueTickRepo();
   readonly mediaWorkflows: MediaWorkflowRepo = new InMemoryMediaWorkflowRepo();
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
@@ -1486,7 +1534,7 @@ export class InMemoryStore implements Store {
     this.schedules = schedules;
     const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));
     this.chats = chats;
-    this.messages = new InMemoryMessageRepo(selfNodeId);
+    this.messages = new InMemoryMessageRepo(selfNodeId, chats);
     this.audit = new InMemoryAuditRepo(selfNodeId);
     // The project and memory repos refer to each other lazily (existence check, cascade on delete).
     const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
@@ -1500,7 +1548,7 @@ export class InMemoryStore implements Store {
       selfNodeId
     );
     this.projects = projects;
-    const apps = new InMemoryAppRepo(this.chats, selfNodeId);
+    const apps = new InMemoryAppRepo(this.chats, this.issueTicks, selfNodeId);
     this.apps = apps;
     this.appFolders = new InMemoryAppFolderRepo(apps);
     this.locations = new InMemoryLocationRepo((id) => {
