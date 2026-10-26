@@ -157,6 +157,30 @@ describe('Thread', () => {
     expect(screen.queryByTestId('git-bar')).toBeNull();
   });
 
+  it("keeps showing the conversation while its new head hasn't loaded yet, instead of blanking the thread", () => {
+    useOtherBenchStore.setState({
+      chats: [makeChat({ headMessageId: 'r1' })],
+      messages: { u1: makeMessage('u1', 'chat-1'), r1: variantMessage('r1', 'u1', { parts: [{ type: 'text', text: 'the first reply' }] }) },
+    });
+    render(<ThreadForChat chatId="chat-1" />);
+    const thread = (): ReturnType<typeof within> => within(screen.getByTestId('thread-scroll'));
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+
+    // A message sent while a reply ran goes out on the server: the chat's head moves to it before its messages arrive.
+    act(() => useOtherBenchStore.setState((s) => ({ chats: s.chats.map((c) => ({ ...c, headMessageId: 'u2' })) })));
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+    expect(thread().getByText('the first reply')).toBeInTheDocument();
+
+    // Once they arrive, the thread follows the new head.
+    act(() =>
+      useOtherBenchStore.setState((s) => ({
+        messages: { ...s.messages, u2: makeMessage('u2', 'chat-1', { parentId: 'r1', parts: [{ type: 'text', text: 'the waiting message' }] }) },
+      }))
+    );
+    expect(thread().getByText('the waiting message')).toBeInTheDocument();
+    expect(thread().getByText('text of u1')).toBeInTheDocument();
+  });
+
   it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);

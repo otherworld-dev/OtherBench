@@ -273,6 +273,16 @@ describe('App view', () => {
     expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
   });
 
+  it('the Overview replaces the tab bar, panes, and right column while it is open', async () => {
+    render(<App />);
+    expect(await screen.findByTestId('tab-bar')).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Overview' }));
+    expect(await screen.findByTestId('overview-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-bar')).toBeNull();
+    expect(screen.queryByTestId('pane-0')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
+  });
+
   it('sizes the sidebar column from --sidebar-w, capped at 40% of the window', () => {
     const { container } = render(<App />);
     expect((container.firstElementChild as HTMLElement).style.gridTemplateColumns).toBe('min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)');

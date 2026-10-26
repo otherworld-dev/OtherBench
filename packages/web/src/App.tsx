@@ -20,6 +20,7 @@ import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
+import { OverviewView } from './overview/OverviewView.js';
 import { useOverview } from './overview/useOverview.js';
 import { useMarkRead } from './state/useMarkRead.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
@@ -63,6 +64,7 @@ function MainApp(): JSX.Element {
   const setApps = useOtherBenchStore((s) => s.setApps);
   const setAppFolders = useOtherBenchStore((s) => s.setAppFolders);
   const mode = useOtherBenchStore((s) => s.mode);
+  const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
 
   // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
   const signedInRemotely = useAuthStore((s) => s.mode === 'login');
@@ -196,14 +198,20 @@ function MainApp(): JSX.Element {
 
       <div className="relative row-start-2 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
         <div className="flex h-full min-h-0 min-w-0 flex-col">
-          <TabBar narrow={isNarrow} />
-          <PaneGrid narrow={isNarrow} />
+          {overviewOpen ? (
+            <OverviewView />
+          ) : (
+            <>
+              <TabBar narrow={isNarrow} />
+              <PaneGrid narrow={isNarrow} />
+            </>
+          )}
         </div>
 
         {/* Code mode's right column is the Code panel (spec 2026-10-20-code-tab-design): Issues and Files
             follow the focused pane's app, so it is useful with no chat open (an app home), and its Chat tab
             holds this same Inspector. It shares the Inspector's collapsed preference: one right column. */}
-        {!isNarrow && mode === 'code' && (
+        {!isNarrow && !overviewOpen && mode === 'code' && (
           // Its width is the user's (spec 2026-10-21-code-terminal-design): dragged on its left edge, at most 70% of the window.
           <div className="relative h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : 'min(var(--code-panel-w, 24rem), 70vw)' }}>
             {!inspectorCollapsed && <PanelResizer width={codePanelWidth} edge="left" label="Resize code panel" />}
@@ -212,7 +220,7 @@ function MainApp(): JSX.Element {
         )}
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
-        {!isNarrow && mode === 'chat' && (
+        {!isNarrow && !overviewOpen && mode === 'chat' && (
           <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
             {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
             <Inspector
@@ -229,7 +237,7 @@ function MainApp(): JSX.Element {
             reachable via the header toggle as an overlay, never a docked column,
             but never simply omitted either (it holds facts that cause harm when
             hidden -- see Inspector's doc comment). */}
-        {isNarrow && narrowOverlayOpen && (
+        {isNarrow && !overviewOpen && narrowOverlayOpen && (
           <>
             <button
               type="button"
