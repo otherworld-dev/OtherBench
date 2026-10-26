@@ -48,6 +48,8 @@ import type {
   NewAppFolder,
   AppFolder,
   AppFolderRepo,
+  IssueTick,
+  IssueTickRepo,
   NewProject,
   NodeRepo,
   PeerRepo,
@@ -827,10 +829,26 @@ class InMemoryProjectRepo implements ProjectRepo {
   }
 }
 
+class InMemoryIssueTickRepo implements IssueTickRepo {
+  private readonly ticks = new Map<string, IssueTick>();
+  list(): IssueTick[] {
+    return [...this.ticks.values()].map((t) => ({ ...t }));
+  }
+  set(appId: string, number: number, through: string): IssueTick {
+    const tick = { appId, number, through, updatedAt: Date.now() };
+    this.ticks.set(`${appId}#${number}`, tick);
+    return { ...tick };
+  }
+  deleteForApp(appId: string): void {
+    for (const [key, t] of this.ticks) if (t.appId === appId) this.ticks.delete(key);
+  }
+}
+
 class InMemoryAppRepo implements AppRepo {
   private readonly repo = new InMemoryCrudRepo<App>();
   constructor(
     private readonly chats: ChatRepo,
+    private readonly issueTicks: IssueTickRepo,
     private readonly selfNodeId: string
   ) {}
   create(a: NewApp): App {
@@ -872,6 +890,7 @@ class InMemoryAppRepo implements AppRepo {
     for (const chat of this.chats.list()) {
       if (chat.appId === id) this.chats.update(chat.id, { appId: null });
     }
+    this.issueTicks.deleteForApp(id);
     this.repo.delete(id);
   }
 }
@@ -1477,6 +1496,7 @@ export class InMemoryStore implements Store {
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
   readonly appFolders: AppFolderRepo;
+  readonly issueTicks: IssueTickRepo = new InMemoryIssueTickRepo();
   readonly mediaWorkflows: MediaWorkflowRepo = new InMemoryMediaWorkflowRepo();
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
@@ -1510,7 +1530,7 @@ export class InMemoryStore implements Store {
       selfNodeId
     );
     this.projects = projects;
-    const apps = new InMemoryAppRepo(this.chats, selfNodeId);
+    const apps = new InMemoryAppRepo(this.chats, this.issueTicks, selfNodeId);
     this.apps = apps;
     this.appFolders = new InMemoryAppFolderRepo(apps);
     this.locations = new InMemoryLocationRepo((id) => {

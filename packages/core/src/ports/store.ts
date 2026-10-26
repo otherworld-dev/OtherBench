@@ -344,6 +344,25 @@ export interface AppFolderRepo {
   delete(id: string): void;
 }
 
+// --- issue ticks -------------------------------------------------------------
+
+/** How far the user has ticked a GitHub issue off in an app (migration 033); a synced table. */
+export interface IssueTick {
+  appId: string;
+  number: number;
+  /** ISO time of the issue activity ticked through. */
+  through: string;
+  updatedAt: number;
+}
+
+export interface IssueTickRepo {
+  list(): IssueTick[];
+  /** Upserts the tick for the issue; a later `through` replaces an earlier one. */
+  set(appId: string, number: number, through: string): IssueTick;
+  /** Deletes every tick of the app; each delete syncs as a tombstone. */
+  deleteForApp(appId: string): void;
+}
+
 // --- media workflows ---------------------------------------------------------
 
 /** Imported ComfyUI workflows (migration 031); a synced table. Stored rows are never `builtin`. */
@@ -1038,6 +1057,7 @@ export interface Store {
   projects: ProjectRepo;
   apps: AppRepo;
   appFolders: AppFolderRepo;
+  issueTicks: IssueTickRepo;
   mediaWorkflows: MediaWorkflowRepo;
   projectMemory: ProjectMemoryRepo;
   globalMemory: GlobalMemoryRepo;

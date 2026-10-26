@@ -69,6 +69,15 @@ function appFolderRowOk(row: SyncRow): boolean {
   return Number.isInteger(sortOrder);
 }
 
+/** A tick row as the app makes one: its id is `${app_id}#${number}`, the number a positive integer, `through` a date. */
+function issueTickRowOk(row: SyncRow): boolean {
+  const { id, app_id: appId, number, through } = row;
+  if (typeof id !== 'string' || typeof appId !== 'string' || appId.length === 0) return false;
+  if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) return false;
+  if (id !== `${appId}#${number}`) return false;
+  return typeof through === 'string' && !Number.isNaN(Date.parse(through));
+}
+
 /** A workflow row as an import makes one: the same size cap and `workflowProblem` checks, and never a built-in's id. */
 function mediaWorkflowRowOk(row: SyncRow): boolean {
   const { id, name, media, graph, bindings, checkpoint } = row;
@@ -447,6 +456,7 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'app_folder' && !appFolderRowOk(row)) return false;
     // `folder_id` is not a foreign key (migration 032) and is never checked against the folders here: rows arrive in no fixed order.
     if (u.tbl === 'app' && row['folder_id'] != null && typeof row['folder_id'] !== 'string') return false;
+    if (u.tbl === 'issue_tick' && !issueTickRowOk(row)) return false;
     // A workflow is sent to a generation backend: only what an import would have accepted.
     if (u.tbl === 'media_workflow' && !mediaWorkflowRowOk(row)) return false;
     // Artifact rows reach the model's prompt and the viewer: only what OtherBench itself could have made.

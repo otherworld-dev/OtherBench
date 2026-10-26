@@ -431,6 +431,34 @@ export function runStoreContract(
       });
     });
 
+    describe('issue ticks', () => {
+      it('set upserts a tick, a later through replaces an earlier one, and list returns them all', () => {
+        expect(store.issueTicks.list()).toEqual([]);
+        const first = store.issueTicks.set('a1', 7, '2026-10-01T00:00:00Z');
+        expect(first).toMatchObject({ appId: 'a1', number: 7, through: '2026-10-01T00:00:00Z' });
+        expectRecentTimestamp(first.updatedAt);
+        store.issueTicks.set('a1', 8, '2026-10-02T00:00:00Z');
+        store.issueTicks.set('a1', 7, '2026-10-05T00:00:00Z');
+        const list = store.issueTicks.list().map((t) => ({ appId: t.appId, number: t.number, through: t.through }));
+        expect(list).toHaveLength(2);
+        expect(list).toContainEqual({ appId: 'a1', number: 7, through: '2026-10-05T00:00:00Z' });
+        expect(list).toContainEqual({ appId: 'a1', number: 8, through: '2026-10-02T00:00:00Z' });
+      });
+
+      it("deleteForApp removes only that app's ticks, and deleting an app removes its ticks", () => {
+        store.apps.create({ id: 'a1', name: 'One' });
+        store.apps.create({ id: 'a2', name: 'Two' });
+        store.issueTicks.set('a1', 1, '2026-10-01T00:00:00Z');
+        store.issueTicks.set('a2', 1, '2026-10-01T00:00:00Z');
+        store.issueTicks.set('a2', 2, '2026-10-01T00:00:00Z');
+        store.issueTicks.deleteForApp('a1');
+        expect(store.issueTicks.list().map((t) => t.appId)).toEqual(['a2', 'a2']);
+        expect(() => store.issueTicks.deleteForApp('a1')).not.toThrow();
+        store.apps.delete('a2');
+        expect(store.issueTicks.list()).toEqual([]);
+      });
+    });
+
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
         return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };
