@@ -28,6 +28,33 @@ describe('QuestionCard', () => {
     await user.click(send);
     expect(onAnswer).toHaveBeenCalledWith('a1', { answers: ['Blue', 'S, M'] });
   });
+  it('puts two or more questions on tabs, one showing at a time, and moves on after a single-select pick', async () => {
+    const user = userEvent.setup();
+    render(<QuestionCard ask={ask} profileName="Sonnet" onAnswer={vi.fn(async () => {})} />);
+    const colour = screen.getByRole('tab', { name: 'Colour' });
+    const sizes = screen.getByRole('tab', { name: 'Sizes' });
+    expect(colour).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Which colour?')).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /^S$/ })).toBeNull();
+    expect(screen.getByText(/Answer all 2 questions to send/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /^Red/ }));
+    expect(sizes).toHaveAttribute('aria-selected', 'true');
+    expect(colour).toHaveAttribute('data-answered', 'true');
+    expect(screen.queryByRole('radio', { name: /^Red/ })).toBeNull();
+
+    await user.click(colour);
+    expect(screen.getByRole('radio', { name: /^Red/ })).toBeChecked();
+    colour.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(sizes).toHaveFocus();
+    expect(sizes).toHaveAttribute('aria-selected', 'true');
+  });
+  it('shows a lone question without tabs', () => {
+    render(<QuestionCard ask={{ ...ask, questions: [ask.questions[0]!] }} profileName="Sonnet" onAnswer={vi.fn(async () => {})} />);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.getByText('Colour')).toBeInTheDocument();
+  });
   it('takes a typed answer through Other', async () => {
     const onAnswer = vi.fn(async () => {});
     const user = userEvent.setup();
