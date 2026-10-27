@@ -46,15 +46,31 @@ describe('pane state (#824)', () => {
     expect(closeTab(waiting, 'c')).toMatchObject({ tabs: ['a', 'b'], panes: ['a', 'b'] });
   });
 
-  it('opening a tab makes only that chat a tab: the chat it replaces in the focused pane stays out of the tabs', () => {
-    expect(openTab(state({ tabs: [], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['new'], panes: ['new'] });
-    expect(openTab(state({ tabs: ['x'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['x', 'new'], panes: ['new'] });
-    expect(openTab(state({ tabs: ['open'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'] });
-    expect(openTab(state({ tabs: [], panes: ['a'] }), 'a')).toMatchObject({ tabs: ['a'] });
-    expect(openTab(state({ tabs: [], panes: [null] }), 'new')).toMatchObject({ tabs: ['new'] });
+  it('opening a tab makes only that chat a tab, and opens it beside the chat on show rather than over it', () => {
+    // One pane: it splits in two, the chat on show staying put and the new tab beside it, focused.
+    expect(openTab(state({ tabs: [], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['new'], layout: 'columns-2', panes: ['open', 'new'], focusedPane: 1 });
+    expect(openTab(state({ tabs: ['x'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['x', 'new'], panes: ['open', 'new'] });
+    expect(openTab(state({ tabs: ['open'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'], panes: ['open', 'new'] });
+    // The same chat, or an empty pane: nothing to open beside.
+    expect(openTab(state({ tabs: [], panes: ['a'] }), 'a')).toMatchObject({ tabs: ['a'], layout: 'single', panes: ['a'] });
+    expect(openTab(state({ tabs: [], panes: [null] }), 'new')).toMatchObject({ tabs: ['new'], layout: 'single', panes: ['new'] });
     // A chat already showing in another pane is only focused, so nothing is replaced.
     const two = state({ layout: 'columns-2', tabs: [], panes: ['open', 'new'], focusedPane: 0 });
     expect(openTab(two, 'new')).toMatchObject({ tabs: ['new'], panes: ['open', 'new'], focusedPane: 1 });
+  });
+
+  it('with several panes a new tab takes an empty one, else the one after the focused pane, never the focused one', () => {
+    const gap = state({ layout: 'columns-3', tabs: ['c'], panes: ['a', null, 'c'], focusedPane: 2 });
+    expect(openTab(gap, 'new')).toMatchObject({ panes: ['a', 'new', 'c'], focusedPane: 1 });
+    // The case that was reported: A on show, an old tab C beside it; B goes over C, not over A.
+    const full = state({ layout: 'columns-2', tabs: ['c'], panes: ['a', 'c'], focusedPane: 0, maximised: true });
+    expect(openTab(full, 'b')).toMatchObject({ tabs: ['c', 'b'], panes: ['a', 'b'], focusedPane: 1, maximised: false });
+    expect(openTab({ ...full, focusedPane: 1 }, 'b')).toMatchObject({ panes: ['b', 'c'], focusedPane: 0 });
+  });
+
+  it('a viewer popped out as a tab still takes its chat\'s pane, which it hands back on closing', () => {
+    const view = viewTabId('c1', { kind: 'file', path: 'doc.pdf' });
+    expect(openTab(state({ tabs: [], panes: ['c1'] }), view)).toMatchObject({ tabs: [view], layout: 'single', panes: [view] });
   });
 
   it('a bigger layout keeps the panes in place and fills new ones with tabs not yet showing', () => {

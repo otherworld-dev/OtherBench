@@ -146,18 +146,19 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click();
   await expect(page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab')).toHaveCount(0);
 
-  // Opening another chat in a new tab makes only that one a tab: the one on show isn't made a tab too.
+  // Opening another chat in a new tab makes only that one a tab, and opens it beside the one on show, not over it.
   await nav.getByTestId(`chat-row-${inProject.id}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
   const tabs = page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
   await expect(tabs).toHaveCount(1);
   await expect(tabs.nth(0)).toContainText(`Planning ${run}`);
+  await expect(page.getByRole('button', { name: 'Layout: Two side by side' })).toBeVisible();
+  const main = page.getByRole('main');
+  await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
+  await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
   await expect(tabs).toHaveCount(2);
-
-  await chooseLayout(page, 'Two side by side');
-  const main = page.getByRole('main');
   await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
   await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
   await main.getByTestId('pane-1').click();

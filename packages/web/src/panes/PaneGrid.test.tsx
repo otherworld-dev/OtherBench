@@ -33,6 +33,11 @@ function chat(id: string): Chat {
   };
 }
 
+/** `ids` as tabs, the last on show in the one pane. */
+function openTabs(...ids: string[]): void {
+  useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: ids, panes: [ids.at(-1)!] }, activeChatId: ids.at(-1)! });
+}
+
 beforeEach(() => {
   synced.length = 0;
   window.localStorage.clear();
@@ -46,8 +51,7 @@ const threads = (): string[] => screen.getAllByTestId('thread').map((t) => t.tex
 
 describe('PaneGrid (#824)', () => {
   it('shows one chat in the single layout, and one per pane otherwise, each syncing its own chat', () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     const { rerender } = render(<PaneGrid narrow={false} />);
     expect(threads()).toEqual(['Chat b']);
 
@@ -62,8 +66,7 @@ describe('PaneGrid (#824)', () => {
   });
 
   it('clicking into a pane focuses it, making its chat the active one', () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     useOtherBenchStore.getState().setLayout('columns-2');
     render(<PaneGrid narrow={false} />);
     fireEvent.mouseDown(screen.getByTestId('pane-1'));
@@ -82,8 +85,7 @@ describe('PaneGrid (#824)', () => {
   });
 
   it('a narrow window shows only the focused pane; the others stay mounted, hidden, so nothing reconnects', () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     useOtherBenchStore.getState().setLayout('columns-2');
     useOtherBenchStore.getState().focusPane(1);
     render(<PaneGrid narrow />);
@@ -93,7 +95,7 @@ describe('PaneGrid (#824)', () => {
   });
 
   it('maximise fills the area with the focused pane, keeps the others mounted, and restores the layout', async () => {
-    for (const id of ['a', 'b', 'c']) useOtherBenchStore.getState().openTab(id);
+    openTabs('a', 'b', 'c');
     useOtherBenchStore.getState().setLayout('columns-3');
     const user = userEvent.setup();
     render(<PaneGrid narrow={false} />);
@@ -107,7 +109,7 @@ describe('PaneGrid (#824)', () => {
   });
 
   it('"one big, two stacked" and "four in a grid" lay out three and four panes with a divider per split', () => {
-    for (const id of ['a', 'b', 'c', 'd']) useOtherBenchStore.getState().openTab(id);
+    openTabs('a', 'b', 'c', 'd');
     useOtherBenchStore.getState().setLayout('main-right-2');
     const { rerender } = render(<PaneGrid narrow={false} />);
     expect(threads()).toHaveLength(3);

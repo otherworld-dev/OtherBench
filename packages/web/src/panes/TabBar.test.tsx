@@ -17,6 +17,11 @@ function chat(id: string, over: Partial<Chat> = {}): Chat {
   };
 }
 
+/** `ids` as tabs, the last on show in the one pane. */
+function openTabs(...ids: string[]): void {
+  useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: ids, panes: [ids.at(-1)!] }, activeChatId: ids.at(-1)! });
+}
+
 const tabNames = (): string[] => within(screen.getByRole('tablist')).getAllByRole('tab').map((t) => t.getAttribute('title') ?? '');
 
 /** A fake DataTransfer: jsdom has none. */
@@ -46,8 +51,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('a sidebar click shows a chat without making it a tab; clicking a tab shows that chat', async () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     useOtherBenchStore.getState().setActiveChatId('c');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);
@@ -58,8 +62,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('closing a tab takes its chat out of the pane, showing the next tab instead', async () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);
     await user.click(screen.getByRole('button', { name: 'Close tab Chat b' }));
@@ -71,8 +74,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('switching layout keeps the tab bar, numbers tabs by pane, and fills new panes with tabs', async () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);
     await user.click(screen.getByRole('button', { name: 'Layout: One chat' }));
@@ -108,8 +110,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('marks a tab replying, or waiting for an approval', () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     useOtherBenchStore.setState({ appRunningTurns: { m1: 'a' }, appPendingApprovals: { r1: { chatId: 'b', messageId: 'm2', requestId: 'r1', toolName: 'Write' } } });
     render(<TabBar narrow={false} />);
     expect(screen.getByTestId('tab-status-a')).toHaveAttribute('data-status', 'working');
@@ -125,8 +126,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('a chat dragged from the sidebar onto a tab opens as a tab there; a dragged tab moves', () => {
-    useOtherBenchStore.getState().openTab('a');
-    useOtherBenchStore.getState().openTab('b');
+    openTabs('a', 'b');
     render(<TabBar narrow={false} />);
     fireEvent.drop(screen.getByTestId('tab-a'), { dataTransfer: dataTransfer(CHAT_DRAG_MIME, 'c') });
     expect(useOtherBenchStore.getState().paneState.tabs).toEqual(['c', 'a', 'b']);
@@ -136,7 +136,7 @@ describe('TabBar (#824)', () => {
   });
 
   it('arrow keys move between tabs and Delete closes the focused one', async () => {
-    for (const id of ['a', 'b', 'c']) useOtherBenchStore.getState().openTab(id);
+    openTabs('a', 'b', 'c');
     useOtherBenchStore.getState().setActiveChatId('a');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);

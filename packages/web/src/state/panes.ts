@@ -153,14 +153,21 @@ export function resizeSplit(sizes: number[], index: number, delta: number): numb
 }
 
 /**
- * Adds `chatId` as a tab (if it isn't one) and shows it. Only what the user
- * asks to be a tab becomes one: the chat it replaces in the focused pane
- * (opened from the sidebar, say) is not made a tab, as it's still in the
- * sidebar.
+ * Adds `chatId` as a tab (if it isn't one) and shows it beside the chat on
+ * show, never over it: one pane splits in two, and with more panes it takes
+ * an empty one, else the one after the focused pane. Only what the user asks
+ * to be a tab becomes one, so the chat on show (opened from the sidebar, say)
+ * stays out of the tabs; covering it would lose it from view. A viewer popped
+ * out of its chat still takes the chat's pane, which closing it hands back.
  */
 export function openTab(state: PaneState, chatId: string): PaneState {
-  const tabs = state.tabs.includes(chatId) ? state.tabs : [...state.tabs, chatId];
-  return showChat({ ...state, tabs }, chatId);
+  const next = { ...state, tabs: state.tabs.includes(chatId) ? state.tabs : [...state.tabs, chatId] };
+  const shown = state.panes[state.focusedPane] ?? null;
+  if (shown === null || state.panes.includes(chatId) || parseViewTab(chatId) !== null) return showChat(next, chatId);
+  if (state.panes.length === 1) return { ...next, layout: 'columns-2', panes: [shown, chatId], focusedPane: 1, maximised: false };
+  const empty = state.panes.indexOf(null);
+  const target = empty !== -1 ? empty : (state.focusedPane + 1) % state.panes.length;
+  return { ...next, panes: state.panes.map((id, i) => (i === target ? chatId : id)), focusedPane: target, maximised: false };
 }
 
 /**

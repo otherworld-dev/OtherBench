@@ -8,11 +8,16 @@ const press = (init: KeyboardEventInit): boolean => window.dispatchEvent(new Key
 
 let unmount: () => void = () => {};
 
+/** `ids` as tabs, the last on show in the one pane. */
+function openTabs(...ids: string[]): void {
+  useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: ids, panes: [ids.at(-1)!] }, activeChatId: ids.at(-1)! });
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ paneState: DEFAULT_PANE_STATE, activeChatId: null });
-  for (const id of ['a', 'b', 'c']) useOtherBenchStore.getState().openTab(id);
+  openTabs('a', 'b', 'c');
 });
 
 afterEach(() => unmount());
