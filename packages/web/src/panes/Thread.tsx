@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
@@ -6,6 +6,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { GitBar } from '../code/GitBar.js';
 import { Composer } from '../components/Composer.js';
+import { Gwyn } from '../components/Gwyn.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
 import { ElsewhereWorking } from '../components/ElsewhereWorking.js';
@@ -194,7 +195,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
 
   if (!chat) {
     return (
-      <section aria-label="No chat open" className="flex h-full w-full flex-1 items-center justify-center text-sm text-[var(--text-faint)]">
+      <section aria-label="No chat open" className="flex h-full w-full flex-1 flex-col items-center justify-center gap-4 text-sm text-[var(--text-faint)]">
+        <Gwyn mood="peek" className="h-28 w-28" />
         Select a chat, or start a new one, to begin.
       </section>
     );
@@ -389,8 +391,17 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           <div className="relative min-h-0 flex-1">
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-                {displayPath.length === 0 ? (
-                  <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
+                {displayPath.length === 0 && chat.headMessageId !== null ? (
+                  // The chat has messages, they just haven't arrived: Gwyn waits with you, held back a moment so a quick load never flashes him.
+                  <div role="status" className="gwyn-appear flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-faint)]" style={{ '--gwyn-delay': '300ms' } as CSSProperties}>
+                    <Gwyn mood="loading" className="h-24 w-24" />
+                    Opening the chat…
+                  </div>
+                ) : displayPath.length === 0 ? (
+                  <div className="flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-faint)]">
+                    <Gwyn mood="wave" className="h-24 w-24" />
+                    No messages yet -- say something below.
+                  </div>
                 ) : (
                   displayPath.map((m) => {
                     let siblings = [m];

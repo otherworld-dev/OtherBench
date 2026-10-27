@@ -315,3 +315,137 @@ body {
   margin-left: 1px;
   animation: otherbench-caret-blink 1s step-start infinite;
 }
+
+/*
+ * Gwyn (components/Gwyn.tsx). He climbs out of the portal and grabs its rim,
+ * then each mood has its own loop. Transforms are in SVG user units; the
+ * rotations and the blink turn about their own box (fill-box). A wrapper can
+ * set --gwyn-delay to hold the whole thing back, so a load that finishes at
+ * once never flashes him. Reduced motion leaves him still in the peek pose,
+ * which is every element's resting state.
+ */
+.gwyn {
+  --gwyn-at: var(--gwyn-delay, 0ms);
+  overflow: visible;
+}
+.gwyn-rise {
+  animation: gwyn-rise 700ms cubic-bezier(0.2, 0.8, 0.3, 1.15) var(--gwyn-at) both;
+}
+.gwyn-hands {
+  animation: gwyn-grab 260ms ease-out calc(var(--gwyn-at) + 520ms) both;
+}
+.gwyn-antenna,
+.gwyn-eyes,
+.gwyn-wave-hand,
+.gwyn-bulb-glow {
+  transform-box: fill-box;
+}
+.gwyn-antenna {
+  transform-origin: 100% 100%;
+}
+.gwyn-eyes,
+.gwyn-bulb-glow {
+  transform-origin: center;
+}
+.gwyn-wave-hand {
+  transform-origin: 0% 100%;
+}
+.gwyn-loading .gwyn-eyes {
+  animation: gwyn-glance 2.8s ease-in-out calc(var(--gwyn-at) + 900ms) infinite;
+}
+.gwyn-loading .gwyn-antenna {
+  animation: gwyn-bob 1.6s ease-in-out calc(var(--gwyn-at) + 700ms) infinite alternate;
+}
+.gwyn-loading .gwyn-bulb-glow {
+  animation: gwyn-pulse 1.2s ease-in-out var(--gwyn-at) infinite;
+}
+.gwyn-wave .gwyn-wave-hand {
+  animation: gwyn-wave 1.1s ease-in-out calc(var(--gwyn-at) + 700ms) 3;
+}
+.gwyn-peek .gwyn-eyes,
+.gwyn-wave .gwyn-eyes {
+  animation: gwyn-blink 4.5s linear calc(var(--gwyn-at) + 1500ms) infinite;
+}
+.gwyn-appear {
+  animation: gwyn-appear 200ms ease-out var(--gwyn-delay, 0ms) both;
+}
+@keyframes gwyn-rise {
+  from {
+    transform: translateY(92px);
+  }
+}
+@keyframes gwyn-grab {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes gwyn-appear {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes gwyn-glance {
+  0%,
+  12%,
+  88%,
+  100% {
+    transform: translateX(0);
+  }
+  22%,
+  42% {
+    transform: translateX(-7px);
+  }
+  58%,
+  78% {
+    transform: translateX(7px);
+  }
+}
+@keyframes gwyn-bob {
+  from {
+    transform: rotate(-5deg);
+  }
+  to {
+    transform: rotate(5deg);
+  }
+}
+@keyframes gwyn-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.5);
+  }
+}
+@keyframes gwyn-wave {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25%,
+  75% {
+    transform: rotate(16deg);
+  }
+  50% {
+    transform: rotate(-10deg);
+  }
+}
+@keyframes gwyn-blink {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gwyn *,
+  .gwyn-appear {
+    animation: none !important;
+  }
+}

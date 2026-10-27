@@ -181,6 +181,28 @@ describe('Thread', () => {
     expect(thread().getByText('text of u1')).toBeInTheDocument();
   });
 
+  it("shows Gwyn waiting while an opened chat's messages load, not the empty-chat line, then the conversation", () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })], messages: {} });
+    render(<ThreadForChat chatId="chat-1" />);
+    // A live region, so a screen reader hears it.
+    expect(screen.getByText('Opening the chat…').closest('[role="status"]')).not.toBeNull();
+    expect(screen.getByTestId('gwyn')).toHaveAttribute('data-mood', 'loading');
+    expect(screen.queryByText(/No messages yet/)).toBeNull();
+
+    act(() => useOtherBenchStore.setState({ messages: { u1: makeMessage('u1', 'chat-1') } }));
+    expect(within(screen.getByTestId('thread-scroll')).getByText('text of u1')).toBeInTheDocument();
+    expect(screen.queryByText('Opening the chat…')).toBeNull();
+    expect(screen.queryByTestId('gwyn')).toBeNull();
+  });
+
+  it('has Gwyn wave in a chat with no messages yet', () => {
+    useOtherBenchStore.setState({ chats: [makeChat()] });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByText(/No messages yet/)).toBeInTheDocument();
+    expect(screen.getByTestId('gwyn')).toHaveAttribute('data-mood', 'wave');
+    expect(screen.queryByText('Opening the chat…')).toBeNull();
+  });
+
   it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
