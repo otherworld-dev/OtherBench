@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildOverview, chatNeedsYou, deckSummary, isBotLogin, issueNeed, type OverviewInput,
+  buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, issueNeed, type OverviewInput,
 } from '../src/domain/overview.js';
 import type { App, Chat } from '../src/ports/store.js';
 import type { DeckBoardView, DeckCardSummary } from '../src/types/nextcloud.js';
@@ -94,21 +94,26 @@ const head = (status: ChatHead['status'], role: ChatHead['role'] = 'assistant', 
 describe('chatNeedsYou', () => {
   const open = { archivedAt: null };
   it('a finished assistant reply needs me', () => {
-    expect(chatNeedsYou(open, head('complete'), false)).toBe(true);
-    expect(chatNeedsYou(open, head('error'), false)).toBe(true);
+    expect(chatNeedsYou(open, head('complete'), false, 0)).toBe(true);
+    expect(chatNeedsYou(open, head('error'), false, 0)).toBe(true);
   });
   it('a streaming or cancelled head does not', () => {
-    expect(chatNeedsYou(open, head('streaming'), false)).toBe(false);
-    expect(chatNeedsYou(open, head('cancelled'), false)).toBe(false);
+    expect(chatNeedsYou(open, head('streaming'), false, 0)).toBe(false);
+    expect(chatNeedsYou(open, head('cancelled'), false, 0)).toBe(false);
   });
   it('dealtWithAt after the head settles it, before does not', () => {
-    expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 150 }, head('complete'), false)).toBe(false);
-    expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 50 }, head('complete'), false)).toBe(true);
+    expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 150 }, head('complete'), false, 0)).toBe(false);
+    expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 50 }, head('complete'), false, 0)).toBe(true);
+  });
+  it('a reply from before `since` does not, but waiting does however old', () => {
+    expect(chatNeedsYou(open, head('complete'), false, 100)).toBe(true);
+    expect(chatNeedsYou(open, head('complete'), false, 101)).toBe(false);
+    expect(chatNeedsYou(open, head('complete'), true, 101)).toBe(true);
   });
   it('archived is never, waiting is always otherwise', () => {
-    expect(chatNeedsYou({ archivedAt: 1 }, head('complete'), true)).toBe(false);
-    expect(chatNeedsYou(open, head('streaming', 'user'), true)).toBe(true);
-    expect(chatNeedsYou(open, null, false)).toBe(false);
+    expect(chatNeedsYou({ archivedAt: 1 }, head('complete'), true, 0)).toBe(false);
+    expect(chatNeedsYou(open, head('streaming', 'user'), true, 0)).toBe(true);
+    expect(chatNeedsYou(open, null, false, 0)).toBe(false);
   });
 });
 
@@ -122,6 +127,8 @@ function app(id: string, over: Partial<App> = {}): App {
 function chat(id: string, appId: string | null, over: Partial<Chat> = {}): Chat {
   return { id, title: `chat ${id}`, appId, projectId: null, archivedAt: null, updatedAt: 1, ...over } as Chat;
 }
+/** `ms` after an hour before `now`, inside the chat window. */
+const recent = (ms: number): number => now.getTime() - 3_600_000 + ms;
 const done = (chatId: string, createdAt: number): ChatHead => ({ chatId, role: 'assistant', status: 'complete', createdAt });
 function input(over: Partial<OverviewInput>): OverviewInput {
   return {
@@ -135,7 +142,7 @@ describe('buildOverview', () => {
     const o = buildOverview(input({
       apps: [app('a', { deckBoardId: 1 }), app('b', { deckBoardId: 2 }), app('c', { deckBoardId: 3 }), app('d')],
       chats: [chat('1', 'd'), chat('2', 'd'), chat('3', null)],
-      heads: [done('1', 1), done('2', 2), done('3', 3)],
+      heads: [done('1', recent(1)), done('2', recent(2)), done('3', recent(3))],
       decks: {
         a: { view: view([{ id: 1, title: 'Backlog', cards: [card(1, 1, null)] }]) },
         b: { view: view([{ id: 2, title: 'Doing', cards: [card(2, 2, null)] }]) },
@@ -152,11 +159,20 @@ describe('buildOverview', () => {
     const o = buildOverview(input({
       apps: [app('a')],
       chats: [chat('1', 'a'), chat('2', 'a'), chat('3', 'a', { projectId: 'p' })],
-      heads: [done('1', 10), done('2', 20), { chatId: '3', role: 'user', status: 'complete', createdAt: 5 }],
+      heads: [done('1', recent(10)), done('2', recent(20)), { chatId: '3', role: 'user', status: 'complete', createdAt: recent(5) }],
       waitingChatIds: new Set(['3']), projects: [{ id: 'p', name: 'Proj' }],
     }));
     expect(o.tiles[0]?.chats.map((x) => x.chatId)).toEqual(['3', '2', '1']);
     expect(o.tiles[0]?.chats[0]).toMatchObject({ waiting: true, projectName: 'Proj' });
+  });
+  it('leaves out replies older than the chat window, but not waiting chats', () => {
+    const old = now.getTime() - CHAT_NEED_WINDOW_MS - 1;
+    const o = buildOverview(input({
+      chats: [chat('1', null), chat('2', null), chat('3', null)],
+      heads: [done('1', old), done('2', now.getTime() - CHAT_NEED_WINDOW_MS), done('3', old)],
+      waitingChatIds: new Set(['3']),
+    }));
+    expect(o.tiles[0]?.chats.map((x) => x.chatId)).toEqual(['3', '2']);
   });
   it('a tick hides an issue; an error sets issuesError; no repo means null', () => {
     const a1 = issue({ number: 7, comments: [c('bob', 10)] });

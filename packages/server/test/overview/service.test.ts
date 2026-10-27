@@ -160,6 +160,12 @@ describe('OverviewService checks', () => {
     expect(tileOf(service(), 'a1').chats.map((c) => c.chatId)).toEqual(['c9']);
   });
 
+  it('leaves out chats whose last reply is older than a week', () => {
+    chat('c-week', 'a1', 'assistant', NOW - 6 * DAY);
+    chat('c-stale', 'a1', 'assistant', NOW - 8 * DAY);
+    expect(tileOf(service(), 'a1').chats.map((c) => c.chatId)).toEqual(['c-week']);
+  });
+
   it('shares one check between concurrent refreshes', async () => {
     const svc = service();
     const a = svc.refresh();

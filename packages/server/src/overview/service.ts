@@ -1,4 +1,4 @@
-import { buildOverview, chatNeedsYou } from '@otherbench/core/domain/overview.js';
+import { buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou } from '@otherbench/core/domain/overview.js';
 import type { IssueTick, Store } from '@otherbench/core/ports/store.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { DeckBoardView } from '@otherbench/core/types/nextcloud.js';
@@ -183,7 +183,7 @@ export class OverviewService {
     for (const chat of this.store.chats.list()) {
       if (waiting.has(chat.id)) continue;
       const head = heads.get(chat.id) ?? null;
-      if (!head || head.createdAt >= before || !chatNeedsYou(chat, head, false)) continue;
+      if (!head || head.createdAt >= before || !chatNeedsYou(chat, head, false, now - CHAT_NEED_WINDOW_MS)) continue;
       this.store.chats.update(chat.id, { dealtWithAt: now });
       chats++;
     }

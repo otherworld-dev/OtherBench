@@ -59,16 +59,28 @@ export function deckSummary(view: DeckBoardView, now: Date): OverviewDeck {
   return out;
 }
 
-/** Whether a chat wants the user: waiting on them, or a finished reply they haven't dealt with. */
+/**
+ * How far back a finished reply can still need the user. Without it every old
+ * chat that ended on Claude's answer counted, hundreds on a first run. Chats
+ * waiting on a card or question count however old they are.
+ */
+export const CHAT_NEED_WINDOW_MS = 7 * 86_400_000;
+
+/**
+ * Whether a chat wants the user: waiting on them, or a finished reply from
+ * `since` (ms) on that they haven't dealt with.
+ */
 export function chatNeedsYou(
   chat: { archivedAt: number | null; dealtWithAt?: number | null },
   head: ChatHead | null,
   waiting: boolean,
+  since: number,
 ): boolean {
   if (chat.archivedAt !== null) return false;
   if (waiting) return true;
   if (!head || head.role !== 'assistant') return false;
   if (head.status !== 'complete' && head.status !== 'error') return false;
+  if (head.createdAt < since) return false;
   return chat.dealtWithAt == null || chat.dealtWithAt < head.createdAt;
 }
 
@@ -91,6 +103,7 @@ const emptyDeck = (): OverviewDeck => ({ due: [], doing: 0, todo: 0, backlog: 0 
 export function buildOverview(input: OverviewInput): Overview {
   const heads = new Map(input.heads.map((h) => [h.chatId, h]));
   const projectNames = new Map(input.projects.map((p) => [p.id, p.name]));
+  const since = input.now.getTime() - CHAT_NEED_WINDOW_MS;
 
   const chatsFor = (appId: string | null): OverviewChat[] => {
     const out: OverviewChat[] = [];
@@ -98,7 +111,7 @@ export function buildOverview(input: OverviewInput): Overview {
       if ((chat.appId ?? null) !== appId) continue;
       const head = heads.get(chat.id) ?? null;
       const waiting = input.waitingChatIds.has(chat.id);
-      if (!chatNeedsYou(chat, head, waiting)) continue;
+      if (!chatNeedsYou(chat, head, waiting, since)) continue;
       const projectId = chat.projectId ?? null;
       out.push({
         chatId: chat.id, title: chat.title, waiting, at: head?.createdAt ?? chat.updatedAt,
