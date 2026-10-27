@@ -764,7 +764,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               title={primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : undefined}
               // line-clamp with break-all, not truncate: it looks the same, but the name can shrink to a letter, so the
               // toolbar wraps by its other controls' widths rather than the full name's.
-              className="max-w-full line-clamp-1 break-all rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
+              className="chip max-w-full line-clamp-1 break-all px-2 py-0.5 font-mono text-[0.6875rem] text-[var(--text)]"
             >
               {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
             </button>
@@ -795,9 +795,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             disabled={planSaving}
             title="Plan first: the model sets out a plan and waits for your approval before it changes anything (from the next message)"
             onClick={() => void togglePlanMode()}
-            className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
-              planMode ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]' : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
-            }`}
+            className="chip shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]"
           >
             Plan
           </button>
@@ -816,11 +814,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                     : 'Let Claude Code decide routine tool calls (applies at once, even to a reply that is running)'
               }
               onClick={() => void toggleAutoMode()}
-              className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
-                autoActive
-                  ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
-                  : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
-              }`}
+              className="chip shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]"
             >
               Auto
             </button>
@@ -833,7 +827,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               disabled={effortSaving}
               title="Effort: how much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
               onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
-              className="shrink-0 field-sizing-content rounded-full border border-[var(--border-strong)] bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+              className={`chip shrink-0 field-sizing-content bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] ${effort ? 'chip-on' : ''}`}
             >
               {/* Just the level, to keep the toolbar to one line; the tooltip says what it is. */}
               <option value="">default</option>
@@ -846,7 +840,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           )}
 
           {comparedProfiles.map((p) => (
-            <span key={p.id} className="shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border)] text-[var(--text-muted)]">
+            <span key={p.id} className="chip chip-on shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]">
               + {p.name}
             </span>
           ))}
@@ -859,7 +853,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               aria-expanded={comparePickerOpen}
               aria-label="Compare"
               title="Compare against other profiles"
-              className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+              className="chip chip-add px-2 py-0.5 font-mono text-[0.6875rem]"
             >
               +
             </button>

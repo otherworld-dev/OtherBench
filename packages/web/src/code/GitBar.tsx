@@ -155,7 +155,7 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
           aria-haspopup="dialog"
           aria-expanded={open === 'changed'}
           onClick={() => toggle('changed')}
-          className="rounded-full border border-[var(--border)] px-2 hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+          className="chip px-2"
         >
           {`${changed.length} ${changed.length === 1 ? 'file' : 'files'} changed in this chat`} <span aria-hidden="true">▾</span>
         </button>

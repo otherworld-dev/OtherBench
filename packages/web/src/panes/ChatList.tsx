@@ -98,9 +98,7 @@ interface Section {
 
 /** A filter chip under the search box, on or off. */
 function chipClass(on: boolean): string {
-  return `rounded-full border px-2 py-0.5 text-xs ${
-    on ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:text-[var(--text)]'
-  }`;
+  return `chip px-2 py-0.5 text-xs ${on ? 'chip-on' : ''}`;
 }
 
 function headingSelector(projectId: string): string {

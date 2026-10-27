@@ -501,7 +501,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               <button
                 type="button"
                 onClick={jumpToLatest}
-                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-[3px] border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
               >
                 <span aria-hidden="true">↓</span> Jump to latest
               </button>

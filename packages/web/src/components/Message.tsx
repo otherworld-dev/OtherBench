@@ -836,7 +836,7 @@ export function Message({
             type="button"
             data-testid="reopen-variants-chip"
             onClick={onReopenVariants}
-            className="ml-auto rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+            className="chip ml-auto px-2 py-0.5 text-xs"
           >
             ⤺ {otherVariantsCount} other variant{otherVariantsCount === 1 ? '' : 's'}
           </button>

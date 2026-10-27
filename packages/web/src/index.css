@@ -149,6 +149,46 @@ body {
     background: var(--danger);
     color: var(--bg);
   }
+
+  /*
+   * Small toolbar controls: the composer's profile, mode and effort pickers,
+   * the chat list's filters, the git bar's changed-files menu. Square-cornered
+   * like `.btn` and borderless at rest so a row of them reads as one toolbar
+   * rather than a row of capsules; the border is kept, transparent, so a
+   * control doesn't shift when it turns on. On (`aria-pressed`, or `.chip-on`
+   * for a select holding a filter) takes the inline-code accent tint.
+   */
+  .chip {
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--text-muted);
+  }
+  .chip:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--bg-sunken);
+    color: var(--text);
+  }
+  .chip:disabled,
+  .chip[aria-disabled="true"] {
+    opacity: 0.5;
+  }
+  .chip[aria-pressed="true"],
+  .chip[aria-expanded="true"],
+  .chip-on {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: color-mix(in srgb, var(--accent) 45%, var(--text));
+  }
+  .chip[aria-pressed="true"]:hover:not(:disabled),
+  .chip[aria-expanded="true"]:hover:not(:disabled),
+  .chip-on:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: color-mix(in srgb, var(--accent) 45%, var(--text));
+  }
+  /* Something to add rather than a setting: a dashed outline marks the slot. */
+  .chip-add {
+    border-style: dashed;
+    border-color: var(--border-strong);
+  }
 }
 
 /* Minimal hljs token palette that tracks the theme tokens above rather than
