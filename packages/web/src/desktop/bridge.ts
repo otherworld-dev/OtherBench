@@ -169,3 +169,11 @@ export async function revealPath(path: string): Promise<boolean> {
   await revealItemInDir(path);
   return true;
 }
+
+/** Opens a folder in Explorer (desktop/src-tauri/src/folder.rs refuses anything but a folder). False in a browser, which can't. */
+export async function openFolder(path: string): Promise<boolean> {
+  if (!isDesktop()) return false;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_folder', { path });
+  return true;
+}
