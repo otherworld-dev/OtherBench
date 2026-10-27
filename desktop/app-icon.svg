@@ -1,8 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- OtherBench: two interlocking rings, for comparing models side by side. app-icon.png is rendered from this. -->
-  <rect width="1024" height="1024" rx="230" fill="#21252f"/>
-  <circle cx="400" cy="512" r="215" fill="none" stroke="#f39c12" stroke-width="100"/>
-  <circle cx="624" cy="512" r="215" fill="none" stroke="#f6f1e7" stroke-width="100"/>
-  <!-- The amber ring passes over the cream one at the top crossing, under it at the bottom. -->
-  <path d="M 437.3 300.3 A 215 215 0 0 1 569.4 379.6" fill="none" stroke="#f39c12" stroke-width="100"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512">
+  <!-- OtherBench in the Other family style (brand sheet v1): night tile, teal portal ring, a workbench glyph in paper-white with one glow block. app-icon.png is rendered from this. -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="65%">
+      <stop offset="0" stop-color="#12202B"/>
+      <stop offset="1" stop-color="#0A0F16"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- portal ring, the same on every product -->
+  <circle cx="256" cy="256" r="178" fill="none" stroke="#22D3C4" stroke-width="44" opacity="0.14"/>
+  <circle cx="256" cy="256" r="178" fill="none" stroke="#22D3C4" stroke-width="20"/>
+  <!-- glyph: workbench -->
+  <g stroke="#F2EFE6" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <line x1="166" y1="236" x2="346" y2="236"/>
+    <line x1="196" y1="240" x2="184" y2="324"/>
+    <line x1="316" y1="240" x2="328" y2="324"/>
+    <line x1="190" y1="290" x2="322" y2="290"/>
+  </g>
+  <rect x="222" y="186" width="56" height="34" rx="6" fill="#5EEAD4"/>
 </svg>
