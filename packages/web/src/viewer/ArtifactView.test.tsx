@@ -143,6 +143,7 @@ describe('ArtifactView', () => {
     await screen.findByTitle('calc.html');
     await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(await navigator.clipboard.readText()).toBe('<p>v2</p>');
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Download' }));
     expect(saveFile).toHaveBeenCalledWith(expect.any(Blob), 'calc.html');
 

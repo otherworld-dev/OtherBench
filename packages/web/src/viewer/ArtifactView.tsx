@@ -25,7 +25,7 @@ function failure(err: unknown): string {
  * version unless one is pinned or picked, rendered by kind (pages and Mermaid
  * in the sandbox, SVG as an image, Markdown by React, code highlighted, Word and
  * Excel and PowerPoint files drawn from their source (OfficePreview)), with
- * Source, Edit, Copy, Download and Save to workspace. It reloads when the
+ * Source, Edit, Copy (which says Copied for a moment), Download and Save to workspace. It reloads when the
  * reply the chat shows changes (a new reply, a branch switch, a part
  * streaming in), so an unpinned artifact follows the branch in the panel
  * and in a popped-out tab alike. A live page (spec 2026-10-12-live-artifacts)
@@ -46,6 +46,10 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const [reload, setReload] = useState(0);
   /** An Office download is being made by the server: Download waits, so repeat clicks don't queue more renders. */
   const [downloading, setDownloading] = useState(false);
+  /** Copy says Copied for a moment, so you can tell the click took. */
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
   const workspaceHere = useOtherBenchStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
   const stamp = useArtifactsStamp(chatId);
 
@@ -198,6 +202,20 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     }
   }
 
+  async function copy(): Promise<void> {
+    if (!version) return;
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(version.content);
+      setCopied(true);
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Under the toolbar, like Download's: a failed copy mustn't replace the view.
+      setActionError("Couldn't copy to the clipboard.");
+    }
+  }
+
   async function saveToWorkspace(replace: boolean): Promise<void> {
     if (!saving || !versionId) return;
     setActionError(null);
@@ -331,7 +349,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
           <button type="button" onClick={() => { setActionError(null); setDraft(version.content); }} className={BUTTON}>Edit</button>
         )}
         {version && (
-          <button type="button" onClick={() => void navigator.clipboard.writeText(version.content).catch(() => setError("Couldn't copy to the clipboard."))} className={BUTTON}>Copy</button>
+          <button type="button" onClick={() => void copy()} className={BUTTON}>{copied ? 'Copied' : 'Copy'}</button>
         )}
         {version && (
           <button type="button" onClick={() => void download()} disabled={downloading} aria-busy={downloading} className={BUTTON}>{downloading ? 'Making file…' : 'Download'}</button>
