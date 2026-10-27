@@ -2,12 +2,12 @@
 @import "./fonts.css";
 
 /*
- * Quiet, dense, long-session tool -- not a landing page. The identity is
- * "workhorse": warm charcoal and bone with one hi-vis orange accent, condensed
- * caps for labels and buttons, mono for anything that's data. Dark is the
- * signature scheme; light ("concrete") is its twin with the orange deepened
- * for contrast. Redefined under `prefers-color-scheme` so the OS preference
- * is honoured without a manual toggle.
+ * Quiet, dense, long-session tool -- not a landing page. The colours are the
+ * Other family's (Otherworld brand sheet v1): night and paper-white with one
+ * teal accent, condensed caps for labels and buttons, mono for anything
+ * that's data. Dark is the signature scheme; light ("paper") is its twin with
+ * the teal deepened for contrast. Redefined under `prefers-color-scheme` so
+ * the OS preference is honoured without a manual toggle.
  */
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
@@ -19,16 +19,19 @@
 
 :root {
   color-scheme: light;
-  --bg: #f4f1ec;
-  --bg-raised: #fbfaf7;
-  --bg-sunken: #e9e5dd;
-  --border: #d9d3c8;
-  --border-strong: #bfb7a9;
-  --text: #1d1b18;
-  --text-muted: #5c564c;
-  --text-faint: #8d8578;
-  --accent: #c2410c;
+  --bg: #f2efe6;
+  --bg-raised: #faf9f5;
+  --bg-sunken: #e6e3da;
+  --border: #d5d3cb;
+  --border-strong: #b3b6b4;
+  --text: #0a1118;
+  --text-muted: #5b6670;
+  --text-faint: #87929c;
+  /* The brand's deep teal (#0d9488) is 3.3:1 on paper, too faint for links and
+     button labels, so the accent is a step darker. The wordmark keeps it. */
+  --accent: #0f766e;
   --accent-text: #ffffff;
+  --brand: #0d9488;
   --danger: #b42318;
   --success: #4d7c0f;
   --warn: #a16207;
@@ -42,22 +45,23 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #1a1815;
-    --bg-raised: #23201c;
-    --bg-sunken: #131210;
-    --border: #34302a;
-    --border-strong: #4a443b;
-    --text: #ece5d8;
-    --text-muted: #a39b8c;
-    --text-faint: #6e675b;
-    --accent: #ff6b1a;
-    --accent-text: #1a1006;
-    --danger: #e5484d;
+    --bg: #0a0f16;
+    --bg-raised: #0f1720;
+    --bg-sunken: #070a0f;
+    --border: #1c2733;
+    --border-strong: #2c3a48;
+    --text: #f2efe6;
+    --text-muted: #8a97a3;
+    --text-faint: #5b6874;
+    --accent: #22d3c4;
+    --accent-text: #0a0f16;
+    --brand: #22d3c4;
+    --danger: #f28b82;
     --success: #8fbf4a;
     --warn: #f5c518;
-    --diff-add-bg: #1f2d12;
+    --diff-add-bg: #14281a;
     --diff-add-text: #b5dd84;
-    --diff-del-bg: #3a1618;
+    --diff-del-bg: #33161a;
     --diff-del-text: #f29a9d;
   }
 }
