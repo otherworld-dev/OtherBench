@@ -3,6 +3,7 @@
 
 mod computer;
 mod download;
+mod folder;
 mod hotkey;
 mod legacy;
 mod links;
@@ -110,6 +111,12 @@ async fn save_download(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) 
     download::save(&dir, &name, bytes).map(|p| p.display().to_string())
 }
 
+/// The Files tree's Open in Explorer: opens a folder, never a file (folder.rs).
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    folder::open(&path)
+}
+
 /// Quick chat's Expand: the main window opens the chat and the quick window goes away.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle, chat_id: String) {
@@ -194,7 +201,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_folder])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
@@ -281,7 +288,7 @@ mod tests {
         let app_granted = app["permissions"].to_string();
         let indicator_granted = indicator["permissions"].to_string();
         let commands = registered();
-        assert!(commands.len() >= 9, "{commands:?}");
+        assert!(commands.len() >= 10, "{commands:?}");
         for command in commands {
             assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from the app manifest in build.rs");
             let permission = format!("\"allow-{}\"", command.replace('_', "-"));
