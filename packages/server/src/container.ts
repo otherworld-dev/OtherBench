@@ -34,6 +34,7 @@ import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
 import { ClaudeAccountService } from './claude-accounts/service.js';
+import { attachAccountSwitcher } from './claude-accounts/switcher.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ClaudeImportService } from './import/claude-import.js';
@@ -683,6 +684,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).
   subscribeAutoTitle(container);
+  // A Claude reply cut off by its account's usage limit: the account is held, and the chat may carry on on another.
+  attachAccountSwitcher(container);
   // Re-queue project chats that went quiet while the server was down (spec §2, §6).
   try {
     memory.sweep();

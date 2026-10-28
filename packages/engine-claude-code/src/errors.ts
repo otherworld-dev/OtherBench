@@ -27,8 +27,10 @@ export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; 
   }
   if (ctx.rateLimitResetsAt != null || /usage limit|you['’]?ve hit your (usage )?limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
     const resets = ctx.rateLimitResetsAt ?? Number(/\|(\d{9,})/.exec(text)?.[1] ?? NaN);
-    const when = Number.isFinite(resets) ? ` It resets at ${new Date(resets * 1000).toLocaleString()}.` : '';
-    return { kind: 'rate_limit', retryable: true, message: `Claude usage limit reached.${when}`, detail: { text: tail(text) } };
+    const known = Number.isFinite(resets);
+    const when = known ? ` It resets at ${new Date(resets * 1000).toLocaleString()}.` : '';
+    // `resetsAt` in ms, for the account switcher to hold the account until; absent when the reset time isn't known.
+    return { kind: 'rate_limit', retryable: true, message: `Claude usage limit reached.${when}`, detail: { text: tail(text), ...(known ? { resetsAt: resets * 1000 } : {}) } };
   }
   if (!isClaudeLogin(ctx.backend) && /ECONNREFUSED|ENOTFOUND|fetch failed|connect(ion)? (refused|error)|socket hang up/i.test(text)) {
     return { kind: 'transient', retryable: true, message: `Can't reach ${ctx.backend}.` };

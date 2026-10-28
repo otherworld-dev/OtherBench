@@ -19,6 +19,11 @@ describe('classifyClaudeCodeFailure', () => {
   it('uses a rejected rate-limit event even when the text is vague', () => {
     expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 })).toMatchObject({ kind: 'rate_limit', message: expect.stringContaining('resets') });
   });
+  it('puts the reset time on a rate limit in ms, only when it is known', () => {
+    expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 }).detail).toEqual({ text: 'error', resetsAt: 1_700_000_000_000 });
+    expect(classifyClaudeCodeFailure('Claude AI usage limit reached|1700000123', c).detail).toEqual({ text: 'Claude AI usage limit reached|1700000123', resetsAt: 1_700_000_123_000 });
+    expect(classifyClaudeCodeFailure("You've hit your limit", c).detail).toEqual({ text: "You've hit your limit" });
+  });
   it('gives the login hint for auth failures', () => {
     expect(classifyClaudeCodeFailure('not logged in', c).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
   });

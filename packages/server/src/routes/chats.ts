@@ -17,6 +17,7 @@ import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { recordBackgroundUsage } from '../background-usage.js';
+import { continueOnAccount } from '../claude-accounts/switcher.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
@@ -344,6 +345,18 @@ export function chatsRoutes(container: Container): Hono {
       );
     }
     return c.body(null, 204);
+  });
+
+  // "Continue on <account>": carries a reply cut off by its Claude account's
+  // usage limit on to another account, whether or not the chat switches by
+  // itself (spec 2026-10-28-claude-accounts-design, "Switching mid-chat").
+  app.post('/:id/continue-on-account', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown; account?: unknown };
+    const chatId = getChatOrThrow(container, c.req.param('id')).id;
+    const messageId = requireNonEmptyString(body.messageId, 'messageId');
+    const account = requireNonEmptyString(body.account, 'account');
+    const result = await continueOnAccount(container, { chatId, messageId, account, midReply: false });
+    return c.json(result, 202);
   });
 
   // Export (#820): the shown conversation as Markdown, or the whole tree as
