@@ -36,3 +36,17 @@ export function claudeBackend(account: ClaudeAccountRef | null | undefined): str
 export function isClaudeLogin(backend: string): boolean {
   return backend === 'claude' || backend.startsWith('claude:');
 }
+
+/** An account as the API shows it. The login fields stay null until a login runner has read them. */
+export interface AccountView {
+  slug: string;
+  name: string;
+  colour: string | null;
+  configDir: string | null;
+  main: boolean;
+  limitedUntil: number | null;
+  signedIn: boolean | null;
+  email: string | null;
+  subscriptionType: string | null;
+  signingIn: boolean;
+}
