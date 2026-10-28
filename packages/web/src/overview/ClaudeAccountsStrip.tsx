@@ -45,7 +45,9 @@ export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX
           }
         }),
       );
-      if (live) setReadings(Object.fromEntries(entries));
+      if (!live) return;
+      // A failed poll keeps the last good reading; only an account that never had one shows "—".
+      setReadings((prev) => Object.fromEntries(entries.map(([slug, r]) => [slug, r === 'failed' && prev[slug] && prev[slug] !== 'failed' ? prev[slug] : r])));
     };
     void read(force);
     const timer = setInterval(() => void read(false), PLAN_USAGE_POLL_MS);
@@ -63,7 +65,7 @@ export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX
     <div data-testid="claude-accounts-strip" className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
       {accounts.map((a) => {
         const reading = readings[a.slug];
-        const limited = a.limitedUntil !== null && a.limitedUntil > now;
+        const limitedUntil = a.limitedUntil !== null && a.limitedUntil > now ? a.limitedUntil : null;
         const dot = a.main ? 'var(--text-muted)' : (a.colour ?? 'var(--accent)');
         return (
           <span key={a.slug} data-testid={`claude-account-${a.slug}`} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
@@ -77,7 +79,7 @@ export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX
                 <span key={w.id}>{w.short} —</span>
               );
             })}
-            {limited && <span className="text-[var(--danger)]">Limited until {formatReset(a.limitedUntil as number, now)}</span>}
+            {limitedUntil !== null && <span className="text-[var(--danger)]">{`Limited until ${formatReset(limitedUntil, now)}`}</span>}
           </span>
         );
       })}
