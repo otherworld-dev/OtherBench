@@ -572,5 +572,18 @@ export function runToolProviderContract(
       expect(await provider.requestApproval(agent('Read', 'read'), { path: 'a.txt' }, policy({ fs: 'read' }), ctx({ unattended: true }))).toMatchObject({ allowed: true });
       expect(w.requests).toHaveLength(0);
     });
+
+    it('requestApproval in an unattended run whose schedule allows Auto: deferAsk goes to the classifier or approves, as when attended', async () => {
+      const w = watch({ choice: 'once' });
+      const unattendedAuto = ctx({ unattended: true, unattendedAuto: true });
+      expect(await provider.requestApproval(agent('Bash', 'execute'), { command: 'npm test' }, policy({ shell: true }), unattendedAuto, { deferAsk: true })).toEqual({ deferred: true });
+      const [shell] = await listed(policy({ shell: true }));
+      expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), unattendedAuto, { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'auto' });
+      // Without deferAsk (canUseTool, after the classifier) nobody is there: still refused.
+      expect(await provider.requestApproval(agent('Bash', 'execute'), { command: 'npm test' }, policy({ shell: true }), unattendedAuto)).toEqual({ allowed: false, reason: UNATTENDED_REASON });
+      // The flag alone, with no unattended run, changes nothing.
+      expect(await provider.requestApproval(agent('Bash', 'execute'), { command: 'npm test' }, policy({ shell: true }), ctx({ unattendedAuto: true }), { deferAsk: true })).toEqual({ deferred: true });
+      expect(w.requests).toHaveLength(0);
+    });
   });
 }

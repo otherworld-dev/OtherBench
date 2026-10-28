@@ -1024,8 +1024,9 @@ export class OtherBenchToolProvider implements ToolProvider {
       console.error(`[OtherBenchToolProvider] the broker could not decide a "${tool.name}" call: ${messageOf(err)}`);
       return { kind: 'refused', args: call.args, denied: quoting(tool, deniedAuth(`${UNCHECKED_REASON} ${messageOf(err)}`, false)) };
     }
-    // Never in a scheduled run: nobody is there, so the call is refused below rather than handed on.
-    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true) {
+    // Never in a scheduled run, unless its schedule allows auto mode: nobody
+    // is there, so the call is refused below rather than handed on.
+    if (decision.kind === 'ask' && opts.deferAsk === true && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
       // Auto mode: no card, no event and nothing stored -- the pending
       // request is dropped unanswered. A Claude Code tool goes to its
       // classifier. One of OtherBench's own (relayed, artifact, recall, plan)

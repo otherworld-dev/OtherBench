@@ -33,7 +33,7 @@ const cancel = vi.mocked(api.turns.cancel);
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
     id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' },
-    rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'),
+    rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'), autoMode: false,
     createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, activeRun: null, lastRun: null, warnings: [], ...over,
   };
 }
@@ -69,6 +69,18 @@ describe('SchedulesView', () => {
     const paused = screen.getByTestId('schedule-row-s2');
     expect(paused).toHaveTextContent('New chat each run in Alpha');
     expect(within(paused).getByTestId('schedule-next')).toHaveTextContent('Next run: Paused');
+  });
+
+  it('says which schedules run in auto mode, only where the profile is Claude Code', async () => {
+    useOtherBenchStore.setState({
+      profiles: [profile, { ...profile, id: 'p-cc', name: 'Claude', connectionId: 'cc' }],
+      connections: [connection, { ...connection, id: 'cc', name: 'Claude Code', kind: 'claude_code' }],
+    });
+    list.mockResolvedValue([view({ profileId: 'p-cc', autoMode: true }), view({ id: 's2', autoMode: true }), view({ id: 's3', profileId: 'p-cc' })]);
+    render(<SchedulesView onClose={vi.fn()} />);
+    expect(await screen.findByTestId('schedule-row-s1')).toHaveTextContent('Claude · Auto mode');
+    expect(screen.getByTestId('schedule-row-s2')).not.toHaveTextContent('Auto mode');
+    expect(screen.getByTestId('schedule-row-s3')).not.toHaveTextContent('Auto mode');
   });
 
   it('pauses and resumes', async () => {
@@ -117,14 +129,41 @@ describe('SchedulesView', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
     expect(dialog).toHaveTextContent('Chat: Trip plans');
     expect(dialog).toHaveTextContent('This profile asks before every tool call, so every tool call will be refused.');
+    // Auto is Claude Code's: not offered on this profile.
+    expect(within(dialog).queryByRole('checkbox', { name: /auto mode/i })).not.toBeInTheDocument();
     await user.type(within(dialog).getByLabelText('Name'), 'Weekly report');
     await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' } })
+      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false })
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it("offers Auto for a Claude Code profile: ticking it changes the warnings and is saved with the schedule", async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({
+      profiles: [{ ...profile, id: 'p-cc', name: 'Claude', connectionId: 'cc' }],
+      connections: [{ ...connection, id: 'cc', name: 'Claude Code', kind: 'claude_code' }],
+      chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p-cc', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+    });
+    create.mockResolvedValue(view());
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    const auto = within(dialog).getByRole('checkbox', { name: /auto mode/i });
+    expect(auto).not.toBeChecked();
+    expect(dialog).toHaveTextContent('This profile asks before every tool call, so every tool call will be refused.');
+    await user.click(auto);
+    expect(dialog).not.toHaveTextContent('every tool call will be refused');
+    expect(dialog).toHaveTextContent("Auto mode decides Claude Code's tool calls.");
+    await user.type(within(dialog).getByLabelText('Name'), 'Triage');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'p-cc', autoMode: true })));
   });
 
   describe('the editor dialog', () => {

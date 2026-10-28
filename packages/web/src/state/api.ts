@@ -117,6 +117,7 @@ export interface CreateScheduleBody {
   target: { chatId: string } | { projectId: string };
   rule: ScheduleRule;
   enabled?: boolean;
+  autoMode?: boolean;
 }
 
 /** `PATCH /api/schedules/:id`: any of these; the target can't change. */
@@ -126,6 +127,7 @@ export interface PatchScheduleBody {
   profileId?: string;
   rule?: ScheduleRule;
   enabled?: boolean;
+  autoMode?: boolean;
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {

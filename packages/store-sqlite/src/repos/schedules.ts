@@ -34,6 +34,7 @@ function toSchedule(row: Record<string, unknown>): Schedule {
     timezone: row.timezone as string,
     enabled: valid && row.enabled === 1,
     nextRunAt: valid ? (row.next_run_at as number | null) : null,
+    autoMode: row.auto_mode === 1,
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
     ...(valid ? {} : { invalid: rule }),
@@ -66,8 +67,8 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, auto_mode, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         s.id,
@@ -80,6 +81,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
         s.timezone,
         s.enabled ? 1 : 0,
         s.nextRunAt,
+        s.autoMode === true ? 1 : 0,
         s.createdAt ?? now,
         s.updatedAt ?? now
       );
@@ -100,7 +102,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     if (!row) throw new Error(`schedule: not found: ${id}`);
     const next = { ...toSchedule(row), ...patch };
     this.db
-      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, enabled = ?, next_run_at = ?, auto_mode = ?, updated_at = ? WHERE id = ?')
       .run(
         next.name,
         next.prompt,
@@ -109,6 +111,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
         patch.rule !== undefined ? JSON.stringify(patch.rule) : (row.rule as string),
         next.enabled ? 1 : 0,
         next.nextRunAt,
+        next.autoMode ? 1 : 0,
         next.updatedAt,
         id
       );

@@ -23,6 +23,8 @@ export function toolContextFor(req: EngineRequest, signal: AbortSignal = req.sig
     ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
     ...(req.plan ? { plan: req.plan } : {}),
     ...(req.unattended === true ? { unattended: true } : {}),
+    // TurnRunner sets autoMode on an unattended request only when its schedule allows it.
+    ...(req.unattended === true && req.autoMode === true ? { unattendedAuto: true } : {}),
     signal,
     ...(toolCallId !== undefined ? { toolCallId } : {}),
     ...(req.subagents ? { subagents: req.subagents } : {}),

@@ -1530,6 +1530,31 @@ describe('ClaudeCodeChatEngine unattended turns', () => {
     expect(canUse).toEqual({ behavior: 'deny', message: UNATTENDED_REASON });
     e.dispose();
   });
+
+  it("in auto mode (the schedule allows it): the hook hands the call to the classifier, and canUseTool, where the classifier couldn't decide, is still refused", async () => {
+    const tools = new FakeToolProvider();
+    let hookOut: unknown;
+    let canUse: unknown;
+    const { query, calls } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1', 'auto');
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!(
+        { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never,
+        't1',
+        { signal: new AbortController().signal }
+      );
+      canUse = await options.canUseTool!('Bash', { command: 'npm test' }, { signal: new AbortController().signal, toolUseID: 't2' } as never);
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: tools, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+
+    const events = await collect(e.stream(req({ unattended: true, autoMode: true })));
+
+    expect(events.some((ev) => ev.type === 'error')).toBe(false);
+    expect(calls[0]!.options.permissionMode).toBe('auto');
+    expect(hookOut).toEqual({});
+    expect(canUse).toEqual({ behavior: 'deny', message: UNATTENDED_REASON });
+    e.dispose();
+  });
 });
 
 describe('ClaudeCodeChatEngine relayed browser (spec 2026-10-12-model-browser-design)', () => {
@@ -2612,6 +2637,30 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  it("a scheduled run's helper between replies keeps the schedule's Auto, not the chat's", async () => {
+    for (const [scheduleAuto, chatAuto] of [[true, false], [false, true]] as const) {
+      let go!: () => void;
+      const out: { hookAnswer?: unknown } = {};
+      const { query } = helperAsksLater(new Promise<void>((r) => (go = r)), out);
+      const requestApproval = vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+      const e = new ClaudeCodeChatEngine({
+        query,
+        approvals: { requestApproval, recordAgentDenial: vi.fn() },
+        listEndpointModels: async () => [],
+        baseEnv: { PATH: '/bin' },
+        chatSettings: () => ({ autoMode: chatAuto, planMode: false, policy: profile().toolPolicy }),
+      });
+      await collect(e.stream(req({ unattended: true, autoMode: scheduleAuto, messageId: 'm1' })));
+      go();
+      await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+      const [, , , ctx, opts] = requestApproval.mock.calls[0]! as unknown as [unknown, unknown, unknown, ToolContext, { deferAsk?: boolean } | undefined];
+      expect(opts?.deferAsk === true).toBe(scheduleAuto);
+      expect(ctx.unattended).toBe(true);
+      expect(ctx.unattendedAuto === true).toBe(scheduleAuto);
+      e.dispose();
+    }
+  });
+
   it("refuses a helper's call between replies once its chat is gone", async () => {
     let go!: () => void;
     const out: { hookAnswer?: unknown } = {};
@@ -2695,6 +2744,25 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     expect(events.filter((ev) => ev.type === 'text-delta')).toEqual([{ type: 'text-delta', text: 'Reviewed.' }]);
     expect(events.at(-1)).toMatchObject({ type: 'finish' });
     e.dispose();
+  });
+
+  it("a scheduled run's self-start carries on unattended, with the schedule's Auto", async () => {
+    for (const autoMode of [true, false]) {
+      const { query } = scripted(async function* ({ options, nextPrompt }) {
+        yield* firstReply(nextPrompt, options?.permissionMode ?? 'default');
+        yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+        yield delta('Reviewed.');
+        yield selfResult();
+        await nextPrompt();
+      });
+      const { e, seen } = make(query);
+      await collect(e.stream(req({ messageId: 'm1', unattended: true, autoMode })));
+      await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+      const start = selfStarts(seen)[0]!;
+      expect(start.unattended).toBe(true);
+      expect(start.unattendedAuto === true).toBe(autoMode);
+      e.dispose();
+    }
   });
 
   it("a self-started reply whose process ends before the turn's result ends in an error, not as complete", async () => {

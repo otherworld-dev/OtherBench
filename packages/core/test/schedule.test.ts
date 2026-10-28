@@ -158,6 +158,12 @@ describe('texts', () => {
     );
   });
 
+  it("says what happens to tool calls in a run whose schedule allows Claude Code's auto mode", () => {
+    expect(scheduledPromptText({ ...base, trigger: 'scheduled', at: slot, dueAt: slot, previousAt: null, autoMode: true })).toBe(
+      '[Scheduled run "Weekly report": Monday 12 October 2026, 09:00 (Europe/London). This is the first run. Nobody is watching this run: auto mode decides tool calls, and any that would still need approval will be refused.]\n\nhello'
+    );
+  });
+
   it('titles a run chat with the name and the short date, uncut', () => {
     expect(runChatTitle('Weekly report', slot, LONDON)).toBe('Weekly report · 12 Oct 2026');
     expect(runChatTitle('x'.repeat(80), slot, LONDON)).toBe(`${'x'.repeat(80)} · 12 Oct 2026`);
@@ -233,5 +239,18 @@ describe('unattendedWarnings', () => {
     expect(unattendedWarnings(policy({ computer: false }), 'anthropic', true)).toEqual([]);
     expect(unattendedWarnings(policy(), 'anthropic', true)).toEqual([]);
     expect(unattendedWarnings(policy({ approvalMode: 'always_ask', computer: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
+  });
+
+  it("with the schedule's Auto on a Claude Code profile: auto mode decides, and only what it can't settle, a sandbox host and computer use are named", () => {
+    const decides = "Auto mode decides Claude Code's tool calls. One it blocks is refused, and so is one it would still ask you about.";
+    const hosts = "Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).";
+    const computer = 'Computer use needs someone at the machine, so every computer action is refused, a screenshot included.';
+    const all = policy({ shell: true, shellRuns: 'sandbox', fs: 'readwrite', mcpServerIds: ['s'], recall: true, browser: true, computer: true });
+    expect(unattendedWarnings(all, 'claude_code', true, true)).toEqual([decides, hosts, computer]);
+    // Always ask doesn't mean every call is refused: auto mode still decides them.
+    expect(unattendedWarnings(policy({ ...all, approvalMode: 'always_ask' }), 'claude_code', true, true)).toEqual([decides, hosts, computer]);
+    expect(unattendedWarnings(all, 'claude_code', false, true)).toEqual([decides, computer]);
+    // Auto is Claude Code's: an API profile's warnings don't change.
+    expect(unattendedWarnings(policy({ recall: true }), 'anthropic', true, true)).toEqual(['Searching past chats asks first in each chat, so it will be refused.']);
   });
 });

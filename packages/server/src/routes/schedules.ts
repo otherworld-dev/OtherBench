@@ -25,6 +25,7 @@ interface ScheduleBody {
   target?: unknown;
   rule?: unknown;
   enabled?: unknown;
+  autoMode?: unknown;
 }
 
 /** The server machine's IANA zone, which schedules made now are stored in; UTC when the runtime can't say. */
@@ -80,9 +81,9 @@ function parseRuleBody(value: unknown): ScheduleRule {
   return rule;
 }
 
-function parseEnabled(value: unknown, fallback: boolean): boolean {
+function parseFlag(field: 'enabled' | 'autoMode', value: unknown, fallback: boolean): boolean {
   if (value === undefined) return fallback;
-  if (typeof value !== 'boolean') throw new HTTPException(400, { message: '"enabled" must be true or false.' });
+  if (typeof value !== 'boolean') throw new HTTPException(400, { message: `"${field}" must be true or false.` });
   return value;
 }
 
@@ -101,7 +102,7 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
     running: container.schedules?.isRunning(s.id) ?? false,
     activeRun: container.schedules?.activeRun(s.id) ?? null,
     lastRun: store.schedules.lastRun(s.id),
-    warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder) : [],
+    warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder, s.autoMode) : [],
   };
 }
 
@@ -132,7 +133,8 @@ export function schedulesRoutes(container: Container): Hono {
     const profileId = parseProfile(container, body.profileId);
     const target = parseTarget(container, body.target);
     const rule = parseRuleBody(body.rule);
-    const enabled = parseEnabled(body.enabled, true);
+    const enabled = parseFlag('enabled', body.enabled, true);
+    const autoMode = parseFlag('autoMode', body.autoMode, false);
     if (container.store.schedules.list().length >= MAX_SCHEDULES) {
       throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most OtherBench keeps. Delete one first.` });
     }
@@ -148,6 +150,7 @@ export function schedulesRoutes(container: Container): Hono {
       timezone,
       enabled,
       nextRunAt: enabled ? nextRunAt(rule, timezone, now) : null,
+      autoMode,
       createdAt: now,
       updatedAt: now,
     });
@@ -165,7 +168,8 @@ export function schedulesRoutes(container: Container): Hono {
     if (body.prompt !== undefined) patch.prompt = parsePrompt(body.prompt);
     if (body.profileId !== undefined) patch.profileId = parseProfile(container, body.profileId);
     if (body.rule !== undefined) patch.rule = parseRuleBody(body.rule);
-    const enabled = parseEnabled(body.enabled, current.enabled);
+    if (body.autoMode !== undefined) patch.autoMode = parseFlag('autoMode', body.autoMode, current.autoMode);
+    const enabled = parseFlag('enabled', body.enabled, current.enabled);
     patch.enabled = enabled;
     if (!enabled) {
       patch.nextRunAt = null;

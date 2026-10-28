@@ -477,7 +477,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       afterMessageId: last.messageId,
       profileId: last.profileId,
       // The user asked for a follow-on: it's attended, and needs no notice.
-      ...(noteIds ? { notice: '', unattended: false, noteIds } : { notice: this.selfStartNotice(live), unattended: last.unattended }),
+      ...(noteIds
+        ? { notice: '', unattended: false, noteIds }
+        : { notice: this.selfStartNotice(live), unattended: last.unattended, ...(last.unattended && last.autoMode ? { unattendedAuto: true } : {}) }),
       run: (req) => {
         if (taken) throw new Error('A self-started turn runs once.');
         taken = true;
@@ -740,9 +742,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const helpers = new HelperRegistry();
     // The process this reply runs in, once chosen. Its calls go to the
     // classifier while that Claude Code is in auto mode, which can change
-    // mid-reply (Auto switched, refreshChatSettings); a scheduled run never.
+    // mid-reply (Auto switched, refreshChatSettings); a scheduled run's never
+    // does, and it uses the classifier only when its schedule allows Auto.
     const proc: { live: LiveProcess | null } = { live: null };
-    const classifier = backend === CLAUDE_BACKEND && req.unattended !== true;
+    const classifier = backend === CLAUDE_BACKEND && (req.unattended !== true || autoMode);
     const binding: TurnBinding = {
       gate: createGate({
         approvals: this.deps.approvals,
@@ -1126,7 +1129,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         ctx: { ...rest, ...(plan ? { plan } : {}), signal: abortController.signal, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
         policy: current.policy,
         // Claude Code's own mode can't change mid-process: Auto turned on since doesn't make it auto.
-        autoMode: current.autoMode && !last.unattended && live.permissionMode === 'auto',
+        // A scheduled run keeps its schedule's Auto, whatever the chat's says now.
+        autoMode: (last.unattended ? last.autoMode : current.autoMode) && live.permissionMode === 'auto',
       };
     };
     const gate: Gate = async (toolName, toolInput, signal, opts) => {

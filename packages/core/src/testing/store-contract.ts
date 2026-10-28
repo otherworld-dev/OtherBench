@@ -1576,6 +1576,17 @@ export function runStoreContract(
         expect(() => store.schedules.delete('s1')).not.toThrow();
       });
 
+      it('autoMode defaults to false and round-trips through create and update', () => {
+        const ids = seedTargets();
+        expect(store.schedules.create(schedule({ id: 's1' }, ids)).autoMode).toBe(false);
+        expect(store.schedules.create(schedule({ id: 's2', autoMode: true }, ids)).autoMode).toBe(true);
+        expect(store.schedules.update('s1', { autoMode: true }).autoMode).toBe(true);
+        expect(store.schedules.get('s1')!.autoMode).toBe(true);
+        expect(store.schedules.update('s2', { name: 'Renamed' }).autoMode).toBe(true);
+        expect(store.schedules.update('s2', { autoMode: false }).autoMode).toBe(false);
+        expect(store.schedules.list().map((s) => s.autoMode)).toEqual([true, false]);
+      });
+
       it('due lists enabled schedules whose time has come, oldest due first', () => {
         const ids = seedTargets();
         store.schedules.create(schedule({ id: 'late', nextRunAt: 500 }, ids));
