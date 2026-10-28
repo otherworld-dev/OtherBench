@@ -8,17 +8,17 @@
 
 use tauri::AppHandle;
 
-/// Shows a notification; clicking it opens `chat_id` in the main window, or shows `reveal_path` in Explorer
-/// (Windows). A path outside the user's Downloads folder is never revealed.
-pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal_path: Option<String>) -> Result<(), String> {
+/// Shows a notification; clicking it opens `chat_id` in `window` (main or an undocked one), or shows
+/// `reveal_path` in Explorer (Windows). A path outside the user's Downloads folder is never revealed.
+pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal_path: Option<String>, window: String) -> Result<(), String> {
     let reveal = reveal_path.filter(|p| in_downloads(app, std::path::Path::new(p)));
     #[cfg(windows)]
     {
-        windows::show(app, title, body, chat_id, reveal)
+        windows::show(app, title, body, chat_id, reveal, window)
     }
     #[cfg(not(windows))]
     {
-        let _ = (chat_id, reveal);
+        let _ = (chat_id, reveal, window);
         use tauri_plugin_notification::NotificationExt;
         app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
     }
@@ -56,7 +56,7 @@ mod windows {
         }
     }
 
-    pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal: Option<String>) -> Result<(), String> {
+    pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal: Option<String>, window: String) -> Result<(), String> {
         let handle = app.clone();
         Toast::new(&app_id(app))
             .title(title)
@@ -67,9 +67,9 @@ mod windows {
                     let _ = handle.opener().reveal_item_in_dir(path);
                     return Ok(());
                 }
-                crate::tray::show_main(&handle);
+                crate::docks::bring_forward(&handle, &window);
                 if let Some(id) = &chat_id {
-                    let _ = handle.emit_to("main", "open-chat", id.clone());
+                    let _ = handle.emit_to(window.as_str(), "open-chat", id.clone());
                 }
                 Ok(())
             })

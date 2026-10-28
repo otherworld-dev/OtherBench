@@ -22,6 +22,7 @@ tauri-plugin-opener = "2"
 # Computer use: screenshots as PNG, sent as base64 (src/computer). Both already in the tree.
 png = "0.18"
 base64 = "0.22"
+tauri-plugin-window-state = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Windows toasts with a click handler (notify.rs); already in the tree via the notification plugin.

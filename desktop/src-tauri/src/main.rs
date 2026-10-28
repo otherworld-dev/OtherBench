@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod computer;
+mod docks;
 mod download;
 mod folder;
 mod hotkey;
@@ -92,10 +93,13 @@ fn computer_stop(app: tauri::AppHandle) {
     computer::stop_from_shell(&app, "button");
 }
 
-/// A desktop notification; clicking it opens `chat_id`, or shows `reveal_path` in its folder (notify.rs).
+/// A desktop notification; clicking it opens `chat_id` in `window` (the window
+/// that holds its mode: main unless it is an undocked one), or shows
+/// `reveal_path` in its folder (notify.rs).
 #[tauri::command]
-fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id: Option<String>, reveal_path: Option<String>) -> Result<(), String> {
-    notify::show(&app, &title, &body, chat_id, reveal_path)
+fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id: Option<String>, reveal_path: Option<String>, window: Option<String>) -> Result<(), String> {
+    let window = window.filter(|w| docks::is_target(w) && app.get_webview_window(w).is_some()).unwrap_or_else(|| "main".to_string());
+    notify::show(&app, &title, &body, chat_id, reveal_path, window)
 }
 
 /// Saves a download from the web app in the user's Downloads folder (download.rs) and returns its full path.
@@ -123,6 +127,51 @@ fn open_chat(app: tauri::AppHandle, chat_id: String) {
     tray::show_main(&app);
     let _ = app.emit_to("main", "open-chat", chat_id);
     hotkey::hide_quick(&app);
+}
+
+/// Opens `view` (code or overview) in its own window (docks.rs).
+#[tauri::command]
+fn undock(app: tauri::AppHandle, view: String) -> Result<(), String> {
+    docks::undock(&app, &view)
+}
+
+/// Puts `view` back in the main window, closing its own.
+#[tauri::command]
+fn dock(app: tauri::AppHandle, view: String) {
+    docks::dock(&app, &view);
+}
+
+/// The views in windows of their own now.
+#[tauri::command]
+fn undocked() -> Vec<String> {
+    docks::current()
+}
+
+/// Brings one of the app's windows forward (the mode switch, when a mode is in another window).
+#[tauri::command]
+fn show_window(app: tauri::AppHandle, window: String) {
+    if docks::is_target(&window) {
+        docks::bring_forward(&app, &window);
+    }
+}
+
+/// Hands `request` (a chat, an app, an issue or a card to open; web/src/desktop/windows.ts
+/// reads it) to the window that holds it and brings that window forward. A
+/// window that isn't open gets the main window instead.
+#[tauri::command]
+fn open_in(app: tauri::AppHandle, window: String, request: serde_json::Value) {
+    let target = if docks::is_target(&window) && app.get_webview_window(&window).is_some() { window } else { "main".to_string() };
+    docks::bring_forward(&app, &target);
+    let _ = app.emit_to(target.as_str(), "open-request", request);
+}
+
+/// Which of the app's windows has focus, if any: a notification isn't shown for a chat whose window is being looked at.
+#[tauri::command]
+fn focused_window(app: tauri::AppHandle) -> Option<String> {
+    ["main", "code", "overview"]
+        .into_iter()
+        .find(|label| app.get_webview_window(label).and_then(|w| w.is_focused().ok()).unwrap_or(false))
+        .map(str::to_string)
 }
 
 /// The webview origins the bundled UI can be served from. Windows uses
@@ -201,15 +250,26 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_folder])
+        // Undocked windows open where they were last, on the same screen (docks.rs).
+        // Only theirs: the main window keeps its place as before.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::SIZE | tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::MAXIMIZED)
+                .with_filter(docks::is_view)
+                .build(),
+        )
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_folder, undock, dock, undocked, show_window, open_in, focused_window])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
             // The quick-chat window is only ever hidden too: the hotkey brings it back.
+            // Closing an undocked window docks its view again (quitting doesn't ask, so they come back).
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" || window.label() == hotkey::QUICK {
                     api.prevent_close();
                     let _ = window.hide();
+                } else if docks::is_view(window.label()) {
+                    docks::closed(window.app_handle(), window.label());
                 }
             }
         })
@@ -218,8 +278,10 @@ fn main() {
             links::app_windows(app.handle())?;
             tray::build(app.handle())?;
             // The window is created hidden (tauri.conf.json) so a sign-in
-            // launch never flashes it on screen.
-            if !std::env::args().any(|a| a == MINIMIZED_FLAG) {
+            // launch never flashes it on screen; so are the undocked ones.
+            let minimized = std::env::args().any(|a| a == MINIMIZED_FLAG);
+            docks::restore(app.handle(), !minimized);
+            if !minimized {
                 tray::show_main(app.handle());
             }
 
@@ -278,8 +340,9 @@ mod tests {
 
     /// Tauri lets any page it counts as local call an app command unless the
     /// app declares an ACL manifest. With one, a command needs its
-    /// `allow-<command>` permission. The main and quick windows get every
-    /// command but `computer_stop`; the indicator bar gets only that one.
+    /// `allow-<command>` permission. The app windows (main, quick and the
+    /// undocked ones) get every command but `computer_stop`; the indicator bar
+    /// gets only that one.
     #[test]
     fn every_app_command_needs_a_permission_only_the_right_windows_have() {
         let build = include_str!("../build.rs");
@@ -288,7 +351,7 @@ mod tests {
         let app_granted = app["permissions"].to_string();
         let indicator_granted = indicator["permissions"].to_string();
         let commands = registered();
-        assert!(commands.len() >= 10, "{commands:?}");
+        assert!(commands.len() >= 16, "{commands:?}");
         for command in commands {
             assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from the app manifest in build.rs");
             let permission = format!("\"allow-{}\"", command.replace('_', "-"));
@@ -305,7 +368,10 @@ mod tests {
     #[test]
     fn the_app_windows_open_web_links_and_reveal_files_but_never_open_them() {
         let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-        assert_eq!(caps["windows"], serde_json::json!(["main", "quick"]));
+        assert_eq!(caps["windows"], serde_json::json!(["main", "quick", "code", "overview"]));
+        for view in crate::docks::VIEWS {
+            assert!(caps["windows"].as_array().unwrap().iter().any(|w| w == view), "{view} needs the app permissions");
+        }
         assert!(caps.get("remote").is_none());
         let permissions = caps["permissions"].to_string();
         assert!(permissions.contains("opener:allow-open-url"), "web links need the opener: {permissions}");
