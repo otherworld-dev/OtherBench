@@ -546,6 +546,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     let finished = false;
     // A rejected rate limit seen in the turn: its failure says when the limit resets.
     let rateLimitResetsAt: number | null = null;
+    // A usage limit was reported in the turn (a rejected rate-limit event, or Claude Code's own limit message), reset time known or not.
+    let rateLimited = false;
     try {
       yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, ...accountMeta(account), cwd, tools: [], mcpServers: [] } };
       for (;;) {
@@ -560,7 +562,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           // The process ended (closed, or died) before the turn's result: the reply didn't finish.
           if (!req.signal.aborted) {
             const text = [live.failure instanceof Error ? live.failure.message : 'Claude Code ended before it finished this reply.', ...live.stderr].join('\n');
-            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId, rateLimitResetsAt }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
           }
           break;
         }
@@ -574,6 +576,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           if (event.type === 'init') continue;
           if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
+            rateLimited = true;
             continue;
           }
           if (event.type === 'command-error') continue;
@@ -582,7 +585,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             continue;
           }
           if (event.type === 'result-error') {
-            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId, rateLimitResetsAt }) };
+            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
             continue;
           }
           if (event.type === 'finish') finished = true;
@@ -877,6 +880,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // The turn's own result arrived (a success or not): the process is in a known state.
     let ended = false;
     let rateLimitResetsAt: number | null = null;
+    // A usage limit was reported in the turn (a rejected rate-limit event, or Claude Code's own limit message), reset time known or not.
+    let rateLimited = false;
     let pending: Promise<IteratorResult<SDKMessage>> | null = null;
     try {
       while (!finished) {
@@ -920,6 +925,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             yield* flushNotice();
           } else if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
+            rateLimited = true;
           } else if (event.type === 'compacted') {
             if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
             else if (compaction) Object.assign(compaction, { preTokens: event.preTokens, postTokens: event.postTokens });
@@ -932,7 +938,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             live.close();
             if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
             return 'done';
           } else {
             if (event.type === 'finish') {
@@ -963,7 +969,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const text = [err instanceof Error ? err.message : String(err), ...live.stderr].join('\n');
       if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
       yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
     } finally {
       this.running.delete(req.messageId);
       tickets.clear();

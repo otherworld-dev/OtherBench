@@ -236,6 +236,18 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(events.at(-1)).toMatchObject({ type: 'error', error: { kind: 'capability' } });
   });
 
+  it("marks a usage limit Claude Code reports with no reset time, even when the result's text is vague", async () => {
+    const { query } = fakeQuery(async function* () {
+      yield init();
+      yield { type: 'assistant', error: 'rate_limit', message: { content: [] }, parent_tool_use_id: null, uuid: 'u', session_id: 'sess-0' } as unknown as SDKMessage;
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['error'], usage: {} } as unknown as SDKMessage;
+    });
+    const events = await collect(engine(query).stream(req()));
+    const last = events.at(-1);
+    expect(last).toMatchObject({ type: 'error', error: { kind: 'rate_limit' } });
+    expect((last as { error: { detail: unknown } }).error.detail).toEqual({ text: 'error', usageLimit: true });
+  });
+
   it('stops quietly on abort while an approval is pending, without an error event', async () => {
     const ac = new AbortController();
     const { query } = fakeQuery(async function* ({ options }) {

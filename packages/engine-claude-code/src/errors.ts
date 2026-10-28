@@ -14,7 +14,17 @@ export function autoModeUnavailable(): SerializedError {
   return { kind: 'capability', retryable: false, message: AUTO_MODE_UNAVAILABLE_MESSAGE };
 }
 
-export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; autoMode?: boolean }): SerializedError {
+/** Claude Code's own words for an account out of usage (not an overload or an API 429). */
+const USAGE_LIMIT_TEXT = /usage limit|you['’]?ve hit your (usage )?limit/i;
+
+/**
+ * `ctx.rateLimited`: the turn reported a usage limit (a rejected rate-limit
+ * event, or Claude Code's own limit message), whether or not it said when it
+ * resets. A `rate_limit` error carries `detail.usageLimit: true` only on such
+ * evidence (that, a known reset time, or the limit text): an overload or a
+ * bare 429 is a `rate_limit` too, but must not hold the account.
+ */
+export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; rateLimited?: boolean; autoMode?: boolean }): SerializedError {
   if (/not logged in|\/login|invalid api key|authentication|unauthori[sz]ed|\b401\b/i.test(text)) {
     // `/login` only fixes a Claude login (main or another account); an endpoint backend uses the connection's token.
     const message = isClaudeLogin(ctx.backend) ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
@@ -25,12 +35,14 @@ export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; 
   if (ctx.autoMode === true && /auto[ -]?mode/i.test(text) && /unavailable|not available|not supported|not enabled|disabled/i.test(text)) {
     return autoModeUnavailable();
   }
-  if (ctx.rateLimitResetsAt != null || /usage limit|you['’]?ve hit your (usage )?limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
+  const usageLimit = ctx.rateLimited === true || ctx.rateLimitResetsAt != null || USAGE_LIMIT_TEXT.test(text);
+  if (usageLimit || /rate.?limit|\b429\b|overloaded/i.test(text)) {
     const resets = ctx.rateLimitResetsAt ?? Number(/\|(\d{9,})/.exec(text)?.[1] ?? NaN);
     const known = Number.isFinite(resets);
     const when = known ? ` It resets at ${new Date(resets * 1000).toLocaleString()}.` : '';
     // `resetsAt` in ms, for the account switcher to hold the account until; absent when the reset time isn't known.
-    return { kind: 'rate_limit', retryable: true, message: `Claude usage limit reached.${when}`, detail: { text: tail(text), ...(known ? { resetsAt: resets * 1000 } : {}) } };
+    const detail = { text: tail(text), ...(known ? { resetsAt: resets * 1000 } : {}), ...(usageLimit ? { usageLimit: true } : {}) };
+    return { kind: 'rate_limit', retryable: true, message: `Claude usage limit reached.${when}`, detail };
   }
   if (!isClaudeLogin(ctx.backend) && /ECONNREFUSED|ENOTFOUND|fetch failed|connect(ion)? (refused|error)|socket hang up/i.test(text)) {
     return { kind: 'transient', retryable: true, message: `Can't reach ${ctx.backend}.` };

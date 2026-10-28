@@ -20,9 +20,24 @@ describe('classifyClaudeCodeFailure', () => {
     expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 })).toMatchObject({ kind: 'rate_limit', message: expect.stringContaining('resets') });
   });
   it('puts the reset time on a rate limit in ms, only when it is known', () => {
-    expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 }).detail).toEqual({ text: 'error', resetsAt: 1_700_000_000_000 });
-    expect(classifyClaudeCodeFailure('Claude AI usage limit reached|1700000123', c).detail).toEqual({ text: 'Claude AI usage limit reached|1700000123', resetsAt: 1_700_000_123_000 });
-    expect(classifyClaudeCodeFailure("You've hit your limit", c).detail).toEqual({ text: "You've hit your limit" });
+    expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 }).detail).toEqual({ text: 'error', resetsAt: 1_700_000_000_000, usageLimit: true });
+    expect(classifyClaudeCodeFailure('Claude AI usage limit reached|1700000123', c).detail).toEqual({ text: 'Claude AI usage limit reached|1700000123', resetsAt: 1_700_000_123_000, usageLimit: true });
+    expect(classifyClaudeCodeFailure("You've hit your limit", c).detail).toEqual({ text: "You've hit your limit", usageLimit: true });
+  });
+  it('marks a usage limit only on real evidence, never on an overload or a bare 429', () => {
+    const overloaded = classifyClaudeCodeFailure('API Error: 529 overloaded_error', c);
+    expect(overloaded).toMatchObject({ kind: 'rate_limit', message: 'Claude usage limit reached.' });
+    expect(overloaded.detail).toEqual({ text: 'API Error: 529 overloaded_error' });
+    expect(classifyClaudeCodeFailure('API Error: 429 Too Many Requests', c).detail).toEqual({ text: 'API Error: 429 Too Many Requests' });
+    expect(classifyClaudeCodeFailure('API Error: 429 rate_limit_error', c).detail).not.toHaveProperty('usageLimit');
+
+    expect(classifyClaudeCodeFailure('Claude AI usage limit reached', c).detail).toMatchObject({ usageLimit: true });
+    expect(classifyClaudeCodeFailure("You've hit your usage limit · resets 3pm", c).detail).toMatchObject({ usageLimit: true });
+    expect(classifyClaudeCodeFailure('error', { ...c, rateLimitResetsAt: 1700000000 }).detail).toMatchObject({ usageLimit: true });
+    // A rejected rate-limit event (or Claude Code's own limit message) with no reset time.
+    const flagged = classifyClaudeCodeFailure('error', { ...c, rateLimited: true });
+    expect(flagged.kind).toBe('rate_limit');
+    expect(flagged.detail).toEqual({ text: 'error', usageLimit: true });
   });
   it('gives the login hint for auth failures', () => {
     expect(classifyClaudeCodeFailure('not logged in', c).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
