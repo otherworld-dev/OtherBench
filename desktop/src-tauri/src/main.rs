@@ -129,9 +129,11 @@ fn open_chat(app: tauri::AppHandle, chat_id: String) {
     hotkey::hide_quick(&app);
 }
 
-/// Opens `view` (code or overview) in its own window (docks.rs).
+/// Opens `view` (code or overview) in its own window (docks.rs). Async on purpose:
+/// on Windows a window built in a synchronous command deadlocks (WebView2), and
+/// shows only a white frame that can't be closed.
 #[tauri::command]
-fn undock(app: tauri::AppHandle, view: String) -> Result<(), String> {
+async fn undock(app: tauri::AppHandle, view: String) -> Result<(), String> {
     docks::undock(&app, &view)
 }
 
@@ -376,6 +378,14 @@ mod tests {
         let permissions = caps["permissions"].to_string();
         assert!(permissions.contains("opener:allow-open-url"), "web links need the opener: {permissions}");
         assert!(!permissions.contains("open-path"), "Show in folder must never open a file: {permissions}");
+    }
+
+    /// WebView2 deadlocks a window built in a synchronous command (tauri's
+    /// WebviewWindowBuilder docs), so the command that builds one is async.
+    #[test]
+    fn the_command_that_builds_a_window_is_async() {
+        let src = include_str!("main.rs");
+        assert!(src.contains("async fn undock("), "undock builds a window, so it must be an async command");
     }
 
     #[test]
