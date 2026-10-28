@@ -123,15 +123,19 @@ fn open_folder(path: String) -> Result<(), String> {
 
 /// Quick chat's Expand: the main window opens the chat and the quick window goes away.
 #[tauri::command]
-fn open_chat(app: tauri::AppHandle, chat_id: String) {
+async fn open_chat(app: tauri::AppHandle, chat_id: String) {
     tray::show_main(&app);
     let _ = app.emit_to("main", "open-chat", chat_id);
     hotkey::hide_quick(&app);
 }
 
-/// Opens `view` (code or overview) in its own window (docks.rs). Async on purpose:
-/// on Windows a window built in a synchronous command deadlocks (WebView2), and
-/// shows only a white frame that can't be closed.
+/// Opens `view` (code or overview) in its own window (docks.rs).
+///
+/// This and every other command that builds, shows, focuses or closes a window
+/// is async on purpose. A synchronous command runs inside WebView2's message
+/// handler on the main thread, and a window built there deadlocks (a white
+/// frame that can't be closed), while showing or focusing another webview from
+/// there makes the windows fight over focus and leaves clicks queued for seconds.
 #[tauri::command]
 async fn undock(app: tauri::AppHandle, view: String) -> Result<(), String> {
     docks::undock(&app, &view)
@@ -139,19 +143,19 @@ async fn undock(app: tauri::AppHandle, view: String) -> Result<(), String> {
 
 /// Puts `view` back in the main window, closing its own.
 #[tauri::command]
-fn dock(app: tauri::AppHandle, view: String) {
+async fn dock(app: tauri::AppHandle, view: String) {
     docks::dock(&app, &view);
 }
 
 /// The views in windows of their own now.
 #[tauri::command]
-fn undocked() -> Vec<String> {
+async fn undocked() -> Vec<String> {
     docks::current()
 }
 
 /// Brings one of the app's windows forward (the mode switch, when a mode is in another window).
 #[tauri::command]
-fn show_window(app: tauri::AppHandle, window: String) {
+async fn show_window(app: tauri::AppHandle, window: String) {
     if docks::is_target(&window) {
         docks::bring_forward(&app, &window);
     }
@@ -161,7 +165,7 @@ fn show_window(app: tauri::AppHandle, window: String) {
 /// reads it) to the window that holds it and brings that window forward. A
 /// window that isn't open gets the main window instead.
 #[tauri::command]
-fn open_in(app: tauri::AppHandle, window: String, request: serde_json::Value) {
+async fn open_in(app: tauri::AppHandle, window: String, request: serde_json::Value) {
     let target = if docks::is_target(&window) && app.get_webview_window(&window).is_some() { window } else { "main".to_string() };
     docks::bring_forward(&app, &target);
     let _ = app.emit_to(target.as_str(), "open-request", request);
@@ -169,7 +173,7 @@ fn open_in(app: tauri::AppHandle, window: String, request: serde_json::Value) {
 
 /// Which of the app's windows has focus, if any: a notification isn't shown for a chat whose window is being looked at.
 #[tauri::command]
-fn focused_window(app: tauri::AppHandle) -> Option<String> {
+async fn focused_window(app: tauri::AppHandle) -> Option<String> {
     ["main", "code", "overview"]
         .into_iter()
         .find(|label| app.get_webview_window(label).and_then(|w| w.is_focused().ok()).unwrap_or(false))
@@ -380,12 +384,15 @@ mod tests {
         assert!(!permissions.contains("open-path"), "Show in folder must never open a file: {permissions}");
     }
 
-    /// WebView2 deadlocks a window built in a synchronous command (tauri's
-    /// WebviewWindowBuilder docs), so the command that builds one is async.
+    /// WebView2 deadlocks a window built in a synchronous command, and stalls on
+    /// one shown or focused from there (tauri's WebviewWindowBuilder docs), so
+    /// the commands that touch another window are async.
     #[test]
-    fn the_command_that_builds_a_window_is_async() {
+    fn the_commands_that_touch_windows_are_async() {
         let src = include_str!("main.rs");
-        assert!(src.contains("async fn undock("), "undock builds a window, so it must be an async command");
+        for command in ["undock", "dock", "undocked", "show_window", "open_in", "focused_window", "open_chat"] {
+            assert!(src.contains(&format!("async fn {command}(")), "{command} touches a window, so it must be an async command");
+        }
     }
 
     #[test]
