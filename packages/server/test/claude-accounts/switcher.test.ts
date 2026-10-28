@@ -315,6 +315,26 @@ describe('attachAccountSwitcher', () => {
     expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
   });
 
+  it('continues a reply regenerated through the route, which puts the head on the reply itself', async () => {
+    const { store } = container;
+    // No folder: the route refuses a chat whose folder isn't on this machine.
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, accountAutoSwitch: true, claudeAccount: null });
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'Do it' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'First go' }], status: 'complete', error: null, producedBy });
+    store.chats.update('chat-1', { headMessageId: 'a1' });
+
+    const res = await createApp(container).request('/api/chats/chat-1/regenerate', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messageId: 'a1' }),
+    });
+    expect(res.status).toBe(202);
+    const { assistantMessageId } = (await res.json()) as { assistantMessageId: string };
+    expect(container.store.chats.get('chat-1')!.headMessageId).not.toBe('u1');
+
+    await vi.waitFor(() => expect(userChildren(assistantMessageId)).toHaveLength(1));
+    expect(userChildren(assistantMessageId)[0]!.parts).toEqual([{ type: 'text', text: continuePrompt('Main', 'VH') }]);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
+  });
+
   it('continues a self-started reply, which follows the reply before it while the head stays on the user message', async () => {
     chat(true);
     seedSelfStarted();

@@ -45,8 +45,9 @@ function ranOnClaudeLogin(store: Store, message: CanonMessage): boolean {
 /**
  * Whether the reply is the live tip of the chat's thread: the one line a
  * continuation would carry on. Not a compare turn's variant, and the newest
- * reply among its siblings (a regenerated one is), with nothing after it. Its
- * parent is the head, or it was self-started on the head's line: a self-started
+ * reply among its siblings (a regenerated one is), with nothing after it. It
+ * is the head (regenerating puts the head on the new reply), its parent is the
+ * head, or it was self-started on the head's line: a self-started
  * reply follows the reply before it while the head stays on the user message,
  * so every message between the head and it is a reply, each the newest child
  * of the one before, with no context line (/clear, /compact) on the way.
@@ -58,7 +59,7 @@ function isLiveTip(store: Store, chat: Chat, message: CanonMessage): boolean {
   if (isCompareSet(siblings)) return false;
   if (siblings.filter((m) => m.role === 'assistant').at(-1)?.id !== message.id) return false;
   if (store.messages.children(message.id).length > 0) return false;
-  if (head === message.parentId) return true;
+  if (head === message.id || head === message.parentId) return true;
   const path = store.messages.pathToRoot(message.id);
   const at = path.findIndex((m) => m.id === head);
   if (at === -1 || lineAfter({ store }, message.id, head)) return false;
