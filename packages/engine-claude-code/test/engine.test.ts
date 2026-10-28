@@ -2716,6 +2716,36 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  it('a self-started reply names the account its process runs on, not the one the chat has moved to', async () => {
+    const config = mkdtempSync(join(tmpdir(), 'otherbench-cfg-vh-'));
+    mkdirSync(join(config, 'skills', 'x'), { recursive: true });
+    const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: config };
+    let decision: unknown;
+    const { query } = scripted(async function* ({ options, nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewed.');
+      // The self-started turn reads one of the VH account's skills: its gate allows VH's folder, not main's.
+      await new Promise((r) => setTimeout(r, 20));
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(config, 'skills', 'x', 'SKILL.md') }, tool_use_id: 'r' } as never, 'r', { signal: new AbortController().signal });
+      yield selfResult();
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    try {
+      await collect(e.stream(req({ messageId: 'm1', claudeAccount: VH })));
+      await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+      // The chat has moved to main since: the server's request says so.
+      const events = await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self', claudeAccount: MAIN_ACCOUNT })));
+      expect(events[0]).toMatchObject({ type: 'engine-meta', meta: { backend: 'claude:vh', account: 'vh' } });
+      expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+      e.dispose();
+    } finally {
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
   it('a self-started reply that hits the usage limit says when it resets', async () => {
     const { query } = scripted(async function* ({ nextPrompt }) {
       yield* firstReply(nextPrompt);

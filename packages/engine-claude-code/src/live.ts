@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage, PermissionMode, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { Gate } from './approval.js';
 import type { BackgroundTasks } from './background.js';
 import type { ApprovalTickets } from './tickets.js';
@@ -193,6 +194,14 @@ export class LiveProcess {
   permissionMode: string | null = null;
   /** Whether this process can run in auto mode at all (it runs on the Claude login). */
   canAuto = false;
+  /** The backend this process was started on: an endpoint's URL, `claude`, or `claude:<slug>`. */
+  backend = 'claude';
+  /**
+   * The Claude account it runs on (none for main's inherited folder, or an
+   * endpoint). A turn Claude Code starts by itself runs here, whatever the
+   * chat's account is now.
+   */
+  account: ClaudeAccountRef | undefined = undefined;
   /**
    * The chat's Auto as last set for this process, recorded the moment it
    * changes: calls go to the classifier only while this is on AND Claude Code
