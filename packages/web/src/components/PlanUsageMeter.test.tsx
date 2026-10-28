@@ -117,6 +117,17 @@ describe('PlanUsageMeter account', () => {
     expect(screen.getByTestId('plan-usage').title.split('\n')[0]).toBe('VH');
   });
 
+  it('drops the previous reading on a switch, even when the next read fails', async () => {
+    const { rerender } = render(<PlanUsageMeter busy={false} account={null} />);
+    await settle();
+    expect(screen.getByTestId('plan-usage')).toBeInTheDocument();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    planUsage.mockRejectedValue(new Error('offline'));
+    rerender(<PlanUsageMeter busy={false} account="vh" />);
+    await settle();
+    expect(screen.queryByTestId('plan-usage')).toBeNull();
+  });
+
   it('reads again when the account changes', async () => {
     const { rerender } = render(<PlanUsageMeter busy={false} account={null} />);
     await settle();

@@ -57,6 +57,8 @@ export function PlanUsageMeter({ busy, account }: { busy: boolean; account: stri
   }
 
   useEffect(() => {
+    // The previous account's reading must not sit under the new account's name, or outlive a failed read.
+    setUsage(null);
     void load(false);
     const timer = setInterval(() => void load(false), PLAN_USAGE_POLL_MS);
     return () => clearInterval(timer);

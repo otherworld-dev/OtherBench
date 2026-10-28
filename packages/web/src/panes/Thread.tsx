@@ -201,7 +201,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   useEffect(() => {
     if (pinned && pinned !== 'main' && accounts.length === 0) loadAccounts().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
   }, [pinned, accounts.length, loadAccounts]);
-  const tint = pinned && pinned !== 'main' ? (accounts.find((a) => a.slug === pinned)?.colour ?? null) : null;
+  const tint = pinned && pinned !== 'main' ? (accounts.find((a) => a.slug === pinned)?.colour ?? 'var(--accent)') : null;
 
   if (!chat) {
     return (

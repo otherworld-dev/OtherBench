@@ -14,12 +14,17 @@ export function isWindowsPlatform(userAgent: string = typeof navigator === 'unde
  * The terminal command that picks the session up. A non-main account's reply also needs its
  * `CLAUDE_CONFIG_DIR` (`configDir`), set the PowerShell way on Windows and the shell way elsewhere.
  */
-export function resumeCommand(meta: EngineMeta, opts: { windows: boolean; configDir: string | null } = { windows: isWindowsPlatform(), configDir: null }): string {
+export function resumeCommand(meta: EngineMeta, opts: { windows: boolean; configDir: string | null } = { windows: isWindowsPlatform(), configDir: null }): string | null {
   const { cwd, sessionId } = meta;
-  if (!meta.account || !opts.configDir) return `cd "${cwd}" && claude --resume ${sessionId}`;
+  if (!meta.account) return `cd "${cwd}" && claude --resume ${sessionId}`;
+  // The reply ran on an account this machine doesn't have: main's command would resume it in the wrong login.
+  if (!opts.configDir) return null;
+  // Single quotes, so a `$` or `"` in a path stays literal.
+  const ps = (v: string): string => `'${v.replace(/'/g, "''")}'`;
+  const sh = (v: string): string => `'${v.replace(/'/g, "'\\''")}'`;
   return opts.windows
-    ? `$env:CLAUDE_CONFIG_DIR = "${opts.configDir}"; cd "${cwd}"; claude --resume ${sessionId}`
-    : `cd "${cwd}" && CLAUDE_CONFIG_DIR="${opts.configDir}" claude --resume ${sessionId}`;
+    ? `$env:CLAUDE_CONFIG_DIR = ${ps(opts.configDir)}; cd ${ps(cwd)}; claude --resume ${sessionId}`
+    : `cd ${sh(cwd)} && CLAUDE_CONFIG_DIR=${sh(opts.configDir)} claude --resume ${sessionId}`;
 }
 
 interface McpServerGroup {
@@ -128,10 +133,12 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
   if (!meta) return accountControls || null;
   const { builtIn, servers, empty } = groupTools(meta);
   const replyAccount = meta.account ? accounts.find((a) => a.slug === meta.account) : undefined;
+  const command = resumeCommand(meta, { windows: isWindowsPlatform(), configDir: replyAccount?.configDir ?? null });
 
   async function copy(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(resumeCommand(meta!, { windows: isWindowsPlatform(), configDir: replyAccount?.configDir ?? null }));
+      if (!command) return;
+      await navigator.clipboard.writeText(command);
       setCopied(true);
     } catch (err) {
       console.error('[otherbench-web] failed to copy resume command:', err);
@@ -177,7 +184,7 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
           </dd>
         </div>
       )}
-      <button type="button" onClick={() => void copy()} aria-label="Copy resume command" className="btn mt-1 px-2 py-0.5">
+      <button type="button" onClick={() => void copy()} aria-label="Copy resume command" disabled={command === null} title={command === null ? "This reply's Claude account isn't set up on this machine." : undefined} className="btn mt-1 px-2 py-0.5">
         {copied ? 'Copied' : 'Copy terminal resume command'}
       </button>
     </dl>

@@ -89,7 +89,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
   const codeMode = useOtherBenchStore((s) => s.mode === 'code');
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const [open, setOpen] = useState(readOpen);
-  const accountName = useClaudeAccounts((s) => (chat.claudeAccount && chat.claudeAccount !== 'main' ? (s.accounts.find((a) => a.slug === chat.claudeAccount)?.name ?? null) : null));
+  const accountName = useClaudeAccounts((s) => (chat.claudeAccount && chat.claudeAccount !== 'main' ? (s.accounts.find((a) => a.slug === chat.claudeAccount)?.name ?? chat.claudeAccount) : null));
   const [pinError, setPinError] = useState<string | null>(null);
   useEffect(() => setPinError(null), [chat.id]);
 

@@ -131,6 +131,17 @@ describe('Thread', () => {
     expect(root.style.getPropertyValue('--account-colour')).toBe('#e0a030');
     expect(screen.getByLabelText('Claude account')).toHaveTextContent('VH');
     unmount();
+    // A colourless account is still tinted (the accent), and a missing one is still badged by its slug.
+    useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('plain', 'Plain', null)] });
+    useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'plain' })] });
+    const plain = render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByRole('region', { name: 'Chat 1' })).toHaveAttribute('data-account', 'plain');
+    expect(screen.getByRole('region', { name: 'Chat 1' }).style.getPropertyValue('--account-colour')).toBe('var(--accent)');
+    plain.unmount();
+    useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'gone' })] });
+    const gone = render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByLabelText('Claude account')).toHaveTextContent('gone');
+    gone.unmount();
     for (const claudeAccount of ['main', null]) {
       useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount })] });
       const r = render(<ThreadForChat chatId="chat-1" />);

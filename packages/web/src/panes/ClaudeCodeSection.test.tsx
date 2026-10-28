@@ -206,11 +206,24 @@ describe('ClaudeCodeSection account controls', () => {
     expect(screen.getByText('Account: VH')).toBeInTheDocument();
   });
 
+  it("disables copy when the reply's account isn't set up here", () => {
+    loginChat();
+    const m = msg('a', 1, 's');
+    useOtherBenchStore.setState({ messages: { a: { ...m, engineMeta: { ...m.engineMeta!, account: 'gone', backend: 'claude:gone' } } } });
+    render(<ClaudeCodeSection chatId="c1" />);
+    const button = screen.getByRole('button', { name: 'Copy resume command' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', "This reply's Claude account isn't set up on this machine.");
+  });
+
   it('builds the resume command per platform', () => {
     const meta = { engine: 'claude_code' as const, sessionId: 's', backend: 'claude:vh', account: 'vh', cwd: 'E:\\p' };
-    expect(resumeCommand(meta, { windows: true, configDir: 'C:\\acc\\vh' })).toBe('$env:CLAUDE_CONFIG_DIR = "C:\\acc\\vh"; cd "E:\\p"; claude --resume s');
-    expect(resumeCommand(meta, { windows: false, configDir: '/acc/vh' })).toBe('cd "E:\\p" && CLAUDE_CONFIG_DIR="/acc/vh" claude --resume s');
+    expect(resumeCommand(meta, { windows: true, configDir: 'C:\\acc\\vh' })).toBe("$env:CLAUDE_CONFIG_DIR = 'C:\\acc\\vh'; cd 'E:\\p'; claude --resume s");
+    expect(resumeCommand(meta, { windows: false, configDir: '/acc/vh' })).toBe("cd 'E:\\p' && CLAUDE_CONFIG_DIR='/acc/vh' claude --resume s");
     expect(resumeCommand({ ...meta, account: undefined }, { windows: true, configDir: null })).toBe('cd "E:\\p" && claude --resume s');
+    expect(resumeCommand({ ...meta, cwd: "/it's $HOME" }, { windows: true, configDir: "/a'b" })).toBe(`$env:CLAUDE_CONFIG_DIR = '/a''b'; cd '/it''s $HOME'; claude --resume s`);
+    expect(resumeCommand({ ...meta, cwd: "/it's $HOME" }, { windows: false, configDir: "/a'b" })).toBe(`cd '/it'\\''s $HOME' && CLAUDE_CONFIG_DIR='/a'\\''b' claude --resume s`);
+    expect(resumeCommand(meta, { windows: false, configDir: null })).toBeNull();
     expect(isWindowsPlatform('Mozilla/5.0 (Windows NT 10.0)')).toBe(true);
     expect(isWindowsPlatform('Mozilla/5.0 (X11; Linux)')).toBe(false);
   });
