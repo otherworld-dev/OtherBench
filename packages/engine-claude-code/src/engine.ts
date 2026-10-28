@@ -694,7 +694,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const compaction: Compaction | null = compacting ? { summary: null } : null;
     if (compaction) binding.compacted = (summary) => (compaction.summary = summary);
     const options = this.processOptions(req, cwd, autoMode, clean);
-    const key = liveKey(options, { backend, token: profile.apiKey }, own);
+    const key = liveKey(options, { backend, token: profile.apiKey, configDir: account?.configDir ?? null }, own);
     let taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
     // Stopped while waiting for the session's busy process (or before it began): no process is started.
     if (taken === null && req.signal.aborted) return 'done';

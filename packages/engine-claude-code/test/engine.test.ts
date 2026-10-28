@@ -3703,6 +3703,21 @@ describe('ClaudeCodeChatEngine on a Claude account', () => {
     e.dispose();
   });
 
+  it('never reuses a pooled process for an account removed and re-added at a new folder', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req({ claudeAccount: VH })));
+    // Same slug (so the same backend and session), but its login now lives in another folder.
+    const moved: ClaudeAccountRef = { ...VH, configDir: 'D:\\y\\.claude-vh' };
+    await collect(e.stream(after('claude:vh', 'vh', { claudeAccount: moved })));
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.prompts).toHaveLength(1);
+    expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(moved.configDir);
+    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    expect(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: VH.configDir }, own)).not.toBe(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: moved.configDir }, own));
+    e.dispose();
+  });
+
   it("reads the account's plan usage in its own config folder", async () => {
     const usage = vi.fn(async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 7, resets_at: null } } }));
     const seen: Options[] = [];

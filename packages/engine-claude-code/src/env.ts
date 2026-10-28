@@ -27,6 +27,12 @@ const AUTO_BACKGROUND_VAR = 'CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS';
 const AUTO_BACKGROUND_VARS = /^CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS$/i;
 /** Where Claude Code keeps its login and settings. An account other than main replaces it, in any letter case. */
 const CONFIG_DIR_VARS = /^CLAUDE_CONFIG_DIR$/i;
+/**
+ * A login token Claude Code prefers over the one stored in its config folder.
+ * Inherited, it would run another account's turns on the token's account, so
+ * an account other than main drops it in any letter case; main keeps it.
+ */
+const OAUTH_TOKEN_VARS = /^CLAUDE_CODE_OAUTH_TOKEN$/i;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, '');
@@ -49,8 +55,9 @@ export function backendOf(conn: Connection, account?: ClaudeAccountRef): string 
  * Code's todo tools switched on, and its moving of long MCP calls to the
  * background switched off. On the Claude login, an account with its own
  * folder (not main) gets `CLAUDE_CONFIG_DIR` pointed there, replacing an
- * inherited one in any letter case; main passes an inherited one through
- * unchanged. An endpoint backend uses no login, so it ignores the account, as
+ * inherited one in any letter case, and loses an inherited
+ * `CLAUDE_CODE_OAUTH_TOKEN` so the folder's own login is used; main passes
+ * both through unchanged. An endpoint backend uses no login, so it ignores the account, as
  * `backendOf` does (the account is then no part of its process key either).
  */
 export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string, account?: ClaudeAccountRef): Record<string, string> {
@@ -60,7 +67,7 @@ export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: 
     if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !AUTO_BACKGROUND_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
   }
   if (!conn.baseUrl && account?.configDir) {
-    for (const key of Object.keys(env)) if (CONFIG_DIR_VARS.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (CONFIG_DIR_VARS.test(key) || OAUTH_TOKEN_VARS.test(key)) delete env[key];
     env['CLAUDE_CONFIG_DIR'] = account.configDir;
   }
   if (conn.baseUrl) {

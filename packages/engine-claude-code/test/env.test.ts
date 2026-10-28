@@ -61,6 +61,15 @@ describe('env', () => {
       expect(env).toEqual({ PATH: '/bin', claude_config_dir: '/cfg', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '0' });
     }
   });
+  it("drops an inherited Claude Code OAuth token for another account (in any letter case), so its own login is used; main keeps it", () => {
+    const base = { PATH: '/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok', claude_code_oauth_token: 'tok2' };
+    const other = buildChildEnv(base, conn(null), null, 'm', VH);
+    expect(Object.keys(other).filter((k) => /^claude_code_oauth_token$/i.test(k))).toEqual([]);
+    for (const account of [MAIN_ACCOUNT, undefined]) {
+      const env = buildChildEnv(base, conn(null), null, 'm', account);
+      expect(env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'tok', claude_code_oauth_token: 'tok2' });
+    }
+  });
   it("names an account's backend after its slug, and an endpoint after its URL whatever the account", () => {
     expect(backendOf(conn(null), VH)).toBe('claude:vh');
     expect(backendOf(conn(null), MAIN_ACCOUNT)).toBe('claude');

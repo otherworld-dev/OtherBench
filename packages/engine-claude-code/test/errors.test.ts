@@ -51,7 +51,8 @@ describe('classifyClaudeCodeFailure', () => {
     expect(classifyClaudeCodeFailure("You've hit your usage limit", { backend: 'claude:vh', modelId: 'x' }).kind).toBe('rate_limit');
   });
   it("gives the login hint, not the endpoint's, for another account's auth failure", () => {
-    expect(classifyClaudeCodeFailure('not logged in', { backend: 'claude:vh', modelId: 'sonnet' }).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
+    expect(classifyClaudeCodeFailure('not logged in', { backend: 'claude:vh', modelId: 'sonnet' }).message).toBe("This Claude account isn't signed in. Sign in under Settings → Claude accounts.");
+    expect(classifyClaudeCodeFailure('not logged in', { backend: 'claude', modelId: 'sonnet' }).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
     expect(classifyClaudeCodeFailure('fetch failed: connect ECONNREFUSED 127.0.0.1:443', { backend: 'claude:vh', modelId: 'sonnet' }).kind).toBe('unknown');
   });
   it('detects a missing session on resume', () => {

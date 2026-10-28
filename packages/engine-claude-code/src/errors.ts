@@ -1,5 +1,6 @@
 import type { SerializedError } from '@otherbench/core/types/messages.js';
 import { isClaudeLogin } from '@otherbench/core/types/claude-accounts.js';
+import { CLAUDE_BACKEND } from './env.js';
 
 const tail = (text: string): string => (text.length > 600 ? `...${text.slice(-600)}` : text);
 
@@ -26,8 +27,13 @@ const USAGE_LIMIT_TEXT = /usage limit|you['’]?ve hit your (usage )?limit/i;
  */
 export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; rateLimited?: boolean; autoMode?: boolean }): SerializedError {
   if (/not logged in|\/login|invalid api key|authentication|unauthori[sz]ed|\b401\b/i.test(text)) {
-    // `/login` only fixes a Claude login (main or another account); an endpoint backend uses the connection's token.
-    const message = isClaudeLogin(ctx.backend) ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
+    // `/login` fixes main's login; another account is signed in from Settings; an endpoint backend uses the connection's token.
+    const message =
+      ctx.backend === CLAUDE_BACKEND
+        ? "Claude Code isn't logged in. Run `claude` and `/login`."
+        : isClaudeLogin(ctx.backend)
+          ? "This Claude account isn't signed in. Sign in under Settings → Claude accounts."
+          : `${ctx.backend} rejected the token.`;
     return { kind: 'auth', retryable: false, message };
   }
   // Only an auto-mode turn can fail this way (detection is normally via the
