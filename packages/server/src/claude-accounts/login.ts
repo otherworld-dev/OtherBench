@@ -133,8 +133,9 @@ export class ClaudeLoginRunner {
     return true;
   }
 
-  /** `auth logout`. Forgets the cached status. */
+  /** `auth logout`, after ending a sign-in still waiting on this account. Forgets the cached status. */
   async signOut(account: ClaudeAccountRef): Promise<void> {
+    this.logins.get(account.slug)?.child.kill();
     try {
       await this.run(account, ['auth', 'logout'], STATUS_TIMEOUT_MS, false);
     } finally {

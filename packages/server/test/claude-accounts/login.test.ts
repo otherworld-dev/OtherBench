@@ -172,6 +172,15 @@ describe('ClaudeLoginRunner.signIn', () => {
     expect(calls).toHaveLength(3);
   });
 
+  it('ends a running login when the account signs out', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    onSpawn = (child) => child.finish(0);
+    await r.signOut(vh());
+    expect(calls[0]!.child.killed).toBe(true);
+    expect(r.signingIn('vh')).toBe(false);
+  });
+
   it('kills a login left running for 10 minutes', async () => {
     vi.useFakeTimers();
     const r = runner();
