@@ -1,3 +1,4 @@
+import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import type { Container } from './container.js';
 
@@ -43,9 +44,9 @@ export class PlanUsageCache {
   }
 }
 
-/** The plan usage of this machine's Claude login, read through a Claude Code connection that uses it; null when there's none. */
-export function readPlanUsage(container: Container): Promise<PlanUsage | null> {
+/** The plan usage of one of this machine's Claude logins, read through a Claude Code connection that uses the login; null when there's none. */
+export function readPlanUsage(container: Pick<Container, 'store' | 'engine'>, account: ClaudeAccountRef): Promise<PlanUsage | null> {
   const conn = container.store.connections.list().find((c) => c.kind === 'claude_code' && !c.baseUrl);
   if (!conn || !container.engine.planUsage) return Promise.resolve(null);
-  return container.engine.planUsage(conn);
+  return container.engine.planUsage(conn, account);
 }

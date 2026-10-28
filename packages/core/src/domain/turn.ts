@@ -9,6 +9,7 @@ import type { CanonMessage, MessageStatus, Part, SerializedError, UserNotePart }
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
 import type { Usage } from '../types/usage.js';
+import type { ClaudeAccountRef } from '../types/claude-accounts.js';
 import { recordUsage } from './usage-record.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
@@ -210,6 +211,15 @@ export interface TurnRunnerOptions {
    * never broadcast or stored either way.
    */
   saveToolImage?: SaveToolImage;
+  /**
+   * The Claude account a Claude Code turn on the machine's Claude login runs
+   * on (`EngineRequest.claudeAccount`). Asked once per variant, only for a
+   * `claude_code` connection with no `baseUrl`; it may pin the chat to the
+   * account it picks. It throws `ClaudeAccountUnavailableError` when the
+   * chat names an account this machine doesn't have, which fails the reply
+   * before the engine is called. Unset, every turn runs on main.
+   */
+  claudeAccountFor?: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -252,6 +262,14 @@ class WorkspaceUnresolvedError extends Error {
   constructor(readonly status: Extract<WorkspaceStatus, { status: 'unresolved' }>) {
     super(workspaceUnresolvedMessage(status));
     this.name = 'WorkspaceUnresolvedError';
+  }
+}
+
+/** The chat names a Claude account this machine doesn't have: the reply fails rather than run on main. */
+export class ClaudeAccountUnavailableError extends Error {
+  constructor(readonly slug: string) {
+    super(`No Claude account named "${slug}" on this machine.`);
+    this.name = 'ClaudeAccountUnavailableError';
   }
 }
 
@@ -328,6 +346,7 @@ export class TurnRunner {
   private readonly pathExists: (path: string) => boolean;
   private readonly canonicalPath: (path: string) => string;
   private readonly saveToolImage?: SaveToolImage;
+  private readonly claudeAccountFor?: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** Running variants' chat and unattended flag, kept and cleared with `controllers`. */
@@ -360,6 +379,7 @@ export class TurnRunner {
     this.pathExists = options.pathExists ?? existsSync;
     this.canonicalPath = options.canonicalPath ?? ((p) => p);
     this.saveToolImage = options.saveToolImage;
+    this.claudeAccountFor = options.claudeAccountFor;
     this.toolProvider?.onApprovalEvent((event) => {
       switch (event.type) {
         case 'request':
@@ -762,6 +782,18 @@ export class TurnRunner {
         throw new WorkspaceUnresolvedError(workspace);
       }
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
+      // Which Claude login this turn runs on, resolved fresh per variant (a
+      // chat moved off a limited main stays moved). Endpoint backends have none.
+      let claudeAccount: ClaudeAccountRef | undefined;
+      if (profile.connection.kind === 'claude_code' && !profile.connection.baseUrl && this.claudeAccountFor) {
+        try {
+          claudeAccount = this.claudeAccountFor(chatId, profile);
+        } catch (err) {
+          // Yield first, as for an unresolved folder, so the failure reaches live subscribers.
+          if (err instanceof ClaudeAccountUnavailableError) await new Promise((resolve) => setTimeout(resolve, 0));
+          throw err;
+        }
+      }
       // Extra folders: a parent project's, the project's and the chat's, each
       // resolved here; one not on this machine is left out, and none apply
       // without a workspace (spec 2026-10-07-extra-folders).
@@ -912,6 +944,7 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
+        ...(claudeAccount ? { claudeAccount } : {}),
         ...(subagents ? { subagents } : {}),
         ...(this.loadAttachment ? { loadAttachment: this.chatScopedLoader(this.loadAttachment, chatId) } : {}),
         ...(loadToolImage ? { loadToolImage } : {}),
@@ -1036,7 +1069,9 @@ export class TurnRunner {
       error =
         err instanceof WorkspaceUnresolvedError
           ? { kind: 'workspace_unresolved', message: err.message, retryable: false, detail: err.status }
-          : classifyProviderError(err);
+          : err instanceof ClaudeAccountUnavailableError
+            ? { kind: 'auth', message: err.message, retryable: false }
+            : classifyProviderError(err);
     } finally {
       this.controllers.delete(messageId);
       this.running.delete(messageId);
