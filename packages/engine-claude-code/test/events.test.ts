@@ -134,6 +134,13 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1700000000 }, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([{ type: 'rate-limited', resetsAt: 1700000000 }]);
     expect(m.map({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], usage: { input_tokens: 0, output_tokens: 0 } } as unknown as SDKMessage)).toEqual([{ type: 'result-error', text: 'boom' }]);
   });
+  it("maps an assistant message Claude Code marks as rate limited, which carries no reset time", () => {
+    const m = new SdkEventMapper();
+    const limited = (content: object[]) => ({ type: 'assistant', error: 'rate_limit', message: { content }, parent_tool_use_id: null, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    expect(m.map(limited([]))).toEqual([{ type: 'rate-limited', resetsAt: null }]);
+    expect(m.map(limited([{ type: 'text', text: "You've hit your limit · resets 3pm" }]))).toContainEqual({ type: 'rate-limited', resetsAt: null });
+    expect(m.map({ type: 'assistant', message: { content: [] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
+  });
   it('maps success usage, counting cache reads and writes as input', () => {
     const m = new SdkEventMapper();
     const out = m.map({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: 'ok', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } } as unknown as SDKMessage);

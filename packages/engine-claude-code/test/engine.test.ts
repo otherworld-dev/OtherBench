@@ -8,6 +8,7 @@ import type { EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbe
 import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import { MAIN_ACCOUNT, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { ClaudeCodeChatEngine, SECRET_DENY_RULES, type QueryFn } from '../src/engine.js';
 import { agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
@@ -2697,6 +2698,41 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  it('a self-started reply on another Claude account says so in its meta', async () => {
+    const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: join(ws, '.claude-vh') };
+    const { query, starts } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewed.');
+      yield selfResult();
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1', claudeAccount: VH })));
+    expect(starts[0]!.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    const events = await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self', claudeAccount: VH })));
+    expect(events[0]).toMatchObject({ type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 'sess-1', backend: 'claude:vh', account: 'vh' } });
+    e.dispose();
+  });
+
+  it('a self-started reply that hits the usage limit says when it resets', async () => {
+    const { query } = scripted(async function* ({ nextPrompt }) {
+      yield* firstReply(nextPrompt);
+      yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+      yield delta('Reviewing');
+      yield msg({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1700000000 } });
+      yield msg({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['error'], usage: {}, user_message_uuids: [], origin: { kind: 'task-notification' } });
+      await nextPrompt();
+    });
+    const { e, seen } = make(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    const events = await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self' })));
+    expect(events).toContainEqual({ type: 'error', error: expect.objectContaining({ kind: 'rate_limit', message: expect.stringContaining('resets') }) });
+    e.dispose();
+  });
+
   it("a self-started reply whose process ends before the turn's result ends in an error, not as complete", async () => {
     const { query } = scripted(async function* ({ nextPrompt }) {
       yield* firstReply(nextPrompt);
@@ -3569,5 +3605,102 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     await r.done;
     e.dispose();
     expect(seen.filter((ev) => ev.type === 'notes-dropped')).toEqual([]);
+  });
+});
+
+describe('ClaudeCodeChatEngine on a Claude account', () => {
+  const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: 'C:\\x\\.claude-vh' };
+  const textOfPrompt = (p: SDKUserMessage): string => ((p.message as { content: { text?: string }[] }).content[0]!.text ?? '');
+  const live = (query: QueryFn) => new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', CLAUDE_CONFIG_DIR: '/main-cfg' } });
+  /** The chat so far: one reply on `backend` (and `account`), session sess-1, which is the session's tip. */
+  const after = (backend: string, account: string | undefined, o: Partial<EngineRequest> = {}): EngineRequest => {
+    const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-1', backend, cwd: ws, ...(account ? { account } : {}) } };
+    return req({ messages: [user('q1'), prev, { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
+  };
+
+  it("runs the turn in the account's config folder and says so in the reply's meta", async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const events = await collect(engine(query).stream(req({ claudeAccount: VH })));
+    expect(calls[0]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
+    expect(events[0]).toEqual({ type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 'sess-1', backend: 'claude:vh', account: 'vh', cwd: ws, tools: ['Read', 'Bash'], mcpServers: [{ name: 'nextcloud', status: 'connected' }] } });
+  });
+
+  it('leaves the account out of the meta on main', async () => {
+    const { query } = fakeQuery(async function* () { yield init(); yield success(); });
+    const events = await collect(engine(query).stream(req({ claudeAccount: MAIN_ACCOUNT })));
+    expect(events[0]).toMatchObject({ type: 'engine-meta', meta: { backend: 'claude' } });
+    expect((events[0] as { meta: object }).meta).not.toHaveProperty('account');
+  });
+
+  it('starts a fresh, history-seeded session when the chat moves from an account to main', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req({ claudeAccount: VH })));
+    await collect(e.stream(after('claude:vh', 'vh', { claudeAccount: MAIN_ACCOUNT })));
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.prompts).toHaveLength(1);
+    expect(starts[1]!.options.resume).toBeUndefined();
+    expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe('/main-cfg');
+    expect(textOfPrompt(starts[1]!.prompts[0]!)).toContain('<otherbench-history>');
+    e.dispose();
+  });
+
+  it('never gives a turn a live process started on another account', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req()));
+    // The session planner continues sess-1 on VH here: its pooled process (on main) must not be taken.
+    await collect(e.stream(after('claude:vh', 'vh', { claudeAccount: VH })));
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.prompts).toHaveLength(1);
+    expect(starts[1]!.options).toMatchObject({ resume: 'sess-1' });
+    expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
+    const options = starts[1]!.options;
+    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    expect(liveKey(options, { backend: 'claude:vh', token: null }, own)).not.toBe(liveKey(options, { backend: 'claude', token: null }, own));
+    e.dispose();
+  });
+
+  it("reads the account's plan usage in its own config folder", async () => {
+    const usage = vi.fn(async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 7, resets_at: null } } }));
+    const seen: Options[] = [];
+    const base = fakeQuery(async function* () {}).query;
+    const query: QueryFn = (p) => { seen.push(p.options); return Object.assign(base(p), { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage }); };
+    expect(await engine(query).planUsage(conn(), VH)).not.toBeNull();
+    expect(seen[0]!.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
+  });
+
+  it('honours Auto on another account', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1', 'auto'); yield success(); });
+    const events = await collect(engine(query).stream(req({ autoMode: true, claudeAccount: VH })));
+    expect(events.map((ev) => ev.type)).toEqual(['engine-meta', 'finish']);
+    expect(calls[0]!.options.permissionMode).toBe('auto');
+    expect(calls[0]!.options.hooks?.PermissionDenied?.[0]?.hooks).toHaveLength(1);
+  });
+
+  it("runs a utility turn on haiku in the account's config folder", async () => {
+    const { query, calls } = fakeQuery(async function* () { yield delta('Title'); yield success(); });
+    await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null, claudeAccount: VH })));
+    expect(calls[0]!.options).toMatchObject({ model: 'haiku' });
+    expect(calls[0]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
+  });
+
+  it("lets a skill in the account's config folder read its own files", async () => {
+    const config = mkdtempSync(join(tmpdir(), 'otherbench-cfg-vh-'));
+    mkdirSync(join(config, 'skills', 'x'), { recursive: true });
+    const file = join(config, 'skills', 'x', 'SKILL.md');
+    let decision: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: file }, tool_use_id: 'r' } as never, 'r', { signal: new AbortController().signal });
+      yield success();
+    });
+    try {
+      await collect(engine(query).stream(req({ claudeAccount: { ...VH, configDir: config } })));
+    } finally {
+      rmSync(config, { recursive: true, force: true });
+    }
+    expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
   });
 });

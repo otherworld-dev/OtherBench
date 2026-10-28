@@ -26,6 +26,14 @@ describe('classifyClaudeCodeFailure', () => {
     expect(classifyClaudeCodeFailure('API Error: 401 Unauthorized', { backend: 'http://localhost:11434', modelId: 'q' })).toEqual({ kind: 'auth', retryable: false, message: 'http://localhost:11434 rejected the token.' });
     expect(classifyClaudeCodeFailure('Invalid API key · Please run /login', { backend: 'http://gw.example', modelId: 'q' }).message).not.toMatch(/login/);
   });
+  it("classifies the CLI's own limit text", () => {
+    expect(classifyClaudeCodeFailure("You've hit your limit · resets 3pm", { backend: 'claude', modelId: 'x' }).kind).toBe('rate_limit');
+    expect(classifyClaudeCodeFailure("You've hit your usage limit", { backend: 'claude:vh', modelId: 'x' }).kind).toBe('rate_limit');
+  });
+  it("gives the login hint, not the endpoint's, for another account's auth failure", () => {
+    expect(classifyClaudeCodeFailure('not logged in', { backend: 'claude:vh', modelId: 'sonnet' }).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
+    expect(classifyClaudeCodeFailure('fetch failed: connect ECONNREFUSED 127.0.0.1:443', { backend: 'claude:vh', modelId: 'sonnet' }).kind).toBe('unknown');
+  });
   it('detects a missing session on resume', () => {
     expect(isMissingSessionError('No conversation found with session ID: abc')).toBe(true);
     expect(isMissingSessionError('other')).toBe(false);

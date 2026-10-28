@@ -1,5 +1,5 @@
 import type { SerializedError } from '@otherbench/core/types/messages.js';
-import { CLAUDE_BACKEND } from './env.js';
+import { isClaudeLogin } from '@otherbench/core/types/claude-accounts.js';
 
 const tail = (text: string): string => (text.length > 600 ? `...${text.slice(-600)}` : text);
 
@@ -16,8 +16,8 @@ export function autoModeUnavailable(): SerializedError {
 
 export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; autoMode?: boolean }): SerializedError {
   if (/not logged in|\/login|invalid api key|authentication|unauthori[sz]ed|\b401\b/i.test(text)) {
-    // `/login` only fixes the Claude login; an endpoint backend uses the connection's token.
-    const message = ctx.backend === CLAUDE_BACKEND ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
+    // `/login` only fixes a Claude login (main or another account); an endpoint backend uses the connection's token.
+    const message = isClaudeLogin(ctx.backend) ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
     return { kind: 'auth', retryable: false, message };
   }
   // Only an auto-mode turn can fail this way (detection is normally via the
@@ -25,12 +25,12 @@ export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; 
   if (ctx.autoMode === true && /auto[ -]?mode/i.test(text) && /unavailable|not available|not supported|not enabled|disabled/i.test(text)) {
     return autoModeUnavailable();
   }
-  if (ctx.rateLimitResetsAt != null || /usage limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
+  if (ctx.rateLimitResetsAt != null || /usage limit|you['’]?ve hit your (usage )?limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
     const resets = ctx.rateLimitResetsAt ?? Number(/\|(\d{9,})/.exec(text)?.[1] ?? NaN);
     const when = Number.isFinite(resets) ? ` It resets at ${new Date(resets * 1000).toLocaleString()}.` : '';
     return { kind: 'rate_limit', retryable: true, message: `Claude usage limit reached.${when}`, detail: { text: tail(text) } };
   }
-  if (ctx.backend !== CLAUDE_BACKEND && /ECONNREFUSED|ENOTFOUND|fetch failed|connect(ion)? (refused|error)|socket hang up/i.test(text)) {
+  if (!isClaudeLogin(ctx.backend) && /ECONNREFUSED|ENOTFOUND|fetch failed|connect(ion)? (refused|error)|socket hang up/i.test(text)) {
     return { kind: 'transient', retryable: true, message: `Can't reach ${ctx.backend}.` };
   }
   if (/does not support tools|tool use is not supported|tools are not supported/i.test(text)) {

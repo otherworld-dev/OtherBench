@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Connection } from '@otherbench/core/types/config.js';
+import { MAIN_ACCOUNT, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import { backendOf, buildChildEnv } from '../src/env.js';
 
 const conn = (baseUrl: string | null): Connection => ({ id: 'c', name: 'CC', kind: 'claude_code', baseUrl, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+
+const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: 'C:\\x\\.claude-vh' };
 
 describe('env', () => {
   it('names the backend', () => {
@@ -41,5 +44,26 @@ describe('env', () => {
   });
   it('turns the todo tools on for every model and backend', () => {
     for (const b of [null, 'http://h']) expect(buildChildEnv({}, conn(b), null, 'm').CLAUDE_CODE_ENABLE_TODO_TOOLS).toBe('1');
+  });
+  it("points Claude Code at an account's own config folder, replacing an inherited one in any letter case", () => {
+    const env = buildChildEnv({ PATH: '/bin', claude_config_dir: 'C:\\other', Claude_Config_Dir: 'C:\\other2' }, conn(null), null, 'm', VH);
+    expect(Object.keys(env).filter((k) => /^claude_config_dir$/i.test(k))).toEqual(['CLAUDE_CONFIG_DIR']);
+    expect(env.CLAUDE_CONFIG_DIR).toBe('C:\\x\\.claude-vh');
+  });
+  it('ignores the account for an endpoint backend, which uses no Claude login (its backend names no account either)', () => {
+    const env = buildChildEnv({ PATH: '/bin', claude_config_dir: '/cfg' }, conn('http://h'), null, 'm', VH);
+    expect(env['claude_config_dir']).toBe('/cfg');
+    expect(env['CLAUDE_CONFIG_DIR']).toBeUndefined();
+  });
+  it('passes an inherited CLAUDE_CONFIG_DIR through unchanged for main, or no account', () => {
+    for (const account of [MAIN_ACCOUNT, undefined]) {
+      const env = buildChildEnv({ PATH: '/bin', claude_config_dir: '/cfg' }, conn(null), null, 'm', account);
+      expect(env).toEqual({ PATH: '/bin', claude_config_dir: '/cfg', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '0' });
+    }
+  });
+  it("names an account's backend after its slug, and an endpoint after its URL whatever the account", () => {
+    expect(backendOf(conn(null), VH)).toBe('claude:vh');
+    expect(backendOf(conn(null), MAIN_ACCOUNT)).toBe('claude');
+    expect(backendOf(conn('http://localhost:11434/'), VH)).toBe('http://localhost:11434');
   });
 });

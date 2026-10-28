@@ -1,7 +1,8 @@
 import type { Connection } from '@otherbench/core/types/config.js';
 import { isServerOnlyEnvVar } from '@otherbench/core/domain/child-env.js';
+import { claudeBackend, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 
-/** The `EngineMeta.backend` value for the Claude login (no base URL). */
+/** The `EngineMeta.backend` value for the main Claude login (no base URL); another account's is `claude:<slug>`. */
 export const CLAUDE_BACKEND = 'claude';
 
 const CREDENTIAL_VARS = /^ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)$/i;
@@ -24,13 +25,16 @@ const ADDED_DIR_CONFIG_VARS = /^CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD$/i;
  */
 const AUTO_BACKGROUND_VAR = 'CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS';
 const AUTO_BACKGROUND_VARS = /^CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS$/i;
+/** Where Claude Code keeps its login and settings. An account other than main replaces it, in any letter case. */
+const CONFIG_DIR_VARS = /^CLAUDE_CONFIG_DIR$/i;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
-export function backendOf(conn: Connection): string {
-  return conn.baseUrl ? trimTrailingSlash(conn.baseUrl) : CLAUDE_BACKEND;
+/** An endpoint's URL, else the Claude login the turn runs on: `claude` for main (or none), `claude:<slug>` for another account. */
+export function backendOf(conn: Connection, account?: ClaudeAccountRef): string {
+  return conn.baseUrl ? trimTrailingSlash(conn.baseUrl) : claudeBackend(account);
 }
 
 /**
@@ -43,13 +47,21 @@ export function backendOf(conn: Connection): string {
  * background "small/fast" model is pointed at the chosen model so it never
  * asks the endpoint for a Claude model id. Every backend also gets Claude
  * Code's todo tools switched on, and its moving of long MCP calls to the
- * background switched off.
+ * background switched off. On the Claude login, an account with its own
+ * folder (not main) gets `CLAUDE_CONFIG_DIR` pointed there, replacing an
+ * inherited one in any letter case; main passes an inherited one through
+ * unchanged. An endpoint backend uses no login, so it ignores the account, as
+ * `backendOf` does (the account is then no part of its process key either).
  */
-export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string): Record<string, string> {
+export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string, account?: ClaudeAccountRef): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
     // The server's own API token (OTHERBENCH_TOKEN) never reaches Claude Code or its Bash (core/domain/child-env.ts).
     if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !AUTO_BACKGROUND_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
+  }
+  if (!conn.baseUrl && account?.configDir) {
+    for (const key of Object.keys(env)) if (CONFIG_DIR_VARS.test(key)) delete env[key];
+    env['CLAUDE_CONFIG_DIR'] = account.configDir;
   }
   if (conn.baseUrl) {
     env['ANTHROPIC_BASE_URL'] = trimTrailingSlash(conn.baseUrl);

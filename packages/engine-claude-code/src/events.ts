@@ -224,6 +224,8 @@ export class SdkEventMapper {
           }
         }
         if (isMain) this.sawDelta = false;
+        // Claude Code's own limit message ("You've hit your limit"): the account is limited, with no reset time given.
+        if (m['error'] === 'rate_limit') out.push({ type: 'rate-limited', resetsAt: null });
         return out;
       }
       case 'user': {
