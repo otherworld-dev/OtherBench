@@ -495,8 +495,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // A title or memory call names no account: it runs on main, or one with room while main is limited.
     () => claudeAccounts?.defaultRef() ?? MAIN_ACCOUNT
   );
-  const accounts = new ClaudeAccountService({ store, engine, events });
   const claudeLogin = new ClaudeLoginRunner();
+  // A chat is never overflowed or switched onto an account whose last sign-in reading said it is signed out.
+  const accounts = new ClaudeAccountService({ store, engine, events, signedIn: (slug) => claudeLogin.cachedSignedIn(slug) });
   claudeAccounts = accounts;
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
   // against whatever `mcp_server` rows already exist as soon as the

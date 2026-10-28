@@ -1,11 +1,12 @@
 import { HTTPException } from 'hono/http-exception';
 import { continuePrompt, pickOtherAccount } from '@otherbench/core/domain/claude-accounts.js';
+import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import type { Chat, Store } from '@otherbench/core/ports/store.js';
 import { isClaudeLogin, MAIN_ACCOUNT, MAIN_ACCOUNT_SLUG } from '@otherbench/core/types/claude-accounts.js';
 import type { CanonMessage, SerializedError } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
-import { startTurn } from '../turn-start.js';
+import { lineAfter, startTurn } from '../turn-start.js';
 
 /** How long an account is held when its limit error doesn't say when it resets: the length of the 5-hour window. */
 const UNKNOWN_RESET_HOLD_MS = 5 * 3600_000;
@@ -39,6 +40,35 @@ function ranOnClaudeLogin(store: Store, message: CanonMessage): boolean {
   if (message.engineMeta) return isClaudeLogin(message.engineMeta.backend);
   const connection = message.producedBy ? store.connections.get(message.producedBy.connectionId) : null;
   return connection?.kind === 'claude_code' && !connection.baseUrl;
+}
+
+/**
+ * Whether the reply is the live tip of the chat's thread: the one line a
+ * continuation would carry on. Not a compare turn's variant, and the newest
+ * reply among its siblings (a regenerated one is), with nothing after it. Its
+ * parent is the head, or it was self-started on the head's line: a self-started
+ * reply follows the reply before it while the head stays on the user message,
+ * so every message between the head and it is a reply, each the newest child
+ * of the one before, with no context line (/clear, /compact) on the way.
+ */
+function isLiveTip(store: Store, chat: Chat, message: CanonMessage): boolean {
+  const head = chat.headMessageId;
+  if (!message.parentId || !head) return false;
+  const siblings = store.messages.children(message.parentId);
+  if (isCompareSet(siblings)) return false;
+  if (siblings.filter((m) => m.role === 'assistant').at(-1)?.id !== message.id) return false;
+  if (store.messages.children(message.id).length > 0) return false;
+  if (head === message.parentId) return true;
+  const path = store.messages.pathToRoot(message.id);
+  const at = path.findIndex((m) => m.id === head);
+  if (at === -1 || lineAfter({ store }, message.id, head)) return false;
+  const between = path.slice(at + 1, -1);
+  if (between.length === 0 || between.some((m) => m.role !== 'assistant')) return false;
+  // Each step down from the head is the newest message there: nothing newer sits on the head's thread.
+  for (let i = at; i < path.length - 1; i++) {
+    if (store.messages.children(path[i]!.id).at(-1)?.id !== path[i + 1]!.id) return false;
+  }
+  return true;
 }
 
 /** The slug of the account that wrote the reply; one that failed before its session started is taken to have run on the chat's. */
@@ -142,9 +172,10 @@ export async function continueOnAccount(
  * When a Claude reply ends cut off by its account's usage limit (the engine's
  * `detail.usageLimit`; an overload or a bare 429 is left alone): holds that
  * account as limited until the reset the error names (5 hours when it names
- * none), and either says every account is out of usage or, when the chat has
- * "Switch automatically" on and the reply is the chat's only reply at its tip,
- * carries it on to the first other account with room. Returns the unsubscribe.
+ * none), and either says every account is out of usage (only on a machine
+ * with more than main) or, when the chat has "Switch automatically" on and the
+ * reply is the live tip of its thread (`isLiveTip`), carries it on to the first
+ * other account with room that isn't known to be signed out. Returns the unsubscribe.
  */
 export function attachAccountSwitcher(container: Container): () => void {
   const { events } = container;
@@ -176,17 +207,20 @@ function onCutOff(container: Container, messageId: string): Promise<unknown> | n
   const until = resetsAtOf(message.error) ?? now + UNKNOWN_RESET_HOLD_MS;
   accounts.markLimited(from, Math.max(until, accounts.limitedUntil(from) ?? 0));
 
-  const refs = accounts.refs();
+  // An account known to be signed out is never switched onto (nor listed as one to wait for).
+  const candidates = accounts.candidates().filter((r) => r.slug !== from);
   const limitedUntil = (slug: string): number | null => accounts.limitedUntil(slug);
-  const to = pickOtherAccount({ current: from, accounts: refs, limitedUntil, now });
+  const to = pickOtherAccount({ current: from, accounts: candidates, limitedUntil, now });
   if (!to) {
-    container.events?.emit({ type: 'claude-accounts-exhausted', chatId: chat.id, resets: refs.map((r) => ({ name: r.name, resetsAt: limitedUntil(r.slug) })) });
+    // A machine with main alone has no other account to be out of: its limit is shown as it always was.
+    if (accounts.refs().length > 1) {
+      const listed = accounts.refs().filter((r) => r.slug === from || candidates.some((c) => c.slug === r.slug));
+      container.events?.emit({ type: 'claude-accounts-exhausted', chatId: chat.id, resets: listed.map((r) => ({ name: r.name, resetsAt: limitedUntil(r.slug) })) });
+    }
     return null;
   }
 
-  if (!chat.accountAutoSwitch || !message.parentId || chat.headMessageId !== message.parentId) return null;
-  // A compare turn's variant (or a regenerated sibling) isn't the thread's one line to carry on.
-  if (store.messages.children(message.parentId).filter((m) => m.role === 'assistant').length !== 1) return null;
+  if (!chat.accountAutoSwitch || !isLiveTip(store, chat, message)) return null;
   if (continued(container).has(message.id)) return null;
   return continueOnAccount(container, { chatId: chat.id, messageId: message.id, account: to.slug, midReply: true });
 }

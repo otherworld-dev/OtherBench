@@ -15,6 +15,8 @@ export interface LoginStatus {
 
 const STATUS_TIMEOUT_MS = 15_000;
 const STATUS_CACHE_MS = 60_000;
+/** How long a failed status read is answered from memory, so a stuck CLI isn't started again on every poll. */
+const FAILED_STATUS_CACHE_MS = 15_000;
 const LOGIN_LIFETIME_MS = 10 * 60_000;
 /** How long `signIn` waits for the CLI to print its sign-in link before answering without one. */
 const URL_WAIT_MS = 20_000;
@@ -44,6 +46,10 @@ export class ClaudeLoginRunner {
   private readonly baseEnv: NodeJS.ProcessEnv;
   private readonly now: () => number;
   private readonly cache = new Map<string, { at: number; value: LoginStatus }>();
+  /** The status read running per account: calls made while it runs share it. */
+  private readonly reading = new Map<string, Promise<LoginStatus>>();
+  /** The last status read that failed, per account, until a read succeeds or the account's status is forgotten. */
+  private readonly failed = new Map<string, { at: number; error: unknown }>();
   private readonly logins = new Map<string, Login>();
   /** Every child still running (logins, status reads, logouts), so `dispose` can end them. */
   private readonly live = new Set<ChildProcess>();
@@ -55,10 +61,51 @@ export class ClaudeLoginRunner {
     this.now = deps.now ?? Date.now;
   }
 
-  /** `auth status --json`, cached 60 s per account. Rejects when the CLI fails, can't be parsed, or takes over 15 s. */
+  /**
+   * `auth status --json`, cached 60 s per account. Rejects when the CLI fails,
+   * can't be parsed, or takes over 15 s; that failure is given again for 15 s
+   * without running the CLI. Calls made while a read runs share it.
+   */
   async status(account: ClaudeAccountRef): Promise<LoginStatus> {
-    const hit = this.cache.get(account.slug);
+    const slug = account.slug;
+    const hit = this.cache.get(slug);
     if (hit && this.now() - hit.at < STATUS_CACHE_MS) return hit.value;
+    const failed = this.failed.get(slug);
+    if (failed && this.now() - failed.at < FAILED_STATUS_CACHE_MS) throw failed.error;
+    const running = this.reading.get(slug);
+    if (running) return running;
+    const read: Promise<LoginStatus> = this.readStatus(account).then(
+      (value) => {
+        // Kept only while this is still the account's read: a sign-in or sign-out since forgot it.
+        if (this.reading.get(slug) === read) {
+          this.cache.set(slug, { at: this.now(), value });
+          this.failed.delete(slug);
+        }
+        return value;
+      },
+      (error: unknown) => {
+        if (this.reading.get(slug) === read) this.failed.set(slug, { at: this.now(), error });
+        throw error;
+      }
+    );
+    this.reading.set(slug, read);
+    try {
+      return await read;
+    } finally {
+      if (this.reading.get(slug) === read) this.reading.delete(slug);
+    }
+  }
+
+  /**
+   * What the last status read said of the account's login, however old:
+   * true or false, or null when it hasn't been read (or was forgotten by a
+   * sign-in or sign-out). Synchronous, for picking an account to move a chat to.
+   */
+  cachedSignedIn(slug: string): boolean | null {
+    return this.cache.get(slug)?.value.signedIn ?? null;
+  }
+
+  private async readStatus(account: ClaudeAccountRef): Promise<LoginStatus> {
     const { stdout } = await this.run(account, ['auth', 'status', '--json'], STATUS_TIMEOUT_MS, true);
     let raw: unknown;
     try {
@@ -68,13 +115,18 @@ export class ClaudeLoginRunner {
     }
     const o = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
     const signedIn = o['loggedIn'] === true;
-    const value: LoginStatus = {
+    return {
       signedIn,
       email: signedIn && typeof o['email'] === 'string' ? o['email'] : null,
       subscriptionType: signedIn && typeof o['subscriptionType'] === 'string' ? o['subscriptionType'] : null,
     };
-    this.cache.set(account.slug, { at: this.now(), value });
-    return value;
+  }
+
+  /** Forgets what is known of the account's login: its cached status, a failed read, and a read still running. */
+  private forget(slug: string): void {
+    this.cache.delete(slug);
+    this.failed.delete(slug);
+    this.reading.delete(slug);
   }
 
   /**
@@ -117,7 +169,7 @@ export class ClaudeLoginRunner {
       const ended = (): void => {
         clearTimeout(login.timer);
         if (this.logins.get(account.slug) === login) this.logins.delete(account.slug);
-        this.cache.delete(account.slug);
+        this.forget(account.slug);
         // Ended before printing a link: the login did not start.
         answer(login.url === null);
       };
@@ -164,7 +216,7 @@ export class ClaudeLoginRunner {
     try {
       await this.run(account, ['auth', 'logout'], STATUS_TIMEOUT_MS, false);
     } finally {
-      this.cache.delete(account.slug);
+      this.forget(account.slug);
     }
   }
 

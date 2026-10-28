@@ -136,6 +136,29 @@ describe('ClaudeAccountService.resolveForTurn', () => {
     expect(() => accounts.resolveForTurn('c2')).toThrow('No Claude account named "gone" on this machine.');
   });
 
+  it('never overflows onto an account known to be signed out; one not yet read counts as signed in', () => {
+    let status: Record<string, boolean | null> = { vh: false, work: null };
+    const bus = new AppEventBus();
+    bus.subscribe((e) => events.push(e));
+    const engine = Object.assign(new FakeChatEngine([]), { planUsage });
+    const accounts = new ClaudeAccountService({ store, engine, events: bus, now: () => clock, home, baseEnv: {}, signedIn: (slug) => status[slug] ?? null });
+    accounts.add({ name: 'VH', colour: '#e0a030' });
+    const work = accounts.add({ name: 'Work', colour: '#112233' });
+    accounts.markLimited('main', T0 + 60_000);
+    chat('c1', null);
+    expect(accounts.resolveForTurn('c1')).toEqual({ slug: 'work', name: 'Work', configDir: work.configDir });
+    expect(accounts.defaultRef().slug).toBe('work');
+    // Every other account signed out: the turn runs on main (and fails with its limit), unpinned.
+    status = { vh: false, work: false };
+    chat('c2', null);
+    expect(accounts.resolveForTurn('c2')).toEqual(MAIN_ACCOUNT);
+    expect(store.chats.get('c2')!.claudeAccount).toBeNull();
+    // A chat that names a signed-out account still runs on it: an explicit choice is never second-guessed.
+    chat('c3', 'vh');
+    expect(accounts.resolveForTurn('c3').slug).toBe('vh');
+    expect(accounts.candidates().map((r) => r.slug)).toEqual(['main']);
+  });
+
   it('gives the default pick without pinning anything', () => {
     const accounts = service();
     accounts.add({ name: 'VH', colour: '#e0a030' });
@@ -169,11 +192,12 @@ describe('ClaudeAccountService.usage', () => {
     expect(accounts.limitedUntil('main')).toBeNull();
   });
 
-  it('lets a hold go on a newer reading with room, but not on one read before it', async () => {
+  it('lets a hold made from a reading go on a newer reading with room, but not on one read before it', async () => {
+    reading = { fetchedAt: T0, windows: [{ id: 'five_hour', label: '5-hour', percent: 100, resetsAt: T0 + 3_600_000 }] };
     const accounts = service();
-    await accounts.usage('main', false); // fetched at T0, with room
+    await accounts.usage('main', false); // fetched at T0, full
+    expect(accounts.limitedUntil('main')).toBe(T0 + 3_600_000);
     clock = T0 + 1_000;
-    accounts.markLimited('main', T0 + 3_600_000); // a rate-limit event after that reading
     await accounts.usage('main', false); // the T0 reading again, from the cache
     expect(accounts.limitedUntil('main')).toBe(T0 + 3_600_000);
 
@@ -182,6 +206,25 @@ describe('ClaudeAccountService.usage', () => {
     await accounts.usage('main', false);
     expect(planUsage).toHaveBeenCalledTimes(2);
     expect(accounts.limitedUntil('main')).toBeNull();
+  });
+
+  it("keeps a hold made from a refusal until its own time, whatever a newer reading says", async () => {
+    const accounts = service();
+    await accounts.usage('main', false); // fetched at T0, with room
+    clock = T0 + 1_000;
+    // A refusal (an Opus weekly limit, or 99% at refusal time) the 5-hour and weekly windows don't show.
+    accounts.markLimited('main', T0 + 3_600_000);
+    clock = T0 + PLAN_USAGE_MAX_AGE_MS;
+    reading = { fetchedAt: clock, windows: [{ id: 'five_hour', label: '5-hour', percent: 99, resetsAt: null }, { id: 'seven_day', label: 'Weekly', percent: 40, resetsAt: null }] };
+    await accounts.usage('main', true);
+    expect(planUsage).toHaveBeenCalledTimes(2);
+    expect(accounts.limitedUntil('main')).toBe(T0 + 3_600_000);
+    // A full reading doesn't move it either: it ends at its own time.
+    clock = T0 + 2 * PLAN_USAGE_MAX_AGE_MS;
+    reading = { fetchedAt: clock, windows: [{ id: 'five_hour', label: '5-hour', percent: 100, resetsAt: T0 + 7_200_000 }] };
+    await accounts.usage('main', true);
+    expect(planUsage).toHaveBeenCalledTimes(3);
+    expect(accounts.limitedUntil('main')).toBe(T0 + 3_600_000);
   });
 
   it('is null for an account not on this machine', async () => {

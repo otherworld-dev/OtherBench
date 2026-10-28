@@ -27,6 +27,8 @@ let detach: () => void;
 let resetsAt: number;
 /** The account service's clock. */
 let clock: number;
+/** Accounts whose last sign-in reading said signed out. */
+let signedOut: Set<string>;
 
 /** Main's replies are cut off by the usage limit; VH's finish. */
 function script(req: EngineRequest): EngineEvent[] {
@@ -62,7 +64,8 @@ beforeEach(() => {
     toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
   });
   engine = new FakeChatEngine(script);
-  accounts = new ClaudeAccountService({ store, engine, events, home, baseEnv: {}, now: () => clock });
+  signedOut = new Set();
+  accounts = new ClaudeAccountService({ store, engine, events, home, baseEnv: {}, now: () => clock, signedIn: (slug) => (signedOut.has(slug) ? false : null) });
   accounts.add({ name: 'VH', colour: '#e0a030', configDir: join(home, '.claude-vh') });
   const turnRunner = new TurnRunner(store, engine, { pathExists: () => true, claudeAccountFor: (chatId) => accounts.resolveForTurn(chatId) });
   events.attach(turnRunner, store);
@@ -124,6 +127,18 @@ function seed(opts: { status?: MessageStatus; error?: SerializedError; siblings?
   }
   store.chats.update('chat-1', { headMessageId: 'u1' });
   return 'a1';
+}
+
+/** A user message (the head), its reply, and a reply Claude Code started by itself after it, cut off by the limit. */
+function seedSelfStarted(): void {
+  const { store } = container;
+  store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'Do it' }], status: 'complete', error: null, producedBy: null });
+  store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'Waiting on the helper.' }], status: 'complete', error: null, producedBy });
+  store.messages.create({
+    id: 'a2', chatId: 'chat-1', parentId: 'a1', role: 'assistant', parts: [{ type: 'notice', text: 'Carried on.' }, { type: 'text', text: 'Half done' }],
+    status: 'error', error: RATE_LIMIT, producedBy, engineMeta: { engine: 'claude_code', sessionId: 's', backend: 'claude', cwd: '/ws' },
+  });
+  store.chats.update('chat-1', { headMessageId: 'u1' });
 }
 
 function finished(messageId: string, status: 'error' | 'cancelled' = 'error'): void {
@@ -221,6 +236,47 @@ describe('attachAccountSwitcher', () => {
       expect(container.store.chats.get('chat-1')!.claudeAccount).toBeNull();
     });
 
+    it('the cut-off reply is an older sibling of a regenerated one', async () => {
+      chat(true);
+      seed();
+      container.store.messages.create({
+        id: 'a2', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'Again' }],
+        status: 'complete', error: null, producedBy: { ...producedBy, regenerated: true },
+      });
+      finished('a1');
+      await settle();
+
+      expect(userChildren('a1')).toEqual([]);
+      expect(accounts.limitedUntil('main')).toBe(clock + 5 * 3_600_000);
+    });
+
+    it('a self-started reply with a newer message after it', async () => {
+      chat(true);
+      seedSelfStarted();
+      container.store.messages.create({ id: 'a3', chatId: 'chat-1', parentId: 'a2', role: 'assistant', parts: [], status: 'complete', error: null, producedBy });
+      finished('a2');
+      await settle();
+
+      expect(userChildren('a2')).toEqual([]);
+    });
+
+    it('a reply with a /clear between it and the head', async () => {
+      chat(true);
+      const { store } = container;
+      store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'Do it' }], status: 'complete', error: null, producedBy: null });
+      store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy });
+      store.messages.create({ id: 'c1', chatId: 'chat-1', parentId: 'a1', role: 'user', parts: [{ type: 'context', kind: 'clear' }], status: 'complete', error: null, producedBy: null });
+      store.messages.create({
+        id: 'a2', chatId: 'chat-1', parentId: 'c1', role: 'assistant', parts: [], status: 'error', error: RATE_LIMIT, producedBy,
+        engineMeta: { engine: 'claude_code', sessionId: 's', backend: 'claude', cwd: '/ws' },
+      });
+      store.chats.update('chat-1', { headMessageId: 'u1' });
+      finished('a2');
+      await settle();
+
+      expect(userChildren('a2')).toEqual([]);
+    });
+
     it('the reply was cancelled', async () => {
       chat(true);
       seed({ status: 'cancelled' });
@@ -242,6 +298,33 @@ describe('attachAccountSwitcher', () => {
     expect(accounts.limitedUntil('main')).toBeNull();
   });
 
+  it('continues a regenerated reply, the newest of its siblings', async () => {
+    chat(true);
+    const { store } = container;
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'Do it' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'First go' }], status: 'complete', error: null, producedBy });
+    store.messages.create({
+      id: 'a2', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'Half done' }], status: 'error', error: RATE_LIMIT,
+      producedBy: { ...producedBy, regenerated: true }, engineMeta: { engine: 'claude_code', sessionId: 's', backend: 'claude', cwd: '/ws' },
+    });
+    store.chats.update('chat-1', { headMessageId: 'u1' });
+    finished('a2');
+
+    await vi.waitFor(() => expect(userChildren('a2')).toHaveLength(1));
+    expect(userChildren('a2')[0]!.parts).toEqual([{ type: 'text', text: continuePrompt('Main', 'VH') }]);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
+  });
+
+  it('continues a self-started reply, which follows the reply before it while the head stays on the user message', async () => {
+    chat(true);
+    seedSelfStarted();
+    finished('a2');
+
+    await vi.waitFor(() => expect(userChildren('a2')).toHaveLength(1));
+    expect(userChildren('a2')[0]!.parts).toEqual([{ type: 'text', text: continuePrompt('Main', 'VH') }]);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
+  });
+
   it('continues a reply only once', async () => {
     chat(true);
     seed();
@@ -252,6 +335,51 @@ describe('attachAccountSwitcher', () => {
 
     expect(userChildren('a1')).toHaveLength(1);
     expect(seen.filter((e) => e.type === 'claude-account-switched')).toHaveLength(1);
+  });
+
+  it('a main-only machine holds main but says nothing about every account being out of usage', async () => {
+    accounts.remove('vh');
+    chat(true);
+    const [replyId] = await send();
+    await settle();
+
+    expect(accounts.limitedUntil('main')).toBe(resetsAt);
+    expect(userChildren(replyId!)).toEqual([]);
+    expect(seen.some((e) => e.type === 'claude-accounts-exhausted' || e.type === 'claude-account-switched')).toBe(false);
+  });
+
+  it('never switches onto an account known to be signed out', async () => {
+    signedOut.add('vh');
+    chat(true);
+    seed();
+    finished('a1');
+    await settle();
+
+    expect(userChildren('a1')).toEqual([]);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBeNull();
+    expect(seen.filter((e) => e.type === 'claude-accounts-exhausted')).toEqual([
+      { type: 'claude-accounts-exhausted', chatId: 'chat-1', resets: [{ name: 'Main', resetsAt: clock + 5 * 3_600_000 }] },
+    ]);
+  });
+
+  it('hands the continuation the cut-off reply as it was: its text, tool calls and their results', async () => {
+    chat(true);
+    seed();
+    const parts = [
+      { type: 'text' as const, text: 'Half done' },
+      { type: 'tool-call' as const, id: 't1', name: 'Bash', args: { command: 'ls' } },
+      { type: 'tool-result' as const, id: 't1', name: 'Bash', result: 'a.txt', isError: false },
+    ];
+    container.store.messages.updateParts('a1', parts);
+    finished('a1');
+    await vi.waitFor(() => expect(userChildren('a1')).toHaveLength(1));
+    const next = userChildren('a1')[0]!;
+    await vi.waitFor(() => expect(engine.requests.at(-1)?.claudeAccount?.slug).toBe('vh'));
+
+    const history = engine.requests.at(-1)!.messages;
+    const cut = history.find((m) => m.id === 'a1');
+    expect(cut?.parts).toEqual(parts);
+    expect(history.findIndex((m) => m.id === 'a1')).toBe(history.findIndex((m) => m.id === next.id) - 1);
   });
 
   it('all accounts limited: no continuation, and one exhausted event listing both', async () => {

@@ -9,6 +9,9 @@ import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { PlanUsageCache, readPlanUsage } from '../plan-usage.js';
 import type { AppEventBus } from '../stream/events.js';
 
+/** Where an account's hold came from: a refusal (a rate-limit event) or a plan-usage reading. */
+export type HoldSource = 'event' | 'reading';
+
 /** The machine-local `app_setting` value the account list is kept in. Never synced: each machine has its own logins. */
 const ACCOUNTS_KEY = 'claudeAccounts';
 const COLOUR = /^#[0-9a-f]{6}$/i;
@@ -49,18 +52,37 @@ function checkColour(colour: string): void {
  * single reading used to be.
  *
  * "Limited until" is held in memory: a restart forgets it, and the next
- * usage reading or rate-limit event sets it again.
+ * usage reading or rate-limit event sets it again. Each hold remembers where
+ * it came from: one from a refusal (`'event'`: a rejected rate-limit event,
+ * Claude Code's limit text) lasts until its own time, since a reading can't
+ * see every limit (a per-model weekly one, or 99% at refusal time); one from
+ * a reading (`'reading'`) is set and cleared by readings.
  */
 export class ClaudeAccountService {
   /** The clock the holds are kept by (ms epoch); injected in tests. */
   readonly now: () => number;
   private readonly home: string;
   private readonly baseEnv: NodeJS.ProcessEnv;
-  /** Until when each account is out of usage, and when that was learnt (so only a newer reading clears it). */
-  private readonly limits = new Map<string, { until: number; at: number }>();
+  /** Until when each account is out of usage, when that was learnt (so only a newer reading clears it), and from what. */
+  private readonly limits = new Map<string, { until: number; at: number; source: HoldSource }>();
   private readonly usageCaches = new Map<string, PlanUsageCache>();
 
-  constructor(private readonly deps: { store: Store; engine: ChatEngine; events: AppEventBus; now?: () => number; home?: string; baseEnv?: NodeJS.ProcessEnv }) {
+  /**
+   * `signedIn` says whether an account's login is known to be signed in
+   * (ClaudeLoginRunner.cachedSignedIn): false keeps it from being overflowed
+   * or switched onto; null (not known) allows it.
+   */
+  constructor(
+    private readonly deps: {
+      store: Store;
+      engine: ChatEngine;
+      events: AppEventBus;
+      now?: () => number;
+      home?: string;
+      baseEnv?: NodeJS.ProcessEnv;
+      signedIn?: (slug: string) => boolean | null;
+    }
+  ) {
     this.now = deps.now ?? Date.now;
     this.home = deps.home ?? homedir();
     this.baseEnv = deps.baseEnv ?? process.env;
@@ -75,6 +97,11 @@ export class ClaudeAccountService {
   /** Every account a turn can run on, main first. */
   refs(): ClaudeAccountRef[] {
     return [MAIN_ACCOUNT, ...this.list().map(toRef)];
+  }
+
+  /** The accounts a turn may be moved onto: every one but those known to be signed out. Main first. */
+  candidates(): ClaudeAccountRef[] {
+    return this.refs().filter((r) => this.deps.signedIn?.(r.slug) !== false);
   }
 
   ref(slug: string): ClaudeAccountRef | null {
@@ -135,16 +162,17 @@ export class ClaudeAccountService {
     return limit.until;
   }
 
-  markLimited(slug: string, until: number): void {
-    this.limits.set(slug, { until, at: this.now() });
+  /** Holds the account until `until`. A refusal's hold (`'event'`, the default) lasts until then whatever a reading says. */
+  markLimited(slug: string, until: number, source: HoldSource = 'event'): void {
+    this.limits.set(slug, { until, at: this.now(), source });
   }
 
   /**
    * The account's plan usage, read at most every PLAN_USAGE_MAX_AGE_MS (or
    * PLAN_USAGE_MIN_REFRESH_MS when `refresh` asks); null for an account not
    * on this machine. A reading with a full 5-hour or weekly window holds the
-   * account until it resets; a reading newer than the hold that shows room
-   * lets it go.
+   * account until it resets; a reading newer than that hold that shows room
+   * lets it go. A refusal's hold is never set or cleared by a reading.
    */
   async usage(slug: string, refresh: boolean): Promise<PlanUsage | null> {
     if (!this.ref(slug)) return null;
@@ -157,12 +185,13 @@ export class ClaudeAccountService {
       this.usageCaches.set(slug, cache);
     }
     const usage = await cache.get(refresh);
-    const held = this.limits.get(slug);
-    // Only a reading newer than what's held says anything: a cached one served again, or one
-    // fetched before a rate-limit event, must neither move nor clear that event's hold.
-    if (usage && (!held || usage.fetchedAt > held.at)) {
+    // Read through limitedUntil, so a hold already over is gone first.
+    const held = this.limitedUntil(slug) === null ? undefined : this.limits.get(slug);
+    // A refusal's hold lasts until its own time. Otherwise only a reading newer than what's held
+    // says anything: a cached one served again must neither move nor clear it.
+    if (usage && held?.source !== 'event' && (!held || usage.fetchedAt > held.at)) {
       const until = limitFromUsage(usage);
-      if (until !== null && until > this.now()) this.markLimited(slug, until);
+      if (until !== null && until > this.now()) this.markLimited(slug, until, 'reading');
       else this.limits.delete(slug);
     }
     return usage;
@@ -171,7 +200,7 @@ export class ClaudeAccountService {
   /**
    * The account chat `chatId`'s next turn runs on. A chat that names one runs
    * on it; one that names none runs on main, or, while main is limited, on
-   * the first account with room, and is pinned to it (with a
+   * the first account with room not known to be signed out, and is pinned to it (with a
    * `claude-account-switched` event). Throws ClaudeAccountUnavailableError
    * when the chat names an account this machine doesn't have: it never falls
    * back to main.
@@ -200,8 +229,10 @@ export class ClaudeAccountService {
     return pick.kind === 'ok' ? pick.account : MAIN_ACCOUNT;
   }
 
+  /** Main and an explicit choice are always offered; another account known to be signed out is never overflowed onto. */
   private pick(chosen: string | null): ReturnType<typeof pickClaudeAccount> {
-    return pickClaudeAccount({ chosen, accounts: this.refs(), limitedUntil: (slug) => this.limitedUntil(slug), now: this.now() });
+    const accounts = this.refs().filter((r) => r.slug === MAIN_ACCOUNT_SLUG || r.slug === chosen || this.deps.signedIn?.(r.slug) !== false);
+    return pickClaudeAccount({ chosen, accounts, limitedUntil: (slug) => this.limitedUntil(slug), now: this.now() });
   }
 
   /** Main's folder as Claude Code sees it: the inherited CLAUDE_CONFIG_DIR, or `~/.claude`. */

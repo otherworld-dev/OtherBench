@@ -114,6 +114,52 @@ describe('ClaudeLoginRunner.status', () => {
     expect(await caught).toBeInstanceOf(Error);
     expect(calls[0]!.child.killed).toBe(true);
   });
+
+  it('shares one read between calls made while it runs', async () => {
+    let child: FakeChild | undefined;
+    onSpawn = (c) => (child = c);
+    const r = runner();
+    const first = r.status(vh());
+    const second = r.status(vh());
+    await vi.waitFor(() => expect(child).toBeDefined());
+    child!.say(SIGNED_IN);
+    child!.finish(0);
+    expect(await first).toEqual(await second);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('remembers a failed read for 15 s, so a stuck CLI is not run again on every poll', async () => {
+    onSpawn = (child) => child.finish(2);
+    const r = runner();
+    await expect(r.status(vh())).rejects.toThrow('unreadable');
+    clock += 14_000;
+    await expect(r.status(vh())).rejects.toThrow('unreadable');
+    expect(calls).toHaveLength(1);
+    expect(r.cachedSignedIn('vh')).toBeNull();
+    clock += 2_000;
+    onSpawn = (child) => {
+      child.say(SIGNED_IN);
+      child.finish(0);
+    };
+    expect((await r.status(vh())).signedIn).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('says what it last read of a login: signed in, signed out, or not known', async () => {
+    const r = runner();
+    expect(r.cachedSignedIn('vh')).toBeNull();
+    await r.status(vh());
+    expect(r.cachedSignedIn('vh')).toBe(true);
+    onSpawn = (child) => {
+      child.say(JSON.stringify({ loggedIn: false }));
+      child.finish(1);
+    };
+    await r.status(MAIN_ACCOUNT);
+    expect(r.cachedSignedIn('main')).toBe(false);
+    onSpawn = (child) => child.finish(0);
+    await r.signOut(vh());
+    expect(r.cachedSignedIn('vh')).toBeNull();
+  });
 });
 
 describe('ClaudeLoginRunner.signOut', () => {
