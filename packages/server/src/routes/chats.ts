@@ -17,7 +17,7 @@ import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { recordBackgroundUsage } from '../background-usage.js';
-import { continueOnAccount } from '../claude-accounts/switcher.js';
+import { continueOnAccount, NOT_HERE } from '../claude-accounts/switcher.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
@@ -352,7 +352,10 @@ export function chatsRoutes(container: Container): Hono {
   // itself (spec 2026-10-28-claude-accounts-design, "Switching mid-chat").
   app.post('/:id/continue-on-account', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown; account?: unknown };
-    const chatId = getChatOrThrow(container, c.req.param('id')).id;
+    const chat = getChatOrThrow(container, c.req.param('id'));
+    const chatId = chat.id;
+    // As the peer API refuses it: the machine that runs the chat holds its replies and its accounts.
+    if (chat.runsOn !== container.store.nodes.self().id) return c.json({ error: NOT_HERE, kind: 'not_here' }, 409);
     const messageId = requireNonEmptyString(body.messageId, 'messageId');
     const account = requireNonEmptyString(body.account, 'account');
     const result = await continueOnAccount(container, { chatId, messageId, account, midReply: false });

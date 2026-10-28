@@ -10,6 +10,9 @@ import { startTurn } from '../turn-start.js';
 /** How long an account is held when its limit error doesn't say when it resets: the length of the 5-hour window. */
 const UNKNOWN_RESET_HOLD_MS = 5 * 3600_000;
 
+/** The refusal for a chat another machine runs, as the peer API words it (`kind: 'not_here'`). */
+export const NOT_HERE = 'This chat runs on another machine.';
+
 /**
  * The replies already carried on to another account, per container, whether
  * the switcher did it or the user asked: one Set for both, so a cut-off reply
@@ -44,12 +47,24 @@ function producingAccount(chat: Chat, message: CanonMessage): string {
   return chat.claudeAccount ?? MAIN_ACCOUNT_SLUG;
 }
 
+function detailOf(error: SerializedError | null): Record<string, unknown> {
+  const detail = error?.detail;
+  return typeof detail === 'object' && detail !== null ? (detail as Record<string, unknown>) : {};
+}
+
 /** The reset time (ms) the engine put on a rate-limit error, or null when it didn't know it. */
 function resetsAtOf(error: SerializedError | null): number | null {
-  const detail = error?.detail;
-  if (typeof detail !== 'object' || detail === null) return null;
-  const resetsAt = (detail as Record<string, unknown>)['resetsAt'];
+  const resetsAt = detailOf(error)['resetsAt'];
   return typeof resetsAt === 'number' && Number.isFinite(resetsAt) ? resetsAt : null;
+}
+
+/**
+ * Whether the engine had real evidence the account is out of usage (a rejected
+ * rate-limit event, a reset time, Claude Code's limit text). An overload or a
+ * bare 429 is a `rate_limit` too, but must never hold an account or move a chat.
+ */
+function isUsageLimit(error: SerializedError | null): boolean {
+  return detailOf(error)['usageLimit'] === true;
 }
 
 /**
@@ -57,9 +72,11 @@ function resetsAtOf(error: SerializedError | null): number | null {
  * to `account` (spec 2026-10-28-claude-accounts-design, "Switching mid-chat"):
  * the chat is moved to that account, and a new user message under the cut-off
  * reply asks Claude to carry on, on the profile that wrote it. The cut-off
- * reply is kept as it is. Throws HTTPException: 404 for an unknown chat or
- * message, 400 for an account this machine doesn't have, 409 when the message
- * isn't a reply of this chat cut off by a usage limit, when `account` is the
+ * reply is kept as it is. Any `rate_limit` reply may be continued this way,
+ * an overload too: the user asked. If the turn can't start, the chat keeps
+ * its account. Throws HTTPException: 404 for an unknown chat or message, 400
+ * for an account this machine doesn't have, 409 when the message belongs to
+ * another chat or isn't a reply cut off by a rate limit, when `account` is the
  * one that wrote it, when the chat runs on another machine, or when the reply
  * has been continued already.
  */
@@ -71,11 +88,12 @@ export async function continueOnAccount(
   const chat = store.chats.get(input.chatId);
   if (!chat) throw new HTTPException(404, { message: `Chat "${input.chatId}" not found.` });
   const message = store.messages.get(input.messageId);
-  if (!message || message.chatId !== chat.id) throw new HTTPException(404, { message: `Message "${input.messageId}" not found in this chat.` });
+  if (!message) throw new HTTPException(404, { message: `Message "${input.messageId}" not found.` });
+  if (message.chatId !== chat.id) throw new HTTPException(409, { message: `Message "${input.messageId}" belongs to another chat.` });
   const accounts = container.claudeAccounts;
   const to = accounts ? accounts.ref(input.account) : input.account === MAIN_ACCOUNT_SLUG ? MAIN_ACCOUNT : null;
   if (!to) throw new HTTPException(400, { message: `No Claude account named "${input.account}" on this machine.` });
-  if (chat.runsOn !== store.nodes.self().id) throw new HTTPException(409, { message: 'This chat runs on another machine: continue it there.' });
+  if (chat.runsOn !== store.nodes.self().id) throw new HTTPException(409, { message: NOT_HERE });
   if (!cutOffByLimit(message) || !message.producedBy || !ranOnClaudeLogin(store, message)) {
     throw new HTTPException(409, { message: "That message isn't a Claude reply cut off by a usage limit." });
   }
@@ -89,13 +107,21 @@ export async function continueOnAccount(
   try {
     const profile = await resolveProfile(container, message.producedBy.profileId);
     const fromName = accounts?.ref(fromSlug)?.name ?? fromSlug;
+    const before = store.chats.get(chat.id)?.claudeAccount ?? null;
     store.chats.update(chat.id, { claudeAccount: to.slug });
-    const result = await startTurn(container, {
-      chatId: chat.id,
-      parentId: message.id,
-      userParts: [{ type: 'text', text: continuePrompt(fromName, to.name) }],
-      profiles: [profile],
-    });
+    let result: Awaited<ReturnType<typeof startTurn>>;
+    try {
+      result = await startTurn(container, {
+        chatId: chat.id,
+        parentId: message.id,
+        userParts: [{ type: 'text', text: continuePrompt(fromName, to.name) }],
+        profiles: [profile],
+      });
+    } catch (err) {
+      // Nothing started on the new account: the chat stays where it was.
+      if (store.chats.get(chat.id)) store.chats.update(chat.id, { claudeAccount: before });
+      throw err;
+    }
     container.events?.emit({
       type: 'claude-account-switched',
       chatId: chat.id,
@@ -113,7 +139,8 @@ export async function continueOnAccount(
 }
 
 /**
- * When a Claude reply ends cut off by its account's usage limit: holds that
+ * When a Claude reply ends cut off by its account's usage limit (the engine's
+ * `detail.usageLimit`; an overload or a bare 429 is left alone): holds that
  * account as limited until the reset the error names (5 hours when it names
  * none), and either says every account is out of usage or, when the chat has
  * "Switch automatically" on and the reply is the chat's only reply at its tip,
@@ -138,14 +165,16 @@ function onCutOff(container: Container, messageId: string): Promise<unknown> | n
   const { store, claudeAccounts: accounts } = container;
   if (!accounts) return null;
   const message = store.messages.get(messageId);
-  if (!message || !cutOffByLimit(message) || !ranOnClaudeLogin(store, message)) return null;
+  if (!message || !cutOffByLimit(message) || !isUsageLimit(message.error) || !ranOnClaudeLogin(store, message)) return null;
   const chat = store.chats.get(message.chatId);
   // A reply run on a paired machine is that machine's to handle: its accounts are its own.
   if (!chat || chat.runsOn !== store.nodes.self().id) return null;
 
   const from = producingAccount(chat, message);
-  const now = Date.now();
-  accounts.markLimited(from, resetsAtOf(message.error) ?? now + UNKNOWN_RESET_HOLD_MS);
+  const now = accounts.now();
+  // A fallback (or an earlier reset) never shortens a longer hold the account already has.
+  const until = resetsAtOf(message.error) ?? now + UNKNOWN_RESET_HOLD_MS;
+  accounts.markLimited(from, Math.max(until, accounts.limitedUntil(from) ?? 0));
 
   const refs = accounts.refs();
   const limitedUntil = (slug: string): number | null => accounts.limitedUntil(slug);

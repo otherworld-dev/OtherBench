@@ -52,7 +52,8 @@ function checkColour(colour: string): void {
  * usage reading or rate-limit event sets it again.
  */
 export class ClaudeAccountService {
-  private readonly now: () => number;
+  /** The clock the holds are kept by (ms epoch); injected in tests. */
+  readonly now: () => number;
   private readonly home: string;
   private readonly baseEnv: NodeJS.ProcessEnv;
   /** Until when each account is out of usage, and when that was learnt (so only a newer reading clears it). */

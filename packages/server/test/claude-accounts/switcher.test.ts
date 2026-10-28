@@ -25,6 +25,8 @@ let engine: FakeChatEngine;
 let seen: AppEvent[];
 let detach: () => void;
 let resetsAt: number;
+/** The account service's clock. */
+let clock: number;
 
 /** Main's replies are cut off by the usage limit; VH's finish. */
 function script(req: EngineRequest): EngineEvent[] {
@@ -39,12 +41,17 @@ function script(req: EngineRequest): EngineEvent[] {
   return [
     { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: 's-main', backend: 'claude', cwd: '/ws' } },
     { type: 'text-delta', text: 'Half done' },
-    { type: 'error', error: { kind: 'rate_limit', retryable: true, message: 'Claude usage limit reached.', detail: { text: 'limit', resetsAt } } },
+    { type: 'error', error: cutOff() },
   ];
 }
 
+function cutOff(): SerializedError {
+  return { kind: 'rate_limit', retryable: true, message: 'Claude usage limit reached.', detail: { text: 'limit', resetsAt, usageLimit: true } };
+}
+
 beforeEach(() => {
-  resetsAt = Date.now() + 3_600_000;
+  clock = Date.now();
+  resetsAt = clock + 3_600_000;
   const store = new InMemoryStore();
   const events = new AppEventBus();
   seen = [];
@@ -55,7 +62,7 @@ beforeEach(() => {
     toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
   });
   engine = new FakeChatEngine(script);
-  accounts = new ClaudeAccountService({ store, engine, events, home, baseEnv: {} });
+  accounts = new ClaudeAccountService({ store, engine, events, home, baseEnv: {}, now: () => clock });
   accounts.add({ name: 'VH', colour: '#e0a030', configDir: join(home, '.claude-vh') });
   const turnRunner = new TurnRunner(store, engine, { pathExists: () => true, claudeAccountFor: (chatId) => accounts.resolveForTurn(chatId) });
   events.attach(turnRunner, store);
@@ -78,8 +85,8 @@ beforeEach(() => {
 
 afterEach(() => detach());
 
-function chat(accountAutoSwitch: boolean): void {
-  container.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p1', headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null, accountAutoSwitch });
+function chat(accountAutoSwitch: boolean, claudeAccount: string | null = null, id = 'chat-1'): void {
+  container.store.chats.create({ id, title: 'T', profileId: 'p1', headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null, accountAutoSwitch, claudeAccount });
 }
 
 /** Sends a message the way the turns route does and waits for every reply it started to end. */
@@ -100,7 +107,9 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
-const RATE_LIMIT: SerializedError = { kind: 'rate_limit', retryable: true, message: 'Claude usage limit reached.', detail: { text: 'limit' } };
+const RATE_LIMIT: SerializedError = { kind: 'rate_limit', retryable: true, message: 'Claude usage limit reached.', detail: { text: 'limit', usageLimit: true } };
+/** An overload (or a bare 429): a `rate_limit` too, but no evidence the account is out of usage. */
+const OVERLOADED: SerializedError = { kind: 'rate_limit', retryable: true, message: 'Claude usage limit reached.', detail: { text: 'API Error: 529 overloaded_error' } };
 
 /** A user message with its cut-off reply, written straight to the store (head on the user message). */
 function seed(opts: { status?: MessageStatus; error?: SerializedError; siblings?: number } = {}): string {
@@ -130,6 +139,7 @@ describe('attachAccountSwitcher', () => {
     const reply = container.store.messages.get(replyId!)!;
     expect(reply.status).toBe('error');
     expect(reply.parts).toEqual([{ type: 'text', text: 'Half done' }]);
+    expect(reply.error).toEqual(cutOff());
     expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
 
     const next = userChildren(replyId!)[0]!;
@@ -158,13 +168,34 @@ describe('attachAccountSwitcher', () => {
   it('holds the account for five hours when the error has no reset time', async () => {
     chat(false);
     seed();
-    const before = Date.now();
+    clock += 60_000;
     finished('a1');
     await settle();
 
-    const until = accounts.limitedUntil('main')!;
-    expect(until).toBeGreaterThanOrEqual(before + 5 * 3_600_000);
-    expect(until).toBeLessThanOrEqual(Date.now() + 5 * 3_600_000);
+    expect(accounts.limitedUntil('main')).toBe(clock + 5 * 3_600_000);
+  });
+
+  it('never shortens a longer hold already on the account', async () => {
+    chat(false);
+    seed();
+    const longer = clock + 10 * 3_600_000;
+    accounts.markLimited('main', longer);
+    finished('a1');
+    await settle();
+
+    expect(accounts.limitedUntil('main')).toBe(longer);
+  });
+
+  it('does nothing for an overload or a bare 429, which is no evidence of a usage limit', async () => {
+    chat(true);
+    seed({ error: OVERLOADED });
+    finished('a1');
+    await settle();
+
+    expect(accounts.limitedUntil('main')).toBeNull();
+    expect(userChildren('a1')).toEqual([]);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBeNull();
+    expect(seen.some((e) => e.type === 'claude-account-switched' || e.type === 'claude-accounts-exhausted')).toBe(false);
   });
 
   describe('does not continue a compare variant or a superseded reply', () => {
@@ -285,5 +316,41 @@ describe('POST /api/chats/:id/continue-on-account', () => {
     container.store.messages.updateStatus('a1', 'error', RATE_LIMIT);
     expect((await post({ messageId: 'a1', account: 'main' })).status).toBe(409);
     expect(userChildren('a1')).toEqual([]);
+  });
+
+  it("is 409 for another chat's message", async () => {
+    chat(false);
+    seed();
+    chat(false, null, 'chat-2');
+    expect((await post({ messageId: 'a1', account: 'vh' }, 'chat-2')).status).toBe(409);
+    expect(userChildren('a1')).toEqual([]);
+  });
+
+  it("is 409 with kind not_here for a chat that runs on another machine", async () => {
+    chat(false);
+    seed();
+    container.store.chats.update('chat-1', { runsOn: 'other-node' });
+    const res = await post({ messageId: 'a1', account: 'vh' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'This chat runs on another machine.', kind: 'not_here' });
+  });
+
+  it('continues an overloaded reply when the user asks', async () => {
+    chat(false);
+    seed({ error: OVERLOADED });
+    expect((await post({ messageId: 'a1', account: 'vh' })).status).toBe(202);
+    expect(userChildren('a1')).toHaveLength(1);
+  });
+
+  it("puts the chat's account back when the turn can't start, so it may be tried again", async () => {
+    chat(false, 'main');
+    seed();
+    vi.spyOn(container.turnRunner, 'run').mockRejectedValueOnce(new Error('boom'));
+    expect((await post({ messageId: 'a1', account: 'vh' })).status).toBe(500);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('main');
+    expect(seen.some((e) => e.type === 'claude-account-switched')).toBe(false);
+
+    expect((await post({ messageId: 'a1', account: 'vh' })).status).toBe(202);
+    expect(container.store.chats.get('chat-1')!.claudeAccount).toBe('vh');
   });
 });
