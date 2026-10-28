@@ -146,9 +146,9 @@ describe('desktop bridge', () => {
 
     invoke.mockResolvedValue(undefined);
     await showNotification('Trip', 'Reply finished', 'c1');
-    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1', revealPath: null });
+    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1', revealPath: null, window: 'main' });
     await showNotification('Download complete', 'x.md is in Downloads', null, 'C:/Users/a/Downloads/x.md');
-    expect(invoke).toHaveBeenLastCalledWith('show_notification', { title: 'Download complete', body: 'x.md is in Downloads', chatId: null, revealPath: 'C:/Users/a/Downloads/x.md' });
+    expect(invoke).toHaveBeenLastCalledWith('show_notification', { title: 'Download complete', body: 'x.md is in Downloads', chatId: null, revealPath: 'C:/Users/a/Downloads/x.md', window: 'main' });
   });
 
   it('saveDownload sends the bytes raw with the name percent-encoded in a header, and returns the path; null in a browser', async () => {

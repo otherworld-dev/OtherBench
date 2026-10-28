@@ -40,8 +40,8 @@ export function saveNotifyPrefs(prefs: NotifyPrefs): void {
 }
 
 export interface NotifierDeps {
-  /** Whether the main window has focus right now; nothing is shown while it does. */
-  isFocused(): Promise<boolean>;
+  /** Whether the window holding `chatId` has focus right now; nothing is shown while it does. */
+  isFocused(chatId: string): Promise<boolean>;
   /** `chatId` lets a click open the chat (Windows); null opens just OtherBench. */
   show(title: string, body: string, chatId: string | null): Promise<void>;
   /** The chat's title for the notification's heading, or null if it isn't loaded. */
@@ -116,7 +116,7 @@ export class Notifier {
     } else {
       return;
     }
-    if (this.sent.has(key) || (await this.deps.isFocused()) || this.sent.has(key)) return;
+    if (this.sent.has(key) || (await this.deps.isFocused(e.chatId)) || this.sent.has(key)) return;
     this.sent.add(key);
     this.lastChatId = e.chatId;
     await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'OtherBench', body, e.chatId);

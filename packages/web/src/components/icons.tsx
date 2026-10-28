@@ -82,3 +82,23 @@ export function ClockIcon({ className }: IconProps): JSX.Element {
     </Svg>
   );
 }
+
+/** A box with an arrow leaving its corner: open in a window of its own. */
+export function PopOutIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <path d="M7 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9" />
+      <path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5" />
+    </Svg>
+  );
+}
+
+/** A box with an arrow coming into it: back into the main window. */
+export function DockIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <path d="M7 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9" />
+      <path d="M8 4.5V8h3.5M8 8l5.5-5.5" />
+    </Svg>
+  );
+}

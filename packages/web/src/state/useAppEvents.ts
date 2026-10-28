@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
 import type { AppEvent, AppEventsHello } from '@otherbench/core/types/events.js';
-import { isDesktop, isMainWindowFocused, onDesktopEvent, showNotification } from '../desktop/bridge.js';
+import { focusedWindow, isDesktop, onDesktopEvent, showNotification } from '../desktop/bridge.js';
+import { windowForMode } from '../desktop/windows.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
 import { api } from './api.js';
 import { emitAppEvent } from './appEventListeners.js';
 import { refreshMachines } from './machines.js';
 import { SseClient } from './sse.js';
-import { useOtherBenchStore } from './store.js';
+import { modeOfChat } from './mode.js';
+import { useOtherBenchStore, WINDOW_ROLE } from './store.js';
 
 /**
  * Subscribes to `GET /api/events` (v2 plan, Task 34) for as long as the app
@@ -14,7 +16,8 @@ import { useOtherBenchStore } from './store.js';
  * the tray, auto-title) show up here, and the pending-approval count stays
  * current. Reconnects like the chat stream; each `hello` resets the count.
  * In the desktop app it also raises notifications (desktop/notify.ts), and
- * opening OtherBench from the tray goes to the chat last notified about.
+ * opening OtherBench from the tray goes to the chat last notified about; only
+ * the main window does, so an undocked one never raises them twice.
  */
 /**
  * Another machine's changes were applied: chats, projects, profiles,
@@ -37,13 +40,20 @@ export function refreshAfterSync(): void {
     .catch((err: unknown) => console.error('[otherbench-web] failed to reload after a sync:', err));
 }
 
+/** The window holding `chatId` (desktop/windows.ts), which a notification about it opens and whose focus hides it. */
+function windowOfChat(chatId: string | null): 'main' | 'code' {
+  const { chats, undocked } = useOtherBenchStore.getState();
+  const chat = chatId === null ? undefined : chats.find((c) => c.id === chatId);
+  return chat ? windowForMode(modeOfChat(chat), undocked, 'main') : 'main';
+}
+
 export function useAppEvents(): void {
   useEffect(() => {
     const { applyAppHello, applyAppEvent } = useOtherBenchStore.getState();
-    const notifier = isDesktop()
+    const notifier = isDesktop() && WINDOW_ROLE === 'main'
       ? new Notifier({
-          isFocused: isMainWindowFocused,
-          show: showNotification,
+          isFocused: async (chatId) => (await focusedWindow()) === windowOfChat(chatId),
+          show: (title, body, chatId) => showNotification(title, body, chatId, null, windowOfChat(chatId)),
           chatTitle: (chatId) => useOtherBenchStore.getState().chats.find((c) => c.id === chatId)?.title ?? null,
           prefs: loadNotifyPrefs,
         })

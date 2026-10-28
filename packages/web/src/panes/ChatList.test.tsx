@@ -11,6 +11,8 @@ vi.mock('../desktop/bridge.js', () => ({
     desktopListeners.set(name, cb);
     return unlisten;
   }),
+  undock: vi.fn(async () => {}),
+  dock: vi.fn(async () => {}),
 }));
 
 vi.mock('../state/api.js', async (importOriginal) => {
@@ -2214,5 +2216,44 @@ describe('ChatList Overview switch', () => {
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('mode-switch')).getByRole('button', { name: /^Chat/ }));
     expect(useOtherBenchStore.getState().overviewOpen).toBe(false);
+  });
+});
+
+describe('ChatList undock button (desktop)', () => {
+  beforeEach(() => {
+    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {};
+    useOtherBenchStore.setState({ overview: null, overviewOpen: false, mode: 'chat', undocked: [] });
+  });
+  afterEach(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    useOtherBenchStore.setState({ undocked: [] });
+  });
+
+  it('offers nothing for Chat mode, which stays in the main window', () => {
+    render(<ChatList />);
+    expect(screen.queryByTestId('dock-toggle')).toBeNull();
+  });
+
+  it('opens Code, or the Overview while it shows, in a window of its own', async () => {
+    const { undock } = await import('../desktop/bridge.js');
+    useOtherBenchStore.setState({ mode: 'code' });
+    render(<ChatList />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Open Code in its own window' }));
+    expect(undock).toHaveBeenLastCalledWith('code');
+    act(() => useOtherBenchStore.setState({ overviewOpen: true }));
+    await user.click(screen.getByRole('button', { name: 'Open the Overview in its own window' }));
+    expect(undock).toHaveBeenLastCalledWith('overview');
+  });
+
+  it('marks a mode in its own window and leaves it unpressed', () => {
+    useOtherBenchStore.setState({ undocked: ['code', 'overview'] });
+    render(<ChatList />);
+    const sw = screen.getByTestId('mode-switch');
+    const code = within(sw).getByRole('button', { name: /^Code/ });
+    expect(code).toHaveAttribute('title', 'Code is in its own window');
+    expect(code).toHaveAttribute('aria-pressed', 'false');
+    expect(within(sw).getByRole('button', { name: /^Overview/ })).toHaveAttribute('title', 'The Overview is in its own window');
+    expect(within(sw).getByRole('button', { name: /^Chat/ })).toHaveAttribute('aria-pressed', 'true');
   });
 });

@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import { useState, type JSX, type ReactNode } from 'react';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeAccountsStrip } from './ClaudeAccountsStrip.js';
@@ -78,8 +78,11 @@ function TickOlder(): JSX.Element {
   );
 }
 
-/** The main column while the Overview is open: what needs you across apps (spec 2026-10-26-overview). */
-export function OverviewView(): JSX.Element {
+/**
+ * The main column while the Overview is open: what needs you across apps (spec 2026-10-26-overview).
+ * Also the whole of the Overview's own window, which puts its Dock button in the header (`action`).
+ */
+export function OverviewView({ action }: { action?: ReactNode } = {}): JSX.Element {
   const overview = useOtherBenchStore((s) => s.overview);
   const setOverview = useOtherBenchStore((s) => s.setOverview);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -107,11 +110,14 @@ export function OverviewView(): JSX.Element {
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-label text-lg font-bold uppercase tracking-[0.08em]">Overview</h2>
         <TickOlder />
-        <span className="text-xs text-[var(--text-muted)]">
-          {status} ·{' '}
-          <button type="button" data-testid="overview-refresh" onClick={refresh} className="underline hover:text-[var(--text)]">
-            refresh
-          </button>
+        <span className="flex items-baseline gap-2 text-xs text-[var(--text-muted)]">
+          <span>
+            {status} ·{' '}
+            <button type="button" data-testid="overview-refresh" onClick={refresh} className="underline hover:text-[var(--text)]">
+              refresh
+            </button>
+          </span>
+          {action}
         </span>
       </div>
       <ClaudeAccountsStrip refreshKey={refreshKey} />
