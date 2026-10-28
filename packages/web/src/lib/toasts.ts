@@ -7,6 +7,8 @@ export interface Toast {
   tone: 'ok' | 'error';
   /** A saved file's full path: the toast offers "Show in folder". */
   path?: string;
+  /** A chat to open: the toast's text becomes a button that opens it. */
+  chatId?: string;
 }
 
 /** How long a toast stays before it goes on its own. */

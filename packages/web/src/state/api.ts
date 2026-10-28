@@ -10,6 +10,7 @@ import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { ImportPreview, ImportStart, ImportStatus } from '@otherbench/core/types/claude-import.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
+import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
 import type { PlanUsage, RecordedUsage } from '@otherbench/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@otherbench/core/types/workspace.js';
 import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
@@ -603,6 +604,9 @@ export const api = {
     commands: (chatId: string, profileId: string) => request<{ commands: CommandRow[]; warning?: string }>(`/chats/${chatId}/commands?profileId=${encodeURIComponent(profileId)}`),
     /** Stops one of the chat's background tasks (spec 2026-10-17-claude-background-helpers-design). */
     stopHelper: (chatId: string, taskId: string) => post<{ stopped: boolean }>(`/chats/${chatId}/helpers/${encodeURIComponent(taskId)}/stop`, {}),
+    /** Re-runs the reply to `messageId` on another Claude account (202). */
+    continueOnAccount: (chatId: string, body: { messageId: string; account: string }) =>
+      post<{ userMessageId: string; assistantMessageIds: string[] }>(`/chats/${chatId}/continue-on-account`, body),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),
     /** The chat as a file (#820): the shown conversation as Markdown, or the whole tree as JSON. */
@@ -871,7 +875,22 @@ export const api = {
 
   claude: {
     /** The Claude login's plan usage (Deck #825), null when there's no plan to show. `refresh` asks for a fresher reading, as after a reply. */
-    planUsage: (refresh = false) => request<{ usage: PlanUsage | null }>(`/claude/plan-usage${refresh ? '?refresh=1' : ''}`),
+    planUsage: (refresh = false, account?: string) => {
+      const q = [...(account ? [`account=${encodeURIComponent(account)}`] : []), ...(refresh ? ['refresh=1'] : [])];
+      return request<{ usage: PlanUsage | null }>(`/claude/plan-usage${q.length ? `?${q.join('&')}` : ''}`);
+    },
+    /** Claude account logins: each its own config folder. Main comes first. */
+    accounts: {
+      list: () => request<{ accounts: AccountView[] }>('/claude/accounts'),
+      add: (body: { name: string; colour: string; configDir?: string }) => post<{ account: AccountView }>('/claude/accounts', body),
+      update: (slug: string, body: { colour: string }) => patch<{ account: AccountView }>(`/claude/accounts/${encodeURIComponent(slug)}`, body),
+      remove: (slug: string) => del(`/claude/accounts/${encodeURIComponent(slug)}`),
+      /** Starts the CLI's sign-in (202); `url` is the page to open, null if none came. */
+      signIn: (slug: string) => post<{ url: string | null }>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in`),
+      /** The code the sign-in page shows, for a CLI that can't be reached by its callback. */
+      submitCode: (slug: string, code: string) => post<void>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in/code`, { code }),
+      signOut: (slug: string) => post<void>(`/claude/accounts/${encodeURIComponent(slug)}/sign-out`),
+    },
   },
 
   artifacts: {
