@@ -1284,7 +1284,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
         <div className="mb-2 flex items-stretch gap-1">
-          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid flex-1 grid-cols-3 gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
+          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
             {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
               <button
                 key={m}
