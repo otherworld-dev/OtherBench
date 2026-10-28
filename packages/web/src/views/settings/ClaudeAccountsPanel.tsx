@@ -59,13 +59,17 @@ export function ClaudeAccountsPanel(): JSX.Element {
     }
   }
 
-  async function act(run: () => Promise<unknown>): Promise<void> {
+  /** Runs a change, toasts its failure, and reloads the list either way. True when it worked. */
+  async function act(run: () => Promise<unknown>): Promise<boolean> {
+    let ok = true;
     try {
       await run();
     } catch (e) {
+      ok = false;
       toast({ tone: 'error', text: messageOf(e) });
     }
     await reload();
+    return ok;
   }
 
   return (
@@ -109,7 +113,8 @@ interface CardProps {
   onSignOut(): void;
   onRemove(): void;
   onColour(colour: string): void;
-  onCode(code: string): Promise<void>;
+  /** Resolves true when the code was taken, so the field is cleared only then. */
+  onCode(code: string): Promise<boolean>;
 }
 
 function AccountCard({ account: a, url, onSignIn, onSignOut, onRemove, onColour, onCode }: CardProps): JSX.Element {
@@ -147,7 +152,8 @@ function AccountCard({ account: a, url, onSignIn, onSignOut, onRemove, onColour,
             onSubmit={(e) => {
               e.preventDefault();
               const pasted = code.trim();
-              if (pasted) void onCode(pasted).then(() => setCode(''));
+              // A failed submit keeps the code, to be sent again.
+              if (pasted) void onCode(pasted).then((ok) => ok && setCode(''));
             }}
           >
             <input

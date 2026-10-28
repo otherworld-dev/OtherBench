@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
+import { MAIN_ACCOUNT } from '@otherbench/core/types/claude-accounts.js';
 import type { PlanUsage, PlanWindow } from '@otherbench/core/types/usage.js';
 import { api } from '../state/api.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
@@ -40,7 +41,11 @@ export function usageDetails(usage: PlanUsage, now: number): string {
  */
 export function PlanUsageMeter({ busy, account }: { busy: boolean; account: string | null }): JSX.Element | null {
   const [usage, setUsage] = useState<PlanUsage | null>(null);
-  const accountName = useClaudeAccounts((s) => (account ? (s.accounts.find((a) => a.slug === account)?.name ?? account) : null));
+  const accountName = useClaudeAccounts((s) => {
+    if (account) return s.accounts.find((a) => a.slug === account)?.name ?? account;
+    // A Default chat runs on main: named once there is another account it could be confused with.
+    return s.accounts.some((a) => !a.main) ? (s.accounts.find((a) => a.main)?.name ?? MAIN_ACCOUNT.name) : null;
+  });
   const wasBusy = useRef(busy);
   const accountRef = useRef(account);
   accountRef.current = account;

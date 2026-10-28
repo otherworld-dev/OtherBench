@@ -117,6 +117,12 @@ describe('PlanUsageMeter account', () => {
     expect(screen.getByTestId('plan-usage').title.split('\n')[0]).toBe('VH');
   });
 
+  it("names Main in the tooltip for a Default chat (no account), which runs on main", async () => {
+    render(<PlanUsageMeter busy={false} account={null} />);
+    await settle();
+    expect(screen.getByTestId('plan-usage').title.split('\n')[0]).toBe('Main');
+  });
+
   it('drops the previous reading on a switch, even when the next read fails', async () => {
     const { rerender } = render(<PlanUsageMeter busy={false} account={null} />);
     await settle();

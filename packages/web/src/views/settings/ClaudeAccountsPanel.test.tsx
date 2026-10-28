@@ -114,6 +114,18 @@ describe('ClaudeAccountsPanel', () => {
     await user.type(within(card('vh')).getByLabelText('Paste code'), 'abc#123');
     await user.click(within(card('vh')).getByRole('button', { name: 'Submit' }));
     expect(accounts.submitCode).toHaveBeenCalledWith('vh', 'abc#123');
+    await waitFor(() => expect(within(card('vh')).getByLabelText('Paste code')).toHaveValue(''));
+  });
+
+  it('keeps the pasted code when submitting it fails, so it can be sent again', async () => {
+    accounts.list.mockResolvedValue({ accounts: [account(), VH({ signingIn: true })] });
+    accounts.submitCode.mockRejectedValue(new Error('No sign-in is running for this account.'));
+    render(<ClaudeAccountsPanel />);
+    const user = userEvent.setup();
+    await user.type(await within(await screen.findByTestId('claude-account-vh')).findByLabelText('Paste code'), 'abc#123');
+    await user.click(within(card('vh')).getByRole('button', { name: 'Submit' }));
+    await waitFor(() => expect(useToasts.getState().toasts).toMatchObject([{ tone: 'error', text: 'No sign-in is running for this account.' }]));
+    expect(within(card('vh')).getByLabelText('Paste code')).toHaveValue('abc#123');
   });
 
   it("toasts an error when the sign-in gave no page and isn't running", async () => {

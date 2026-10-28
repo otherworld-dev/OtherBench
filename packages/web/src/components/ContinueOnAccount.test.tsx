@@ -67,6 +67,14 @@ describe('Continue on <account>', () => {
     expect(screen.queryByRole('button', { name: /Continue on/ })).toBeNull();
   });
 
+  it('loads the accounts when none are loaded yet (a chat opened before Settings or the Overview)', async () => {
+    useClaudeAccounts.setState({ accounts: [] });
+    vi.mocked(api.claude.accounts.list).mockResolvedValueOnce({ accounts: [view('main', 'Main'), view('vh', 'VH')] });
+    render(<Message message={cutOff()} />);
+    expect(await screen.findByRole('button', { name: 'Continue on VH' })).toBeInTheDocument();
+    expect(api.claude.accounts.list).toHaveBeenCalled();
+  });
+
   it('toasts when the continue fails', async () => {
     cont.mockRejectedValue(new Error('boom'));
     useToasts.setState({ toasts: [] });

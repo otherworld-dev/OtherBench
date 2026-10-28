@@ -198,6 +198,19 @@ describe('ClaudeCodeSection account controls', () => {
     expect(vi.mocked(api.claude.accounts.list)).toHaveBeenCalled();
   });
 
+  it('shows no Account picker or Switch automatically on a machine with main alone, unless the chat names an account', () => {
+    loginChat();
+    useClaudeAccounts.setState({ accounts: [MAIN] });
+    const { unmount } = render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.queryByLabelText('Account')).toBeNull();
+    expect(screen.queryByLabelText('Switch automatically')).toBeNull();
+    unmount();
+    // A chat still pinned to a removed account can be put back on Default.
+    loginChat({ claudeAccount: 'gone' });
+    render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.getByLabelText('Account')).toHaveValue('gone');
+  });
+
   it("shows the latest reply's account", () => {
     loginChat();
     const m = msg('a', 1, 's');

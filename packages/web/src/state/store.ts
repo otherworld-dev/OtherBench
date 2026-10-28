@@ -35,7 +35,7 @@ import {
   type Layout,
   type PaneState,
 } from './panes.js';
-import { announceAccountEvent } from './claudeAccounts.js';
+import { announceAccountEvent, reloadOnAccountEvent } from './claudeAccounts.js';
 import { parseProjectTab } from './projectTab.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 import type { PeersOverview } from './api.js';
@@ -897,6 +897,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     }),
   applyAppEvent: (event) => {
     announceAccountEvent(event, (id) => get().chats.find((c) => c.id === id)?.title);
+    reloadOnAccountEvent(event);
     set((state) => {
       switch (event.type) {
         case 'chat-created':

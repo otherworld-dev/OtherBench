@@ -7,6 +7,7 @@ import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import { formatReset } from '../components/PlanUsageMeter.js';
 import { useToasts } from '../lib/toasts.js';
+import { useClaudeAccounts } from './claudeAccounts.js';
 import { viewTabId } from '../viewer/items.js';
 import { appTabId } from './appTab.js';
 import { MODE_STORAGE_KEY } from './mode.js';
@@ -1169,6 +1170,8 @@ describe('Claude account events', () => {
   beforeEach(() => {
     useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     useToasts.setState({ toasts: [] });
+    // These events reload the accounts: no real request from a test.
+    useClaudeAccounts.setState({ load: vi.fn(async () => {}) });
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 9, 28, 13, 0));
   });
@@ -1202,5 +1205,16 @@ describe('Claude account events', () => {
     vi.advanceTimersByTime(61_000);
     useOtherBenchStore.getState().applyAppEvent(event);
     expect(useToasts.getState().toasts).toHaveLength(1);
+  });
+
+  it('reloads the Claude accounts on a switch or when every account is out, so their "Limited until" is current', () => {
+    const load = vi.fn(async () => {});
+    useClaudeAccounts.setState({ load });
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-account-switched', chatId: 'c1', from: 'Main', to: 'VH', resetsAt, midReply: false });
+    expect(load).toHaveBeenCalledTimes(1);
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-accounts-exhausted', chatId: 'c9', resets: [{ name: 'Main', resetsAt }] });
+    expect(load).toHaveBeenCalledTimes(2);
+    useOtherBenchStore.getState().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'm1', status: 'complete' });
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });

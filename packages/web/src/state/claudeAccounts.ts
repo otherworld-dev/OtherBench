@@ -46,6 +46,16 @@ export function announceAccountEvent(event: AppEvent, chatTitle: (chatId: string
   }
 }
 
+/**
+ * Reloads the accounts after a switch, or when every account is out: the
+ * server has just held an account, so its "Limited until" (on the Overview)
+ * changes. Any other event is ignored.
+ */
+export function reloadOnAccountEvent(event: AppEvent): void {
+  if (event.type !== 'claude-account-switched' && event.type !== 'claude-accounts-exhausted') return;
+  useClaudeAccounts.getState().load().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
+}
+
 /** True when the chat's profile runs through Claude Code on the Claude login (a `claude_code` connection with no endpoint). */
 export function isClaudeLoginChat(chat: Pick<Chat, 'profileId'> | undefined, profiles: Profile[], connections: Connection[]): boolean {
   const profile = profiles.find((p) => p.id === chat?.profileId);

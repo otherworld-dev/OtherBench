@@ -15,7 +15,8 @@ const WINDOWS = [
 /**
  * Every Claude account's plan usage on the Overview: a dot, the name, the 5-hour and weekly
  * figures, and "Limited until" while the account is rate limited. Reads each account in
- * parallel every PLAN_USAGE_POLL_MS and again when `refreshKey` changes (the Overview's refresh).
+ * parallel every PLAN_USAGE_POLL_MS and again when `refreshKey` changes (the Overview's refresh),
+ * then reloads the accounts, whose "Limited until" a reading may have changed.
  */
 export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX.Element | null {
   const accounts = useClaudeAccounts((s) => s.accounts);
@@ -48,6 +49,8 @@ export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX
       if (!live) return;
       // A failed poll keeps the last good reading; only an account that never had one shows "—".
       setReadings((prev) => Object.fromEntries(entries.map(([slug, r]) => [slug, r === 'failed' && prev[slug] && prev[slug] !== 'failed' ? prev[slug] : r])));
+      // A reading can set or let go of an account's hold on the server: reload the accounts for their "Limited until".
+      useClaudeAccounts.getState().load().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
     };
     void read(force);
     const timer = setInterval(() => void read(false), PLAN_USAGE_POLL_MS);

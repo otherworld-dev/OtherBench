@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { toast } from '../lib/toasts.js';
 import { api } from '../state/api.js';
@@ -8,13 +8,19 @@ import { useOtherBenchStore } from '../state/store.js';
 /**
  * "Continue on <name>" under a reply a Claude account's usage limit cut off: one button per account
  * other than the one that produced the reply. Only in a Claude-login chat, and only when there is
- * another account to offer.
+ * another account to offer. Loads the accounts if nothing has yet.
  */
 export function ContinueOnAccount({ message }: { message: CanonMessage }): JSX.Element | null {
   const accounts = useClaudeAccounts((s) => s.accounts);
   const login = useOtherBenchStore((s) => isClaudeLoginChat(s.chats.find((c) => c.id === message.chatId), s.profiles, s.connections));
   const [busy, setBusy] = useState(false);
-  if (message.status !== 'error' || message.error?.kind !== 'rate_limit' || !login) return null;
+  const cutOff = message.status === 'error' && message.error?.kind === 'rate_limit' && login;
+  const empty = accounts.length === 0;
+  // A chat can be opened before anything else has loaded the accounts: load them for the buttons.
+  useEffect(() => {
+    if (cutOff && empty) useClaudeAccounts.getState().load().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
+  }, [cutOff, empty]);
+  if (!cutOff) return null;
   const producer = message.engineMeta?.account ?? 'main';
   const others = accounts.filter((a) => a.slug !== producer);
   if (others.length === 0) return null;

@@ -30,6 +30,8 @@ describe('ClaudeAccountsStrip', () => {
     vi.clearAllMocks();
     planUsage.mockReset();
     useClaudeAccounts.setState({ accounts: [] });
+    // A reload gives back what the test put in the store, unless it says otherwise.
+    vi.mocked(api.claude.accounts.list).mockImplementation(async () => ({ accounts: useClaudeAccounts.getState().accounts }));
   });
   afterEach(() => {
     cleanup();
@@ -115,6 +117,27 @@ describe('ClaudeAccountsStrip', () => {
     const dot = (slug: string) => (screen.getByTestId(`claude-account-${slug}`).querySelector('[aria-hidden]') as HTMLElement).style.background;
     expect(dot('main')).toBe('var(--text-muted)');
     expect(dot('vh')).toBe('var(--accent)');
+  });
+
+  it('reloads the accounts after each read, so a hold the reading set shows as "Limited until"', async () => {
+    const now = at(13, 0);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    const limitedUntil = at(15, 10);
+    useClaudeAccounts.setState({ accounts: [account({})] });
+    planUsage.mockResolvedValue({ usage: reading(100, 10) });
+    vi.mocked(api.claude.accounts.list).mockResolvedValue({ accounts: [account({ limitedUntil })] });
+    const { rerender } = render(<ClaudeAccountsStrip refreshKey={0} />);
+    await settle();
+    expect(api.claude.accounts.list).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('claude-account-main').textContent).toContain(`Limited until ${formatReset(limitedUntil, now)}`);
+
+    // The Overview's refresh reads again, and reloads again.
+    vi.mocked(api.claude.accounts.list).mockResolvedValue({ accounts: [account({})] });
+    rerender(<ClaudeAccountsStrip refreshKey={1} />);
+    await settle();
+    expect(api.claude.accounts.list).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('claude-account-main').textContent).not.toContain('Limited until');
   });
 
   it('stops polling on unmount', async () => {
