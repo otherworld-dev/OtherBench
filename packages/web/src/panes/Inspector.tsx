@@ -12,6 +12,7 @@ import { ApiError, api } from '../state/api.js';
 import { alsoActive } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
+import { isClaudeLoginChat } from '../state/claudeAccounts.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
 import { Section, useSectionSummary, type SummaryTone } from './InspectorSection.js';
@@ -917,7 +918,8 @@ function ProfileSection({ profile }: { profile: Profile | null }): JSX.Element {
 
 function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element | null {
   const hasSession = useOtherBenchStore((s) => Object.values(s.messages).some((m) => m.chatId === chatId && !!m.engineMeta));
-  if (!hasSession) return null;
+  const login = useOtherBenchStore((s) => isClaudeLoginChat(s.chats.find((c) => c.id === chatId), s.profiles, s.connections));
+  if (!hasSession && !login) return null;
   return (
     <Section title="Claude Code session">
       <ClaudeCodeSection chatId={chatId} />

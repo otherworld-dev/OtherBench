@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Connection, Profile } from '@otherbench/core/types/config.js';
 import { MAIN_ACCOUNT_SLUG, type AccountView } from '@otherbench/core/types/claude-accounts.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { formatReset } from '../components/PlanUsageMeter.js';
@@ -42,4 +44,11 @@ export function announceAccountEvent(event: AppEvent, chatTitle: (chatId: string
     const when = e.resets.map((r) => (r.resetsAt !== null ? `${r.name} resets ${formatReset(r.resetsAt, now)}` : r.name));
     toast({ tone: 'error', chatId: e.chatId, text: `All Claude accounts are at their limit: ${when.join(', ')}` });
   }
+}
+
+/** True when the chat's profile runs through Claude Code on the Claude login (a `claude_code` connection with no endpoint). */
+export function isClaudeLoginChat(chat: Pick<Chat, 'profileId'> | undefined, profiles: Profile[], connections: Connection[]): boolean {
+  const profile = profiles.find((p) => p.id === chat?.profileId);
+  const connection = connections.find((c) => c.id === profile?.connectionId);
+  return connection?.kind === 'claude_code' && !connection.baseUrl;
 }

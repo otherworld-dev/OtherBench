@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
@@ -24,6 +24,7 @@ import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
 import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
 import { ViewerPanel } from '../viewer/ViewerPanel.js';
 import { useBrowserAutoOpen } from '../viewer/useBrowserAutoOpen.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { ConversationStrip } from './ConversationStrip.js';
 import { Splitter } from './Splitter.js';
 
@@ -192,6 +193,15 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const sendUnder = openCompare ? (openVariants.find((v) => v.id === shownVariantId) ?? openVariants[0]!) : null;
   // Regenerate and Edit would race a running reply, so they wait for the chat to be quiet.
   const chatStreaming = useMemo(() => chatMessages.some((m) => m.status === 'streaming'), [chatMessages]);
+
+  // A chat on another Claude account is tinted in that account's colour; the accounts load once, when one is needed.
+  const accounts = useClaudeAccounts((s) => s.accounts);
+  const loadAccounts = useClaudeAccounts((s) => s.load);
+  const pinned = chat?.claudeAccount ?? null;
+  useEffect(() => {
+    if (pinned && pinned !== 'main' && accounts.length === 0) loadAccounts().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
+  }, [pinned, accounts.length, loadAccounts]);
+  const tint = pinned && pinned !== 'main' ? (accounts.find((a) => a.slug === pinned)?.colour ?? null) : null;
 
   if (!chat) {
     return (
@@ -367,7 +377,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         {/* A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads. */}
         <section
           aria-label={chat.title}
-          style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0' }}
+          {...(tint ? { 'data-account': pinned } : {})}
+          style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0', ...(tint ? { '--account-colour': tint } : {}) } as CSSProperties}
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           // Escape anywhere in this chat stops its running reply, as Stop does (lib/escapeStopsReply.ts).
           onKeyDown={(e) => {

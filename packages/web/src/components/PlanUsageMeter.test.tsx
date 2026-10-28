@@ -2,9 +2,10 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 
-vi.mock('../state/api.js', () => ({ api: { claude: { planUsage: vi.fn() } } }));
+vi.mock('../state/api.js', () => ({ api: { claude: { planUsage: vi.fn(), accounts: { list: vi.fn() } } } }));
 
 import { api } from '../state/api.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { formatReset, PLAN_USAGE_POLL_MS, PlanUsageMeter, usageDetails } from './PlanUsageMeter.js';
 
 const planUsage = vi.mocked(api.claude.planUsage);
@@ -37,7 +38,7 @@ describe('PlanUsageMeter', () => {
   });
 
   it('shows the 5-hour and weekly use, amber from 80% and red from 95%, with every window and reset time in its details', async () => {
-    render(<PlanUsageMeter busy={false} />);
+    render(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     const meter = screen.getByTestId('plan-usage');
     expect(meter).toHaveTextContent('5h 7% · week 80%');
@@ -49,13 +50,13 @@ describe('PlanUsageMeter', () => {
 
     planUsage.mockResolvedValue({ usage: reading(96, 50) });
     cleanup();
-    render(<PlanUsageMeter busy={false} />);
+    render(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     expect(screen.getByText('96%').className).toContain('--danger');
   });
 
   it("drops the 5h / week labels in a narrow composer, leaving the percentages (the tooltip still has every window)", async () => {
-    render(<PlanUsageMeter busy={false} />);
+    render(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     const label = screen.getByText('5h', { exact: false, selector: 'span span span' });
     expect(label).toHaveClass('@max-lg:hidden');
@@ -65,39 +66,64 @@ describe('PlanUsageMeter', () => {
 
   it('shows nothing when the login has no plan', async () => {
     planUsage.mockResolvedValue({ usage: null });
-    render(<PlanUsageMeter busy={false} />);
+    render(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     expect(screen.queryByTestId('plan-usage')).not.toBeInTheDocument();
   });
 
   it('reads again every 5 minutes, and asks for a fresh reading when a reply finishes', async () => {
     vi.useFakeTimers();
-    const { rerender } = render(<PlanUsageMeter busy={false} />);
+    const { rerender } = render(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     expect(planUsage).toHaveBeenCalledTimes(1);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PLAN_USAGE_POLL_MS);
     });
     expect(planUsage).toHaveBeenCalledTimes(2);
-    expect(planUsage).toHaveBeenLastCalledWith(false);
+    expect(planUsage).toHaveBeenLastCalledWith(false, undefined);
 
-    rerender(<PlanUsageMeter busy />);
+    rerender(<PlanUsageMeter busy account={null} />);
     await settle();
     expect(planUsage).toHaveBeenCalledTimes(2);
     planUsage.mockResolvedValue({ usage: reading(9, 81) });
-    rerender(<PlanUsageMeter busy={false} />);
+    rerender(<PlanUsageMeter busy={false} account={null} />);
     await settle();
-    expect(planUsage).toHaveBeenLastCalledWith(true);
+    expect(planUsage).toHaveBeenLastCalledWith(true, undefined);
     expect(screen.getByTestId('plan-usage')).toHaveTextContent('5h 9% · week 81%');
   });
 
   it('keeps the last reading when a later read fails', async () => {
-    const { rerender } = render(<PlanUsageMeter busy />);
+    const { rerender } = render(<PlanUsageMeter busy account={null} />);
     await settle();
     planUsage.mockRejectedValue(new Error('offline'));
-    rerender(<PlanUsageMeter busy={false} />);
+    rerender(<PlanUsageMeter busy={false} account={null} />);
     await settle();
     expect(screen.getByTestId('plan-usage')).toHaveTextContent('5h 7% · week 80%');
+  });
+});
+
+describe('PlanUsageMeter account', () => {
+  const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
+  beforeEach(() => {
+    planUsage.mockReset().mockResolvedValue({ usage: reading(7, 80) });
+    useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('vh', 'VH', '#e0a030')] });
+  });
+  afterEach(cleanup);
+
+  it('reads the chosen account and names it first in the tooltip', async () => {
+    render(<PlanUsageMeter busy={false} account="vh" />);
+    await settle();
+    expect(planUsage).toHaveBeenCalledWith(false, 'vh');
+    expect(screen.getByTestId('plan-usage').title.split('\n')[0]).toBe('VH');
+  });
+
+  it('reads again when the account changes', async () => {
+    const { rerender } = render(<PlanUsageMeter busy={false} account={null} />);
+    await settle();
+    expect(planUsage).toHaveBeenLastCalledWith(false, undefined);
+    rerender(<PlanUsageMeter busy={false} account="vh" />);
+    await settle();
+    expect(planUsage).toHaveBeenLastCalledWith(false, 'vh');
   });
 });
 

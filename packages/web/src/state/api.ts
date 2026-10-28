@@ -354,6 +354,10 @@ export type ChatPatchBody = Partial<{
   /** Ticks the chat off the Overview until it needs him again (spec 2026-10-26-overview). */
   dealtWithAt: number | null;
   autoMode: boolean;
+  /** The Claude account slug the chat is pinned to; null = Default (main, overflowing to the others). */
+  claudeAccount: string | null;
+  /** Switch to another Claude account when this one hits its limit. */
+  accountAutoSwitch: boolean;
   /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */
   effort: ClaudeEffort | null;
   /** The chat's extra folders, the whole list (spec 2026-10-07-extra-folders). */

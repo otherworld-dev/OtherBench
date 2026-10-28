@@ -7,6 +7,7 @@ import { PinIcon } from '../components/icons.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { streamStatusText } from '../state/machines.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useOtherBenchStore } from '../state/store.js';
 
 const OUTLINE_USER_CHARS = 60;
@@ -88,6 +89,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
   const codeMode = useOtherBenchStore((s) => s.mode === 'code');
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const [open, setOpen] = useState(readOpen);
+  const accountName = useClaudeAccounts((s) => (chat.claudeAccount && chat.claudeAccount !== 'main' ? (s.accounts.find((a) => a.slug === chat.claudeAccount)?.name ?? null) : null));
   const [pinError, setPinError] = useState<string | null>(null);
   useEffect(() => setPinError(null), [chat.id]);
 
@@ -140,6 +142,11 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
         <span title={chat.title} className="min-w-0 shrink truncate text-sm font-medium">
           {chat.title}
         </span>
+        {accountName && (
+          <span aria-label="Claude account" className="shrink-0 rounded border border-[var(--account-colour,var(--border))] px-1.5 text-[0.6875rem] text-[var(--text-muted)]">
+            {accountName}
+          </span>
+        )}
         {/* Archived chats can't be pinned, here as in the sidebar row and its menu. */}
         {chat.archivedAt === null && (
           <button

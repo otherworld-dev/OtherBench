@@ -1,9 +1,17 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { useOtherBenchStore } from '../state/store.js';
-import { ClaudeCodeSection, resumeCommand } from './ClaudeCodeSection.js';
+import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
+
+vi.mock('../state/api.js', () => ({
+  api: { chats: { patch: vi.fn() }, claude: { accounts: { list: vi.fn(async () => ({ accounts: [] })) } } },
+}));
+
+import { api } from '../state/api.js';
+import { ClaudeCodeSection, isWindowsPlatform, resumeCommand } from './ClaudeCodeSection.js';
 
 afterEach(cleanup);
 const msg = (id: string, createdAt: number, sessionId?: string): CanonMessage => ({ id, chatId: 'c1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt, ...(sessionId ? { engineMeta: { engine: 'claude_code', sessionId, backend: 'claude', cwd: 'E:\\Git\\proj', tools: ['Read', 'Edit'], mcpServers: [{ name: 'nextcloud', status: 'connected' }] } } : {}) });
@@ -127,5 +135,83 @@ describe('ClaudeCodeSection', () => {
 
   it('builds the resume command', () => {
     expect(resumeCommand({ engine: 'claude_code', sessionId: 's', backend: 'claude', cwd: '/ws' })).toBe('cd "/ws" && claude --resume s');
+  });
+});
+
+const acct = (slug: string, name: string, extra: Partial<AccountView> = {}): AccountView => ({
+  slug, name, colour: null, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false, ...extra,
+});
+const MAIN = acct('main', 'Main');
+const VH = acct('vh', 'VH', { colour: '#e0a030', configDir: 'C:\\acc\\vh' });
+
+function loginChat(extra: Record<string, unknown> = {}): void {
+  useOtherBenchStore.setState({
+    chats: [{ id: 'c1', profileId: 'p1', claudeAccount: null, accountAutoSwitch: false, ...extra }] as never,
+    profiles: [{ id: 'p1', connectionId: 'k1' }] as never,
+    connections: [{ id: 'k1', kind: 'claude_code' }] as never,
+    messages: {},
+  });
+}
+
+describe('ClaudeCodeSection account controls', () => {
+  const patch = vi.mocked(api.chats.patch);
+  beforeEach(() => {
+    patch.mockReset().mockImplementation(async (_id, body) => ({ id: 'c1', profileId: 'p1', ...body }) as never);
+    useClaudeAccounts.setState({ accounts: [MAIN, VH] });
+  });
+
+  it('lists Default then each account, and patches the pick', async () => {
+    loginChat();
+    render(<ClaudeCodeSection chatId="c1" />);
+    const select = screen.getByLabelText('Account');
+    expect([...select.querySelectorAll('option')].map((o) => o.textContent)).toEqual(['Default (Main, overflow to others)', 'Main', 'VH']);
+    await userEvent.selectOptions(select, 'vh');
+    expect(patch).toHaveBeenLastCalledWith('c1', { claudeAccount: 'vh' });
+    await userEvent.selectOptions(select, '');
+    expect(patch).toHaveBeenLastCalledWith('c1', { claudeAccount: null });
+  });
+
+  it('patches the Switch automatically checkbox', async () => {
+    loginChat();
+    render(<ClaudeCodeSection chatId="c1" />);
+    await userEvent.click(screen.getByLabelText('Switch automatically'));
+    expect(patch).toHaveBeenLastCalledWith('c1', { accountAutoSwitch: true });
+  });
+
+  it('shows a missing account', () => {
+    loginChat({ claudeAccount: 'gone' });
+    render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.getByLabelText('Account')).toHaveValue('gone');
+    expect(screen.getByRole('option', { name: 'gone (missing)' })).toBeInTheDocument();
+  });
+
+  it('shows nothing for a chat that is not a Claude-login chat, or before the accounts load', () => {
+    loginChat();
+    useOtherBenchStore.setState({ connections: [{ id: 'k1', kind: 'claude_code', baseUrl: 'http://x' }] as never });
+    const { unmount } = render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.queryByLabelText('Account')).toBeNull();
+    unmount();
+    loginChat();
+    useClaudeAccounts.setState({ accounts: [] });
+    render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.queryByLabelText('Account')).toBeNull();
+    expect(vi.mocked(api.claude.accounts.list)).toHaveBeenCalled();
+  });
+
+  it("shows the latest reply's account", () => {
+    loginChat();
+    const m = msg('a', 1, 's');
+    useOtherBenchStore.setState({ messages: { a: { ...m, engineMeta: { ...m.engineMeta!, account: 'vh', backend: 'claude:vh' } } } });
+    render(<ClaudeCodeSection chatId="c1" />);
+    expect(screen.getByText('Account: VH')).toBeInTheDocument();
+  });
+
+  it('builds the resume command per platform', () => {
+    const meta = { engine: 'claude_code' as const, sessionId: 's', backend: 'claude:vh', account: 'vh', cwd: 'E:\\p' };
+    expect(resumeCommand(meta, { windows: true, configDir: 'C:\\acc\\vh' })).toBe('$env:CLAUDE_CONFIG_DIR = "C:\\acc\\vh"; cd "E:\\p"; claude --resume s');
+    expect(resumeCommand(meta, { windows: false, configDir: '/acc/vh' })).toBe('cd "E:\\p" && CLAUDE_CONFIG_DIR="/acc/vh" claude --resume s');
+    expect(resumeCommand({ ...meta, account: undefined }, { windows: true, configDir: null })).toBe('cd "E:\\p" && claude --resume s');
+    expect(isWindowsPlatform('Mozilla/5.0 (Windows NT 10.0)')).toBe(true);
+    expect(isWindowsPlatform('Mozilla/5.0 (X11; Linux)')).toBe(false);
   });
 });
