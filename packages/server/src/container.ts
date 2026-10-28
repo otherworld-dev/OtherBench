@@ -12,6 +12,7 @@ import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
 import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import { MAIN_ACCOUNT } from '@otherbench/core/types/claude-accounts.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ToolProvider } from '@otherbench/core/ports/tool-provider.js';
@@ -32,6 +33,9 @@ import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
+import { ClaudeLoginRunner } from './claude-accounts/login.js';
+import { ClaudeAccountService } from './claude-accounts/service.js';
+import { attachAccountSwitcher } from './claude-accounts/switcher.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ClaudeImportService } from './import/claude-import.js';
@@ -133,6 +137,15 @@ export interface Container {
    * only so route tests can build a Container without one.
    */
   events?: AppEventBus;
+  /**
+   * This machine's Claude account logins (spec 2026-10-28-claude-accounts-design):
+   * which one each Claude Code turn runs on, and each one's plan usage. Always
+   * set by `createContainer`; optional so route tests can build a Container
+   * without one.
+   */
+  claudeAccounts?: ClaudeAccountService;
+  /** Signs those accounts in and out, and reads who is signed in, through the bundled Claude Code CLI. Always set by `createContainer`. */
+  claudeLogin?: ClaudeLoginRunner;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
   pathExists?: (path: string) => boolean;
   /**
@@ -456,6 +469,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
+  // Built after the engine, which reads it only once a request is made.
+  let claudeAccounts: ClaudeAccountService | null = null;
   const engine = new RoutingChatEngine(
     aisdkEngine,
     new ClaudeCodeChatEngine({
@@ -476,8 +491,14 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         const profile = store.profiles.get(profileId);
         return chat && profile ? { autoMode: chat.autoMode, planMode: chat.planMode === true, policy: profile.toolPolicy } : null;
       },
-    })
+    }),
+    // A title or memory call names no account: it runs on main, or one with room while main is limited.
+    () => claudeAccounts?.defaultRef() ?? MAIN_ACCOUNT
   );
+  const claudeLogin = new ClaudeLoginRunner();
+  // A chat is never overflowed or switched onto an account whose last sign-in reading said it is signed out.
+  const accounts = new ClaudeAccountService({ store, engine, events, signedIn: (slug) => claudeLogin.cachedSignedIn(slug) });
+  claudeAccounts = accounts;
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
   // against whatever `mcp_server` rows already exist as soon as the
   // container is up, not lazily on the first turn that needs one --
@@ -529,6 +550,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // An image a tool returns (a screenshot) goes to the blob store, with a
     // row on the reply, before the result is broadcast or stored.
     saveToolImage: toolImageSaver(store, blobStore),
+    // A chat's Claude Code turns run on its account, moving off a limited main.
+    claudeAccountFor: (chatId) => accounts.resolveForTurn(chatId),
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
@@ -601,6 +624,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     peers,
     remoteRuns: new RemoteRuns(),
     engine,
+    claudeAccounts: accounts,
+    claudeLogin,
     registry,
     turnRunner,
     streamRegistry,
@@ -631,6 +656,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
       void browser.closeAll().catch((err: unknown) => console.error('[otherbench-server] error closing the model browser:', err));
+      // Any Claude sign-in, status read or logout still running.
+      claudeLogin.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
       // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
@@ -665,6 +692,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).
   subscribeAutoTitle(container);
+  // A Claude reply cut off by its account's usage limit: the account is held, and the chat may carry on on another.
+  attachAccountSwitcher(container);
   // Re-queue project chats that went quiet while the server was down (spec §2, §6).
   try {
     memory.sweep();

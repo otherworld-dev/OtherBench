@@ -4,7 +4,8 @@ import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-e
 import type { Connection, FsMode, ModelInfo, ResolvedProfile } from '../src/types/config.js';
 import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
-import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { ClaudeAccountUnavailableError, InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import type { ClaudeAccountRef } from '../src/types/claude-accounts.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
@@ -622,6 +623,70 @@ describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
     expect(system).toContain('/home/adam/Nextcloud/refs (read-only)');
     expect(system).toContain('/home/adam/Nextcloud/notes (read and write)');
     expect(system).not.toContain('not-here');
+  });
+});
+
+describe("TurnRunner and the chat's Claude account", () => {
+  const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: '/home/adam/.claude-vh' };
+  const finished: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const claudeCode = (baseUrl: string | null = null) => makeResolvedProfile({ connection: makeConnection({ kind: 'claude_code', baseUrl }) });
+
+  function setup(claudeAccountFor: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined) {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finished]);
+    const asked = vi.fn(claudeAccountFor);
+    const runner = new TurnRunner(store, engine, { claudeAccountFor: asked });
+    const reply = async (profile: ResolvedProfile) => {
+      const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
+      const id = result.assistantMessageIds[0]!;
+      await vi.waitFor(() => expect(['complete', 'error']).toContain(store.messages.get(id)!.status));
+      return store.messages.get(id)!;
+    };
+    return { store, engine, asked, reply };
+  }
+
+  it('hands the engine the account the chat resolves to', async () => {
+    const { engine, asked, reply } = setup(() => VH);
+    expect((await reply(claudeCode())).status).toBe('complete');
+    expect(engine.requests[0]!.claudeAccount).toBe(VH);
+    expect(asked).toHaveBeenCalledWith('chat-1', expect.objectContaining({ id: 'profile-1' }));
+  });
+
+  it('pinned to a removed account fails the reply', async () => {
+    const { engine, reply } = setup(() => {
+      throw new ClaudeAccountUnavailableError('gone');
+    });
+    const message = await reply(claudeCode());
+    expect(message.status).toBe('error');
+    expect(message.error).toMatchObject({ kind: 'auth', retryable: false, message: 'No Claude account named "gone" on this machine.' });
+    expect(engine.requests).toEqual([]);
+  });
+
+  it('is not asked for a profile that is not on a Claude login', async () => {
+    const { engine, asked, reply } = setup(() => VH);
+    expect((await reply(makeResolvedProfile())).status).toBe('complete');
+    expect((await reply(claudeCode('http://localhost:11434'))).status).toBe('complete');
+    expect(asked).not.toHaveBeenCalled();
+    expect(engine.requests.map((r) => r.claudeAccount)).toEqual([undefined, undefined]);
+  });
+
+  it("is not asked for a self-started or follow-on reply, which runs on its process's own account (so it never pins the chat)", async () => {
+    const { store, asked } = setup(() => VH);
+    store.messages.create({ id: 'q1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'go' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'q1', role: 'assistant', parts: [{ type: 'text', text: 'ok' }], status: 'complete', error: null, producedBy: null });
+    const runner = new TurnRunner(store, new FakeChatEngine([]), { claudeAccountFor: asked });
+    const requests: EngineRequest[] = [];
+    const stream = async function* (req: EngineRequest): AsyncGenerator<EngineEvent> {
+      requests.push(req);
+      yield finished;
+    };
+    const self = await runner.runSelfStarted({ chatId: 'chat-1', parentId: 'a1', profile: claudeCode(), notice: 'n', unattended: false, stream });
+    await vi.waitFor(() => expect(store.messages.get(self.assistantMessageId)!.status).toBe('complete'));
+    const follow = await runner.runFollowOn({ chatId: 'chat-1', parentId: self.assistantMessageId, userParts: [{ type: 'text', text: 'and' }], profile: claudeCode(), stream });
+    await vi.waitFor(() => expect(store.messages.get(follow.assistantMessageId)!.status).toBe('complete'));
+    expect(asked).not.toHaveBeenCalled();
+    expect(requests.map((r) => r.claudeAccount)).toEqual([undefined, undefined]);
   });
 });
 

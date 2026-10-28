@@ -16,11 +16,12 @@ import { HelperStopError, type ChatEngine, type ConnectionTestResult, type Disco
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage, NoteAttachment, Part } from '@otherbench/core/types/messages.js';
+import { isClaudeLogin, MAIN_ACCOUNT_SLUG, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type OtherBenchTool } from './approval.js';
 import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchToolName, type OtherBenchServerTool } from './otherbench-server.js';
-import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
+import { backendOf, buildChildEnv } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
@@ -193,6 +194,16 @@ const COMMAND = /^\/([A-Za-z0-9][\w:.-]*)(\s|$)/;
 type Compaction = { summary: string | null; preTokens?: number; postTokens?: number | null; failure?: string };
 
 const AUTO_COMPACTED = 'Claude Code compacted the context automatically.';
+
+/** A reply's meta names the Claude account it ran on, only when that isn't main. */
+function accountMeta(account: ClaudeAccountRef | undefined): { account?: string } {
+  return account && account.slug !== MAIN_ACCOUNT_SLUG ? { account: account.slug } : {};
+}
+
+/** The account a request runs on: none for an endpoint backend, which uses no Claude login. */
+function loginAccount(req: EngineRequest): ClaudeAccountRef | undefined {
+  return req.profile.connection.baseUrl ? undefined : req.claudeAccount;
+}
 
 /** The focus of the /compact the new message is ('' for none), or null when it isn't one. */
 function compactFocus(req: EngineRequest): string | null {
@@ -507,14 +518,15 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /** A self-started turn, for the reply `req` describes: gated and mapped like a user's reply, from the output already buffered. */
   private async *runSelfStarted(live: LiveProcess, req: EngineRequest, feed: AsyncIterator<SDKMessage>): AsyncGenerator<EngineEvent> {
-    const backend = backendOf(req.profile.connection);
+    // The process's own backend and account: the chat may have moved to another account since it started.
+    const { backend, account } = live;
     const clean = !req.workspaceRoot;
     const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
     // This process is already running the turn, and until `live.binding` is set its hooks refuse the
     // turn's calls ("No OtherBench reply is waiting"). So prepareReply's awaits (relayTools, and the media tools'
     // `limitsFor` under it) must stay store reads that settle at once: no network or disk I/O before the
     // binding is set. The binding is built by prepareReply itself, so it can't be set any sooner.
-    const prepared = await this.prepareReply(req, backend, clean);
+    const prepared = await this.prepareReply(req, backend, account, clean);
     prepared.proc.live = live;
     live.binding = prepared.binding;
     live.last = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, policy: req.profile.toolPolicy, ctx: prepared.gateCtx, autoMode: prepared.autoMode, unattended: req.unattended === true };
@@ -532,8 +544,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     let ended = false;
     // The turn ended in its own successful result: notes still queued then run as a follow-on.
     let finished = false;
+    // A rejected rate limit seen in the turn: its failure says when the limit resets.
+    let rateLimitResetsAt: number | null = null;
+    // A usage limit was reported in the turn (a rejected rate-limit event, or Claude Code's own limit message), reset time known or not.
+    let rateLimited = false;
     try {
-      yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, cwd, tools: [], mcpServers: [] } };
+      yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: live.sessionId ?? '', backend, ...accountMeta(account), cwd, tools: [], mcpServers: [] } };
       for (;;) {
         pending ??= feed.next();
         const next = await Promise.race([pending, stoppedNow]);
@@ -546,7 +562,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           // The process ended (closed, or died) before the turn's result: the reply didn't finish.
           if (!req.signal.aborted) {
             const text = [live.failure instanceof Error ? live.failure.message : 'Claude Code ended before it finished this reply.', ...live.stderr].join('\n');
-            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
           }
           break;
         }
@@ -557,14 +573,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         }
         if ((next.value as { type?: unknown }).type === 'result') ended = true;
         for (const event of mapper.map(next.value)) {
-          if (event.type === 'init' || event.type === 'rate-limited') continue;
+          if (event.type === 'init') continue;
+          if (event.type === 'rate-limited') {
+            rateLimitResetsAt = event.resetsAt;
+            rateLimited = true;
+            continue;
+          }
           if (event.type === 'command-error') continue;
           if (event.type === 'compacted') {
             if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
             continue;
           }
           if (event.type === 'result-error') {
-            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId }) };
+            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
             continue;
           }
           if (event.type === 'finish') finished = true;
@@ -618,7 +639,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const notice: PendingNotice = { text: skipped.length > 0 ? `Not sent to Claude Code (only images are): ${skipped.join(', ')}.` : null };
 
     const conn = req.profile.connection;
-    const backend = backendOf(conn);
+    const backend = backendOf(conn, req.claudeAccount);
     const plan = pickSession({ history: req.messages, backend, cwd, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
       // The new message's images are read once, before either attempt: a retry sends the same ones, and
@@ -668,11 +689,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return 'done';
     }
     const content = this.userContent(req, plan.mode === 'fresh', images);
-    const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = await this.prepareReply(req, backend, clean);
+    const account = loginAccount(req);
+    const { gateCtx, autoMode, own, relay, tickets, helpers, binding, proc } = await this.prepareReply(req, backend, account, clean);
     const compaction: Compaction | null = compacting ? { summary: null } : null;
     if (compaction) binding.compacted = (summary) => (compaction.summary = summary);
     const options = this.processOptions(req, cwd, autoMode, clean);
-    const key = liveKey(options, { backend, token: profile.apiKey }, own);
+    const key = liveKey(options, { backend, token: profile.apiKey, configDir: account?.configDir ?? null }, own);
     let taken = plan.mode === 'continue' ? await this.pool.takeWhenFree(plan.sessionId, key, req.signal) : null;
     // Stopped while waiting for the session's busy process (or before it began): no process is started.
     if (taken === null && req.signal.aborted) return 'done';
@@ -684,7 +706,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       taken = null;
     }
     const reused = taken !== null;
-    const live = taken ?? this.startProcess(options, key, plan, own, relay, backend === CLAUDE_BACKEND);
+    const live = taken ?? this.startProcess(options, key, plan, own, relay, backend, account);
     live.wantsAuto = mode === 'auto';
     proc.live = live;
     // A reply stopped before it began starts no turn: a new process is closed, a pooled one goes back.
@@ -706,12 +728,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private async prepareReply(
     req: EngineRequest,
     backend: string,
+    account: ClaudeAccountRef | undefined,
     clean: boolean
   ): Promise<{ gateCtx: ToolContext; autoMode: boolean; own: OtherBenchServerSwitches; relay: Relay; tickets: ApprovalTickets; helpers: HelperRegistry; binding: TurnBinding; proc: { live: LiveProcess | null } }> {
     const profile = req.profile;
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
-    const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
+    const autoMode = req.autoMode === true && isClaudeLogin(backend);
     // The reply's tool context: ids, folder (none for a clean chat, whose
     // scratch folder is not a workspace), extra folders, the plan gate and the
     // unattended flag.
@@ -742,13 +765,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // classifier while that Claude Code is in auto mode, which can change
     // mid-reply (Auto switched, refreshChatSettings); a scheduled run never.
     const proc: { live: LiveProcess | null } = { live: null };
-    const classifier = backend === CLAUDE_BACKEND && req.unattended !== true;
+    const classifier = isClaudeLogin(backend) && req.unattended !== true;
     const binding: TurnBinding = {
       gate: createGate({
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
-        readFolders: this.skillFolders(req.workspaceRoot),
+        readFolders: this.skillFolders(req.workspaceRoot, account),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
         // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
@@ -760,7 +783,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         onApproved: (spec, input, args, toolUseId) => tickets.add(spec.name, input, args, toolUseId),
       }),
       // Auto can be switched on mid-reply, so the classifier's blocks are audited whenever it could run.
-      ...(backend === CLAUDE_BACKEND ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
+      ...(isClaudeLogin(backend) ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
       ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
@@ -857,6 +880,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // The turn's own result arrived (a success or not): the process is in a known state.
     let ended = false;
     let rateLimitResetsAt: number | null = null;
+    // A usage limit was reported in the turn (a rejected rate-limit event, or Claude Code's own limit message), reset time known or not.
+    let rateLimited = false;
     let pending: Promise<IteratorResult<SDKMessage>> | null = null;
     try {
       while (!finished) {
@@ -896,10 +921,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
               yield { type: 'error', error: autoModeUnavailable() };
               return 'done';
             }
-            yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, cwd, tools: event.tools, mcpServers: event.mcpServers } };
+            yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, ...accountMeta(loginAccount(req)), cwd, tools: event.tools, mcpServers: event.mcpServers } };
             yield* flushNotice();
           } else if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
+            rateLimited = true;
           } else if (event.type === 'compacted') {
             if (event.trigger === 'auto') yield { type: 'notice', text: AUTO_COMPACTED };
             else if (compaction) Object.assign(compaction, { preTokens: event.preTokens, postTokens: event.postTokens });
@@ -912,7 +938,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             live.close();
             if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
             return 'done';
           } else {
             if (event.type === 'finish') {
@@ -943,7 +969,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const text = [err instanceof Error ? err.message : String(err), ...live.stderr].join('\n');
       if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
       yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
     } finally {
       this.running.delete(req.messageId);
       tickets.clear();
@@ -1010,8 +1036,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * a skill may read its own files with Claude Code's file tools. Not part of the
    * reply's tool context, so the sandboxed shell and relayed tools never get them.
    */
-  private skillFolders(workspaceRoot: string | null): ResolvedFolder[] {
-    return workspaceRoot ? claudeSkillFolders(this.deps.baseEnv ?? process.env, workspaceRoot) : [];
+  private skillFolders(workspaceRoot: string | null, account: ClaudeAccountRef | undefined): ResolvedFolder[] {
+    if (!workspaceRoot) return [];
+    const base = this.deps.baseEnv ?? process.env;
+    // Another account's skills are in its own config folder; main reads the inherited one as before.
+    return claudeSkillFolders(account?.configDir ? { ...base, CLAUDE_CONFIG_DIR: account.configDir } : base, workspaceRoot);
   }
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
@@ -1033,7 +1062,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return {
         cwd,
         model: profile.modelId,
-        env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
+        env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId, req.claudeAccount),
         permissionMode: autoMode ? 'auto' : 'default',
         includePartialMessages: true,
         settingSources: [],
@@ -1050,7 +1079,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return {
       cwd,
       model: profile.modelId,
-      env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
+      env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId, req.claudeAccount),
       permissionMode: autoMode ? 'auto' : 'default',
       includePartialMessages: true,
       // The folder's own settings; the user's (their CLAUDE.md, skills, plugins, hooks and MCP servers)
@@ -1080,7 +1109,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, own: OtherBenchServerSwitches, relay: Relay, canAuto: boolean): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: OtherBenchServerSwitches, relay: Relay, backend: string, account: ClaudeAccountRef | undefined): LiveProcess {
+    // Auto mode needs a Claude login; an endpoint backend never runs in it.
+    const canAuto = isClaudeLogin(backend);
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();
@@ -1136,7 +1167,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A reply may have begun while this waited: its gate decides.
       if (live?.binding) return live.binding.gate(toolName, toolInput, signal, opts);
       if (!helper) return { allow: false, reason: 'No OtherBench reply is waiting on this tool call.' };
-      return createGate({ approvals: this.deps.approvals, readFolders: this.skillFolders(helper.ctx.workspaceRoot), ...helper })(toolName, toolInput, signal, opts);
+      return createGate({ approvals: this.deps.approvals, readFolders: this.skillFolders(helper.ctx.workspaceRoot, account), ...helper })(toolName, toolInput, signal, opts);
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) => {
       if (live?.binding) return live.binding.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
@@ -1175,6 +1206,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
     process.permissionMode = options.permissionMode ?? 'default';
     process.canAuto = canAuto;
+    process.backend = backend;
+    process.account = account;
     process.artifactTool = ownArtifactTool;
     process.recallTool = ownRecallTool;
     process.planTool = ownPlanTool;
@@ -1256,13 +1289,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    */
   private async *utility(req: EngineRequest): AsyncGenerator<EngineEvent> {
     const conn = req.profile.connection;
-    const backend = backendOf(conn);
+    const backend = backendOf(conn, req.claudeAccount);
     const prompt = promptStream([{ type: 'text', text: textOf(req.messages[req.messages.length - 1]) }]);
     const abortController = new AbortController();
     const onAbort = (): void => abortController.abort();
     req.signal.addEventListener('abort', onAbort, { once: true });
     if (req.signal.aborted) abortController.abort();
-    const model = backend === CLAUDE_BACKEND ? 'haiku' : req.profile.modelId;
+    const model = isClaudeLogin(backend) ? 'haiku' : req.profile.modelId;
     const mapper = new SdkEventMapper();
     try {
       for await (const msg of this.deps.query({
@@ -1271,7 +1304,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           ...lightweightOptions(),
           cwd: tmpdir(),
           model,
-          env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, req.profile.apiKey, model),
+          env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, req.profile.apiKey, model, req.claudeAccount),
           maxTurns: 1,
           tools: [],
           systemPrompt: 'Reply with only the requested text.',
@@ -1317,14 +1350,17 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
-   * The Claude login's plan usage (Deck #825), read through the SDK's
-   * experimental /usage call with the transcript scan skipped. Null for an
-   * endpoint backend (no plan) or an SDK without the call.
+   * A Claude login's plan usage (Deck #825), read through the SDK's
+   * experimental /usage call with the transcript scan skipped: main's, or
+   * `account`'s in its own config folder. Null for an endpoint backend (no
+   * plan) or an SDK without the call.
    */
-  async planUsage(conn: Connection): Promise<PlanUsage | null> {
+  async planUsage(conn: Connection, account?: ClaudeAccountRef): Promise<PlanUsage | null> {
     if (conn.baseUrl) return null;
-    const answer = await this.probe(conn, async (q) =>
-      typeof q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET === 'function' ? q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }) : null
+    const answer = await this.probe(
+      conn,
+      async (q) => (typeof q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET === 'function' ? q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }) : null),
+      account
     );
     return toPlanUsage(answer, Date.now());
   }
@@ -1334,7 +1370,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * it down. Bounded by a timeout so a wedged process can't hang a model list
    * or connection test forever.
    */
-  private async probe<T>(conn: Connection, ask: (q: ReturnType<QueryFn>) => Promise<T>): Promise<T> {
+  private async probe<T>(conn: Connection, ask: (q: ReturnType<QueryFn>) => Promise<T>, account?: ClaudeAccountRef): Promise<T> {
     const abortController = new AbortController();
     const idle: AsyncIterable<SDKUserMessage> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
     const timeoutMs = this.deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
@@ -1346,7 +1382,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       }, timeoutMs);
     });
     try {
-      const q = this.deps.query({ prompt: idle, options: { ...lightweightOptions(), env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku'), abortController } });
+      const q = this.deps.query({ prompt: idle, options: { ...lightweightOptions(), env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku', account), abortController } });
       return await Promise.race([ask(q), timedOut]);
     } finally {
       clearTimeout(timer);

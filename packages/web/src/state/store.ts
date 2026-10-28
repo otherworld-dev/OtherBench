@@ -35,6 +35,7 @@ import {
   type Layout,
   type PaneState,
 } from './panes.js';
+import { announceAccountEvent, reloadOnAccountEvent } from './claudeAccounts.js';
 import { parseProjectTab } from './projectTab.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 import type { PeersOverview } from './api.js';
@@ -894,7 +895,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction)])),
       appBackgroundChats: Object.fromEntries((hello.backgroundChats ?? []).filter((c) => c.count > 0).map((c) => [c.chatId, c.count])),
     }),
-  applyAppEvent: (event) =>
+  applyAppEvent: (event) => {
+    announceAccountEvent(event, (id) => get().chats.find((c) => c.id === id)?.title);
+    reloadOnAccountEvent(event);
     set((state) => {
       switch (event.type) {
         case 'chat-created':
@@ -970,7 +973,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         default:
           return state;
       }
-    }),
+    });
+  },
   markKept: (messageId, at) =>
     set((state) => {
       const message = state.messages[messageId];

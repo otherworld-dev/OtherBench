@@ -5,6 +5,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { Thread } from './Thread.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
 
 vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
@@ -18,7 +19,7 @@ vi.mock('../code/GitBar.js', () => ({
 
 vi.mock('../state/api.js', () => ({
   api: {
-    claude: { planUsage: vi.fn(async () => ({ usage: null })) },
+    claude: { planUsage: vi.fn(async () => ({ usage: null })), accounts: { list: vi.fn(async () => ({ accounts: [] })) } },
     turns: {
       setHead: vi.fn(),
       retry: vi.fn(),
@@ -119,6 +120,36 @@ function ThreadForChat({ chatId }: { chatId: string }): ReturnType<typeof Thread
 describe('Thread', () => {
   beforeEach(reset);
   afterEach(cleanup);
+
+  it('tints a chat pinned to another Claude account and badges its name; a main or default chat has no tint', () => {
+    const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
+    useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('vh', 'VH', '#e0a030')] });
+    useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'vh' })] });
+    const { unmount } = render(<ThreadForChat chatId="chat-1" />);
+    const root = screen.getByRole('region', { name: 'Chat 1' });
+    expect(root).toHaveAttribute('data-account', 'vh');
+    expect(root.style.getPropertyValue('--account-colour')).toBe('#e0a030');
+    expect(screen.getByLabelText('Claude account')).toHaveTextContent('VH');
+    unmount();
+    // A colourless account is still tinted (the accent), and a missing one is still badged by its slug.
+    useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('plain', 'Plain', null)] });
+    useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'plain' })] });
+    const plain = render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByRole('region', { name: 'Chat 1' })).toHaveAttribute('data-account', 'plain');
+    expect(screen.getByRole('region', { name: 'Chat 1' }).style.getPropertyValue('--account-colour')).toBe('var(--accent)');
+    plain.unmount();
+    useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'gone' })] });
+    const gone = render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByLabelText('Claude account')).toHaveTextContent('gone');
+    gone.unmount();
+    for (const claudeAccount of ['main', null]) {
+      useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount })] });
+      const r = render(<ThreadForChat chatId="chat-1" />);
+      expect(screen.getByRole('region', { name: 'Chat 1' })).not.toHaveAttribute('data-account');
+      expect(screen.queryByLabelText('Claude account')).toBeNull();
+      r.unmount();
+    }
+  });
 
   it('shows and hides the viewer beside the chat, remembered per chat', async () => {
     useViewerStore.setState({ viewers: {} });

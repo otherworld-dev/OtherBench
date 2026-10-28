@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
+import { formatReset } from '../components/PlanUsageMeter.js';
+import { useToasts } from '../lib/toasts.js';
+import { useClaudeAccounts } from './claudeAccounts.js';
 import { viewTabId } from '../viewer/items.js';
 import { appTabId } from './appTab.js';
 import { MODE_STORAGE_KEY } from './mode.js';
@@ -1158,5 +1162,59 @@ describe('overview state', () => {
     s().setOverviewOpen(true);
     s().openAppHome('a1');
     expect(s().overviewOpen).toBe(false);
+  });
+});
+
+describe('Claude account events', () => {
+  const resetsAt = new Date(2026, 9, 28, 15, 10).getTime();
+  beforeEach(() => {
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    useToasts.setState({ toasts: [] });
+    // These events reload the accounts: no real request from a test.
+    useClaudeAccounts.setState({ load: vi.fn(async () => {}) });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 28, 13, 0));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('toasts a switch with the chat title, the reset time and the chat to open', () => {
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Fix login' } as Chat] });
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-account-switched', chatId: 'c1', from: 'Main', to: 'VH', resetsAt, midReply: false });
+    expect(useToasts.getState().toasts).toMatchObject([
+      { tone: 'ok', chatId: 'c1', text: `Fix login moved to VH: Main hit its limit (resets ${formatReset(resetsAt, Date.now())})` },
+    ]);
+  });
+
+  it('says "A chat" when the chat is not loaded, and leaves the reset off when unknown', () => {
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-account-switched', chatId: 'zz', from: 'Main', to: 'VH', resetsAt: null, midReply: true });
+    expect(useToasts.getState().toasts[0]).toMatchObject({ text: 'A chat moved to VH: Main hit its limit', chatId: 'zz' });
+  });
+
+  it('toasts all accounts exhausted, once per chat a minute', () => {
+    const later = new Date(2026, 9, 31, 16, 0).getTime();
+    const event: AppEvent = { type: 'claude-accounts-exhausted', chatId: 'c1', resets: [{ name: 'Main', resetsAt }, { name: 'VH', resetsAt: later }] };
+    useOtherBenchStore.getState().applyAppEvent(event);
+    const now = Date.now();
+    expect(useToasts.getState().toasts).toMatchObject([
+      { tone: 'error', text: `All Claude accounts are at their limit: Main resets ${formatReset(resetsAt, now)}, VH resets ${formatReset(later, now)}` },
+    ]);
+    useOtherBenchStore.getState().applyAppEvent(event);
+    expect(useToasts.getState().toasts).toHaveLength(1);
+    useOtherBenchStore.getState().applyAppEvent({ ...event, chatId: 'c2' });
+    expect(useToasts.getState().toasts).toHaveLength(2);
+    vi.advanceTimersByTime(61_000);
+    useOtherBenchStore.getState().applyAppEvent(event);
+    expect(useToasts.getState().toasts).toHaveLength(1);
+  });
+
+  it('reloads the Claude accounts on a switch or when every account is out, so their "Limited until" is current', () => {
+    const load = vi.fn(async () => {});
+    useClaudeAccounts.setState({ load });
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-account-switched', chatId: 'c1', from: 'Main', to: 'VH', resetsAt, midReply: false });
+    expect(load).toHaveBeenCalledTimes(1);
+    useOtherBenchStore.getState().applyAppEvent({ type: 'claude-accounts-exhausted', chatId: 'c9', resets: [{ name: 'Main', resetsAt }] });
+    expect(load).toHaveBeenCalledTimes(2);
+    useOtherBenchStore.getState().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'm1', status: 'complete' });
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });

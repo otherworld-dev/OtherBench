@@ -12,6 +12,7 @@ import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@otherbe
 import { isToolImageRef, type ToolImageRef } from '@otherbench/core/domain/tool-images.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
+import { ContinueOnAccount } from './ContinueOnAccount.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { EditDiff } from './EditDiff.js';
@@ -909,6 +910,7 @@ export function Message({
       {message.status === 'error' && message.error && (
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>
       )}
+      <ContinueOnAccount message={message} />
 
     </article>
   );

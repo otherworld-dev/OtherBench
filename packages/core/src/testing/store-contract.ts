@@ -731,6 +731,22 @@ export function runStoreContract(
       });
     });
 
+    describe('chats: claude account', () => {
+      it('defaults to no account and no auto-switch, and round-trips through update, get and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        expect(created.claudeAccount).toBeNull();
+        expect(created.accountAutoSwitch).toBe(false);
+        store.chats.update('chat-a', { claudeAccount: 'vh', accountAutoSwitch: true });
+        expect(store.chats.get('chat-a')!.claudeAccount).toBe('vh');
+        expect(store.chats.get('chat-a')!.accountAutoSwitch).toBe(true);
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.claudeAccount).toBe('vh');
+        store.chats.update('chat-a', { claudeAccount: null, accountAutoSwitch: false });
+        expect(store.chats.get('chat-a')!.claudeAccount).toBeNull();
+        expect(store.chats.get('chat-a')!.accountAutoSwitch).toBe(false);
+      });
+    });
+
     describe('messages: heads', () => {
       it("returns each chat's head role, status and time, omitting archived chats and chats with no head", () => {
         const { profileId } = seedProfile(store, 'profile-a');

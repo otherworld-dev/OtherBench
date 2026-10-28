@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { ClaudeAccountsStrip } from './ClaudeAccountsStrip.js';
 import { OverviewTile } from './OverviewTile.js';
 
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -81,6 +82,7 @@ function TickOlder(): JSX.Element {
 export function OverviewView(): JSX.Element {
   const overview = useOtherBenchStore((s) => s.overview);
   const setOverview = useOtherBenchStore((s) => s.setOverview);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   if (overview === null) {
     return (
@@ -93,6 +95,7 @@ export function OverviewView(): JSX.Element {
   const checkedAt = overview.checkedAt === null ? null : new Date(overview.checkedAt);
   const status = overview.checking || checkedAt === null ? 'checking…' : `checked ${pad(checkedAt.getHours())}:${pad(checkedAt.getMinutes())}`;
   const refresh = (): void => {
+    setRefreshKey((k) => k + 1);
     api.overview
       .refresh()
       .then(setOverview)
@@ -111,6 +114,7 @@ export function OverviewView(): JSX.Element {
           </button>
         </span>
       </div>
+      <ClaudeAccountsStrip refreshKey={refreshKey} />
       {overview.unreachableMachines.map((name) => (
         <p key={`u-${name}`} className="mb-1 text-xs text-[var(--text-muted)]">
           Couldn't reach {name}: chats running there may be waiting on you

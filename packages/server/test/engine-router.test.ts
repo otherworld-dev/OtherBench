@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { FakeChatEngine } from '@otherbench/core/testing/fakes.js';
+import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection } from '@otherbench/core/types/config.js';
+import { MAIN_ACCOUNT, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import { endpointModelLister, RoutingChatEngine } from '../src/engine-router.js';
 
 const conn = (kind: Connection['kind'], baseUrl: string | null = null): Connection => ({ id: 'c', name: 'n', kind, baseUrl, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
@@ -46,6 +48,44 @@ describe('RoutingChatEngine', () => {
     expect(await none.withdrawNote('n1')).toBe(false);
     expect(none.knowsNote('n1')).toBe(false);
   });
+  describe('the Claude account a request runs on', () => {
+    const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: '/home/adam/.claude-vh' };
+    const finished: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+    const request = (connection: Connection, extra: Partial<EngineRequest> = {}): EngineRequest =>
+      ({ profile: { connection }, messages: [], tools: [], signal: new AbortController().signal, chatId: 'c1', messageId: 'm1', workspaceRoot: null, purpose: 'title', ...extra }) as EngineRequest;
+    const drain = async (events: AsyncIterable<EngineEvent>) => {
+      for await (const _ of events) void _;
+    };
+
+    it("gives a Claude-login request with no account the default account's ref", async () => {
+      const cc = new FakeChatEngine([finished]);
+      const router = new RoutingChatEngine(new FakeChatEngine([]), cc, () => VH);
+      await drain(router.stream(request(conn('claude_code'))));
+      expect(cc.requests[0]!.claudeAccount).toBe(VH);
+    });
+
+    it('leaves an endpoint request, and one that already names an account, as they are', async () => {
+      const cc = new FakeChatEngine([finished]);
+      const router = new RoutingChatEngine(new FakeChatEngine([]), cc, () => VH);
+      await drain(router.stream(request(conn('claude_code', 'http://localhost:11434'))));
+      await drain(router.stream(request(conn('claude_code'), { claudeAccount: MAIN_ACCOUNT })));
+      expect(cc.requests.map((r) => r.claudeAccount)).toEqual([undefined, MAIN_ACCOUNT]);
+      expect('claudeAccount' in cc.requests[0]!).toBe(false);
+    });
+
+    it("reads an account's plan usage through the Claude Code engine", async () => {
+      const seen: (ClaudeAccountRef | undefined)[] = [];
+      const cc = Object.assign(new FakeChatEngine([]), {
+        planUsage: async (_conn: Connection, account?: ClaudeAccountRef) => {
+          seen.push(account);
+          return null;
+        },
+      });
+      await new RoutingChatEngine(new FakeChatEngine([]), cc).planUsage(conn('claude_code'), VH);
+      expect(seen).toEqual([VH]);
+    });
+  });
+
   it('lists endpoint models through the Ollama path with /v1 appended', async () => {
     const aisdk = new FakeChatEngine([]);
     const seen: Connection[] = [];

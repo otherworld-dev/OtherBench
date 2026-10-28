@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage, PermissionMode, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
+import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { Gate } from './approval.js';
 import type { BackgroundTasks } from './background.js';
 import type { ApprovalTickets } from './tickets.js';
@@ -193,6 +194,14 @@ export class LiveProcess {
   permissionMode: string | null = null;
   /** Whether this process can run in auto mode at all (it runs on the Claude login). */
   canAuto = false;
+  /** The backend this process was started on: an endpoint's URL, `claude`, or `claude:<slug>`. */
+  backend = 'claude';
+  /**
+   * The Claude account it runs on (none for main's inherited folder, or an
+   * endpoint). A turn Claude Code starts by itself runs here, whatever the
+   * chat's account is now.
+   */
+  account: ClaudeAccountRef | undefined = undefined;
   /**
    * The chat's Auto as last set for this process, recorded the moment it
    * changes: calls go to the classifier only while this is on AND Claude Code
@@ -430,12 +439,14 @@ export class LiveProcess {
  * reuse a live process only when these are identical; anything else -- a
  * different model, folder, tool policy, Plan mode, system prompt (which
  * carries project memory), extra folders, thinking budget, effort, backend or credentials -- starts
- * a fresh process. `connection` stands in for the child environment, which
+ * a fresh process. `connection` stands in for the child environment (with the
+ * account's config folder, so a slug re-added at another folder never takes a
+ * process signed in from the old one), which
  * can't be compared whole: the Agent SDK itself changes the server's
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
-export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: OtherBenchServerSwitches): string {
+export function liveKey(options: Options, connection: { backend: string; token: string | null; configDir?: string | null }, own: OtherBenchServerSwitches): string {
   // The permission mode is left out: Auto is switched on a live process (LiveProcess.switchMode), as VS Code does.
   const { cwd, additionalDirectories, model, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')

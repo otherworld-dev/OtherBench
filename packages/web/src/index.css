@@ -104,6 +104,12 @@ body {
  * The condensed face reads small, so both sit a step above text-xs.
  */
 @layer components {
+  /* A chat on a non-main Claude account: its colour (set inline as --account-colour) rules the top edge and faintly tints the page, so it can't be mistaken for another account's chat. */
+  [data-account] {
+    border-top: 3px solid var(--account-colour);
+    background: color-mix(in oklab, var(--account-colour) 5%, var(--bg));
+  }
+
   .label-caps {
     font-family: var(--font-label);
     font-weight: 600;

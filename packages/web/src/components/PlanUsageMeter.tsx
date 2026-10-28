@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
+import { MAIN_ACCOUNT } from '@otherbench/core/types/claude-accounts.js';
 import type { PlanUsage, PlanWindow } from '@otherbench/core/types/usage.js';
 import { api } from '../state/api.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 
 /** How often an open meter reads the plan usage again (the server serves its last reading until it's this old). */
 export const PLAN_USAGE_POLL_MS = 5 * 60_000;
@@ -37,13 +39,22 @@ export function usageDetails(usage: PlanUsage, now: number): string {
  * PLAN_USAGE_POLL_MS, and again when a reply finishes (`busy` going false).
  * Shows nothing until there's a reading, or when the login has no plan.
  */
-export function PlanUsageMeter({ busy }: { busy: boolean }): JSX.Element | null {
+export function PlanUsageMeter({ busy, account }: { busy: boolean; account: string | null }): JSX.Element | null {
   const [usage, setUsage] = useState<PlanUsage | null>(null);
+  const accountName = useClaudeAccounts((s) => {
+    if (account) return s.accounts.find((a) => a.slug === account)?.name ?? account;
+    // A Default chat runs on main: named once there is another account it could be confused with.
+    return s.accounts.some((a) => !a.main) ? (s.accounts.find((a) => a.main)?.name ?? MAIN_ACCOUNT.name) : null;
+  });
   const wasBusy = useRef(busy);
+  const accountRef = useRef(account);
+  accountRef.current = account;
 
   async function load(refresh: boolean): Promise<void> {
     try {
-      setUsage((await api.claude.planUsage(refresh)).usage);
+      const read = await api.claude.planUsage(refresh, account ?? undefined);
+      // A reading for an account the chat has since left must not show.
+      if (account === accountRef.current) setUsage(read.usage);
     } catch (err) {
       // Keep the last reading; the next poll tries again.
       console.error('[otherbench-web] failed to read the Claude plan usage:', err);
@@ -51,10 +62,12 @@ export function PlanUsageMeter({ busy }: { busy: boolean }): JSX.Element | null 
   }
 
   useEffect(() => {
+    // The previous account's reading must not sit under the new account's name, or outlive a failed read.
+    setUsage(null);
     void load(false);
     const timer = setInterval(() => void load(false), PLAN_USAGE_POLL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [account]);
 
   useEffect(() => {
     if (wasBusy.current && !busy) void load(true);
@@ -64,7 +77,8 @@ export function PlanUsageMeter({ busy }: { busy: boolean }): JSX.Element | null 
   if (!usage) return null;
   const compact = usage.windows.filter((w) => SHORT[w.id] !== undefined);
   if (compact.length === 0) return null;
-  const details = usageDetails(usage, Date.now());
+  const details = (accountName ? `${accountName}
+` : '') + usageDetails(usage, Date.now());
   return (
     <span
       tabIndex={0}

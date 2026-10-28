@@ -17,6 +17,7 @@ import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { recordBackgroundUsage } from '../background-usage.js';
+import { continueOnAccount, NOT_HERE } from '../claude-accounts/switcher.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
@@ -34,6 +35,8 @@ interface ChatBody {
   autoMode?: unknown;
   planMode?: unknown;
   effort?: unknown;
+  claudeAccount?: unknown;
+  accountAutoSwitch?: unknown;
   folders?: unknown;
   projectId?: unknown;
   appId?: unknown;
@@ -44,7 +47,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'claudeAccount', 'accountAutoSwitch', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
 
 /** Spec 2026-10-20-code-tab-design, "Calls I made": an app chat's folder is the app's folder, so it can't be set on the chat. */
 const APP_FOLDER_LOCKED = "An app chat uses its app's folder.";
@@ -270,6 +273,13 @@ export function chatsRoutes(container: Container): Hono {
       }
       patch.effort = body.effort;
     }
+    if (body.claudeAccount !== undefined) {
+      if (body.claudeAccount !== null && (typeof body.claudeAccount !== 'string' || !/^[a-z0-9-]{1,40}$/.test(body.claudeAccount))) {
+        throw new HTTPException(400, { message: '"claudeAccount" must be null or an account slug.' });
+      }
+      patch.claudeAccount = body.claudeAccount;
+    }
+    if (body.accountAutoSwitch !== undefined) patch.accountAutoSwitch = optionalBoolean(body.accountAutoSwitch, 'accountAutoSwitch', false);
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
     if (body.unread !== undefined) patch.unread = optionalBoolean(body.unread, 'unread', false);
     if (body.sortOrder !== undefined) {
@@ -335,6 +345,21 @@ export function chatsRoutes(container: Container): Hono {
       );
     }
     return c.body(null, 204);
+  });
+
+  // "Continue on <account>": carries a reply cut off by its Claude account's
+  // usage limit on to another account, whether or not the chat switches by
+  // itself (spec 2026-10-28-claude-accounts-design, "Switching mid-chat").
+  app.post('/:id/continue-on-account', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown; account?: unknown };
+    const chat = getChatOrThrow(container, c.req.param('id'));
+    const chatId = chat.id;
+    // As the peer API refuses it: the machine that runs the chat holds its replies and its accounts.
+    if (chat.runsOn !== container.store.nodes.self().id) return c.json({ error: NOT_HERE, kind: 'not_here' }, 409);
+    const messageId = requireNonEmptyString(body.messageId, 'messageId');
+    const account = requireNonEmptyString(body.account, 'account');
+    const result = await continueOnAccount(container, { chatId, messageId, account, midReply: false });
+    return c.json(result, 202);
   });
 
   // Export (#820): the shown conversation as Markdown, or the whole tree as

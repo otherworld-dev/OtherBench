@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react';
 import { isDesktop } from '../desktop/bridge.js';
 import { useAuthStore } from '../state/auth.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
+import { ClaudeAccountsPanel } from './settings/ClaudeAccountsPanel.js';
 import { AppearancePanel } from './settings/AppearancePanel.js';
 import { DesktopPanel } from './settings/DesktopPanel.js';
 import { LocationsPanel } from './settings/LocationsPanel.js';
@@ -15,10 +16,11 @@ import { ImportPanel } from './settings/ImportPanel.js';
 import { SandboxPanel } from './settings/SandboxPanel.js';
 import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
+type Tab = 'connections' | 'claudeAccounts' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
+  claudeAccounts: 'Claude accounts',
   models: 'Models',
   profiles: 'Profiles',
   memory: 'Memory',
@@ -81,6 +83,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
 
       <div className="flex-1 overflow-y-auto p-4">
         {tab === 'connections' && <ConnectionsPanel />}
+        {tab === 'claudeAccounts' && <ClaudeAccountsPanel />}
         {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <ProfilesPanel />}
         {tab === 'memory' && <MemoryPanel />}

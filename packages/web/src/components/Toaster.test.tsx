@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { revealPath } = vi.hoisted(() => ({ revealPath: vi.fn() }));
 vi.mock('../desktop/bridge.js', () => ({ revealPath }));
 
+import { useOtherBenchStore } from '../state/store.js';
 import { Toaster } from './Toaster.js';
 import { TOAST_MS, toast, useToasts } from '../lib/toasts.js';
 
@@ -42,6 +43,14 @@ describe('Toaster', () => {
     });
     expect(screen.getAllByTestId('toast').map((t) => t.textContent)).toEqual(['t2×', 't3×', 't4×']);
     act(() => vi.advanceTimersByTime(TOAST_MS));
+    expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+  });
+
+  it('makes a toast with a chat a button that opens the chat and dismisses the toast', async () => {
+    render(<Toaster />);
+    act(() => void toast({ tone: 'ok', text: 'Fix login moved to VH', chatId: 'c9' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Fix login moved to VH' }));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c9');
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
   });
 });

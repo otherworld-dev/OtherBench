@@ -1,12 +1,21 @@
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 
-/** Sends `claude_code` connections to the Claude Code engine and everything else to the AI SDK engine. */
+/**
+ * Sends `claude_code` connections to the Claude Code engine and everything else to the AI SDK engine.
+ * A Claude-login request that names no account (a title or memory call, which has no chat turn to
+ * resolve one) runs on `defaultClaudeAccount()`, so a maxed main doesn't stop it either.
+ */
 export class RoutingChatEngine implements ChatEngine {
-  constructor(private readonly aisdk: ChatEngine, private readonly claudeCode: ChatEngine) {}
+  constructor(
+    private readonly aisdk: ChatEngine,
+    private readonly claudeCode: ChatEngine,
+    private readonly defaultClaudeAccount?: () => ClaudeAccountRef
+  ) {}
 
   private pick(kind: Connection['kind']): ChatEngine {
     if (isGenerationKind(kind)) throw new Error(`"${kind}" is a generation connection, not a chat model.`);
@@ -14,7 +23,11 @@ export class RoutingChatEngine implements ChatEngine {
   }
 
   stream(req: EngineRequest): AsyncIterable<EngineEvent> {
-    return this.pick(req.profile.connection.kind).stream(req);
+    const { connection } = req.profile;
+    if (connection.kind === 'claude_code' && !connection.baseUrl && req.claudeAccount === undefined && this.defaultClaudeAccount) {
+      return this.claudeCode.stream({ ...req, claudeAccount: this.defaultClaudeAccount() });
+    }
+    return this.pick(connection.kind).stream(req);
   }
 
   async listCommands(input: Parameters<NonNullable<ChatEngine['listCommands']>>[0]): Promise<CommandRow[]> {
@@ -65,9 +78,9 @@ export class RoutingChatEngine implements ChatEngine {
     this.claudeCode.closeChats?.(gone);
   }
 
-  async planUsage(conn: Connection): Promise<PlanUsage | null> {
+  async planUsage(conn: Connection, account?: ClaudeAccountRef): Promise<PlanUsage | null> {
     const engine = this.pick(conn.kind);
-    return engine.planUsage ? engine.planUsage(conn) : null;
+    return engine.planUsage ? engine.planUsage(conn, account) : null;
   }
 
   dispose(): void {

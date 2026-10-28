@@ -877,7 +877,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
-            {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
+            {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} account={(storedChat ?? chat).claudeAccount ?? null} />}
             {/* While a reply runs, Send stays beside Stop: what's sent then waits for the reply or goes into it. */}
             {isStreaming && (
               <button

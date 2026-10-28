@@ -431,6 +431,31 @@ describe('chats CRUD', () => {
     expect(container.store.chats.get(id)!.effort ?? null).toBeNull();
   });
 
+  it('sets the Claude account and auto-switch via PATCH, without moving the chat in the list, and refuses a bad slug', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['claudeAccount']).toBeNull();
+    expect(created['accountAutoSwitch']).toBe(false);
+    const before = container.store.chats.get(id)!.updatedAt;
+    const patch = (body: unknown) =>
+      app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+    const set = await patch({ claudeAccount: 'vh', accountAutoSwitch: true });
+    expect(set.status).toBe(200);
+    const setBody = await json(set);
+    expect(setBody['claudeAccount']).toBe('vh');
+    expect(setBody['accountAutoSwitch']).toBe(true);
+    expect(setBody['updatedAt']).toBe(before);
+
+    for (const bad of ['Bad Slug', '', 3, true]) {
+      const res = await patch({ claudeAccount: bad });
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe('"claudeAccount" must be null or an account slug.');
+    }
+    expect(container.store.chats.get(id)!.claudeAccount).toBe('vh');
+    expect((await json(await patch({ claudeAccount: null })))['claudeAccount']).toBeNull();
+  });
+
   it('ignores headMessageId in the generic PATCH body (moving it stays POST /:id/head only)', async () => {
     const created = await createChat();
     const res = await app().request(`/api/chats/${created['id'] as string}`, {
