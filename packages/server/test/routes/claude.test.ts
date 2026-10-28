@@ -128,4 +128,63 @@ describe('Claude account routes', () => {
     expect(planUsage.mock.calls[0]![1]).toMatchObject({ slug: 'vh', configDir: expect.any(String) });
     expect((await app.request('/api/claude/plan-usage?account=nope')).status).toBe(404);
   });
+  describe('sign-in', () => {
+    function fakeLogin(over: Record<string, unknown> = {}) {
+      const login = {
+        status: vi.fn(async (ref: { slug: string }) => (ref.slug === 'vh' ? { signedIn: true, email: 'a@b.c', subscriptionType: 'max' } : { signedIn: false, email: null, subscriptionType: null })),
+        signIn: vi.fn(async () => ({ started: true, url: 'https://claude.com/cai/oauth/authorize?x=1' })),
+        signingIn: vi.fn((slug: string) => slug === 'vh'),
+        submitCode: vi.fn(() => true),
+        signOut: vi.fn(async () => {}),
+        ...over,
+      };
+      container.claudeLogin = login as never;
+      return login;
+    }
+
+    it('fills signedIn, email, subscriptionType and signingIn from the runner, and leaves null where it fails', async () => {
+      fakeLogin({ status: vi.fn(async (ref: { slug: string }) => { if (ref.slug === 'main') throw new Error('stuck'); return { signedIn: true, email: 'a@b.c', subscriptionType: 'max' }; }) });
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      const { accounts } = (await (await app.request('/api/claude/accounts')).json()) as { accounts: AccountView[] };
+      expect(accounts[0]).toMatchObject({ slug: 'main', signedIn: null, email: null, signingIn: false });
+      expect(accounts[1]).toMatchObject({ slug: 'vh', signedIn: true, email: 'a@b.c', subscriptionType: 'max', signingIn: true });
+    });
+
+    it('starts a sign-in with 202 and the link, 404 for an unknown account', async () => {
+      const login = fakeLogin();
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      const res = await send(app, 'POST', '/api/claude/accounts/vh/sign-in');
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ url: 'https://claude.com/cai/oauth/authorize?x=1' });
+      expect(login.signIn.mock.calls[0]![0]).toMatchObject({ slug: 'vh' });
+      expect((await send(app, 'POST', '/api/claude/accounts/nope/sign-in')).status).toBe(404);
+    });
+
+    it('passes a pasted code on (204), 409 when no login runs, 400 without one', async () => {
+      const login = fakeLogin();
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', { code: 'abc' })).status).toBe(204);
+      expect(login.submitCode).toHaveBeenCalledWith('vh', 'abc');
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', {})).status).toBe(400);
+      login.submitCode.mockReturnValue(false);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', { code: 'abc' })).status).toBe(409);
+    });
+
+    it('signs out with 204', async () => {
+      const login = fakeLogin();
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-out')).status).toBe(204);
+      expect(login.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    it('is 503 without a runner', async () => {
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in')).status).toBe(503);
+    });
+  });
 });

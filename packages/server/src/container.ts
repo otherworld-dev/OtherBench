@@ -33,6 +33,7 @@ import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
+import { ClaudeLoginRunner } from './claude-accounts/login.js';
 import { ClaudeAccountService } from './claude-accounts/service.js';
 import { attachAccountSwitcher } from './claude-accounts/switcher.js';
 import type { BrowserPort } from './routes/browser.js';
@@ -143,6 +144,8 @@ export interface Container {
    * without one.
    */
   claudeAccounts?: ClaudeAccountService;
+  /** Signs those accounts in and out, and reads who is signed in, through the bundled Claude Code CLI. Always set by `createContainer`. */
+  claudeLogin?: ClaudeLoginRunner;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
   pathExists?: (path: string) => boolean;
   /**
@@ -620,6 +623,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     remoteRuns: new RemoteRuns(),
     engine,
     claudeAccounts: accounts,
+    claudeLogin: new ClaudeLoginRunner(),
     registry,
     turnRunner,
     streamRegistry,
