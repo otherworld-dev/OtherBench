@@ -410,9 +410,10 @@ export class PermissionBroker {
       if (tool.source === 'mcp') return { kind: 'allow', grantedBy: 'policy' };
     }
 
-    // A Claude Code write to its own config (see isProtectedAgentPath) always
-    // gets a card: no stored grant, however scoped, may cover it. Nor may one
-    // cover computer use of a high-risk app.
+    // A Claude Code write to its own config (see isProtectedAgentPath) is
+    // asked about every time (a card, or in Auto Claude Code's classifier): no
+    // stored grant, however scoped, may cover it. Nor may one cover computer
+    // use of a high-risk app.
     const grant = isProtectedAgentWrite(tool, args) || isHighRiskComputerCall(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
     if (grant) {
       // A 'once' grant authorises exactly one call; consume it immediately
@@ -774,15 +775,17 @@ export const UNATTENDED_REASON =
 /**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go
  * to Claude Code's own classifier instead of an OtherBench card (spec
- * 2026-10-03-claude-code-auto-mode-design section 3). Only Claude Code tools
- * qualify. A write to Claude Code's own config (see isProtectedAgentPath) and
- * an unrecognised tool (`other`) never do: those are escalation paths and
- * always keep the card.
+ * 2026-10-03-claude-code-auto-mode-design section 3). Every Claude Code tool
+ * does, as in Claude Code's own auto mode (VS Code, the CLI): a write to its
+ * config (isProtectedAgentPath) and an unrecognised tool included, since the
+ * classifier is what Claude Code routes its own protected paths to. A card
+ * left waiting overnight stalls the reply and its helpers; a classifier block
+ * only tells the model to find another way. OtherBench's own tools never
+ * do: each runs only with the ticket its approval leaves, which a hand-off
+ * would not, so in auto mode the tool provider approves them instead.
  */
-export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
-  if (tool.source !== 'agent') return false;
-  if (classifyAgentTool(tool.name).category === 'other') return false;
-  return !isProtectedAgentWrite(tool, args);
+export function isDeferrableInAutoMode(tool: ToolSpec, _args: unknown): boolean {
+  return tool.source === 'agent';
 }
 
 /**

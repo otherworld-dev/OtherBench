@@ -201,34 +201,20 @@ describe("a helper's call (Claude Code's Task tool)", () => {
 });
 
 describe('isDeferrableInAutoMode', () => {
-  it('defers routine Claude Code calls', () => {
+  it("defers every Claude Code call, as Claude Code's own auto mode routes them all to its classifier", () => {
     expect(isDeferrableInAutoMode(spec('Bash'), { command: 'npm test' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('PowerShell'), { command: 'dir' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('Edit'), { path: 'src/a.ts' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('WebFetch'), { url: 'https://example.com' })).toBe(true);
     expect(isDeferrableInAutoMode(spec('mcp__nextcloud__deck_add_card'), {})).toBe(true);
     expect(isDeferrableInAutoMode(spec('SendMessage'), { to: 'helper', message: 'carry on' })).toBe(true);
+    expect(isDeferrableInAutoMode(spec('Write'), { path: '.claude/worktrees/agent-1/src/read_xsd.rs' })).toBe(true);
   });
-  it('defers a write to the scratch folder, judged on every path key', () => {
-    const file_path = 'E:\\Git\\app\\.claude\\scratch\\check.php';
-    expect(isDeferrableInAutoMode(spec('Write'), { file_path, path: '.claude/scratch/check.php' })).toBe(true);
-    // Through a junction, `path` is where the write lands.
-    expect(isDeferrableInAutoMode(spec('Write'), { file_path, path: '.claude/skills/evil/SKILL.md' })).toBe(false);
-  });
-  it('never defers a write to Claude Code config, or a write with no usable path', () => {
-    for (const path of ['.claude/settings.local.json', 'sub/CLAUDE.md', '.mcp.json', 'CLAUDE~1/settings.json']) {
-      expect(isDeferrableInAutoMode(spec('Write'), { path })).toBe(false);
+  it('defers a write to Claude Code config and an unrecognised tool too: the classifier decides them', () => {
+    for (const path of ['.claude/settings.local.json', 'sub/CLAUDE.md', '.mcp.json']) {
+      expect(isDeferrableInAutoMode(spec('Write'), { path })).toBe(true);
     }
-    expect(isDeferrableInAutoMode(spec('Edit'), {})).toBe(false);
-  });
-  it('never defers a write when any path key is protected', () => {
-    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { file_path: 'a.ipynb', notebook_path: '.claude/settings.local.json' })).toBe(false);
-    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'CLAUDE.md' })).toBe(false);
-    expect(isDeferrableInAutoMode(spec('Write'), { path: 'a.ts', file_path: '.mcp.json' })).toBe(false);
-    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'b.ipynb' })).toBe(true);
-  });
-  it('never defers an unrecognised Claude Code tool', () => {
-    expect(isDeferrableInAutoMode(spec('SomeNewTool'), {})).toBe(false);
+    expect(isDeferrableInAutoMode(spec('SomeNewTool'), {})).toBe(true);
   });
   it("never defers OtherBench's own tools", () => {
     expect(isDeferrableInAutoMode({ ...spec('run_command'), source: 'shell' }, { command: 'ls' })).toBe(false);

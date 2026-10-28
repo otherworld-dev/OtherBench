@@ -173,15 +173,15 @@ describe('the browser in a scheduled run', () => {
     expect(s.cards).toEqual([]);
   });
 
-  it("refuses the relayed browser the same way, and never hands it to Claude Code's auto mode", async () => {
+  it('refuses the relayed browser the same way, and with someone watching auto mode approves it with no card', async () => {
     const s = setup({ answer: 'once' });
     const [spec] = (await s.provider.relayTools(policy()));
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ unattended: true }), { deferAsk: true });
     expect(outcome).toEqual({ allowed: false, reason: UNATTENDED_REASON });
-    // With someone watching, auto mode still doesn't get it: the card is OtherBench's.
+    // With someone watching, auto mode approves it as it stands, never handing it to Claude Code: it runs only with its ticket.
     const watched = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx(), { deferAsk: true });
-    expect(watched).toMatchObject({ allowed: true, grantedBy: 'ask:once', args: { command: 'open', url: 'https://example.com/', host: 'example.com' } });
-    expect(s.cards).toHaveLength(1);
+    expect(watched).toMatchObject({ allowed: true, grantedBy: 'auto', args: { command: 'open', url: 'https://example.com/', host: 'example.com' } });
+    expect(s.cards).toHaveLength(0);
   });
 });
 

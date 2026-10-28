@@ -434,7 +434,8 @@ function plainObject(value: unknown): Record<string, unknown> {
  *     that, so no native dialog comes up for a call that can't go ahead); the
  *     broker's decision on the DESCRIBED arguments; the card; the reply still
  *     not stopped. Its answer is approved-with-those-arguments, refused, or
- *     (Claude Code auto mode) deferred.
+ *     (Claude Code auto mode) deferred; in auto mode OtherBench's own tools
+ *     are approved with no card instead.
  *   - `runApproved`: the reply still not stopped, then the tool's `execute`
  *     with the approved arguments and nothing else, and the audit row for
  *     what came of it.
@@ -1024,11 +1025,16 @@ export class OtherBenchToolProvider implements ToolProvider {
       return { kind: 'refused', args: call.args, denied: quoting(tool, deniedAuth(`${UNCHECKED_REASON} ${messageOf(err)}`, false)) };
     }
     // Never in a scheduled run: nobody is there, so the call is refused below rather than handed on.
-    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(call.tool, call.args)) {
-      // Auto mode: Claude Code's classifier decides this call. No card, no
-      // event and nothing stored -- the pending request is dropped unanswered.
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true) {
+      // Auto mode: no card, no event and nothing stored -- the pending
+      // request is dropped unanswered. A Claude Code tool goes to its
+      // classifier. One of OtherBench's own (relayed, artifact, recall, plan)
+      // is approved as it stands: a hand-off would leave it no ticket to run
+      // with. Either way only an enabled tool gets here; a tool the profile
+      // has off was denied above.
       this.broker.discard(decision.request.id);
-      return { kind: 'deferred', args: call.args };
+      if (isDeferrableInAutoMode(call.tool, call.args)) return { kind: 'deferred', args: call.args };
+      return { kind: 'approved', args: call.args, grantedBy: 'auto' };
     }
     const auth = await this.settle(decision, ctx, tool);
     if (!auth.ok) return { kind: 'refused', args: call.args, denied: auth };

@@ -212,9 +212,11 @@ export const NO_APPROVAL_REASON = 'OtherBench has no approval for this call.';
 /** Options for `ToolProvider.requestApproval`. */
 export interface ApprovalOptions {
   /**
-   * Claude Code auto mode: a call the broker would ask about is handed to
-   * Claude Code's own classifier (`{ deferred: true }`) instead of raising a
-   * card, when `isDeferrableInAutoMode` allows it. Deny/allow are unaffected.
+   * Claude Code auto mode: a call the broker would ask about raises no card.
+   * A Claude Code tool is handed to its own classifier (`{ deferred: true }`,
+   * `isDeferrableInAutoMode`); one of OtherBench's own tools is approved
+   * (grantedBy `auto`). Deny/allow are unaffected, and an unattended run
+   * still refuses what it would have asked about.
    */
   deferAsk?: boolean;
 }

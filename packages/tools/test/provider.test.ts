@@ -554,16 +554,14 @@ describe('requestApproval in auto mode (deferAsk)', () => {
 
   it.each([
     ['a write to Claude Code config', 'Edit', { path: '.claude/settings.local.json' }],
+    ["a helper's write into its worktree", 'Write', { path: '.claude/worktrees/agent-1/src/read_xsd.rs' }],
     ['an unrecognised tool', 'SomeNewTool', { anything: 1 }],
-  ])('still raises a card for %s', async (_label, name, args) => {
+  ])('hands %s to the classifier too, with no card', async (_label, name, args) => {
     const { provider } = makeProvider();
     const seen: string[] = [];
-    provider.onApprovalEvent((e) => {
-      seen.push(e.type);
-      if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'once' });
-    });
-    expect(await provider.requestApproval(agentSpec(name, 'mutate'), args, policy(), ctx(), { deferAsk: true })).toEqual({ allowed: true, grantedBy: 'ask:once' });
-    expect(seen).toEqual(['request', 'resolved']);
+    provider.onApprovalEvent((e) => seen.push(e.type));
+    expect(await provider.requestApproval(agentSpec(name, 'mutate'), args, policy(), ctx(), { deferAsk: true })).toEqual({ deferred: true });
+    expect(seen).toEqual([]);
   });
 
   it('raises a card as before when deferAsk is not set', async () => {

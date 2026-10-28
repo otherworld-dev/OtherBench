@@ -72,6 +72,9 @@ describe('isProtectedAgentPath', () => {
     '.claude/memory/MEMORY.md', '.claude/memory/user_role.md', '.Claude/Private/x.md', 'sub/.claude/private/x.md',
     '.claude/private./x.md',
     '.claude/scratch/unlink-check.php', '.claude/scratch/probe/run.sh', '.Claude/Scratch/x.png', 'sub/.claude/scratch/x.txt',
+    // Claude Code's own exemptions: its helpers' worktrees, and agent memory notes.
+    '.claude/worktrees/agent-ac386f1830c42d696/crates/schema-gen/tests/read_xsd.rs', '.claude/worktrees/x/src/main.ts', '.Claude/Worktrees/x/a.txt',
+    '.claude/agent-memory/reviewer/notes.md', '.claude/agent-memory/MEMORY.md',
   ])('treats %s as data', (p) => {
     expect(isProtectedAgentPath(p)).toBe(false);
   });
@@ -88,6 +91,10 @@ describe('isProtectedAgentPath', () => {
     // scratch/ gets the same limits as private/.
     '.claude/scratch', '.claude/scratch/.claude/settings.json', '.claude/scratch/CLAUDE.md', '.claude/scratch/.mcp.json',
     '.claude/SCRATC~1/x.php', '.claude/scratch/../settings.json', '.claude/tmp/x.txt',
+    // A worktree is a checkout of the repo: its own Claude Code config is still config.
+    '.claude/worktrees', '.claude/worktrees/x/.claude/settings.json', '.claude/worktrees/x/.claude/hooks/h.sh', '.claude/worktrees/x/CLAUDE.md',
+    '.claude/worktrees/x/.mcp.json', '.claude/worktrees/../settings.json', '.claude/WORKTR~1/x/a.ts',
+    '.claude/agent-memory', '.claude/agent-memory/reviewer/hook.sh', '.claude/agent-memory/settings.json',
   ])('still protects %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(true);
   });

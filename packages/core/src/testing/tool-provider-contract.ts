@@ -59,8 +59,9 @@ const MCP_SERVERS: ContractMcpServer[] = [
  *   - ask raises a 'request' event, resolveApproval answers it (true once, false
  *     after), then a 'resolved' event carries the choice; read-risk fs/mcp
  *     tools under ask_on_mutate never ask; a 'chat' grant suppresses a repeat ask.
- *   - deferAsk turns an ask for a deferrable agent tool into {deferred:true}, and
- *     never softens a denial or an ask for a non-deferrable tool.
+ *   - deferAsk turns an ask for any agent tool into {deferred:true}, approves
+ *     an ask for one of OtherBench's own tools (grantedBy 'auto'), and never
+ *     softens a denial.
  *   - colliding tool names are de-duplicated with a numeric suffix.
  */
 export function runToolProviderContract(
@@ -495,18 +496,19 @@ export function runToolProviderContract(
       expect(await provider.requestApproval(agent('Read', 'read'), { path: 'a.txt' }, policy({ fs: 'read' }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true });
     });
 
-    it('deferAsk does not defer an agent tool it cannot classify, or a protected config write: those still ask', async () => {
+    it('deferAsk defers an agent tool it cannot classify, and a protected config write, to the classifier too', async () => {
       const w = watch({ choice: 'once' });
-      expect(await provider.requestApproval(agent('SomeNewTool', 'mutate'), {}, policy(), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
-      expect(await provider.requestApproval(agent('Write', 'mutate'), { path: '.claude/settings.json' }, policy({ fs: 'readwrite' }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
-      expect(w.requests).toHaveLength(2);
+      expect(await provider.requestApproval(agent('SomeNewTool', 'mutate'), {}, policy(), ctx(), { deferAsk: true })).toEqual({ deferred: true });
+      expect(await provider.requestApproval(agent('Write', 'mutate'), { path: '.claude/settings.json' }, policy({ fs: 'readwrite' }), ctx(), { deferAsk: true })).toEqual({ deferred: true });
+      expect(w.requests).toHaveLength(0);
     });
 
-    it('deferAsk does not defer fs, shell or mcp tools: those still ask', async () => {
+    it("deferAsk approves OtherBench's own tools with no card, and still refuses one the profile has off", async () => {
       const w = watch({ choice: 'once' });
       const [shell] = await listed(policy({ shell: true }));
-      expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
-      expect(w.requests).toHaveLength(1);
+      expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'auto' });
+      expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: false }), ctx(), { deferAsk: true })).toMatchObject({ allowed: false });
+      expect(w.requests).toHaveLength(0);
     });
 
     // ---- The sandboxed shell (spec 2026-10-12-sandbox-design) ----

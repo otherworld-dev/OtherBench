@@ -405,9 +405,9 @@ export class FakeToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true) {
       this.broker.discard(decision.request.id);
-      return { deferred: true };
+      return isDeferrableInAutoMode(tool, args) ? { deferred: true } : { allowed: true, grantedBy: 'auto' };
     }
     const auth = await this.settle(decision, ctx);
     return auth.ok ? { allowed: true, grantedBy: auth.grantedBy } : { allowed: false, reason: auth.reason };

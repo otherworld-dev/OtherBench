@@ -74,11 +74,15 @@ export function isProtectedAgentPath(relPath: string): boolean {
 }
 
 /**
- * The folders of the claude-setup standard that Claude Code never reads as
- * configuration: `.claude/private/` (plans, specs) and `.claude/scratch/`
- * (throwaway scripts and probes), anything inside either; and
- * plain `.md` notes directly in `.claude/memory/` (auto memory). A write
- * there follows the usual rules (Auto, grants) instead of always asking.
+ * The folders under `.claude` that Claude Code never reads as configuration:
+ * the claude-setup standard's `.claude/private/` (plans, specs) and
+ * `.claude/scratch/` (throwaway scripts and probes), anything inside either;
+ * plain `.md` notes directly in `.claude/memory/` (auto memory); and, as
+ * Claude Code itself exempts them from its protected paths,
+ * `.claude/worktrees/` (the git worktrees its helpers work in) and `.md`
+ * notes in `.claude/agent-memory/`. A write there follows the usual rules
+ * (Auto, grants) instead of always asking. A worktree's own `.claude`,
+ * `CLAUDE.md` or `.mcp.json` is still protected (see below).
  * `.claude/history/` is NOT one: the standard's /pull copies it back into
  * Claude Code's session store, so a forged transcript there would be resumed.
  * `at` is the index of the `.claude` segment; a further `.claude` deeper in
@@ -89,7 +93,8 @@ export function isProtectedAgentPath(relPath: string): boolean {
 function isClaudeDataPath(segments: readonly string[], at: number): boolean {
   const folder = segments[at + 1];
   const rest = segments.length - (at + 2);
-  if (folder === 'private' || folder === 'scratch') return rest >= 1;
+  if (folder === 'private' || folder === 'scratch' || folder === 'worktrees') return rest >= 1;
+  if (folder === 'agent-memory') return rest >= 1 && (segments[segments.length - 1] ?? '').endsWith('.md');
   return folder === 'memory' && rest === 1 && (segments[at + 2] ?? '').endsWith('.md');
 }
 

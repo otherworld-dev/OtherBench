@@ -1120,7 +1120,8 @@ and reads one, through `runRecallCommand` in core for both engines. It has
 source `recall`; Claude Code gets it on the same per-process `otherbench_<16 hex>`
 server as artifacts, matched only by that exact name. It gets no shortcut in
 the broker, not even "ask on mutate"'s read pass, and auto mode never hands
-it to Claude Code's classifier: the first call in a chat gets a card naming
+it to Claude Code's classifier (with Auto on it is approved with no card,
+like OtherBench's other tools): otherwise the first call in a chat gets a card naming
 the query, chat or project, and "Allow for this chat" covers the rest of
 that chat. That card is the guard against text injected into one chat using
 recall to reach the others, since the ways out that need no card (an HTML
@@ -1303,11 +1304,24 @@ There's no spend cap; usage rows are written as normal.
   reused process is switched rather than replaced. The hook still sends every call through
   `requestApproval` -> `PermissionBroker` first, so policy denials,
   outside-workspace denials, auto-read and grants behave exactly as before.
-  Only a call the broker would *ask* about goes to Claude Code's classifier
-  instead of a card (audited `auto`), and never a write to Claude Code config
-  or an unrecognised tool: those still get a card (`isDeferrableInAutoMode`).
-  `canUseTool` never defers, so a call the classifier can't decide gets a
-  card (unverified live -- see Known gaps). Classifier blocks are audited
+  A call the broker would *ask* about goes to Claude Code's classifier
+  instead of a card (audited `auto`), for every Claude Code tool: a write to
+  Claude Code config and an unrecognised tool included
+  (`isDeferrableInAutoMode`), as Claude Code's own auto mode routes its
+  protected paths to the classifier (changed 2026-10-28: cards for those used
+  to pile up overnight, a helper's every write into `.claude/worktrees/`
+  among them). OtherBench's own tools (the profile's relayed MCP servers, the
+  sandboxed shell, the browser, computer use, generation, artifacts, recall)
+  can't be handed off, since each runs only with the ticket its approval
+  leaves: in Auto they are approved as they stand, with no card (audited
+  `auto`), when the profile has them on. A tool the profile has off is still
+  refused, and so is anything a scheduled run would have asked about. Nothing
+  checks those calls in Auto, the browser's and computer use's included.
+  `canUseTool` never
+  defers, so a call that reaches it gets a card; per Claude Code's docs that
+  is only when Claude Code itself would prompt (an explicit ask rule, or auto
+  mode paused after 3 blocks in a row or 20 in all), since a call the
+  classifier can't decide is denied (unverified live -- see Known gaps). Classifier blocks are audited
   `deny:auto` from a `PermissionDenied` hook (unverified live -- see Known
   gaps). Endpoint backends and utility calls ignore the toggle; if Claude Code
   doesn't start in auto mode the turn fails with a capability error.
@@ -1334,14 +1348,17 @@ There's no spend cap; usage rows are written as normal.
   paths are refused (Claude Code reads them as `C:\...`, `containPath` would
   not), and Glob/Grep patterns with absolute, `~` or `..` prefixes are
   contained.
-- Writes to Claude Code's own config always get a card (R13): anything under a
+- Writes to Claude Code's own config are asked about every time (R13; a card, or in Auto the classifier): anything under a
   `.claude` directory, `.mcp.json`, and `CLAUDE.md`/`CLAUDE.local.md` in any
   directory (`isProtectedAgentPath`). No grant covers them and a chat/always
   answer stores none, because a hook, skill or MCP command written there would
   run on a later turn with no Bash card. The claude-setup standard's data
   folders are the exception and follow the usual rules (Auto, grants):
   anything in `.claude/private/` or `.claude/scratch/` (throwaway scripts and
-  probes), which Claude Code never loads, and plain
+  probes), which Claude Code never loads; anything in `.claude/worktrees/`
+  and `.md` notes in `.claude/agent-memory/`, which Claude Code exempts from
+  its own protected paths (a worktree's own `.claude/`, `CLAUDE.md` and
+  `.mcp.json` stay protected); and plain
   `.md` notes directly in `.claude/memory/`. Memory is loaded into every new
   session, so a bad note there steers later turns as `CLAUDE.md` would; it is
   let through deliberately, because auto memory writes there all the time,
@@ -1429,10 +1446,12 @@ Known gaps:
   user's own settings allow-rules, which can't be told apart. No classifier
   block has been observed in testing (the only block seen, a force-push in
   Task 1, came from the user's own git-guard hook). Some of OtherBench's limits
-  still apply in auto mode: tool policy, workspace containment for file
-  tools, and the card for Edit/Write/MultiEdit/NotebookEdit calls that touch
-  Claude Code config (live check: a write to `.claude/settings.local.json`
-  raised a card, denied). Shell tools are different: in auto mode
+  still apply in auto mode: tool policy and workspace containment for file
+  tools. Since 2026-10-28 an Edit/Write/MultiEdit/NotebookEdit call that
+  touches Claude Code config goes to the classifier like any other call, as
+  in Claude Code's own auto mode, so in Auto it is no longer held for a card
+  (before then, a live check: a write to `.claude/settings.local.json` raised
+  a card). Shell tools: in auto mode
   Bash/PowerShell are not path-contained and are decided by the classifier
   (or a settings allow-rule) without an OtherBench card. That includes commands
   that could write `.claude/settings.local.json` or touch files outside the
