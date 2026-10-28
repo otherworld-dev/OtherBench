@@ -1938,6 +1938,20 @@ Spec: `docs/superpowers/specs/2026-10-26-overview-design.md`. The mode switch ha
   - **gh isn't available in CI**, so the e2e covers chats and Deck only; issues are unit-tested.
 - **Tests.** Core: `buildOverview` and `chatNeedsYou`. Server: the service, the routes and the peer announcement. Web: unit tests beside each file in `web/src/overview/`. e2e: `packages/web/e2e/overview.spec.ts` against the fake Nextcloud, which has a card due now (`#104`, in Doing).
 
+### Claude accounts
+
+Spec: `docs/superpowers/specs/2026-10-28-claude-accounts-design.md`. A Claude Code chat on the Claude login (a `claude_code` connection with no Base URL) can run on any of several Claude logins, and a chat that hits its usage limit can move to the next one. Settings has a **Claude accounts** tab; the Inspector's Claude Code section has an **Account** select ("Default (Main, overflow to others)" or one account) and a **Switch automatically** checkbox; a chat on a non-main account is tinted in that account's colour (`data-account` and `--account-colour` on the thread) and shows a badge in its header; a switch raises a toast that opens the chat; the Overview shows every account's usage.
+
+- **Where accounts live.** The machine-local `app_setting` value `claudeAccounts` holds the list (name, slug, colour, config folder); it never syncs. Each account's login sits in its own config folder, which Claude Code manages. Main has `configDir: null`, keeps today's behaviour (including an inherited `CLAUDE_CONFIG_DIR`) and the backend string `'claude'`; other accounts are `claude:<slug>`. The chat's `claudeAccount` (a slug) does sync; a slug this machine doesn't have fails the reply with `No Claude account named "<slug>" on this machine.` and never falls back to main. `buildChildEnv` in `engine-claude-code/src/env.ts` is the only place that sets `CLAUDE_CONFIG_DIR`, and only on the child's environment.
+- **Security posture.** Only the folder path, the email and the plan type leave the CLI: `claude auth status --json` is parsed for those and the rest dropped. No token or credential reaches the API, the database or the logs; they stay in Claude Code's own folder. Folders must be absolute, no two accounts share one, and a non-main account can't use main's folder.
+- **Routes.** `/api/claude/accounts` (GET, POST, PATCH, DELETE), `/api/claude/accounts/:slug/sign-in`, `/sign-in/code` and `/sign-out`, `/api/claude/plan-usage?account=`, `/api/chats/:id/continue-on-account`.
+- **Known gaps.**
+  - **Other machines' accounts aren't shown.** A paired machine's accounts are its own; a synced chat pinned to one of them fails there until you add an account with that slug.
+  - **There is no automatic switch back.** A chat that moved off main stays on the other account; pick Default again by hand.
+  - **"Limited until" lives in memory**, so a restart forgets it until the next usage reading (or the next rejected reply) sets it again.
+  - **The success exit code of `claude auth login` was never observed live**, so sign-in completion is judged by re-reading `auth status`, not by the exit code.
+- **Tests.** e2e: `packages/web/e2e/claude-accounts.spec.ts` stubs every `/api/claude/*` call and the app event stream, so no Claude Code process starts; it covers adding an account, pinning a chat, the tint and a switch toast opening its chat. The rest is unit-tested beside the code.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
