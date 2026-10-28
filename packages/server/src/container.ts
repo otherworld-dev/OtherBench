@@ -496,6 +496,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     () => claudeAccounts?.defaultRef() ?? MAIN_ACCOUNT
   );
   const accounts = new ClaudeAccountService({ store, engine, events });
+  const claudeLogin = new ClaudeLoginRunner();
   claudeAccounts = accounts;
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
   // against whatever `mcp_server` rows already exist as soon as the
@@ -623,7 +624,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     remoteRuns: new RemoteRuns(),
     engine,
     claudeAccounts: accounts,
-    claudeLogin: new ClaudeLoginRunner(),
+    claudeLogin,
     registry,
     turnRunner,
     streamRegistry,
@@ -654,6 +655,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
       void browser.closeAll().catch((err: unknown) => console.error('[otherbench-server] error closing the model browser:', err));
+      // Any Claude sign-in, status read or logout still running.
+      claudeLogin.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
       // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.

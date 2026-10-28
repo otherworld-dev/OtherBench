@@ -11,7 +11,7 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter();
   written: string[] = [];
   killed = false;
-  stdin = { write: (s: string) => { this.written.push(s); return true; }, end: () => {} };
+  stdin = Object.assign(new EventEmitter(), { write: (s: string) => { this.written.push(s); return true; }, end: () => {} });
   kill(): boolean {
     this.killed = true;
     this.emit('close', null);
@@ -178,6 +178,30 @@ describe('ClaudeLoginRunner.signIn', () => {
     onSpawn = (child) => child.finish(0);
     await r.signOut(vh());
     expect(calls[0]!.child.killed).toBe(true);
+    expect(r.signingIn('vh')).toBe(false);
+  });
+
+  it('survives an EPIPE on the login stdin', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    expect(() => calls[0]!.child.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
+  });
+
+  it('answers started:false with no link when the process exits before printing one', async () => {
+    onSpawn = (child) => child.finish(1);
+    expect(await runner().signIn(vh())).toEqual({ started: false, url: null });
+  });
+
+  it('dispose kills the login and any status read in flight, and clears the timer', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    onSpawn = () => {};
+    const pending = r.status(MAIN_ACCOUNT).catch(() => 'ended');
+    await Promise.resolve();
+    r.dispose();
+    expect(calls[0]!.child.killed).toBe(true);
+    expect(calls[1]!.child.killed).toBe(true);
+    expect(await pending).toBe('ended');
     expect(r.signingIn('vh')).toBe(false);
   });
 

@@ -45,6 +45,8 @@ export class ClaudeLoginRunner {
   private readonly now: () => number;
   private readonly cache = new Map<string, { at: number; value: LoginStatus }>();
   private readonly logins = new Map<string, Login>();
+  /** Every child still running (logins, status reads, logouts), so `dispose` can end them. */
+  private readonly live = new Set<ChildProcess>();
 
   constructor(deps: { spawn?: typeof nodeSpawn; cliPath?: () => string; baseEnv?: NodeJS.ProcessEnv; now?: () => number } = {}) {
     this.spawnFn = deps.spawn ?? nodeSpawn;
@@ -87,6 +89,8 @@ export class ClaudeLoginRunner {
     if (running) return { started: false, url: running.url };
     if (account.configDir) mkdirSync(account.configDir, { recursive: true });
     const child = this.spawnFn(this.cliPath(), ['auth', 'login', '--claudeai'], this.options(account));
+    this.track(child);
+    child.stdin?.on('error', () => {});
     const login: Login = { child, url: null, timer: setTimeout(() => child.kill(), LOGIN_LIFETIME_MS) };
     login.timer.unref?.();
     this.logins.set(account.slug, login);
@@ -94,9 +98,9 @@ export class ClaudeLoginRunner {
     return new Promise((resolve) => {
       let out = '';
       let wait: ReturnType<typeof setTimeout> | undefined;
-      const answer = (): void => {
+      const answer = (failed = false): void => {
         if (wait) clearTimeout(wait);
-        resolve({ started: true, url: login.url });
+        resolve({ started: !failed, url: login.url });
       };
       wait = setTimeout(answer, URL_WAIT_MS);
       wait.unref?.();
@@ -114,7 +118,8 @@ export class ClaudeLoginRunner {
         clearTimeout(login.timer);
         if (this.logins.get(account.slug) === login) this.logins.delete(account.slug);
         this.cache.delete(account.slug);
-        answer();
+        // Ended before printing a link: the login did not start.
+        answer(login.url === null);
       };
       child.on('close', ended);
       child.on('error', ended);
@@ -123,6 +128,26 @@ export class ClaudeLoginRunner {
 
   signingIn(slug: string): boolean {
     return this.logins.has(slug);
+  }
+
+  /** Ends the sign-in running for an account, if any. */
+  cancel(slug: string): void {
+    this.logins.get(slug)?.child.kill();
+  }
+
+  /** Ends everything still running: logins, status reads and logouts. For server shutdown. */
+  dispose(): void {
+    for (const login of this.logins.values()) clearTimeout(login.timer);
+    this.logins.clear();
+    for (const child of [...this.live]) child.kill();
+    this.live.clear();
+  }
+
+  private track(child: ChildProcess): void {
+    this.live.add(child);
+    const gone = (): void => void this.live.delete(child);
+    child.on('close', gone);
+    child.on('error', gone);
   }
 
   /** Gives the running login the code the sign-in page showed. False when no login is running. */
@@ -135,7 +160,7 @@ export class ClaudeLoginRunner {
 
   /** `auth logout`, after ending a sign-in still waiting on this account. Forgets the cached status. */
   async signOut(account: ClaudeAccountRef): Promise<void> {
-    this.logins.get(account.slug)?.child.kill();
+    this.cancel(account.slug);
     try {
       await this.run(account, ['auth', 'logout'], STATUS_TIMEOUT_MS, false);
     } finally {
@@ -151,6 +176,7 @@ export class ClaudeLoginRunner {
   private run(account: ClaudeAccountRef, args: string[], timeoutMs: number, anyExit: boolean): Promise<{ stdout: string }> {
     return new Promise((resolve, reject) => {
       const child = this.spawnFn(this.cliPath(), args, this.options(account));
+      this.track(child);
       let stdout = '';
       let done = false;
       const finish = (fn: () => void): void => {

@@ -106,6 +106,7 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
     const slug = c.req.param('slug');
     if (slug !== MAIN_ACCOUNT_SLUG) existing(svc, slug);
     guard(() => svc.remove(slug));
+    container.claudeLogin?.cancel(slug);
     return c.body(null, 204);
   });
 

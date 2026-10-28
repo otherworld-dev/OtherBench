@@ -181,6 +181,21 @@ describe('Claude account routes', () => {
       expect(login.signOut).toHaveBeenCalledTimes(1);
     });
 
+    it('answers 502 when sign-out fails', async () => {
+      fakeLogin({ signOut: vi.fn(async () => { throw new Error('boom'); }) });
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-out')).status).toBe(502);
+    });
+
+    it('ends the pending sign-in when the account is deleted', async () => {
+      const login = fakeLogin({ cancel: vi.fn() });
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'DELETE', '/api/claude/accounts/vh')).status).toBe(204);
+      expect(login.cancel).toHaveBeenCalledWith('vh');
+    });
+
     it('is 503 without a runner', async () => {
       const app = withAccounts();
       await send(app, 'POST', '/api/claude/accounts', vh);
