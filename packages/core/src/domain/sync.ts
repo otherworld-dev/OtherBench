@@ -109,6 +109,8 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   autoMode: ['auto_mode'],
   planMode: ['plan_mode'],
   effort: ['effort'],
+  claudeAccount: ['claude_account'],
+  accountAutoSwitch: ['account_auto_switch'],
   folders: ['folders'],
   projectId: ['project_id'],
   appId: ['app_id'],

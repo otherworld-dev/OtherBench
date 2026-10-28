@@ -106,6 +106,13 @@ export interface Chat {
    */
   effort?: ClaudeEffort | null;
   /**
+   * The Claude account (slug) this chat's Claude Code turns run on; null follows the default (main, or another
+   * account when main is out of usage). Read fresh by TurnRunner on every turn. Repositories always fill it.
+   */
+  claudeAccount?: string | null;
+  /** Move to another Claude account on a usage limit and carry on. Repositories always fill it (false by default). */
+  accountAutoSwitch?: boolean;
+  /**
    * The project this chat is filed under, or null for "No project" (spec
    * 2026-10-03-projects-design). Purely organisational: moving a chat never
    * changes its folder or profile. Set to null when the project is deleted.

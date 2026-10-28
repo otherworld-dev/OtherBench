@@ -29,14 +29,16 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-11).map((m) => m.name)).toEqual(['023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview']);
+    expect(MIGRATIONS.slice(-12).map((m) => m.name)).toEqual(['023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(33);
+      expect(SCHEMA_VERSION).toBe(34);
+      const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
+      expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch']));
     } finally {
       db.close();
     }

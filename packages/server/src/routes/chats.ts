@@ -34,6 +34,8 @@ interface ChatBody {
   autoMode?: unknown;
   planMode?: unknown;
   effort?: unknown;
+  claudeAccount?: unknown;
+  accountAutoSwitch?: unknown;
   folders?: unknown;
   projectId?: unknown;
   appId?: unknown;
@@ -44,7 +46,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'claudeAccount', 'accountAutoSwitch', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
 
 /** Spec 2026-10-20-code-tab-design, "Calls I made": an app chat's folder is the app's folder, so it can't be set on the chat. */
 const APP_FOLDER_LOCKED = "An app chat uses its app's folder.";
@@ -270,6 +272,13 @@ export function chatsRoutes(container: Container): Hono {
       }
       patch.effort = body.effort;
     }
+    if (body.claudeAccount !== undefined) {
+      if (body.claudeAccount !== null && (typeof body.claudeAccount !== 'string' || !/^[a-z0-9-]{1,40}$/.test(body.claudeAccount))) {
+        throw new HTTPException(400, { message: '"claudeAccount" must be null or an account slug.' });
+      }
+      patch.claudeAccount = body.claudeAccount;
+    }
+    if (body.accountAutoSwitch !== undefined) patch.accountAutoSwitch = optionalBoolean(body.accountAutoSwitch, 'accountAutoSwitch', false);
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
     if (body.unread !== undefined) patch.unread = optionalBoolean(body.unread, 'unread', false);
     if (body.sortOrder !== undefined) {

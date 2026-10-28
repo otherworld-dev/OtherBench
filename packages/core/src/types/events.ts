@@ -15,6 +15,10 @@ export type AppEvent =
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
   | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
+  /** A chat moved to another Claude account after the first hit its usage limit. `from`/`to` are display names; `resetsAt` is ms epoch. */
+  | { type: 'claude-account-switched'; chatId: string; from: string; to: string; resetsAt: number | null; midReply: boolean }
+  /** Every Claude account is out of usage; `resets` says when each is back. */
+  | { type: 'claude-accounts-exhausted'; chatId: string; resets: { name: string; resetsAt: number | null }[] }
   /** A machine was paired, renamed or removed: re-read the list. */
   | { type: 'peers-changed' }
   /** A paired machine became reachable or unreachable; `since` is when. */

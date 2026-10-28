@@ -3,6 +3,7 @@ import type { CommandRow } from '../domain/context-lines.js';
 import type { SubagentEvent } from '../domain/parts.js';
 import type { BackgroundHelper } from '../types/background.js';
 export type { BackgroundHelper } from '../types/background.js';
+import type { ClaudeAccountRef } from '../types/claude-accounts.js';
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
@@ -93,6 +94,8 @@ export interface EngineRequest {
   autoMode?: boolean;
   /** The chat's effort (`Chat.effort`), read fresh for every turn. Only the Claude Code engine reads it; unset follows the user's Claude Code settings. */
   effort?: ClaudeEffort;
+  /** The Claude account this turn runs on (`Chat.claudeAccount`, resolved). Only the Claude Code engine reads it; unset is main. */
+  claudeAccount?: ClaudeAccountRef;
   /** This reply's plan approval when the chat's Plan mode is on (TurnRunner makes one per reply); copied onto every ToolContext. */
   plan?: PlanGate;
   /**
@@ -208,7 +211,7 @@ export interface ChatEngine {
    * can't tell). Only the Claude Code engine answers (Deck #825). Rejects
    * when the reading fails.
    */
-  planUsage?(conn: Connection): Promise<PlanUsage | null>;
+  planUsage?(conn: Connection, account?: ClaudeAccountRef): Promise<PlanUsage | null>;
   /** Stops anything the engine keeps running between turns (Claude Code's live processes). Called once, at shutdown. */
   dispose?(): void;
 }

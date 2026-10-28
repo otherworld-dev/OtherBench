@@ -119,6 +119,8 @@ export interface EngineMeta {
   sessionId: string;
   /** `'claude'` for the Claude login, or the endpoint base URL. */
   backend: string;
+  /** The Claude account slug the session ran on; set only for non-main accounts. */
+  account?: string;
   /** The workspace root the session ran in (Claude Code keys sessions by folder). */
   cwd: string;
   /** Tools Claude Code reported at session start. */

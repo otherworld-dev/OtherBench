@@ -745,6 +745,8 @@ class InMemoryChatRepo implements ChatRepo {
       runsOn: c.runsOn ?? this.selfNodeId,
       autoMode: c.autoMode ?? false,
       planMode: c.planMode ?? false,
+      claudeAccount: c.claudeAccount ?? null,
+      accountAutoSwitch: c.accountAutoSwitch ?? false,
       projectId: c.projectId ?? null,
       appId: c.appId ?? null,
       memoryCursor: c.memoryCursor ?? null,
