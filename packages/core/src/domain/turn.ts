@@ -214,7 +214,8 @@ export interface TurnRunnerOptions {
   /**
    * The Claude account a Claude Code turn on the machine's Claude login runs
    * on (`EngineRequest.claudeAccount`). Asked once per variant, only for a
-   * `claude_code` connection with no `baseUrl`; it may pin the chat to the
+   * `claude_code` connection with no `baseUrl`, and never for a self-started
+   * or follow-on reply (it runs on its process's own account); it may pin the chat to the
    * account it picks. It throws `ClaudeAccountUnavailableError` when the
    * chat names an account this machine doesn't have, which fails the reply
    * before the engine is called. Unset, every turn runs on main.
@@ -784,8 +785,10 @@ export class TurnRunner {
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
       // Which Claude login this turn runs on, resolved fresh per variant (a
       // chat moved off a limited main stays moved). Endpoint backends have none.
+      // A self-started or follow-on reply streams from a process already running,
+      // on that process's own account: it is never asked, so it can't pin the chat.
       let claudeAccount: ClaudeAccountRef | undefined;
-      if (profile.connection.kind === 'claude_code' && !profile.connection.baseUrl && this.claudeAccountFor) {
+      if (profile.connection.kind === 'claude_code' && !profile.connection.baseUrl && !variant.stream && this.claudeAccountFor) {
         try {
           claudeAccount = this.claudeAccountFor(chatId, profile);
         } catch (err) {

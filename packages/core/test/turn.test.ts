@@ -670,6 +670,24 @@ describe("TurnRunner and the chat's Claude account", () => {
     expect(asked).not.toHaveBeenCalled();
     expect(engine.requests.map((r) => r.claudeAccount)).toEqual([undefined, undefined]);
   });
+
+  it("is not asked for a self-started or follow-on reply, which runs on its process's own account (so it never pins the chat)", async () => {
+    const { store, asked } = setup(() => VH);
+    store.messages.create({ id: 'q1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'go' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'q1', role: 'assistant', parts: [{ type: 'text', text: 'ok' }], status: 'complete', error: null, producedBy: null });
+    const runner = new TurnRunner(store, new FakeChatEngine([]), { claudeAccountFor: asked });
+    const requests: EngineRequest[] = [];
+    const stream = async function* (req: EngineRequest): AsyncGenerator<EngineEvent> {
+      requests.push(req);
+      yield finished;
+    };
+    const self = await runner.runSelfStarted({ chatId: 'chat-1', parentId: 'a1', profile: claudeCode(), notice: 'n', unattended: false, stream });
+    await vi.waitFor(() => expect(store.messages.get(self.assistantMessageId)!.status).toBe('complete'));
+    const follow = await runner.runFollowOn({ chatId: 'chat-1', parentId: self.assistantMessageId, userParts: [{ type: 'text', text: 'and' }], profile: claudeCode(), stream });
+    await vi.waitFor(() => expect(store.messages.get(follow.assistantMessageId)!.status).toBe('complete'));
+    expect(asked).not.toHaveBeenCalled();
+    expect(requests.map((r) => r.claudeAccount)).toEqual([undefined, undefined]);
+  });
 });
 
 describe('TurnRunner with a sub-project (spec 2026-10-15-sub-projects-design §3)', () => {
