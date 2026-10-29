@@ -12,7 +12,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     api: {
       ...actual.api,
       apps: { ...actual.api.apps, issues: { list: vi.fn(), get: vi.fn(), comment: vi.fn(), close: vi.fn(), reopen: vi.fn() } },
-      overview: { ...actual.api.overview, tickIssue: vi.fn() },
+      overview: { ...actual.api.overview, markDone: vi.fn() },
     },
   };
 });
@@ -252,48 +252,53 @@ describe('IssuesTab', () => {
     expect(within(alert).getByText(/retry later/)).toBeInTheDocument();
   });
 
-  describe('needs you', () => {
-    const needing = (): Overview => ({
-      checkedAt: 1, checking: false, githubLogin: 'me', loginMismatches: [], unreachableMachines: [], total: 1,
+  describe('in your inbox', () => {
+    const inbox = (): Overview => ({
+      checkedAt: 1, checking: false, githubLogin: 'me', loginMismatches: [], unreachableMachines: [], total: 2,
       tiles: [{
-        key: 'a1', appId: 'a1', name: 'OtherBench', count: 1, faded: false, chats: [], issuesError: null, deck: null, deckError: null,
-        issues: [{ number: 48, title: 'x', state: 'open', kind: 'new', at: new Date().toISOString(), who: 'sam', url: '', through: 'x' }],
+        key: 'a1', appId: 'a1', name: 'OtherBench', count: 2, faded: false, chats: [], deck: null, deckError: null,
+        notificationsError: null, notificationsMore: false,
+        notifications: [
+          { id: '901', repo: 'o/r', kind: 'issue', title: 'x', number: 48, reason: 'mention', unread: true, updatedAt: new Date().toISOString(), url: '' },
+          // A PR with the same number as an issue in the list is not the issue.
+          { id: '902', repo: 'o/r', kind: 'pr', title: 'y', number: 45, reason: 'review_requested', unread: true, updatedAt: new Date().toISOString(), url: '' },
+        ],
       }],
     });
 
-    it('marks only the issues that need him and ticks one off', async () => {
-      const next = { ...needing(), tiles: [{ ...needing().tiles[0]!, issues: [] }] };
-      vi.mocked(api.overview.tickIssue).mockResolvedValue(next);
-      useOtherBenchStore.setState({ overview: needing() });
+    it('marks only the issues in the inbox and marks one done', async () => {
+      const next = { ...inbox(), tiles: [{ ...inbox().tiles[0]!, notifications: [] }] };
+      vi.mocked(api.overview.markDone).mockResolvedValue(next);
+      useOtherBenchStore.setState({ overview: inbox() });
       const user = userEvent.setup();
       render(<IssuesTab app={app()} owner="c1" />);
-      expect(await screen.findByTestId('issue-needs-48')).toBeInTheDocument();
-      expect(screen.queryByTestId('issue-needs-45')).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Tick off #45' })).toBeNull();
-      await user.click(screen.getByRole('button', { name: 'Tick off #48' }));
-      expect(api.overview.tickIssue).toHaveBeenCalledWith('a1', 48);
-      await waitFor(() => expect(screen.queryByTestId('issue-needs-48')).toBeNull());
+      expect(await screen.findByTestId('issue-inbox-48')).toHaveTextContent('in your inbox');
+      expect(screen.queryByTestId('issue-inbox-45')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Done: #45' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Done: #48' }));
+      expect(api.overview.markDone).toHaveBeenCalledWith('901');
+      await waitFor(() => expect(screen.queryByTestId('issue-inbox-48')).toBeNull());
       expect(useOtherBenchStore.getState().overview).toBe(next);
     });
 
-    it('the issue view has a Tick off button only when it needs him', async () => {
-      useOtherBenchStore.setState({ overview: needing() });
+    it('the issue view has a Done button only when the issue is in the inbox', async () => {
+      useOtherBenchStore.setState({ overview: inbox() });
       useOtherBenchStore.getState().setIssueView('c1', { selected: 48 });
       const user = userEvent.setup();
       render(<IssuesTab app={app()} owner="c1" />);
       await screen.findByTestId('issue-detail');
-      vi.mocked(api.overview.tickIssue).mockResolvedValue({ ...needing(), tiles: [] });
-      await user.click(screen.getByRole('button', { name: 'Tick off' }));
-      expect(api.overview.tickIssue).toHaveBeenCalledWith('a1', 48);
+      vi.mocked(api.overview.markDone).mockResolvedValue({ ...inbox(), tiles: [] });
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      expect(api.overview.markDone).toHaveBeenCalledWith('901');
     });
 
-    it('the issue view has no Tick off when the issue does not need him', async () => {
-      useOtherBenchStore.setState({ overview: needing() });
+    it('the issue view has no Done when the issue is not in the inbox', async () => {
+      useOtherBenchStore.setState({ overview: inbox() });
       useOtherBenchStore.getState().setIssueView('c1', { selected: 45 });
       vi.mocked(api.apps.issues.get).mockResolvedValue(detail({ number: 45 }));
       render(<IssuesTab app={app()} owner="c1" />);
       await screen.findByTestId('issue-detail');
-      expect(screen.queryByRole('button', { name: 'Tick off' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
     });
   });
 });

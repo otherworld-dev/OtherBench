@@ -1,60 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, issueNeed, type OverviewInput,
+  buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, type OverviewInput,
 } from '../src/domain/overview.js';
 import type { App, Chat } from '../src/ports/store.js';
 import type { DeckBoardView, DeckCardSummary } from '../src/types/nextcloud.js';
-import type { ChatHead, IssueActivity } from '../src/types/overview.js';
+import type { ChatHead, GithubNotification } from '../src/types/overview.js';
 
 describe('isBotLogin', () => {
   it('spots bot accounts', () => {
     expect(isBotLogin('dependabot[bot]')).toBe(true);
     expect(isBotLogin('app/copilot')).toBe(true);
     expect(isBotLogin('bob')).toBe(false);
-  });
-});
-
-const t = (m: number): string => new Date(Date.UTC(2026, 9, 20, 12, m)).toISOString();
-function issue(over: Partial<IssueActivity> = {}): IssueActivity {
-  return {
-    number: 1, title: 'T', state: 'open', url: 'u', author: 'bob', authorIsBot: false,
-    createdAt: t(0), closedAt: null, comments: [], ...over,
-  };
-}
-const c = (author: string, m: number, authorIsBot = false) => ({ author, authorIsBot, createdAt: t(m) });
-
-describe('issueNeed', () => {
-  it('a new issue by someone else needs me', () => {
-    expect(issueNeed(issue(), 'me', null)).toEqual({ kind: 'new', who: 'bob', at: t(0) });
-  });
-  it('my later comment settles it', () => {
-    expect(issueNeed(issue({ comments: [c('me', 5)] }), 'me', null)).toBeNull();
-  });
-  it('their comment after mine needs me again', () => {
-    expect(issueNeed(issue({ comments: [c('me', 5), c('bob', 10)] }), 'me', null))
-      .toEqual({ kind: 'comment', who: 'bob', at: t(10) });
-  });
-  it('a close after their comment settles it', () => {
-    expect(issueNeed(issue({ comments: [c('bob', 10)], state: 'closed', closedAt: t(20) }), 'me', null)).toBeNull();
-  });
-  it('a comment by someone else after the close needs me', () => {
-    const a = issue({ comments: [c('bob', 10), c('alice', 30)], state: 'closed', closedAt: t(20) });
-    expect(issueNeed(a, 'me', null)).toEqual({ kind: 'comment', who: 'alice', at: t(30) });
-  });
-  it('a bot comment after the close does not', () => {
-    const a = issue({ comments: [c('bob', 10), c('dependabot[bot]', 30, true)], state: 'closed', closedAt: t(20) });
-    expect(issueNeed(a, 'me', null)).toBeNull();
-  });
-  it('a tick-off through their last comment settles it, a later comment does not', () => {
-    const a = issue({ comments: [c('bob', 10)] });
-    expect(issueNeed(a, 'me', t(10))).toBeNull();
-    expect(issueNeed(issue({ comments: [c('bob', 10), c('bob', 12)] }), 'me', t(10))?.at).toBe(t(12));
-  });
-  it('an issue I opened with no comments needs nothing', () => {
-    expect(issueNeed(issue({ author: 'me' }), 'me', null)).toBeNull();
-  });
-  it('a bot-opened issue needs nothing', () => {
-    expect(issueNeed(issue({ author: 'x[bot]', authorIsBot: true }), 'me', null)).toBeNull();
   });
 });
 
@@ -130,9 +86,12 @@ function chat(id: string, appId: string | null, over: Partial<Chat> = {}): Chat 
 /** `ms` after an hour before `now`, inside the chat window. */
 const recent = (ms: number): number => now.getTime() - 3_600_000 + ms;
 const done = (chatId: string, createdAt: number): ChatHead => ({ chatId, role: 'assistant', status: 'complete', createdAt });
+function note(id: string, repo: string, unread: boolean, day: number): GithubNotification {
+  return { id, repo, kind: 'issue', title: `n${id}`, number: Number(id), reason: 'mention', unread, updatedAt: new Date(Date.UTC(2026, 9, 20 + day)).toISOString(), url: 'u' };
+}
 function input(over: Partial<OverviewInput>): OverviewInput {
   return {
-    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), me: 'me', issues: {}, ticks: [], decks: {},
+    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), me: 'me', notifications: null, decks: {},
     checkedAt: null, checking: false, loginMismatches: [], unreachableMachines: [], now, ...over,
   };
 }
@@ -152,7 +111,7 @@ describe('buildOverview', () => {
     expect(o.tiles.map((x) => [x.key, x.count, x.faded])).toEqual([
       ['d', 2, false], ['chats', 1, false], ['b', 0, false], ['a', 0, true], ['c', 0, true],
     ]);
-    expect(o.tiles[1]).toMatchObject({ appId: null, name: 'Chats', issues: null, deck: null });
+    expect(o.tiles[1]).toMatchObject({ appId: null, name: 'Chats', notifications: null, deck: null });
     expect(o.total).toBe(3);
   });
   it('lists waiting chats first, then newest', () => {
@@ -174,16 +133,32 @@ describe('buildOverview', () => {
     }));
     expect(o.tiles[0]?.chats.map((x) => x.chatId)).toEqual(['3', '2']);
   });
-  it('a tick hides an issue; an error sets issuesError; no repo means null', () => {
-    const a1 = issue({ number: 7, comments: [c('bob', 10)] });
-    const base = { apps: [app('a', { githubRepo: 'o/a' }), app('b', { githubRepo: 'o/b' }), app('c')] };
-    const shown = buildOverview(input({ ...base, issues: { a: { activity: [a1] }, b: { error: 'boom' } } }));
-    const byKey = (o: ReturnType<typeof buildOverview>, k: string) => o.tiles.find((x) => x.key === k)!;
-    expect(byKey(shown, 'a').issues).toEqual([{ number: 7, title: 'T', state: 'open', kind: 'comment', at: t(10), who: 'bob', url: 'u', through: t(10) }]);
-    expect(byKey(shown, 'b')).toMatchObject({ issues: [], issuesError: 'boom' });
-    expect(byKey(shown, 'c').issues).toBeNull();
-    const ticked = buildOverview(input({ ...base, issues: { a: { activity: [a1] } }, ticks: [{ appId: 'a', number: 7, through: t(10) }] }));
-    expect(byKey(ticked, 'a')).toMatchObject({ issues: [], count: 0 });
+  it("files each notification under its repo's app, shown once and counted; no repo means null", () => {
+    const base = { apps: [app('a', { githubRepo: 'O/A' }), app('b', { githubRepo: 'o/a' }), app('c')] };
+    const o = buildOverview(input({ ...base, notifications: { list: [note('1', 'o/a', false, 1), note('2', 'o/a', true, 0)], more: false, error: null } }));
+    const byKey = (k: string) => o.tiles.find((x) => x.key === k);
+    expect(byKey('a')).toMatchObject({ count: 2, notificationsError: null, notificationsMore: false });
+    expect(byKey('a')?.notifications?.map((x) => x.id)).toEqual(['2', '1']);
+    expect(byKey('b')?.notifications).toEqual([]);
+    expect(byKey('c')?.notifications).toBeNull();
+    expect(byKey('github')).toBeUndefined();
+    expect(o.total).toBe(2);
+  });
+  it('puts notifications for repos that are not apps in a GitHub tile, which carries "more"', () => {
+    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' })], notifications: { list: [note('9', 'o/elsewhere', true, 0)], more: true, error: null } }));
+    expect(o.tiles.find((x) => x.key === 'github')).toMatchObject({ appId: null, name: 'GitHub', count: 1, notificationsMore: true });
+    expect(o.tiles.find((x) => x.key === 'a')).toMatchObject({ notifications: [], notificationsMore: true });
+  });
+  it('puts an error on every GitHub section, and a GitHub tile only for the error', () => {
+    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' }), app('c')], notifications: { list: [], more: false, error: 'boom' } }));
+    expect(o.tiles.find((x) => x.key === 'a')).toMatchObject({ notifications: [], notificationsError: 'boom' });
+    expect(o.tiles.find((x) => x.key === 'github')).toMatchObject({ notifications: [], notificationsError: 'boom', count: 0 });
+    expect(o.tiles.find((x) => x.key === 'c')?.notificationsError).toBeNull();
+  });
+  it('before the first check, repo apps have an empty list and there is no GitHub tile', () => {
+    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' })] }));
+    expect(o.tiles.find((x) => x.key === 'a')?.notifications).toEqual([]);
+    expect(o.tiles.find((x) => x.key === 'github')).toBeUndefined();
   });
   it('an app with a board but no result yet has an empty deck; an error is kept', () => {
     const o = buildOverview(input({ apps: [app('a', { deckBoardId: 1 }), app('b', { deckBoardId: 2 })], decks: { b: { error: 'x' } } }));

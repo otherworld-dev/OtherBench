@@ -1,32 +1,27 @@
 import { useEffect, useState, type JSX } from 'react';
 import { ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { App } from '@otherbench/core/ports/store.js';
+import type { GithubNotification } from '@otherbench/core/types/overview.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { formatAge, formatRelativeTime } from '../lib/relativeTime.js';
 import { api } from '../state/api.js';
+import { doneNotification } from '../overview/notificationActions.js';
 import { useOtherBenchStore, type IssueState } from '../state/store.js';
 import { CodeErrorLine, NO_GITHUB_REPO } from './CodeError.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
 import { stayInApp } from './stayInApp.js';
 import { useCodeRefresh } from './useCodeRefresh.js';
 
-/** The issue numbers of this app that are on the Overview, needing him. */
-function useNeedingIssues(appId: string): Set<number> {
-  const issues = useOtherBenchStore((s) => s.overview?.tiles.find((t) => t.appId === appId)?.issues);
-  return new Set((issues ?? []).map((i) => i.number));
-}
-
-/** Ticks an issue off the Overview and stores the result; a failure is logged and the marker simply stays. */
-function useTickIssue(appId: string): (n: number) => Promise<void> {
-  const setOverview = useOtherBenchStore((s) => s.setOverview);
-  return async (n) => {
-    try {
-      setOverview(await api.overview.tickIssue(appId, n));
-    } catch (err) {
-      console.error(`[otherbench-web] failed to tick off issue #${n}:`, err);
-    }
-  };
+/**
+ * This app's issues that are in the GitHub inbox, by number (spec 2026-10-29-github-inbox-design): marked "in your
+ * inbox", with Done beside them as on the Overview.
+ */
+function useInboxIssues(appId: string): Map<number, GithubNotification> {
+  const notifications = useOtherBenchStore((s) => s.overview?.tiles.find((t) => t.appId === appId)?.notifications);
+  const byNumber = new Map<number, GithubNotification>();
+  for (const n of notifications ?? []) if (n.kind === 'issue' && n.number !== null) byNumber.set(n.number, n);
+  return byNumber;
 }
 
 const MUTED = 'text-xs text-[var(--text-muted)]';
@@ -81,8 +76,7 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   const [starting, setStarting] = useState<number | null>(null);
   const [startError, setStartError] = useState<unknown>(null);
   const repo = app.githubRepo;
-  const needing = useNeedingIssues(app.id);
-  const tick = useTickIssue(app.id);
+  const inbox = useInboxIssues(app.id);
 
   // A row's Chat button: the issue's text is fetched, as the list carries only its title, then the chat starts as from the issue itself.
   async function startOn(n: number): Promise<void> {
@@ -193,16 +187,16 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
                       <span aria-hidden="true">💬 {issue.comments}</span>
                     </span>
                   )}
-                  {needing.has(issue.number) && (
-                    <span data-testid={`issue-needs-${issue.number}`} className="shrink-0 text-xs text-[var(--accent)]">
-                      needs you
+                  {inbox.has(issue.number) && (
+                    <span data-testid={`issue-inbox-${issue.number}`} className="shrink-0 text-xs text-[var(--accent)]">
+                      in your inbox
                     </span>
                   )}
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{age(issue.createdAt)}</span>
                 </button>
-                {needing.has(issue.number) && (
-                  <button type="button" aria-label={`Tick off #${issue.number}`} onClick={() => void tick(issue.number)} className="btn my-1 mr-1 shrink-0 px-1.5 py-0 text-xs">
-                    Tick off
+                {inbox.has(issue.number) && (
+                  <button type="button" aria-label={`Done: #${issue.number}`} onClick={() => void doneNotification(inbox.get(issue.number)!)} className="btn my-1 mr-1 shrink-0 px-1.5 py-0 text-xs">
+                    Done
                   </button>
                 )}
                 {/* Beside the row's button, not in it: a button can't hold another. */}
@@ -236,8 +230,7 @@ function IssueView({ app, owner, number, onBack }: { app: App; owner: string; nu
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState<'comment' | 'state' | 'chat' | null>(null);
   const [actionError, setActionError] = useState<{ error: unknown; fallback: string } | null>(null);
-  const needsYou = useNeedingIssues(app.id).has(number);
-  const tick = useTickIssue(app.id);
+  const inInbox = useInboxIssues(app.id).get(number);
 
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
   useEffect(() => {
@@ -349,9 +342,9 @@ function IssueView({ app, owner, number, onBack }: { app: App; owner: string; nu
         >
           {open ? 'Close issue' : 'Reopen issue'}
         </button>
-        {needsYou && (
-          <button type="button" onClick={() => void tick(number)} className="btn px-2.5 py-1">
-            Tick off
+        {inInbox && (
+          <button type="button" onClick={() => void doneNotification(inInbox)} className="btn px-2.5 py-1">
+            Done
           </button>
         )}
       </div>

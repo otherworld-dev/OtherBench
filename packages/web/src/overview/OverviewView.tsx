@@ -17,7 +17,7 @@ const SPANS = [
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** Header action: tick off every chat and issue not touched for a chosen span, after a confirm step. */
+/** Header action: tick off every chat not touched for a chosen span, after a confirm step. GitHub notifications are done one at a time. */
 function TickOlder(): JSX.Element {
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<(typeof SPANS)[number] | null>(null);
@@ -34,7 +34,7 @@ function TickOlder(): JSX.Element {
     api.overview
       .tickOlder(Date.now() - picked.ms)
       .then((r) => {
-        setResult(`Ticked off ${plural(r.chats, 'chat')} and ${plural(r.issues, 'issue')}`);
+        setResult(`Ticked off ${plural(r.chats, 'chat')}`);
         // The overview refreshes itself from the server events that follow.
         close();
       })

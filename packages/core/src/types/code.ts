@@ -46,3 +46,13 @@ export interface IssueDetail extends IssueSummary {
   body: string;
   commentList: { author: string; body: string; createdAt: string }[];
 }
+
+/** A pull request, as far as a chat started on it needs (spec 2026-10-29-github-inbox-design). */
+export interface PullRequestDetail {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  /** Its head branch. */
+  branch: string;
+}

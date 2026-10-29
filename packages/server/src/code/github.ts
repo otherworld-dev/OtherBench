@@ -1,9 +1,9 @@
 import { tmpdir } from 'node:os';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
 import { isGithubRepo, ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
-import { isBotLogin } from '@otherbench/core/domain/overview.js';
-import type { IssueActivity } from '@otherbench/core/types/overview.js';
-import type { GhErrorCode, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
+import { parseNotification } from '@otherbench/core/domain/github-inbox.js';
+import type { GithubNotification } from '@otherbench/core/types/overview.js';
+import type { GhErrorCode, IssueDetail, IssueSummary, PullRequestDetail } from '@otherbench/core/types/code.js';
 import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 import { redactUrls } from './git-parse.js';
 import { ExecutableMissingError, runProcess, type RunResult } from './process.js';
@@ -26,7 +26,7 @@ import { ExecutableMissingError, runProcess, type RunResult } from './process.js
  * The service takes an injected Runner so tests never call a real gh.
  */
 
-export type { GhErrorCode, IssueSummary, IssueDetail } from '@otherbench/core/types/code.js';
+export type { GhErrorCode, IssueSummary, IssueDetail, PullRequestDetail } from '@otherbench/core/types/code.js';
 
 export class GhError extends Error {
   constructor(
@@ -92,24 +92,9 @@ export function ghRunner(resolve: (command: string) => string = resolveExecutabl
   };
 }
 
-/**
- * The Overview's issue activity (spec 2026-10-26-overview-design), read with GraphQL rather than `gh issue list`:
- * that one gives comment authors as a bare login (a bot's `github-actions` looks like anyone else) and only the
- * first 100 comments, so a long issue's newest comments are missed. Here a bot is `__typename: 'Bot'`, an issue
- * brings its last 100 comments, and the 100 most recently updated issues come back, open and closed. The text is
- * a constant: the repo goes in as the `owner` and `name` variables, never into the query.
- */
-export const ACTIVITY_QUERY = `query($owner: String!, $name: String!) {
-  repository(owner: $owner, name: $name) {
-    issues(first: ${ISSUE_LIST_LIMIT}, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN, CLOSED]) {
-      nodes {
-        number title state url createdAt closedAt
-        author { __typename login }
-        comments(last: ${ISSUE_LIST_LIMIT}) { nodes { author { __typename login } createdAt } }
-      }
-    }
-  }
-}`;
+/** The inbox is read this many at a time, at most INBOX_PAGES times (spec 2026-10-29-github-inbox-design). */
+const INBOX_PAGE_SIZE = 50;
+const INBOX_PAGES = 2;
 const SUMMARY_FIELDS = 'number,title,state,author,labels,comments,createdAt,updatedAt,url';
 
 function firstLine(s: string): string {
@@ -152,30 +137,6 @@ function summary(r: RawIssue): IssueSummary {
   };
 }
 
-interface GqlAuthor {
-  __typename?: string;
-  login?: string;
-}
-interface GqlIssue {
-  number: number;
-  title: string;
-  state: string;
-  url: string;
-  createdAt: string;
-  closedAt?: string | null;
-  author?: GqlAuthor | null;
-  comments?: { nodes?: { author?: GqlAuthor | null; createdAt?: string }[] };
-}
-interface GqlActivity {
-  data?: { repository?: { issues?: { nodes?: GqlIssue[] } } | null };
-}
-
-/** A GraphQL author: null is a deleted account, which GitHub shows as `ghost` and is not a bot. */
-function who(a: GqlAuthor | null | undefined): { author: string; authorIsBot: boolean } {
-  const author = a?.login ?? 'ghost';
-  return { author, authorIsBot: a?.__typename === 'Bot' || isBotLogin(author) };
-}
-
 /** What githubService returns; the container's `github` is one of these. */
 export type GithubService = ReturnType<typeof githubService>;
 
@@ -210,6 +171,9 @@ export function githubService(run: Runner) {
   const checkNumber = (n: number): void => {
     if (!Number.isInteger(n) || n <= 0) throw new GhError('gh-failed', `"${String(n)}" is not a valid issue number.`);
   };
+  const checkThreadId = (id: string): void => {
+    if (!/^\d+$/.test(id)) throw new GhError('gh-failed', `"${id}" is not a notification thread id.`);
+  };
   const parse = <T>(text: string): T => {
     try {
       return JSON.parse(text) as T;
@@ -226,22 +190,40 @@ export function githubService(run: Runner) {
         .map(summary)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     },
-    async activity(repo: string): Promise<IssueActivity[]> {
+    /**
+     * The user's notifications inbox as GitHub's web inbox shows it: read and unread, everything not marked
+     * Done, newest updated first. At most INBOX_PAGES pages; `more` when the last one read was full.
+     */
+    async notifications(): Promise<{ list: GithubNotification[]; more: boolean }> {
+      const list: GithubNotification[] = [];
+      for (let page = 1; page <= INBOX_PAGES; page++) {
+        const raw = parse<unknown>(await gh(['api', `notifications?all=true&per_page=${INBOX_PAGE_SIZE}&page=${page}`]));
+        if (!Array.isArray(raw)) throw new GhError('gh-failed', 'gh did not return a list of notifications.');
+        for (const entry of raw) {
+          const n = parseNotification(entry);
+          if (n !== null) list.push(n);
+        }
+        if (raw.length < INBOX_PAGE_SIZE) return { list, more: false };
+      }
+      return { list, more: true };
+    },
+    /** GitHub's Done: the thread leaves the inbox for the Done list. */
+    async markDone(id: string): Promise<void> {
+      checkThreadId(id);
+      await gh(['api', '-X', 'DELETE', `notifications/threads/${id}`]);
+    },
+    async markRead(id: string): Promise<void> {
+      checkThreadId(id);
+      await gh(['api', '-X', 'PATCH', `notifications/threads/${id}`]);
+    },
+    /** A pull request, for a chat started on it: its branch goes into the composer. */
+    async pr(repo: string, n: number): Promise<PullRequestDetail> {
       checkRepo(repo);
-      const [owner, name] = repo.split('/') as [string, string];
-      const out = await gh(['api', 'graphql', '-f', `query=${ACTIVITY_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`]);
-      const repository = parse<GqlActivity>(out).data?.repository;
-      if (!repository) throw new GhError('repo-not-found', 'That repository was not found on GitHub.');
-      return (repository.issues?.nodes ?? []).map((r) => ({
-        number: r.number,
-        title: r.title,
-        state: r.state === 'CLOSED' ? ('closed' as const) : ('open' as const),
-        url: r.url,
-        ...who(r.author),
-        createdAt: r.createdAt,
-        closedAt: r.closedAt ?? null,
-        comments: (r.comments?.nodes ?? []).map((c) => ({ ...who(c.author), createdAt: c.createdAt ?? '' })),
-      }));
+      checkNumber(n);
+      const r = parse<{ number: number; title: string; body?: string; url: string; headRefName?: string }>(
+        await gh(['pr', 'view', String(n), '--repo', repo, '--json', 'number,title,body,url,headRefName'])
+      );
+      return { number: r.number, title: r.title, body: r.body ?? '', url: r.url, branch: r.headRefName ?? '' };
     },
     /** The account gh is signed in as. */
     async login(): Promise<string> {

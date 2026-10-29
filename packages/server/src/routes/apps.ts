@@ -441,6 +441,13 @@ export function appsRoutes(container: Container): Hono {
     return c.json(await codeCall(() => githubOf(container).view(repo, n)));
   });
 
+  // A pull request, for a chat started on it from the Overview's GitHub inbox (spec 2026-10-29-github-inbox-design).
+  app.get('/:id/pulls/:n', async (c) => {
+    const repo = githubRepoOrThrow(getAppOrThrow(container, c.req.param('id')));
+    const n = issueNumberOf(c.req.param('n'));
+    return c.json(await codeCall(() => githubOf(container).pr(repo, n)));
+  });
+
   app.post('/:id/issues/:n/comment', async (c) => {
     const repo = githubRepoOrThrow(getAppOrThrow(container, c.req.param('id')));
     const n = issueNumberOf(c.req.param('n'));

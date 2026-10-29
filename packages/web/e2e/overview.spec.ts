@@ -7,7 +7,7 @@ import { BASE_URL, NEXTCLOUD_URL } from '../playwright.config.js';
  * chat with a reply is listed under the Chats tile and counted on the mode
  * switch, and ticking it off drops it and the count; an app linked to the fake
  * Nextcloud's board shows the card due today, and clicking it opens that app's
- * Deck tab. No issues here: gh isn't available in CI, so those are unit-tested.
+ * Deck tab. No GitHub inbox here: gh isn't available in CI, so that is unit-tested.
  *
  * Apps and chats are created through the API, as the native folder picker can't
  * be driven. The fixture's board is shared with nextcloud-tabs.spec.ts, which

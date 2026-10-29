@@ -1,12 +1,17 @@
 import { useState, type JSX, type ReactNode } from 'react';
-import type { OverviewChat, OverviewDueCard, OverviewIssue, OverviewTile as Tile } from '@otherbench/core/types/overview.js';
+import type { GithubNotification, NotificationKind, OverviewChat, OverviewDueCard, OverviewTile as Tile } from '@otherbench/core/types/overview.js';
 import { formatAge } from '../lib/relativeTime.js';
+import { openInBrowser } from '../desktop/bridge.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
-import { openApp, openCard, openChat, openIssue } from './openFromOverview.js';
+import { doneNotification, openNotification, startChatFromNotification } from './notificationActions.js';
+import { openApp, openCard, openChat } from './openFromOverview.js';
 
-/** Issues shown before "+N more". */
-const ISSUES_SHOWN = 3;
+/** Notifications shown before "+N more". */
+const NOTIFICATIONS_SHOWN = 3;
+
+/** The kind tag on a notification row. */
+const KIND_TAG: Record<NotificationKind, string> = { issue: 'issue', pr: 'PR', ci: 'CI', release: 'release', discussion: 'discussion', other: 'other' };
 
 /** The DOM id a tile carries, so the jump list can scroll to it. */
 export const overviewTileDomId = (key: string): string => `overview-tile-${key}`;
@@ -83,40 +88,57 @@ export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
   );
 }
 
-/** One issue needing you, with its tick-off beside it. */
-export function OverviewIssueRow({ appId, issue }: { appId: string; issue: OverviewIssue }): JSX.Element {
-  const setOverview = useOtherBenchStore((s) => s.setOverview);
-  const age = formatAge(Date.parse(issue.at));
+/**
+ * One notification from the GitHub inbox (spec 2026-10-29-github-inbox-design): its number and title, what it is,
+ * and why and when GitHub notified, bold while unread. Done marks it done on GitHub; Chat, only in an app's tile
+ * since a chat needs the app's folder, starts a chat on it.
+ */
+export function OverviewNotificationRow({ notification: n, appId }: { notification: GithubNotification; appId: string | null }): JSX.Element {
+  const app = useOtherBenchStore((s) => (appId === null ? undefined : s.apps.find((a) => a.id === appId)));
+  const label = `${n.number === null ? '' : `#${n.number} `}${n.title}`;
   return (
     <div className={ROW_WRAP}>
       <button
         type="button"
-        data-testid={`overview-issue-${appId}-${issue.number}`}
+        data-testid={`overview-notification-${n.id}`}
+        data-unread={n.unread || undefined}
         onClick={(e) => {
           e.stopPropagation();
-          openIssue(appId, issue.number, issue.state);
+          openNotification(n, appId);
         }}
         className={ROW_BUTTON}
       >
-        <span className="min-w-0 truncate">
-          {issue.state === 'closed' && <span className="mr-1 rounded-[3px] border border-[var(--border-strong)] px-1 text-[0.65rem] text-[var(--text-muted)]">closed</span>}
-          #{issue.number} {issue.title}
+        <span className={`min-w-0 truncate ${n.unread ? 'font-semibold' : ''}`}>
+          <span className="mr-1 rounded-[3px] border border-[var(--border-strong)] px-1 text-[0.65rem] font-normal text-[var(--text-muted)]">{KIND_TAG[n.kind]}</span>
+          {label}
         </span>
-        <span className={`${MUTED} shrink-0 whitespace-nowrap`}>{issue.kind} · {age}</span>
+        <span className={`${MUTED} shrink-0 whitespace-nowrap`}>
+          {n.reason.replaceAll('_', ' ')} · {formatAge(Date.parse(n.updatedAt))}
+        </span>
       </button>
+      {app && (
+        <button
+          type="button"
+          aria-label={`Start a chat on ${label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            startChatFromNotification(app, n).catch((err: unknown) => console.error(`[otherbench-web] failed to start a chat on notification ${n.id}:`, err));
+          }}
+          className={ACTION}
+        >
+          Chat
+        </button>
+      )}
       <button
         type="button"
-        aria-label={`Tick off #${issue.number}`}
+        aria-label={`Done: ${label}`}
         onClick={(e) => {
           e.stopPropagation();
-          api.overview
-            .tickIssue(appId, issue.number)
-            .then(setOverview)
-            .catch((err: unknown) => console.error(`[otherbench-web] failed to tick off issue #${issue.number}:`, err));
+          void doneNotification(n);
         }}
         className={ACTION}
       >
-        Tick off
+        Done
       </button>
     </div>
   );
@@ -172,22 +194,36 @@ function ChatsSection({ chats, byProject }: { chats: OverviewChat[]; byProject: 
   );
 }
 
-function IssuesSection({ tile, appId }: { tile: Tile; appId: string }): JSX.Element {
+/** `list` grouped by repo, in the order each repo first appears (so the group holding the first unread leads). */
+function byRepo(list: GithubNotification[]): [string, GithubNotification[]][] {
+  const groups = new Map<string, GithubNotification[]>();
+  for (const n of list) groups.set(n.repo, [...(groups.get(n.repo) ?? []), n]);
+  return [...groups.entries()];
+}
+
+function GithubSection({ tile }: { tile: Tile }): JSX.Element {
   const [expanded, setExpanded] = useState(false);
-  const issues = tile.issues ?? [];
-  const shown = expanded ? issues : issues.slice(0, ISSUES_SHOWN);
-  const hidden = issues.length - shown.length;
+  const notifications = tile.notifications ?? [];
+  const shown = expanded ? notifications : notifications.slice(0, NOTIFICATIONS_SHOWN);
+  const hidden = notifications.length - shown.length;
   return (
-    <Section title="Issues needing you">
-      {tile.issuesError !== null ? (
-        <p className={MUTED}>{tile.issuesError}</p>
-      ) : issues.length === 0 ? (
+    <Section title="GitHub">
+      {tile.notificationsError !== null && <p className={MUTED}>{tile.notificationsError}</p>}
+      {notifications.length === 0 && tile.notificationsError === null ? (
         <p className={MUTED}>None</p>
       ) : (
         <>
-          {shown.map((issue) => (
-            <OverviewIssueRow key={issue.number} appId={appId} issue={issue} />
-          ))}
+          {tile.appId !== null
+            ? shown.map((n) => <OverviewNotificationRow key={n.id} notification={n} appId={tile.appId} />)
+            : // The GitHub tile's rows come from several repos: each repo's under its name, as the Chats tile does projects.
+              byRepo(shown).map(([repo, rows]) => (
+                <div key={repo}>
+                  <div className={`${MUTED} pt-1`}>{repo}</div>
+                  {rows.map((n) => (
+                    <OverviewNotificationRow key={n.id} notification={n} appId={null} />
+                  ))}
+                </div>
+              ))}
           {hidden > 0 && (
             <button
               type="button"
@@ -202,6 +238,18 @@ function IssuesSection({ tile, appId }: { tile: Tile; appId: string }): JSX.Elem
             </button>
           )}
         </>
+      )}
+      {tile.notificationsMore && (expanded || hidden === 0) && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            openInBrowser('https://github.com/notifications').catch((err: unknown) => console.error('[otherbench-web] failed to open the GitHub inbox:', err));
+          }}
+          className={`${MUTED} block pt-0.5 underline hover:text-[var(--text)]`}
+        >
+          More on GitHub
+        </button>
       )}
     </Section>
   );
@@ -256,7 +304,7 @@ export function OverviewTile({ tile }: { tile: Tile }): JSX.Element {
         {tile.count > 0 && <span className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">{tile.count}</span>}
       </div>
       {tile.chats.length > 0 && <ChatsSection chats={tile.chats} byProject={appId === null} />}
-      {appId !== null && tile.issues !== null && <IssuesSection tile={tile} appId={appId} />}
+      {tile.notifications !== null && <GithubSection tile={tile} />}
       {appId !== null && tile.deck !== null && <DeckSection tile={tile} appId={appId} />}
       {tile.faded && <p className={`${MUTED} pt-1`}>Nothing needs you</p>}
     </div>
