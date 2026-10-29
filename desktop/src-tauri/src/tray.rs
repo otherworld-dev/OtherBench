@@ -6,10 +6,11 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
-/// Brings the main window back from the tray and tells the web app, which
-/// opens the chat it last sent a notification about: desktop notifications
-/// don't report clicks, so this is how one gets acted on.
+/// Brings the main window back from the tray, with any undocked ones, and
+/// tells the web app, which opens the chat it last sent a notification about:
+/// desktop notifications don't report clicks, so this is how one gets acted on.
 fn open_from_tray(app: &AppHandle) {
+    crate::docks::show_all(app);
     show_main(app);
     let _ = app.emit_to("main", "tray-open", ());
 }

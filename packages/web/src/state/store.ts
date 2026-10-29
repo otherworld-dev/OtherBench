@@ -16,6 +16,8 @@ import type { Bookmark, DeckBoardView, DeckCardDetail, WikiPage, WikiTree } from
 import { parseViewTab } from '../viewer/items.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
+import { openIn, showWindow } from '../desktop/bridge.js';
+import { loadUndocked, windowForMode, windowRole, type DockView, type OpenRequest, type WindowRole } from '../desktop/windows.js';
 import {
   closeTab as closePaneTab,
   CODE_PANE_STATE_STORAGE_KEY,
@@ -233,7 +235,14 @@ export interface OtherBenchState {
   setOverview(overview: Overview): void;
   /** The Overview window is showing instead of the panes. Closed by choosing any chat, tab, mode or app home. Remembered per browser. */
   overviewOpen: boolean;
+  /** Opening it while it is undocked brings its own window forward instead. */
   setOverviewOpen(open: boolean): void;
+  /**
+   * The views in windows of their own (desktop/windows.ts), as the shell last said. The main window
+   * leaves Code mode while Code is undocked and closes the Overview while that is.
+   */
+  undocked: DockView[];
+  setUndocked(views: DockView[]): void;
   /** Shows the app's home (`appTabId`) in the focused pane in Code mode, switching to Code mode first. Not as a tab. */
   openAppHome(appId: string): void;
   /** The Code mode right panel's tab. Remembered per browser. */
@@ -549,7 +558,55 @@ function movedModes(before: Chat | undefined, after: Chat): Chat[] {
   return before !== undefined && modeOfChat(before) !== modeOfChat(after) ? [after] : [];
 }
 
-const initialMode = loadMode();
+/** This page's window (desktop/windows.ts): the main one, or an undocked Code or Overview window. */
+export const WINDOW_ROLE: WindowRole = windowRole();
+
+const initialUndocked = loadUndocked();
+
+/**
+ * Whether this window holds both modes: only the main one, and only while Code is docked. A window
+ * holding one mode never saves the other's pane state or the mode, since the window that holds them does.
+ */
+const holdsBoth = (undocked: readonly DockView[]): boolean => WINDOW_ROLE === 'main' && !undocked.includes('code');
+
+/** Set while this window opens what another handed it (`openHandedOver`). */
+let handedOver = false;
+
+/**
+ * Opens here what another window handed over: whatever this window's undocked list says, it is never
+ * passed on again, so two windows that disagree can't send a request back and forth for ever.
+ */
+export function openHandedOver(open: () => void): void {
+  handedOver = true;
+  try {
+    open();
+  } finally {
+    handedOver = false;
+  }
+}
+
+/**
+ * Hands `request` to the window holding `mode` when that isn't this one, and says so: then the caller
+ * changes nothing here. The Overview window holds no mode, so everything it opens goes elsewhere.
+ * Something handed over from another window is always opened here (`openHandedOver`).
+ */
+export function sentElsewhere(mode: Mode, request: OpenRequest): boolean {
+  if (handedOver) return false;
+  const target = windowForMode(mode, useOtherBenchStore.getState().undocked, WINDOW_ROLE);
+  if (target === WINDOW_ROLE) return false;
+  openIn(target, request).catch((err: unknown) => console.error(`[otherbench-web] failed to open that in the ${target} window:`, err));
+  return true;
+}
+
+/** Brings forward the window holding `mode` when that isn't this one, and says so. */
+function shownElsewhere(mode: Mode, undocked: readonly DockView[]): boolean {
+  const target = windowForMode(mode, undocked, WINDOW_ROLE);
+  if (target === WINDOW_ROLE) return false;
+  showWindow(target).catch((err: unknown) => console.error(`[otherbench-web] failed to bring the ${target} window forward:`, err));
+  return true;
+}
+
+const initialMode: Mode = WINDOW_ROLE === 'code' ? 'code' : holdsBoth(initialUndocked) ? loadMode() : 'chat';
 const initialPanes = loadPaneState(paneStateKey(initialMode));
 const initialOtherPanes = loadPaneState(paneStateKey(otherMode(initialMode)));
 
@@ -822,11 +879,13 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   chats: [],
   activeChatId: initialPanes.panes[initialPanes.focusedPane] ?? null,
   paneState: initialPanes,
-  openTab: (chatId) =>
+  openTab: (chatId) => {
+    if (sentElsewhere(modeOfTab(chatId, get().chats) ?? get().mode, { kind: 'tab', chatId })) return;
     set((state) => {
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
       return { ...view, overviewOpen: false, ...withPanes(openPaneTab(synced(view), chatId)) };
-    }),
+    });
+  },
   // A closed viewer tab can hand its pane back to its chat, so the active chat follows the pane.
   closeTab: (chatId) => set((state) => withPanes(closePaneTab(synced(state), chatId))),
   moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
@@ -859,11 +918,13 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       };
     }),
   // Fills the focused pane, or focuses the pane already showing the chat, in the chat's own mode.
-  setActiveChatId: (chatId) =>
+  setActiveChatId: (chatId) => {
+    if (chatId !== null && sentElsewhere(modeOfTab(chatId, get().chats) ?? get().mode, { kind: 'chat', chatId })) return;
     set((state) => {
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
       return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), chatId)) };
-    }),
+    });
+  },
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
@@ -1051,17 +1112,40 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     })),
   mode: initialMode,
   otherPaneState: initialOtherPanes,
-  setMode: (mode) => set((state) => ({ ...inMode(state, mode), overviewOpen: false })),
+  setMode: (mode) => {
+    if (shownElsewhere(mode, get().undocked)) return;
+    set((state) => ({ ...inMode(state, mode), overviewOpen: false }));
+  },
   overview: null,
   setOverview: (overview) => set({ overview }),
-  overviewOpen: loadOverviewOpen(),
-  setOverviewOpen: (open) => set({ overviewOpen: open }),
-  openAppHome: (appId) =>
+  // Only the main window's choice is remembered; an undocked Overview isn't open in any other.
+  overviewOpen: WINDOW_ROLE === 'main' && !initialUndocked.includes('overview') && loadOverviewOpen(),
+  setOverviewOpen: (open) => {
+    if (open && get().undocked.includes('overview') && WINDOW_ROLE !== 'overview') {
+      showWindow('overview').catch((err: unknown) => console.error('[otherbench-web] failed to bring the Overview window forward:', err));
+      return;
+    }
+    set({ overviewOpen: open });
+  },
+  undocked: initialUndocked,
+  setUndocked: (views) =>
+    set((state) => {
+      if (WINDOW_ROLE !== 'main') return { undocked: views };
+      const codeOut = views.includes('code');
+      // Code left: the main window goes back to Chat mode, Code's pane state put away as it was (already saved).
+      // Code came back: its pane state is read again, as the Code window left it.
+      const modes = codeOut && state.mode === 'code' ? inMode(state, 'chat') : {};
+      const codeBack = !codeOut && state.undocked.includes('code') && state.mode === 'chat' ? { otherPaneState: loadPaneState(paneStateKey('code')) } : {};
+      return { undocked: views, ...modes, ...codeBack, ...(views.includes('overview') ? { overviewOpen: false } : {}) };
+    }),
+  openAppHome: (appId) => {
+    if (sentElsewhere('code', { kind: 'home', appId })) return;
     set((state) => {
       const view = inMode(state, 'code');
       // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
       return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), appTabId(appId))) };
-    }),
+    });
+  },
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),
   terminalsChanged: null,
@@ -1368,13 +1452,15 @@ export const selectPendingApprovalCount = (s: OtherBenchState): number => Object
 
 // Tabs, layout and panes (each mode's under its own key), the mode, the Code panel's tab and whether the
 // inspector is collapsed are remembered on this device; the notes this tab sent, in this tab. A mode switch
-// swaps which state is showing, so both are saved again then, each under its mode's key.
+// swaps which state is showing, so both are saved again then, each under its mode's key. A window holding
+// one mode (`holdsBoth`) saves only that mode's, and the Overview window none.
 useOtherBenchStore.subscribe((state, previous) => {
   const switched = state.mode !== previous.mode;
-  if (switched || state.paneState !== previous.paneState) savePaneState(state.paneState, paneStateKey(state.mode));
-  if (switched || state.otherPaneState !== previous.otherPaneState) savePaneState(state.otherPaneState, paneStateKey(otherMode(state.mode)));
-  if (switched) saveMode(state.mode);
-  if (state.overviewOpen !== previous.overviewOpen) saveOverviewOpen(state.overviewOpen);
+  const both = holdsBoth(state.undocked);
+  if (WINDOW_ROLE !== 'overview' && (switched || state.paneState !== previous.paneState)) savePaneState(state.paneState, paneStateKey(state.mode));
+  if (both && (switched || state.otherPaneState !== previous.otherPaneState)) savePaneState(state.otherPaneState, paneStateKey(otherMode(state.mode)));
+  if (both && switched) saveMode(state.mode);
+  if (WINDOW_ROLE === 'main' && state.overviewOpen !== previous.overviewOpen) saveOverviewOpen(state.overviewOpen);
   if (state.codePanelTab !== previous.codePanelTab) saveCodePanelTab(state.codePanelTab);
   if (state.issueViews !== previous.issueViews) saveIssueViews(state.issueViews);
   if (state.deckViews !== previous.deckViews) saveViews(DECK_VIEWS_STORAGE_KEY, state.deckViews);

@@ -170,7 +170,7 @@ impl Desktop for WinDesktop {
 
     fn channel_off(&self) {
         self.tooltip(Some(crate::tray::COMPUTER_OFF_TOOLTIP.to_string()));
-        let _ = crate::notify::show(&self.app, "OtherBench", "Computer use is off until OtherBench restarts.", None, None);
+        let _ = crate::notify::show(&self.app, "OtherBench", "Computer use is off until OtherBench restarts.", None, None, "main".to_string());
     }
 
     fn indicator_action(&self, label: &str) {

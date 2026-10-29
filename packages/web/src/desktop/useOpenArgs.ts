@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { api } from '../state/api.js';
-import { useOtherBenchStore } from '../state/store.js';
+import { useOtherBenchStore, WINDOW_ROLE } from '../state/store.js';
 import { isDesktop, launchArgs, onDesktopEvent } from './bridge.js';
 import { parseOpenArgs } from './openArgs.js';
 
@@ -40,10 +40,10 @@ export async function handleOpenArgs(argv: string[]): Promise<void> {
   }
 }
 
-/** Runs `handleOpenArgs` for this launch's arguments and every later launch's. Desktop only. */
+/** Runs `handleOpenArgs` for this launch's arguments and every later launch's. Desktop only, in the main window. */
 export function useOpenArgs(ready: boolean): void {
   useEffect(() => {
-    if (!ready || !isDesktop()) return;
+    if (!ready || !isDesktop() || WINDOW_ROLE !== 'main') return;
     let off: (() => void) | null = null;
     let disposed = false;
     const run = (argv: string[]): void => {

@@ -146,9 +146,9 @@ describe('desktop bridge', () => {
 
     invoke.mockResolvedValue(undefined);
     await showNotification('Trip', 'Reply finished', 'c1');
-    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1', revealPath: null });
+    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1', revealPath: null, window: 'main' });
     await showNotification('Download complete', 'x.md is in Downloads', null, 'C:/Users/a/Downloads/x.md');
-    expect(invoke).toHaveBeenLastCalledWith('show_notification', { title: 'Download complete', body: 'x.md is in Downloads', chatId: null, revealPath: 'C:/Users/a/Downloads/x.md' });
+    expect(invoke).toHaveBeenLastCalledWith('show_notification', { title: 'Download complete', body: 'x.md is in Downloads', chatId: null, revealPath: 'C:/Users/a/Downloads/x.md', window: 'main' });
   });
 
   it('saveDownload sends the bytes raw with the name percent-encoded in a header, and returns the path; null in a browser', async () => {
@@ -199,6 +199,13 @@ describe('desktop bridge', () => {
     expect(listen.mock.calls[0]![0]).toBe('open-args');
     expect(cb).toHaveBeenCalledWith(['otherbench.exe', '--send', 'a.png']);
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDesktopEvent hears only this window's events, never ones sent to another window", async () => {
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'code' } } };
+    listen.mockResolvedValue(vi.fn());
+    await onDesktopEvent('open-request', vi.fn());
+    expect(listen.mock.calls[0]![2]).toEqual({ target: 'code' });
   });
 
   it('autostart wraps the plugin', async () => {

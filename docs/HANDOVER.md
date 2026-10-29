@@ -269,6 +269,25 @@ of work landed after that plan closed out:
   (`open_chat`); `Esc` hides the window, keeping the chat. Settings →
   Desktop changes the hotkey (stored per device); a key another app holds is
   reported there and the previous one put back.
+- **Undocked windows.** Code mode and the Overview can each move to a window
+  of their own (`desktop/src-tauri/src/docks.rs`, labels and `?view=` `code`
+  and `overview`), so chat and code sit on separate screens. The button beside
+  the sidebar's mode switch undocks what is showing (Code, or the Overview), or
+  in the Code window docks it back; closing an undocked window docks it too.
+  The shell keeps the list in `undocked.json` (changed only by undock, dock and
+  a user close, so quitting keeps them) and reopens them at launch where they
+  were (`tauri-plugin-window-state`, for those two windows only), emitting
+  `docks-changed` to every window. In the web app (`desktop/windows.ts`) each
+  window knows its role: the Code window is locked to Code mode; the main
+  window leaves Code mode while Code is out, and saves neither Code's pane
+  state nor the mode then (it reads Code's back on docking); the Overview
+  window shows only the Overview. Opening something whose mode lives in another
+  window (`store.sentElsewhere`: a chat, tab, app home, or an Overview issue or
+  card) goes there through `open_in` and brings it forward; choosing a mode or
+  the Overview that is out brings its window forward. Only the main window
+  registers the hotkey, keeps the tray, acts on launch arguments and raises
+  notifications; a notification's click opens its chat in the window holding
+  it, and is skipped only while that window has focus. Not in a browser.
 - **Sandboxed shell** (spec `docs/superpowers/specs/2026-10-12-sandbox-design.md`):
   a profile's "Shell runs" can be "in the sandbox", an OtherBench-owned WSL2 distro
   (`otherbench-sandbox`) where each command runs under `@anthropic-ai/sandbox-runtime`

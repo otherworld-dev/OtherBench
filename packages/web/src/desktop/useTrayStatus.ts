@@ -3,6 +3,7 @@ import type { PeersOverview } from '../state/api.js';
 import { refreshMachines } from '../state/machines.js';
 import { selectPendingApprovalCount, useOtherBenchStore } from '../state/store.js';
 import { peerStatusText } from '../views/settings/MachinesPanel.js';
+import { WINDOW_ROLE } from '../state/store.js';
 import { isDesktop, setTrayStatus } from './bridge.js';
 
 /** How often the tray's "synced 2 min ago" is brought up to date (the machines list is re-read too). */
@@ -36,14 +37,15 @@ export function trayMachineLines(machines: PeersOverview | null, now: number): s
  * Keeps the desktop tray current while the window is hidden: its tooltip
  * shows how many tool calls are waiting for approval anywhere in the app
  * (from the app-wide event stream), and its menu each paired machine's
- * status. Nothing happens in a browser.
+ * status. Nothing happens in a browser, or in an undocked window: the main
+ * window, always running while OtherBench is, keeps the tray.
  */
 export function useTrayStatus(): void {
   const pending = useOtherBenchStore(selectPendingApprovalCount);
   const machines = useOtherBenchStore((s) => s.machines);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!isDesktop()) return;
+    if (!isDesktop() || WINDOW_ROLE !== 'main') return;
     // The machines list only changes on events; a sync that brought nothing
     // new sends none, so it's re-read here to keep "synced N min ago" true.
     const timer = setInterval(() => {
@@ -55,6 +57,7 @@ export function useTrayStatus(): void {
   const lines = trayMachineLines(machines, now);
   const linesKey = lines.join('\n');
   useEffect(() => {
+    if (WINDOW_ROLE !== 'main') return;
     setTrayStatus(pending, lines).catch((err: unknown) => console.error('[otherbench-web] failed to update the tray status:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `lines` is compared by its text (linesKey), not its identity.
   }, [pending, linesKey]);

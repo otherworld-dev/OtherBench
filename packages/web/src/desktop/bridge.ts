@@ -21,15 +21,27 @@ export async function desktopBootstrap(): Promise<TransportConfig | null> {
   return invoke<TransportConfig>('bootstrap');
 }
 
+/** This window's label in the shell (main, quick, code, overview...), if it says. */
+function windowLabel(): string | undefined {
+  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
+  return internals?.metadata?.currentWindow?.label;
+}
+
 /**
  * Subscribes to an event the shell emits (e.g. `tray-new-chat` from the
  * tray menu). Resolves to the unsubscribe function; in a browser that is a
  * no-op and nothing is ever delivered.
+ *
+ * Only events for this window arrive: ones sent to it and ones sent to every
+ * window. Tauri's `listen` hears an event sent to any window by default, so
+ * with more than one app window (an undocked Code or Overview) a request meant
+ * for one would be acted on by all of them.
  */
 export async function onDesktopEvent<T = unknown>(name: string, cb: (payload: T) => void): Promise<() => void> {
   if (!isDesktop()) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
-  return listen<T>(name, (event) => cb(event.payload));
+  const label = windowLabel();
+  return listen<T>(name, (event) => cb(event.payload), label === undefined ? undefined : { target: label });
 }
 
 /** Opens the native folder picker. The chosen absolute path, or null if cancelled or outside the desktop app. */
@@ -58,7 +70,7 @@ export async function setTrayStatus(pendingApprovals: number, machines: string[]
   await invoke('set_tray_status', { pendingApprovals, machines });
 }
 
-/** Whether the main window has focus. Always true in a browser, where OtherBench never notifies. */
+/** Whether this window has focus. Always true in a browser, where OtherBench never notifies. */
 export async function isMainWindowFocused(): Promise<boolean> {
   if (!isDesktop()) return true;
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -67,13 +79,14 @@ export async function isMainWindowFocused(): Promise<boolean> {
 
 /**
  * Shows a desktop notification through the shell (desktop/src-tauri/src/notify.rs).
- * On Windows clicking it opens `chatId` in the main window, or, with `revealPath` (a
- * file in Downloads), shows that file in Explorer. No-op in a browser.
+ * On Windows clicking it opens `chatId` in `window` (the main one unless the chat's
+ * mode is undocked), or, with `revealPath` (a file in Downloads), shows that file
+ * in Explorer. No-op in a browser.
  */
-export async function showNotification(title: string, body: string, chatId: string | null = null, revealPath: string | null = null): Promise<void> {
+export async function showNotification(title: string, body: string, chatId: string | null = null, revealPath: string | null = null, window: 'main' | 'code' = 'main'): Promise<void> {
   if (!isDesktop()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('show_notification', { title, body, chatId, revealPath });
+  await invoke('show_notification', { title, body, chatId, revealPath, window });
 }
 
 /**
@@ -118,8 +131,7 @@ export async function openChatInMain(chatId: string): Promise<void> {
 export function isQuickView(): boolean {
   if (typeof window === 'undefined') return false;
   if (new URLSearchParams(window.location.search).get('view') === 'quick') return true;
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label === 'quick';
+  return windowLabel() === 'quick';
 }
 
 /**
@@ -129,8 +141,7 @@ export function isQuickView(): boolean {
 export function isIndicatorView(): boolean {
   if (typeof window === 'undefined') return false;
   if (new URLSearchParams(window.location.search).get('view') === 'indicator') return true;
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label === 'computer-indicator';
+  return windowLabel() === 'computer-indicator';
 }
 
 /** The indicator bar's Stop: the shell ends computer-use control and tells the server. */
@@ -176,4 +187,46 @@ export async function openFolder(path: string): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('open_folder', { path });
   return true;
+}
+
+/** Opens `view` in its own window (desktop/src-tauri/src/docks.rs), or brings that window forward. */
+export async function undock(view: 'code' | 'overview'): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('undock', { view });
+}
+
+/** Puts `view` back in the main window: its own window closes. */
+export async function dock(view: 'code' | 'overview'): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('dock', { view });
+}
+
+/** The views in windows of their own, as the shell has them; none in a browser. */
+export async function undockedViews(): Promise<unknown> {
+  if (!isDesktop()) return [];
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<unknown>('undocked');
+}
+
+/** Brings one of the app's windows (main, code or overview) forward. */
+export async function showWindow(label: 'main' | 'code' | 'overview'): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('show_window', { window: label });
+}
+
+/** Hands `request` to the window `label` and brings it forward; it opens there (desktop/windows.ts `OpenRequest`). */
+export async function openIn(label: 'main' | 'code', request: unknown): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_in', { window: label, request });
+}
+
+/** Which of the app's windows has focus: main, code, overview, or null for none. Always main in a browser. */
+export async function focusedWindow(): Promise<string | null> {
+  if (!isDesktop()) return 'main';
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string | null>('focused_window');
 }

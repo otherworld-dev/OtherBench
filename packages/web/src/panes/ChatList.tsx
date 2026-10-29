@@ -4,9 +4,10 @@ import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-import { FolderPlusIcon, PinIcon } from '../components/icons.js';
+import { DockIcon, FolderPlusIcon, PinIcon, PopOutIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
-import { onDesktopEvent } from '../desktop/bridge.js';
+import { dock, onDesktopEvent, undock } from '../desktop/bridge.js';
+import { inDesktopApp, windowForMode, type DockView } from '../desktop/windows.js';
 import { saveFile } from '../lib/saveFile.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { useNow } from '../lib/useNow.js';
@@ -19,7 +20,7 @@ import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { OverviewJumpList } from '../overview/OverviewJumpList.js';
-import { selectOverviewTotal, useOtherBenchStore } from '../state/store.js';
+import { selectOverviewTotal, useOtherBenchStore, WINDOW_ROLE } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { appMenuItems, chatMenuItems, folderMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
@@ -159,6 +160,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
   const setOverviewOpen = useOtherBenchStore((s) => s.setOverviewOpen);
   const overviewTotal = useOtherBenchStore(selectOverviewTotal);
+  const undocked = useOtherBenchStore((s) => s.undocked);
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
@@ -1261,38 +1263,77 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }
 
+  // Undocked windows (desktop/windows.ts): a mode or the Overview in a window of its own is marked so,
+  // and choosing it brings that window forward (the store's setMode and setOverviewOpen do).
+  const modeElsewhere = (m: Mode): boolean => windowForMode(m, undocked, WINDOW_ROLE) !== WINDOW_ROLE;
+  const overviewElsewhere = undocked.includes('overview');
+  const elsewhereMark = <PopOutIcon className="h-3 w-3 shrink-0 opacity-70" />;
+  // What the button beside the switch does with what is showing: the Overview or Code mode out to a
+  // window of its own, or, in the Code window, Code back into the main one. Chat mode stays in the main window.
+  const dockAction: { view: DockView; out: boolean; label: string } | null = !inDesktopApp()
+    ? null
+    : overviewOpen
+      ? { view: 'overview', out: true, label: 'Open the Overview in its own window' }
+      : WINDOW_ROLE === 'code'
+        ? { view: 'code', out: false, label: 'Put Code back in the main window' }
+        : mode === 'code'
+          ? { view: 'code', out: true, label: 'Open Code in its own window' }
+          : null;
+
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
-        <div role="group" aria-label="Mode" data-testid="mode-switch" className="mb-2 grid grid-cols-3 gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
-          {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
+        <div className="mb-2 flex items-stretch gap-1">
+          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
+            {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={mode === m && !overviewOpen && !modeElsewhere(m)}
+                onClick={() => setMode(m)}
+                title={modeElsewhere(m) ? `${m === 'chat' ? 'Chat' : 'Code'} is in its own window` : undefined}
+                className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
+                  mode === m && !overviewOpen && !modeElsewhere(m) ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                }`}
+              >
+                {m === 'chat' ? 'Chat' : 'Code'}
+                {modeElsewhere(m) && elsewhereMark}
+              </button>
+            ))}
             <button
-              key={m}
               type="button"
-              aria-pressed={mode === m && !overviewOpen}
-              onClick={() => setMode(m)}
-              className={`rounded-[3px] px-2 py-1 text-xs ${
-                mode === m && !overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              aria-pressed={overviewOpen}
+              onClick={() => setOverviewOpen(true)}
+              title={overviewElsewhere ? 'The Overview is in its own window' : undefined}
+              className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
+                overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
               }`}
             >
-              {m === 'chat' ? 'Chat' : 'Code'}
+              Overview
+              {overviewTotal > 0 && (
+                <span data-testid="overview-count" className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
+                  {overviewTotal}
+                </span>
+              )}
+              {overviewElsewhere && elsewhereMark}
             </button>
-          ))}
-          <button
-            type="button"
-            aria-pressed={overviewOpen}
-            onClick={() => setOverviewOpen(true)}
-            className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
-              overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-            }`}
-          >
-            Overview
-            {overviewTotal > 0 && (
-              <span data-testid="overview-count" className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
-                {overviewTotal}
-              </span>
-            )}
-          </button>
+          </div>
+          {dockAction && (
+            <button
+              type="button"
+              data-testid="dock-toggle"
+              aria-label={dockAction.label}
+              title={dockAction.label}
+              onClick={() => {
+                (dockAction.out ? undock(dockAction.view) : dock(dockAction.view)).catch((err: unknown) =>
+                  console.error(`[otherbench-web] failed to ${dockAction.out ? 'undock' : 'dock'} ${dockAction.view}:`, err),
+                );
+              }}
+              className="btn shrink-0 px-1.5"
+            >
+              {dockAction.out ? <PopOutIcon /> : <DockIcon />}
+            </button>
+          )}
         </div>
         {!codeMode && draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
           <div

@@ -1,8 +1,9 @@
 import { useEffect, useState, type JSX } from 'react';
 import { CodePanel } from './code/CodePanel.js';
 import { Toaster } from './components/Toaster.js';
-import { ChartIcon, ClockIcon, GearIcon, SignOutIcon } from './components/icons.js';
-import { isIndicatorView, isQuickView } from './desktop/bridge.js';
+import { ChartIcon, ClockIcon, DockIcon, GearIcon, SignOutIcon } from './components/icons.js';
+import { dock, isIndicatorView, isQuickView } from './desktop/bridge.js';
+import { useDocks } from './desktop/useDocks.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
@@ -14,7 +15,7 @@ import { useTerminalShortcuts } from './code/terminal/useTerminalShortcuts.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useAuthStore } from './state/auth.js';
-import { useOtherBenchStore } from './state/store.js';
+import { useOtherBenchStore, WINDOW_ROLE } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
@@ -33,29 +34,27 @@ import { SchedulesView } from './views/SchedulesView.js';
 import { UsageView } from './views/UsageView.js';
 
 /**
- * The quick-chat window gets its own small view (`?view=quick`), and so does
- * the computer-use indicator bar (`?view=indicator`); everything else is the
- * main app.
+ * The quick-chat window gets its own small view (`?view=quick`), and so do
+ * the computer-use indicator bar (`?view=indicator`) and an undocked Overview
+ * (`?view=overview`); everything else is the main app, an undocked Code
+ * window included (locked to Code mode by the store).
  */
 export function App(): JSX.Element {
   if (isIndicatorView()) return <IndicatorView />;
-  return isQuickView() ? <QuickChat /> : <MainApp />;
+  if (isQuickView()) return <QuickChat />;
+  return WINDOW_ROLE === 'overview' ? <OverviewWindow /> : <MainApp />;
 }
 
-function MainApp(): JSX.Element {
-  const chats = useOtherBenchStore((s) => s.chats);
-  const profiles = useOtherBenchStore((s) => s.profiles);
-  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
-  const inspectorCollapsed = useOtherBenchStore((s) => s.inspectorCollapsed);
-  const setInspectorCollapsed = useOtherBenchStore((s) => s.setInspectorCollapsed);
-  const projectPage = useOtherBenchStore((s) => s.projectPage);
-  const closeProjectPage = useOtherBenchStore((s) => s.closeProjectPage);
-  const appPage = useOtherBenchStore((s) => s.appPage);
-  const closeAppPage = useOtherBenchStore((s) => s.closeAppPage);
-  const schedulesPage = useOtherBenchStore((s) => s.schedulesPage);
-  const openSchedules = useOtherBenchStore((s) => s.openSchedules);
-  const closeSchedules = useOtherBenchStore((s) => s.closeSchedules);
-
+/**
+ * Initial reference-data + chat-list load. Individual failures are logged,
+ * not thrown -- a transient failure here shouldn't blank the whole shell;
+ * panes render their own empty states off whatever did load. But if ALL
+ * of them fail, that's not "nothing configured yet", it's "can't reach the
+ * server at all", and `unreachable` says so for the banner instead of
+ * silently rendering the fresh-install empty state. `loaded` is set once the
+ * load has settled, so launch arguments act with the profiles loaded.
+ */
+function useInitialLoad(): { unreachable: boolean; loaded: boolean } {
   const setConnections = useOtherBenchStore((s) => s.setConnections);
   const setModels = useOtherBenchStore((s) => s.setModels);
   const setProfiles = useOtherBenchStore((s) => s.setProfiles);
@@ -63,46 +62,13 @@ function MainApp(): JSX.Element {
   const setProjects = useOtherBenchStore((s) => s.setProjects);
   const setApps = useOtherBenchStore((s) => s.setApps);
   const setAppFolders = useOtherBenchStore((s) => s.setAppFolders);
-  const mode = useOtherBenchStore((s) => s.mode);
-  const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
 
-  // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
-  const signedInRemotely = useAuthStore((s) => s.mode === 'login');
-  const signOut = useAuthStore((s) => s.signOut);
-
-  const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
-  // Separate from `inspectorCollapsed` (the docked-mode show/hide
-  // preference): whether the narrow-mode overlay is currently open. In the
-  // store so each pane's header can open it; ephemeral, and starts closed
-  // regardless of the docked preference, or the inspector would pop over the
-  // thread the instant the window narrows.
-  const narrowOverlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
-  const setNarrowOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
-  // Task 28: the global usage/pricing settings view -- a full-screen
-  // overlay, ephemeral like the narrow inspector overlay above (there is no
-  // "docked" mode for it, and no reason to remember it across reloads).
-  const [usageViewOpen, setUsageViewOpen] = useState(false);
-  // Connections/models/profiles settings -- same ephemeral full-screen
-  // overlay pattern as usageViewOpen above (see SettingsView's doc comment).
-  const [settingsViewOpen, setSettingsViewOpen] = useState(false);
-
-  // Set only when EVERY bootstrap fetch below fails -- a cold load with the
-  // server unreachable renders otherwise-identically to a genuinely fresh
-  // install ("No chats yet...", "+ New chat" disabled): both are just empty
-  // arrays sitting in the store. A single failed fetch alongside others that
-  // succeeded is left alone (console.error only, as before) since that's a
-  // partial/transient hiccup, not "there is no server to talk to" -- see
-  // task 19/20 brief.
+  // A single failed fetch alongside others that succeeded is left alone
+  // (console.error only) since that's a partial/transient hiccup, not "there
+  // is no server to talk to" -- see task 19/20 brief.
   const [unreachable, setUnreachable] = useState(false);
-  // Set once the first load has settled, so launch arguments act with the profiles loaded.
   const [loaded, setLoaded] = useState(false);
 
-  // Initial reference-data + chat-list load. Individual failures are logged,
-  // not thrown -- a transient failure here shouldn't blank the whole shell;
-  // panes render their own empty states off whatever did load. But if ALL
-  // of them fail, that's not "nothing configured yet", it's "can't reach the
-  // server at all", and the banner above says so explicitly instead of
-  // silently rendering the fresh-install empty state.
   useEffect(() => {
     let cancelled = false;
 
@@ -129,8 +95,82 @@ function MainApp(): JSX.Element {
     };
   }, [setConnections, setModels, setProfiles, setChats, setProjects, setApps, setAppFolders]);
 
+  return { unreachable, loaded };
+}
+
+/**
+ * The Overview in a window of its own (desktop/windows.ts): just the Overview, kept current from the
+ * event stream like the main window's. What it opens goes to the window that holds it.
+ */
+function OverviewWindow(): JSX.Element {
+  useInitialLoad();
   useAppEvents();
   useOverview();
+  useDocks();
+  useTextSizeShortcuts();
+  return (
+    <div className="h-screen overflow-hidden">
+      <Toaster />
+      <OverviewView
+        action={
+          <button
+            type="button"
+            data-testid="dock-toggle"
+            onClick={() => dock('overview').catch((err: unknown) => console.error('[otherbench-web] failed to dock the Overview:', err))}
+            aria-label="Put the Overview back in the main window"
+            title="Put the Overview back in the main window"
+            className="btn px-1.5 py-0.5"
+          >
+            <DockIcon />
+          </button>
+        }
+      />
+    </div>
+  );
+}
+
+function MainApp(): JSX.Element {
+  const chats = useOtherBenchStore((s) => s.chats);
+  const profiles = useOtherBenchStore((s) => s.profiles);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
+  const inspectorCollapsed = useOtherBenchStore((s) => s.inspectorCollapsed);
+  const setInspectorCollapsed = useOtherBenchStore((s) => s.setInspectorCollapsed);
+  const projectPage = useOtherBenchStore((s) => s.projectPage);
+  const closeProjectPage = useOtherBenchStore((s) => s.closeProjectPage);
+  const appPage = useOtherBenchStore((s) => s.appPage);
+  const closeAppPage = useOtherBenchStore((s) => s.closeAppPage);
+  const schedulesPage = useOtherBenchStore((s) => s.schedulesPage);
+  const openSchedules = useOtherBenchStore((s) => s.openSchedules);
+  const closeSchedules = useOtherBenchStore((s) => s.closeSchedules);
+
+  const mode = useOtherBenchStore((s) => s.mode);
+  const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
+
+  // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
+  const signedInRemotely = useAuthStore((s) => s.mode === 'login');
+  const signOut = useAuthStore((s) => s.signOut);
+
+  const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
+  // Separate from `inspectorCollapsed` (the docked-mode show/hide
+  // preference): whether the narrow-mode overlay is currently open. In the
+  // store so each pane's header can open it; ephemeral, and starts closed
+  // regardless of the docked preference, or the inspector would pop over the
+  // thread the instant the window narrows.
+  const narrowOverlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
+  const setNarrowOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
+  // Task 28: the global usage/pricing settings view -- a full-screen
+  // overlay, ephemeral like the narrow inspector overlay above (there is no
+  // "docked" mode for it, and no reason to remember it across reloads).
+  const [usageViewOpen, setUsageViewOpen] = useState(false);
+  // Connections/models/profiles settings -- same ephemeral full-screen
+  // overlay pattern as usageViewOpen above (see SettingsView's doc comment).
+  const [settingsViewOpen, setSettingsViewOpen] = useState(false);
+
+  const { unreachable, loaded } = useInitialLoad();
+
+  useAppEvents();
+  useOverview();
+  useDocks();
   useTrayStatus();
   useOpenArgs(loaded);
   useDesktopShell();
