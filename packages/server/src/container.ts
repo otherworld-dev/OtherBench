@@ -22,6 +22,7 @@ import { ProviderRegistry } from '@otherbench/engine-aisdk/registry.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '@otherbench/engine-claude-code/engine.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { backupBeforeMigration } from '@otherbench/store-sqlite/backup.js';
 import { openDatabase } from '@otherbench/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@otherbench/store-sqlite/secret-store.js';
@@ -346,6 +347,13 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
 async function openContainer(options: ContainerOptions): Promise<Container> {
   const db = openDatabase(options.dbPath);
+  // An update that brings a migration leaves the old database beside the new one (throws, so nothing migrates, if it can't).
+  try {
+    backupBeforeMigration(db, options.dbPath, SCHEMA_VERSION);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   runMigrations(db);
   // Every chat change, whoever makes it, is announced on the app-wide stream.
   const events = new AppEventBus();
