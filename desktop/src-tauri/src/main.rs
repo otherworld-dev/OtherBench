@@ -181,6 +181,38 @@ async fn focused_window(app: tauri::AppHandle) -> Option<String> {
         .map(str::to_string)
 }
 
+/// What the updater is doing (update.rs), for Settings → Desktop.
+#[tauri::command]
+async fn update_status(updates: tauri::State<'_, Arc<update::Updates>>) -> Result<update::UpdateStatus, String> {
+    Ok(updates.status())
+}
+
+#[tauri::command]
+async fn update_check_now(updates: tauri::State<'_, Arc<update::Updates>>) -> Result<(), String> {
+    updates.check_now();
+    Ok(())
+}
+
+/// "Get beta releases early", kept for this machine only.
+#[tauri::command]
+async fn update_set_beta(updates: tauri::State<'_, Arc<update::Updates>>, beta: bool) -> Result<(), String> {
+    updates.set_beta(beta)
+}
+
+/// "Restart and update now", once an update is ready.
+#[tauri::command]
+async fn update_install_now(updates: tauri::State<'_, Arc<update::Updates>>) -> Result<(), String> {
+    updates.install_now();
+    Ok(())
+}
+
+/// Input in an app window, and whether a composer holds unsent text: the updater installs only once Adam is away.
+#[tauri::command]
+async fn update_activity(updates: tauri::State<'_, Arc<update::Updates>>, unsent: bool) -> Result<(), String> {
+    updates.activity(unsent);
+    Ok(())
+}
+
 /// The webview origins the bundled UI can be served from. Windows uses
 /// `http://tauri.localhost` by default; Linux and macOS use `tauri://localhost`.
 /// Debug builds load the Vite dev server instead.
@@ -203,11 +235,8 @@ fn server_script(app: &tauri::AppHandle) -> PathBuf {
     if let Ok(p) = std::env::var("OTHERBENCH_SERVER_SCRIPT") {
         return PathBuf::from(p);
     }
-    if let Ok(dir) = app.path().resource_dir() {
-        let bundled = dir.join("server").join("cli.js");
-        if bundled.exists() {
-            return bundled;
-        }
+    if let Some(bundled) = bundled_server(app) {
+        return bundled;
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -216,6 +245,12 @@ fn server_script(app: &tauri::AppHandle) -> PathBuf {
         .join("server")
         .join("dist")
         .join("cli.js")
+}
+
+/// The server the installer carries, when this is an installed build. Only an installed build updates itself (update.rs).
+fn bundled_server(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let bundled = app.path().resource_dir().ok()?.join("server").join("cli.js");
+    bundled.exists().then_some(bundled)
 }
 
 /// `OTHERBENCH_NODE` overrides; otherwise the Node runtime the installer carries
@@ -255,6 +290,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Undocked windows open where they were last, on the same screen (docks.rs).
@@ -265,7 +301,7 @@ fn main() {
                 .with_filter(docks::is_view)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_folder, undock, dock, undocked, show_window, open_in, focused_window])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, computer_stop, save_download, open_folder, undock, dock, undocked, show_window, open_in, focused_window, update_status, update_check_now, update_set_beta, update_install_now, update_activity])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
@@ -286,17 +322,37 @@ fn main() {
             tray::build(app.handle())?;
             // The window is created hidden (tauri.conf.json) so a sign-in
             // launch never flashes it on screen; so are the undocked ones.
+            // After an update the app comes back as it was: hidden in the tray stays hidden.
             let minimized = std::env::args().any(|a| a == MINIMIZED_FLAG);
-            docks::restore(app.handle(), !minimized);
-            if !minimized {
+            let show = update::take_relaunch_note(app.handle()).unwrap_or(!minimized);
+            docks::restore(app.handle(), show);
+            if show {
                 tray::show_main(app.handle());
             }
+
+            // Started before the server and independent of it: a build whose server won't start can still be replaced.
+            let addr_of = server.clone();
+            let stop_of = server.clone();
+            let updates = update::Updates::new(
+                app.handle(),
+                bundled_server(app.handle()).is_some(),
+                Box::new(move || addr_of.lock().ok().and_then(|s| s.as_ref().map(|s| (s.port, s.token.clone())))),
+                Box::new(move || {
+                    let taken = stop_of.lock().ok().and_then(|mut s| s.take());
+                    if let Some(s) = taken {
+                        s.stop();
+                    }
+                }),
+            );
+            updates.start();
+            app.manage(updates);
 
             let spec = sidecar::LaunchSpec {
                 node: node_binary(app.handle()),
                 script: server_script(app.handle()),
                 cors_origins: cors_origins(),
                 log_dir: app.path().app_log_dir()?,
+                app_version: app.package_info().version.to_string(),
             };
             // The server's computer-use channel (rpc.rs) is answered here
             // (computer.rs). Off, with no driver at all, unless the switch is set.
