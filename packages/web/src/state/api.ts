@@ -2,7 +2,7 @@ import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersi
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
-import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
+import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary, PullRequestDetail } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
@@ -642,8 +642,11 @@ export const api = {
   overview: {
     get: () => request<Overview>('/overview'),
     refresh: () => post<Overview>('/overview/refresh'),
-    tickIssue: (appId: string, n: number) => post<Overview>(`/overview/issues/${encodeURIComponent(appId)}/${n}/tick`),
-    tickOlder: (before: number) => post<{ chats: number; issues: number }>('/overview/tick-older', { before }),
+    /** GitHub's Done on a notification thread (spec 2026-10-29-github-inbox-design). */
+    markDone: (id: string) => post<Overview>(`/overview/notifications/${encodeURIComponent(id)}/done`),
+    markRead: (id: string) => post<Overview>(`/overview/notifications/${encodeURIComponent(id)}/read`),
+    /** Chats only: notifications are marked done one at a time. */
+    tickOlder: (before: number) => post<{ chats: number }>('/overview/tick-older', { before }),
   },
 
   /**
@@ -723,6 +726,10 @@ export const api = {
       comment: (id: string, n: number, body: string) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/comment`, { body }),
       close: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/close`),
       reopen: (id: string, n: number) => post<void>(`/apps/${encodeURIComponent(id)}/issues/${n}/reopen`),
+    },
+    pulls: {
+      /** A pull request with its branch, for a chat started on it. */
+      get: (id: string, n: number) => request<PullRequestDetail>(`/apps/${encodeURIComponent(id)}/pulls/${n}`),
     },
     deck: {
       /** The app's Deck board; 409 `no-deck-board` for an app with none. */
