@@ -124,6 +124,79 @@ pub fn install_ready(stop_server: impl FnOnce(), install: impl FnOnce() -> Resul
     install().inspect_err(|_| restart())
 }
 
+/// Which windows hold unsent text. Each window reports only its own, so one
+/// window's "none" must never clear another's.
+#[derive(Default, Debug)]
+pub struct Unsent(std::collections::HashMap<String, bool>);
+
+impl Unsent {
+    pub fn set(&mut self, window: &str, has: bool) {
+        self.0.insert(window.to_string(), has);
+    }
+
+    /// A closed window takes its text with it.
+    pub fn window_gone(&mut self, window: &str) {
+        self.0.remove(window);
+    }
+
+    pub fn any(&self) -> bool {
+        self.0.values().any(|has| *has)
+    }
+}
+
+/// Whether a build already downloaded still installs after a new check: only
+/// if the check chose that same build. A check that failed says nothing new.
+/// (Betas turned off after one was downloaded: it must not install.)
+pub fn keep_ready(ready_version: &str, choice: &Choice) -> bool {
+    match choice {
+        Choice::Error(_) => true,
+        Choice::Install { version, .. } => version == ready_version,
+        _ => false,
+    }
+}
+
+/// What asking the server whether it's busy came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// No server is running (it failed to start, or hasn't yet).
+    NoServer,
+    /// Nothing is listening on its port.
+    Refused,
+    Answered(Vec<String>),
+    /// It's there but didn't answer properly in time: slow (a long sync batch blocks it), or wedged.
+    NoAnswer,
+}
+
+/// After this many gate ticks in a row with no answer (10 minutes), a server that's there but silent counts as broken.
+pub const NO_ANSWER_LIMIT: u32 = 20;
+
+/// `Gate.server_busy` from a probe and how many no-answers in a row came
+/// before it (including this one). A slow server holds the update back; only
+/// a missing one, or one silent for 10 minutes, counts as idle, so a broken
+/// build can still be replaced.
+pub fn busy_from(probe: Probe, no_answers: u32) -> Option<Vec<String>> {
+    match probe {
+        Probe::NoServer | Probe::Refused => None,
+        Probe::Answered(reasons) => Some(reasons),
+        Probe::NoAnswer if no_answers >= NO_ANSWER_LIMIT => None,
+        Probe::NoAnswer => Some(vec!["the server isn't answering".into()]),
+    }
+}
+
+/// The gate ticks every 30 s; a gap of more than four ticks means the machine
+/// slept. Waking counts as being used, so the update doesn't install the
+/// moment the lid opens.
+pub fn just_resumed(last_tick_ms: Option<u64>, now_ms: u64) -> bool {
+    last_tick_ms.is_some_and(|last| now_ms.saturating_sub(last) > 4 * GATE_EVERY.as_millis() as u64)
+}
+
+/// The update download, given up after `limit` so a stalled connection can't hold the updater for good.
+pub async fn within<T>(limit: Duration, download: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    tokio::time::timeout(limit, download)
+        .await
+        .unwrap_or_else(|_| Err(format!("the download took too long (over {} minutes)", limit.as_secs() / 60)))
+}
+
 /// The reasons in the server's answer to `GET /api/desktop/busy` (empty when
 /// it isn't busy), or `None` for anything but a 200 with that JSON.
 pub fn parse_busy(response: &str) -> Option<Vec<String>> {
@@ -178,6 +251,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 const GATE_EVERY: Duration = Duration::from_secs(30);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FEED_TIMEOUT: Duration = Duration::from_secs(30);
+/// Generous for a 115 MB installer on a slow line; a stalled one is given up and tried again at the next check.
+const DOWNLOAD_LIMIT: Duration = Duration::from_secs(30 * 60);
 
 /// What Settings → Desktop shows (web/src/views/settings/DesktopPanel.tsx), also sent as `update-status`.
 #[derive(Clone, Serialize, Debug, PartialEq, Eq)]
@@ -209,10 +284,14 @@ struct Ready {
 struct Inner {
     status: UpdateStatus,
     last_activity: Instant,
-    unsent: bool,
+    unsent: Unsent,
     ready: Option<Ready>,
     check_requested: bool,
     install_requested: bool,
+    /// Gate ticks in a row the server was there but didn't answer.
+    no_answers: u32,
+    /// The wall-clock time of the last gate tick, to notice a sleep.
+    last_tick_ms: Option<u64>,
 }
 
 /// The local server's port and token, while it runs.
@@ -269,7 +348,16 @@ impl Updates {
         };
         Arc::new(Self {
             app: app.clone(),
-            inner: Mutex::new(Inner { status, last_activity: Instant::now(), unsent: false, ready: None, check_requested: false, install_requested: false }),
+            inner: Mutex::new(Inner {
+                status,
+                last_activity: Instant::now(),
+                unsent: Unsent::default(),
+                ready: None,
+                check_requested: false,
+                install_requested: false,
+                no_answers: 0,
+                last_tick_ms: None,
+            }),
             wake: Condvar::new(),
             server_addr,
             stop_server,
@@ -315,11 +403,16 @@ impl Updates {
         }
     }
 
-    /// Input in one of the app's windows, and whether any composer holds unsent text.
-    pub fn activity(&self, unsent: bool) {
+    /// Input in the app window `window`, and whether a composer in it holds unsent text.
+    pub fn activity(&self, window: &str, unsent: bool) {
         let mut inner = locked(&self.inner);
         inner.last_activity = Instant::now();
-        inner.unsent = unsent;
+        inner.unsent.set(window, unsent);
+    }
+
+    /// A window closed: its unsent text went with it.
+    pub fn window_gone(&self, window: &str) {
+        locked(&self.inner).unsent.window_gone(window);
     }
 
     fn change(&self, f: impl FnOnce(&mut UpdateStatus)) {
@@ -389,6 +482,12 @@ impl Updates {
             _ => None,
         };
         let choice = choose(&current, beta, &results);
+        {
+            let mut inner = locked(&self.inner);
+            if inner.ready.as_ref().is_some_and(|r| !keep_ready(&r.update.version, &choice)) {
+                inner.ready = None;
+            }
+        }
         self.change(|s| {
             s.last_checked_at = Some(now_ms());
             s.newest_full = newest_full;
@@ -406,7 +505,7 @@ impl Updates {
                     s.available = Some(version.clone());
                 });
                 // The signature is checked here, before anything is stopped or installed.
-                match update.download(|_, _| {}, || {}).await {
+                match within(DOWNLOAD_LIMIT, async { update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string()) }).await {
                     Ok(bytes) => {
                         locked(&self.inner).ready = Some(Ready { update, bytes, since: Instant::now() });
                         self.change(|s| s.state = "ready".into());
@@ -427,37 +526,55 @@ impl Updates {
         }
     }
 
-    /// Nothing to install: a build downloaded earlier stays ready unless the switch made it pointless.
+    /// Nothing to install (`check` has already dropped any build the choice no longer wants).
     fn settled(&self, state: &str) {
-        let has_ready = locked(&self.inner).ready.is_some();
-        if !has_ready {
-            self.change(|s| {
-                s.state = state.into();
-                s.available = None;
-                s.waiting_for.clear();
-            });
+        self.change(|s| {
+            s.state = state.into();
+            s.available = None;
+            s.waiting_for.clear();
+        });
+    }
+
+    fn probe_server(&self) -> Probe {
+        use std::io::{Read, Write};
+        let Some((port, token)) = (self.server_addr)() else { return Probe::NoServer };
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let mut stream = match std::net::TcpStream::connect_timeout(&addr, BUSY_TIMEOUT) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return Probe::Refused,
+            Err(_) => return Probe::NoAnswer,
+        };
+        let asked = stream.set_read_timeout(Some(BUSY_TIMEOUT)).and_then(|_| stream.set_write_timeout(Some(BUSY_TIMEOUT))).and_then(|_| {
+            // HTTP/1.0, so the answer is never chunked and ends when the connection closes.
+            write!(stream, "GET /api/desktop/busy HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\n\r\n")
+        });
+        let mut response = String::new();
+        if asked.and_then(|_| stream.take(64 * 1024).read_to_string(&mut response)).is_err() {
+            return Probe::NoAnswer;
         }
+        parse_busy(&response).map_or(Probe::NoAnswer, Probe::Answered)
     }
 
     fn server_busy(&self) -> Option<Vec<String>> {
-        use std::io::{Read, Write};
-        let (port, token) = (self.server_addr)()?;
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        let mut stream = std::net::TcpStream::connect_timeout(&addr, BUSY_TIMEOUT).ok()?;
-        stream.set_read_timeout(Some(BUSY_TIMEOUT)).ok()?;
-        stream.set_write_timeout(Some(BUSY_TIMEOUT)).ok()?;
-        // HTTP/1.0, so the answer is never chunked and ends when the connection closes.
-        write!(stream, "GET /api/desktop/busy HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\n\r\n").ok()?;
-        let mut response = String::new();
-        stream.take(64 * 1024).read_to_string(&mut response).ok()?;
-        parse_busy(&response)
+        let probe = self.probe_server();
+        let no_answers = {
+            let mut inner = locked(&self.inner);
+            inner.no_answers = if probe == Probe::NoAnswer { inner.no_answers.saturating_add(1) } else { 0 };
+            inner.no_answers
+        };
+        busy_from(probe, no_answers)
     }
 
     fn gate_says_install(&self) -> bool {
         let (idle_ms, unsent, ready_for_ms) = {
-            let inner = locked(&self.inner);
+            let mut inner = locked(&self.inner);
+            let now = now_ms();
+            if just_resumed(inner.last_tick_ms, now) {
+                inner.last_activity = Instant::now();
+            }
+            inner.last_tick_ms = Some(now);
             let Some(ready) = &inner.ready else { return false };
-            (inner.last_activity.elapsed().as_millis() as u64, inner.unsent, ready.since.elapsed().as_millis() as u64)
+            (inner.last_activity.elapsed().as_millis() as u64, inner.unsent.any(), ready.since.elapsed().as_millis() as u64)
         };
         let any_window_visible = self.app.webview_windows().values().any(|w| w.is_visible().unwrap_or(false));
         let gate = Gate { server_busy: self.server_busy(), idle_ms, any_window_visible, unsent_text: unsent, ready_for_ms };
@@ -633,6 +750,59 @@ mod tests {
         assert_eq!(relaunch_show(&format!("{{\"at\":{},\"mainVisible\":false}}", now - 10 * 60 * 1000 - 1), now), None);
         assert_eq!(relaunch_show("{\"at\":\"soon\"}", now), None);
         assert_eq!(relaunch_show("", now), None);
+    }
+
+    #[test]
+    fn unsent_text_in_one_window_is_not_cleared_by_another() {
+        let mut unsent = Unsent::default();
+        unsent.set("code", true);
+        unsent.set("main", false);
+        assert!(unsent.any());
+        unsent.set("code", false);
+        assert!(!unsent.any());
+        unsent.set("quick", true);
+        unsent.window_gone("quick");
+        assert!(!unsent.any());
+    }
+
+    #[test]
+    fn a_ready_build_is_dropped_once_the_choice_no_longer_wants_it() {
+        assert!(keep_ready("0.2.0-beta.8", &Choice::Install { feed: 1, version: "0.2.0-beta.8".into() }));
+        assert!(!keep_ready("0.2.0-beta.8", &Choice::Install { feed: 1, version: "0.2.0-beta.9".into() }));
+        // Betas turned off after one was downloaded: it must not install.
+        assert!(!keep_ready("0.2.0-beta.8", &Choice::Ahead { newest: "0.1.0".into() }));
+        assert!(!keep_ready("0.2.0-beta.8", &Choice::NoReleases));
+        assert!(!keep_ready("0.2.0-beta.8", &Choice::UpToDate));
+        // A feed that couldn't be read says nothing new: keep what's ready.
+        assert!(keep_ready("0.2.0-beta.8", &Choice::Error("dns".into())));
+    }
+
+    #[test]
+    fn a_server_that_is_slow_to_answer_counts_as_busy_until_it_has_been_silent_for_ten_minutes() {
+        assert_eq!(busy_from(Probe::NoServer, 0), None);
+        assert_eq!(busy_from(Probe::Refused, 0), None);
+        assert_eq!(busy_from(Probe::Answered(vec!["1 reply being written".into()]), 0), Some(vec!["1 reply being written".to_string()]));
+        assert_eq!(busy_from(Probe::NoAnswer, 1), Some(vec!["the server isn't answering".to_string()]));
+        assert_eq!(busy_from(Probe::NoAnswer, NO_ANSWER_LIMIT - 1), Some(vec!["the server isn't answering".to_string()]));
+        assert_eq!(busy_from(Probe::NoAnswer, NO_ANSWER_LIMIT), None);
+        assert_eq!(NO_ANSWER_LIMIT as u64 * GATE_EVERY.as_millis() as u64, 10 * 60 * 1000);
+    }
+
+    #[test]
+    fn waking_from_sleep_counts_as_being_used() {
+        let tick = GATE_EVERY.as_millis() as u64;
+        assert!(!just_resumed(None, 1_000_000));
+        assert!(!just_resumed(Some(1_000_000), 1_000_000 + tick));
+        assert!(just_resumed(Some(1_000_000), 1_000_000 + 4 * tick + 1));
+    }
+
+    #[test]
+    fn a_download_that_stalls_gives_up() {
+        let stalled = std::future::pending::<Result<Vec<u8>, String>>();
+        let r = tauri::async_runtime::block_on(within(Duration::from_millis(20), stalled));
+        assert!(r.unwrap_err().contains("took too long"));
+        let quick = async { Ok::<_, String>(vec![1u8]) };
+        assert_eq!(tauri::async_runtime::block_on(within(Duration::from_secs(5), quick)), Ok(vec![1u8]));
     }
 
     #[test]

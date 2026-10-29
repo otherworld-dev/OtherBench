@@ -208,8 +208,8 @@ async fn update_install_now(updates: tauri::State<'_, Arc<update::Updates>>) -> 
 
 /// Input in an app window, and whether a composer holds unsent text: the updater installs only once Adam is away.
 #[tauri::command]
-async fn update_activity(updates: tauri::State<'_, Arc<update::Updates>>, unsent: bool) -> Result<(), String> {
-    updates.activity(unsent);
+async fn update_activity(window: tauri::WebviewWindow, updates: tauri::State<'_, Arc<update::Updates>>, unsent: bool) -> Result<(), String> {
+    updates.activity(window.label(), unsent);
     Ok(())
 }
 
@@ -305,6 +305,12 @@ fn main() {
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
+            // A closed window's unsent text no longer holds an update back.
+            if let WindowEvent::Destroyed = event {
+                if let Some(updates) = window.app_handle().try_state::<Arc<update::Updates>>() {
+                    updates.window_gone(window.label());
+                }
+            }
             // The quick-chat window is only ever hidden too: the hotkey brings it back.
             // Closing an undocked window docks its view again (quitting doesn't ask, so they come back).
             if let WindowEvent::CloseRequested { api, .. } = event {
