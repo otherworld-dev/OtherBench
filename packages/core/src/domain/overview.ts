@@ -2,36 +2,13 @@
 import type { App, Chat } from '../ports/store.js';
 import type { DeckBoardView } from '../types/nextcloud.js';
 import type {
-  ChatHead, IssueActivity, Overview, OverviewChat, OverviewDeck, OverviewIssue, OverviewTile,
+  ChatHead, GithubNotification, Overview, OverviewChat, OverviewDeck, OverviewTile,
 } from '../types/overview.js';
 import { columnKind } from './deck-columns.js';
+import { appForRepo, sortNotifications } from './github-inbox.js';
 
 export function isBotLogin(login: string): boolean {
   return login.endsWith('[bot]') || login.startsWith('app/');
-}
-
-interface Other { kind: 'new' | 'comment'; at: string; who: string; ms: number }
-
-/**
- * Whether an issue needs `me`: someone else (not a bot) opened it or commented
- * after the latest of my own comment, a close, and the user's tick-off.
- */
-export function issueNeed(
-  a: IssueActivity, me: string, tickedThrough: string | null,
-): { kind: 'new' | 'comment'; at: string; who: string } | null {
-  const others: Other[] = [];
-  if (a.author !== me && !a.authorIsBot) others.push({ kind: 'new', at: a.createdAt, who: a.author, ms: Date.parse(a.createdAt) });
-  for (const c of a.comments) {
-    if (c.author !== me && !c.authorIsBot) others.push({ kind: 'comment', at: c.createdAt, who: c.author, ms: Date.parse(c.createdAt) });
-  }
-  const last = others.reduce<Other | null>((best, o) => (best === null || o.ms > best.ms ? o : best), null);
-  if (!last) return null;
-  let settled = -Infinity;
-  for (const c of a.comments) if (c.author === me) settled = Math.max(settled, Date.parse(c.createdAt));
-  if (a.closedAt) settled = Math.max(settled, Date.parse(a.closedAt));
-  if (tickedThrough) settled = Math.max(settled, Date.parse(tickedThrough));
-  if (!(last.ms > settled)) return null;
-  return { kind: last.kind, at: last.at, who: last.who };
 }
 
 const dayNumber = (d: Date): number => Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
@@ -88,9 +65,8 @@ export interface OverviewInput {
   apps: App[]; chats: Chat[]; projects: { id: string; name: string }[];
   heads: ChatHead[]; waitingChatIds: ReadonlySet<string>;
   me: string | null;
-  /** By app id; absent = not checked yet. */
-  issues: Record<string, { activity: IssueActivity[] } | { error: string }>;
-  ticks: { appId: string; number: number; through: string }[];
+  /** The GitHub inbox from the last check; null = not checked yet. */
+  notifications: { list: GithubNotification[]; more: boolean } | { error: string } | null;
   /** By app id. */
   decks: Record<string, { view: DeckBoardView } | { error: string }>;
   checkedAt: number | null; checking: boolean;
@@ -121,21 +97,21 @@ export function buildOverview(input: OverviewInput): Overview {
     return out.sort((a, b) => Number(b.waiting) - Number(a.waiting) || b.at - a.at);
   };
 
-  const issuesFor = (app: App): { issues: OverviewIssue[] | null; error: string | null } => {
-    if (app.githubRepo === null) return { issues: null, error: null };
-    const result = input.issues[app.id];
-    if (!result) return { issues: [], error: null };
-    if ('error' in result) return { issues: [], error: result.error };
-    const me = input.me;
-    if (me === null) return { issues: [], error: null };
-    const issues: OverviewIssue[] = [];
-    for (const a of result.activity) {
-      const tick = input.ticks.find((t) => t.appId === app.id && t.number === a.number)?.through ?? null;
-      const need = issueNeed(a, me, tick);
-      if (need) issues.push({ number: a.number, title: a.title, state: a.state, kind: need.kind, at: need.at, who: need.who, url: a.url, through: need.at });
-    }
-    return { issues: issues.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)), error: null };
-  };
+  // Each notification goes to the first app whose repo it is, else to the GitHub tile.
+  const inbox = input.notifications;
+  const inboxError = inbox !== null && 'error' in inbox ? inbox.error : null;
+  const inboxMore = inbox !== null && 'list' in inbox ? inbox.more : false;
+  const byApp = new Map<string, GithubNotification[]>();
+  const elsewhere: GithubNotification[] = [];
+  for (const n of inbox !== null && 'list' in inbox ? sortNotifications(inbox.list) : []) {
+    const owner = appForRepo(input.apps, n.repo);
+    if (owner === null) elsewhere.push(n);
+    else byApp.set(owner.id, [...(byApp.get(owner.id) ?? []), n]);
+  }
+  type Inbox = { notifications: GithubNotification[] | null; error: string | null; more: boolean };
+  const noInbox: Inbox = { notifications: null, error: null, more: false };
+  const inboxFor = (app: App): Inbox =>
+    app.githubRepo === null ? noInbox : { notifications: byApp.get(app.id) ?? [], error: inboxError, more: inboxMore };
 
   const deckFor = (app: App): { deck: OverviewDeck | null; error: string | null } => {
     if (app.deckBoardId === null) return { deck: null, error: null };
@@ -147,16 +123,25 @@ export function buildOverview(input: OverviewInput): Overview {
 
   const tile = (
     key: string, appId: string | null, name: string, chats: OverviewChat[],
-    iss: { issues: OverviewIssue[] | null; error: string | null },
+    gh: Inbox,
     dk: { deck: OverviewDeck | null; error: string | null },
   ): OverviewTile => {
-    const count = chats.length + (iss.issues?.length ?? 0) + (dk.deck?.due.length ?? 0);
+    const count = chats.length + (gh.notifications?.length ?? 0) + (dk.deck?.due.length ?? 0);
     const faded = count === 0 && (dk.deck?.doing ?? 0) + (dk.deck?.todo ?? 0) === 0;
-    return { key, appId, name, count, faded, chats, issues: iss.issues, issuesError: iss.error, deck: dk.deck, deckError: dk.error };
+    return {
+      key, appId, name, count, faded, chats,
+      notifications: gh.notifications, notificationsError: gh.error, notificationsMore: gh.more,
+      deck: dk.deck, deckError: dk.error,
+    };
   };
 
-  const tiles = input.apps.map((app) => tile(app.id, app.id, app.name, chatsFor(app.id), issuesFor(app), deckFor(app)));
-  tiles.push(tile('chats', null, 'Chats', chatsFor(null), { issues: null, error: null }, { deck: null, error: null }));
+  const noDeck = { deck: null, error: null };
+  const tiles = input.apps.map((app) => tile(app.id, app.id, app.name, chatsFor(app.id), inboxFor(app), deckFor(app)));
+  tiles.push(tile('chats', null, 'Chats', chatsFor(null), noInbox, noDeck));
+  // Repos that aren't apps: a tile only when there is something to show there.
+  if (elsewhere.length > 0 || inboxError !== null) {
+    tiles.push(tile('github', null, 'GitHub', [], { notifications: elsewhere, error: inboxError, more: inboxMore }, noDeck));
+  }
 
   const sorted = tiles
     .map((t, i) => ({ t, i }))
