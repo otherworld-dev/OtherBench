@@ -1,11 +1,15 @@
 import { useEffect } from 'react';
 import { openApp, openCard, openIssue } from '../overview/openFromOverview.js';
-import { useOtherBenchStore } from '../state/store.js';
+import { openHandedOver, useOtherBenchStore } from '../state/store.js';
 import { isDesktop, onDesktopEvent, undockedViews } from './bridge.js';
 import { parseOpenRequest, parseUndocked, saveUndocked, type OpenRequest } from './windows.js';
 
-/** Opens what another window handed over, here: the window it was sent to holds it. */
+/** Opens what another window handed over, here and never passed on (`openHandedOver`): the window it was sent to holds it. */
 export function applyOpenRequest(request: OpenRequest): void {
+  openHandedOver(() => open(request));
+}
+
+function open(request: OpenRequest): void {
   const state = useOtherBenchStore.getState();
   switch (request.kind) {
     case 'chat':

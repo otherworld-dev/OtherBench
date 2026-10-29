@@ -21,15 +21,27 @@ export async function desktopBootstrap(): Promise<TransportConfig | null> {
   return invoke<TransportConfig>('bootstrap');
 }
 
+/** This window's label in the shell (main, quick, code, overview...), if it says. */
+function windowLabel(): string | undefined {
+  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
+  return internals?.metadata?.currentWindow?.label;
+}
+
 /**
  * Subscribes to an event the shell emits (e.g. `tray-new-chat` from the
  * tray menu). Resolves to the unsubscribe function; in a browser that is a
  * no-op and nothing is ever delivered.
+ *
+ * Only events for this window arrive: ones sent to it and ones sent to every
+ * window. Tauri's `listen` hears an event sent to any window by default, so
+ * with more than one app window (an undocked Code or Overview) a request meant
+ * for one would be acted on by all of them.
  */
 export async function onDesktopEvent<T = unknown>(name: string, cb: (payload: T) => void): Promise<() => void> {
   if (!isDesktop()) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
-  return listen<T>(name, (event) => cb(event.payload));
+  const label = windowLabel();
+  return listen<T>(name, (event) => cb(event.payload), label === undefined ? undefined : { target: label });
 }
 
 /** Opens the native folder picker. The chosen absolute path, or null if cancelled or outside the desktop app. */
@@ -119,8 +131,7 @@ export async function openChatInMain(chatId: string): Promise<void> {
 export function isQuickView(): boolean {
   if (typeof window === 'undefined') return false;
   if (new URLSearchParams(window.location.search).get('view') === 'quick') return true;
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label === 'quick';
+  return windowLabel() === 'quick';
 }
 
 /**
@@ -130,8 +141,7 @@ export function isQuickView(): boolean {
 export function isIndicatorView(): boolean {
   if (typeof window === 'undefined') return false;
   if (new URLSearchParams(window.location.search).get('view') === 'indicator') return true;
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label === 'computer-indicator';
+  return windowLabel() === 'computer-indicator';
 }
 
 /** The indicator bar's Stop: the shell ends computer-use control and tells the server. */

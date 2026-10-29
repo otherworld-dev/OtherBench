@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { App, Chat } from '@otherbench/core/ports/store.js';
+import { applyOpenRequest } from '../desktop/useDocks.js';
 import { openCard, openIssue } from '../overview/openFromOverview.js';
 import { MODE_STORAGE_KEY } from './mode.js';
 import { CODE_PANE_STATE_STORAGE_KEY, DEFAULT_PANE_STATE, PANE_STATE_STORAGE_KEY, type PaneState } from './panes.js';
@@ -105,6 +106,18 @@ describe('the main window with Code or the Overview undocked', () => {
     expect(window.localStorage.getItem(PANE_STATE_STORAGE_KEY)).not.toBeNull();
     expect(window.localStorage.getItem(CODE_PANE_STATE_STORAGE_KEY)).toBeNull();
     expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBeNull();
+  });
+
+  it('opens what another window handed over here, never sending it on, even when its list says otherwise', () => {
+    s().setUndocked(['code']);
+    applyOpenRequest({ kind: 'chat', chatId: 'app-chat' });
+    expect(bridge.openIn).not.toHaveBeenCalled();
+    expect(s().mode).toBe('code');
+    expect(s().activeChatId).toBe('app-chat');
+    // Afterwards this window routes as before.
+    s().setActiveChatId('plain-1');
+    s().setActiveChatId('app-chat');
+    expect(bridge.openIn.mock.calls).toEqual([['code', { kind: 'chat', chatId: 'app-chat' }]]);
   });
 
   it("sends the Overview's issues and cards to the Code window with their panel", () => {

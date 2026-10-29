@@ -569,11 +569,29 @@ const initialUndocked = loadUndocked();
  */
 const holdsBoth = (undocked: readonly DockView[]): boolean => WINDOW_ROLE === 'main' && !undocked.includes('code');
 
+/** Set while this window opens what another handed it (`openHandedOver`). */
+let handedOver = false;
+
+/**
+ * Opens here what another window handed over: whatever this window's undocked list says, it is never
+ * passed on again, so two windows that disagree can't send a request back and forth for ever.
+ */
+export function openHandedOver(open: () => void): void {
+  handedOver = true;
+  try {
+    open();
+  } finally {
+    handedOver = false;
+  }
+}
+
 /**
  * Hands `request` to the window holding `mode` when that isn't this one, and says so: then the caller
  * changes nothing here. The Overview window holds no mode, so everything it opens goes elsewhere.
+ * Something handed over from another window is always opened here (`openHandedOver`).
  */
 export function sentElsewhere(mode: Mode, request: OpenRequest): boolean {
+  if (handedOver) return false;
   const target = windowForMode(mode, useOtherBenchStore.getState().undocked, WINDOW_ROLE);
   if (target === WINDOW_ROLE) return false;
   openIn(target, request).catch((err: unknown) => console.error(`[otherbench-web] failed to open that in the ${target} window:`, err));

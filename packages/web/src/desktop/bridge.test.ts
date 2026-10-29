@@ -201,6 +201,13 @@ describe('desktop bridge', () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
+  it("onDesktopEvent hears only this window's events, never ones sent to another window", async () => {
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'code' } } };
+    listen.mockResolvedValue(vi.fn());
+    await onDesktopEvent('open-request', vi.fn());
+    expect(listen.mock.calls[0]![2]).toEqual({ target: 'code' });
+  });
+
   it('autostart wraps the plugin', async () => {
     enterDesktop();
     isEnabled.mockResolvedValue(true);
