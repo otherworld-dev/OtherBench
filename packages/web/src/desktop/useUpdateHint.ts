@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { PeerView } from '../state/api.js';
 import { toast } from '../lib/toasts.js';
 import { useOtherBenchStore, WINDOW_ROLE } from '../state/store.js';
-import { checkForUpdates, isDesktop } from './bridge.js';
+import { checkForUpdates, isDesktop, onUpdateStatus } from './bridge.js';
 
 /** A paired machine that stays ahead asks for an update check no more often than this. */
 export const HINT_EVERY_MS = 10 * 60_000;
@@ -25,6 +25,26 @@ export function useUpdateHint(): void {
   const machines = useOtherBenchStore((s) => s.machines);
   const noticed = useRef(new Set<string>());
   const lastCheck = useRef<number | null>(null);
+
+  // An update that has waited a day for a quiet moment says so once, instead of only in Settings.
+  useEffect(() => {
+    if (!isDesktop() || WINDOW_ROLE !== 'main') return;
+    const asked = new Set<string>();
+    let off: (() => void) | null = null;
+    let gone = false;
+    void onUpdateStatus((s) => {
+      if (s.state !== 'ask' || !s.available || asked.has(s.available)) return;
+      asked.add(s.available);
+      toast({ text: `OtherBench ${s.available} has been waiting a day to install. Restart it from Settings → Desktop → Updates when it suits you.`, tone: 'ok' });
+    }).then((unlisten) => {
+      if (gone) unlisten();
+      else off = unlisten;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, []);
   useEffect(() => {
     if (!isDesktop() || WINDOW_ROLE !== 'main' || !machines) return;
     let ahead = false;

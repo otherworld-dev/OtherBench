@@ -13,6 +13,7 @@ vi.mock('../state/api.js', () => ({
   ApiError: class ApiError extends Error {},
 }));
 vi.mock('../state/useChatSync.js', () => ({ useChatSync: () => {} }));
+vi.mock('../desktop/useUpdateActivity.js', () => ({ useUpdateActivity: vi.fn() }));
 vi.mock('../desktop/bridge.js', () => ({
   hideQuick: vi.fn(async () => {}),
   openChatInMain: vi.fn(async () => {}),
@@ -20,8 +21,10 @@ vi.mock('../desktop/bridge.js', () => ({
 }));
 
 import { hideQuick, openChatInMain } from '../desktop/bridge.js';
+import { useUpdateActivity } from '../desktop/useUpdateActivity.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { hasUnsentText } from '../state/unsent.js';
 import { QuickChat } from './QuickChat.js';
 
 const profile = (id: string, over: Partial<Profile> = {}): Profile => ({
@@ -49,6 +52,17 @@ afterEach(() => {
 });
 
 describe('QuickChat', () => {
+  it('tells the updater when it is used and while it holds unsent text', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<QuickChat />);
+    expect(useUpdateActivity).toHaveBeenCalled();
+    await screen.findByText(/Quick chat · Profile p-default/);
+    await user.type(screen.getByRole('textbox', { name: 'Quick message' }), 'half a thought');
+    expect(hasUnsentText()).toBe(true);
+    unmount();
+    expect(hasUnsentText()).toBe(false);
+  });
+
   it('sends in a new chat with the default profile, and a follow-up stays in that chat after the reply', async () => {
     const user = userEvent.setup();
     render(<QuickChat />);

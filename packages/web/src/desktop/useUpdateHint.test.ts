@@ -1,7 +1,15 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./bridge.js', () => ({ isDesktop: () => true, checkForUpdates: vi.fn(async () => {}) }));
+const statusListeners: ((s: unknown) => void)[] = [];
+vi.mock('./bridge.js', () => ({
+  isDesktop: () => true,
+  checkForUpdates: vi.fn(async () => {}),
+  onUpdateStatus: vi.fn(async (cb: (s: unknown) => void) => {
+    statusListeners.push(cb);
+    return () => statusListeners.splice(statusListeners.indexOf(cb), 1);
+  }),
+}));
 
 import type { PeersOverview, PeerView, VersionMismatchView } from '../state/api.js';
 import { useToasts } from '../lib/toasts.js';
@@ -64,6 +72,15 @@ describe('useUpdateHint', () => {
     act(() => useOtherBenchStore.getState().setMachines(overview({ versionMismatch: mismatch({ peerAppVersion: '0.2.0-beta.41', thisMachineOlder: false }) })));
     expect(checked).not.toHaveBeenCalled();
     expect(toastTexts()).toEqual(['Megabyte runs an older OtherBench (0.2.0-beta.41), so sync with it has stopped until it updates.']);
+  });
+
+  it('says once when an update has waited a day for a quiet moment', async () => {
+    renderHook(() => useUpdateHint());
+    await act(async () => {});
+    const ask = { current: '0.2.0-beta.7', installed: true, beta: true, state: 'ask', available: '0.2.0-beta.8', newestFull: null, lastCheckedAt: 1, waitingFor: ["you're using OtherBench"], error: null };
+    act(() => statusListeners.forEach((cb) => cb(ask)));
+    act(() => statusListeners.forEach((cb) => cb(ask)));
+    expect(toastTexts()).toEqual(['OtherBench 0.2.0-beta.8 has been waiting a day to install. Restart it from Settings → Desktop → Updates when it suits you.']);
   });
 
   it('says nothing for machines in step', () => {

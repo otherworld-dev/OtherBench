@@ -110,6 +110,7 @@ function OverviewWindow(): JSX.Element {
   useOverview();
   useDocks();
   useTextSizeShortcuts();
+  useUpdateActivity();
   return (
     <div className="h-screen overflow-hidden">
       <Toaster />
