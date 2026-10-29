@@ -69,6 +69,13 @@ describe('syncText', () => {
     expect(syncText({ lastSyncedAt: 1000, syncError: 'PC runs a different version' })).toBe('Sync failed: PC runs a different version');
     expect(syncText({ lastSyncedAt: null, syncError: null })).toBe('Not synced yet');
   });
+
+  it('says sync has stopped when the two machines run different versions', () => {
+    const versionMismatch = { peerAppVersion: '0.2.0-beta.44', peerSchemaVersion: 35, peerProtocolVersion: 1, thisMachineOlder: true, at: 1 };
+    expect(syncText({ lastSyncedAt: 1000, syncError: 'PC runs a different version of OtherBench (0.2.0-beta.44; this machine 0.2.0-beta.41). Update Laptop to sync.', versionMismatch })).toBe(
+      'Sync stopped: versions differ'
+    );
+  });
 });
 
 describe('MachinesPanel', () => {
@@ -80,6 +87,18 @@ describe('MachinesPanel', () => {
     expect(within(pc).getByText('192.168.1.20:4748, pc.lan:4748')).toBeInTheDocument();
     expect(screen.getByTestId('this-machine')).toHaveTextContent('Laptop');
     expect(screen.getByTestId('this-machine')).toHaveTextContent('AB12 CD34 EF56 7890');
+  });
+
+  it("shows why sync stopped when the machines run different versions, with the server's message underneath", async () => {
+    const message = 'PC runs a different version of OtherBench (0.2.0-beta.44; this machine 0.2.0-beta.41). Update Laptop to sync.';
+    vi.mocked(api.peers.overview).mockResolvedValue({
+      ...overview,
+      peers: [{ ...overview.peers[0]!, status: 'reachable', syncError: message, versionMismatch: { peerAppVersion: '0.2.0-beta.44', peerSchemaVersion: 35, peerProtocolVersion: 1, thisMachineOlder: true, at: 1 } }],
+    });
+    render(<MachinesPanel />);
+    const pc = await screen.findByTestId('peer-node-pc');
+    expect(within(pc).getByTestId('peer-sync')).toHaveTextContent('Sync stopped: versions differ');
+    expect(within(pc).getByTestId('peer-sync-detail')).toHaveTextContent(message);
   });
 
   it('shows a code with the addresses, fingerprint and firewall note, and cancels it', async () => {

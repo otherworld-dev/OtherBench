@@ -25,6 +25,13 @@ function overview(...peers: Partial<PeerView>[]): PeersOverview {
   };
 }
 
+describe('trayMachineLines', () => {
+  it('says sync has stopped for a machine on a different version', () => {
+    const versionMismatch = { peerAppVersion: '0.2.0-beta.44', peerSchemaVersion: 35, peerProtocolVersion: 1, thisMachineOlder: true, at: 1 };
+    expect(trayMachineLines(overview({ lastSyncedAt: 1, syncError: 'different version', versionMismatch }), 2)).toEqual(['PC: sync stopped, versions differ']);
+  });
+});
+
 describe('useTrayStatus', () => {
   beforeEach(() => useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true));
   afterEach(() => mocked.mockClear());

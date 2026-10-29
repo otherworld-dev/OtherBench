@@ -3,6 +3,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import { ApiError } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { useUnsentText } from '../state/unsent.js';
 
 /**
  * Per page (`pendingKey`), the chat a start whose message didn't send made:
@@ -66,6 +67,7 @@ function showInPagePane(tabId: string, chatId: string, stayed: boolean): void {
  */
 export function StartBox({ target, placeholder, submitLabel }: { target: StartTarget; placeholder?: string; submitLabel?: string }): JSX.Element {
   const [text, setText] = useState('');
+  useUnsentText(text);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);

@@ -1,19 +1,27 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../desktop/bridge.js', () => ({
   isDesktop: () => true,
   autostart: { isEnabled: vi.fn(), set: vi.fn() },
   setHotkey: vi.fn(),
+  // The Updates section (UpdatesSection.test.tsx covers it).
+  updateStatus: vi.fn(),
+  onUpdateStatus: vi.fn(),
 }));
 
-import { autostart, setHotkey } from '../../desktop/bridge.js';
+import { autostart, onUpdateStatus, setHotkey, updateStatus } from '../../desktop/bridge.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { DesktopPanel } from './DesktopPanel.js';
 
 const mockedIsEnabled = vi.mocked(autostart.isEnabled);
 const mockedSet = vi.mocked(autostart.set);
+
+beforeEach(() => {
+  vi.mocked(updateStatus).mockResolvedValue(null);
+  vi.mocked(onUpdateStatus).mockResolvedValue(() => {});
+});
 
 afterEach(() => {
   cleanup();

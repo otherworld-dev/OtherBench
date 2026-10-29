@@ -8,6 +8,7 @@ import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { hasUnsentText } from '../state/unsent.js';
 import { Composer } from './Composer.js';
 
 vi.mock('../state/api.js', () => ({
@@ -139,6 +140,19 @@ describe('Composer', () => {
   });
   afterEach(() => {
     cleanup();
+  });
+
+  it('tells the updater while it holds unsent text, and forgets it when it goes away', async () => {
+    const { unmount } = render(<Composer chat={makeChat()} />);
+    expect(hasUnsentText()).toBe(false);
+    const box = screen.getByRole('textbox', { name: /message/i });
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+    expect(hasUnsentText()).toBe(true);
+    fireEvent.change(box, { target: { value: '   ' } });
+    expect(hasUnsentText()).toBe(false);
+    fireEvent.change(box, { target: { value: 'again' } });
+    unmount();
+    expect(hasUnsentText()).toBe(false);
   });
 
   it('keeps the message field, attach, the profile and Send in one box', () => {

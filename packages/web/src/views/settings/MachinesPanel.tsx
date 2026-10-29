@@ -49,7 +49,8 @@ function PairingCode({ pairing, onCancel, now }: { pairing: PairingView; onCance
 }
 
 /** "Synced 2 min ago", the last sync error, or "Not synced yet". */
-export function syncText(peer: Pick<PeerView, 'lastSyncedAt' | 'syncError'>, now = Date.now()): string {
+export function syncText(peer: Pick<PeerView, 'lastSyncedAt' | 'syncError' | 'versionMismatch'>, now = Date.now()): string {
+  if (peer.versionMismatch) return 'Sync stopped: versions differ';
   if (peer.syncError) return `Sync failed: ${peer.syncError}`;
   if (peer.lastSyncedAt !== null) return `Synced ${formatRelativeTime(peer.lastSyncedAt, now)}`;
   return 'Not synced yet';
@@ -139,6 +140,11 @@ function PeerRow({ peer, onChanged, onRemove }: { peer: PeerView; onChanged: () 
       {!editing && (
         <p data-testid="peer-sync" className={`text-xs ${peer.syncError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>
           {syncText(peer)}
+        </p>
+      )}
+      {!editing && peer.versionMismatch && peer.syncError && (
+        <p data-testid="peer-sync-detail" className="text-xs text-[var(--text-faint)]">
+          {peer.syncError}
         </p>
       )}
       {!editing && peer.status === 'unreachable' && peer.error && <p className="text-xs text-[var(--text-faint)]">{peer.error}</p>}
