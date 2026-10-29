@@ -32,7 +32,7 @@ afterEach(async () => {
   for (const c of cleanup.splice(0).reverse()) await c();
 });
 
-function syncNode(name: string, options: { schemaVersion?: number; fallbackMs?: number; changeCheckMs?: number } = {}): SyncNode {
+function syncNode(name: string, options: { schemaVersion?: number; appVersion?: string; fallbackMs?: number; changeCheckMs?: number } = {}): SyncNode {
   const db = openDatabase(':memory:');
   runMigrations(db);
   db.prepare('UPDATE node_self SET id = ?, name = ?').run(`node-${name}`, name);
@@ -52,6 +52,7 @@ function syncNode(name: string, options: { schemaVersion?: number; fallbackMs?: 
     port: 0,
     hosts: ['127.0.0.1'],
     schemaVersion: options.schemaVersion ?? SCHEMA_VERSION,
+    ...(options.appVersion ? { appVersion: options.appVersion } : {}),
     platform: 'win32',
     monitor: { minBackoffMs: 20, maxBackoffMs: 100 },
   });
@@ -282,6 +283,52 @@ describe('syncing two machines over the peer listener', () => {
     await expect(laptop.syncer.pullFrom('node-PC')).rejects.toThrow(/different version of OtherBench.*Update Laptop/);
     expect(laptop.store.chats.get('chat')).toBeNull();
     expect(laptop.syncer.status('node-PC').error).toMatch(/different version/);
+  });
+
+  it('says which build each machine runs, and which side is older', async () => {
+    const pc = syncNode('PC', { schemaVersion: SCHEMA_VERSION + 1, appVersion: '0.2.0-beta.44' });
+    const laptop = syncNode('Laptop', { appVersion: '0.2.0-beta.41' });
+    await pairNodes(pc, laptop);
+
+    await expect(laptop.syncer.pullFrom('node-PC')).rejects.toThrow(
+      'PC runs a different version of OtherBench (0.2.0-beta.44; this machine 0.2.0-beta.41). Update Laptop to sync.'
+    );
+    expect(laptop.syncer.status('node-PC').versionMismatch).toEqual({
+      peerAppVersion: '0.2.0-beta.44',
+      peerSchemaVersion: SCHEMA_VERSION + 1,
+      peerProtocolVersion: expect.any(Number),
+      thisMachineOlder: true,
+      at: expect.any(Number),
+    });
+
+    await expect(pc.syncer.pullFrom('node-Laptop')).rejects.toThrow(/Update Laptop to sync/);
+    expect(pc.syncer.status('node-Laptop').versionMismatch).toMatchObject({ peerAppVersion: '0.2.0-beta.41', thisMachineOlder: false });
+  });
+
+  it('still reports a version mismatch after a restart', async () => {
+    const pc = syncNode('PC', { schemaVersion: SCHEMA_VERSION + 1, appVersion: '0.2.0-beta.44' });
+    const laptop = syncNode('Laptop');
+    await pairNodes(pc, laptop);
+    await expect(laptop.syncer.pullFrom('node-PC')).rejects.toThrow(/different version/);
+
+    const restarted = new Syncer({ store: laptop.store, secrets: laptop.secrets, peers: laptop.service });
+    expect(restarted.status('node-PC').versionMismatch).toMatchObject({ peerAppVersion: '0.2.0-beta.44', thisMachineOlder: true });
+    expect(restarted.status('node-PC').error).toMatch(/different version/);
+  });
+
+  it('a successful pull clears a version mismatch', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    await pairNodes(pc, laptop);
+    laptop.store.settings.setValue('sync-version-mismatch:node-PC', {
+      peerAppVersion: '0.1.0', peerSchemaVersion: 1, peerProtocolVersion: 1, thisMachineOlder: false, at: 1, message: 'old',
+    });
+    expect(laptop.syncer.status('node-PC').versionMismatch).not.toBeNull();
+
+    await laptop.syncer.pullFrom('node-PC');
+    expect(laptop.syncer.status('node-PC').versionMismatch).toBeNull();
+    expect(laptop.store.settings.getValue('sync-version-mismatch:node-PC')).toBeNull();
   });
 
   it('a change on one machine reaches the other within a second, by announcement', async () => {

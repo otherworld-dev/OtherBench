@@ -32,4 +32,6 @@ export interface PeerInfo {
   protocolVersion: number;
   schemaVersion: number;
   platform: string;
+  /** The OtherBench build it runs (`0.2.0-beta.7`); absent from builds before the updater. */
+  appVersion?: string;
 }

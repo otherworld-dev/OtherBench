@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -240,6 +241,8 @@ export interface ContainerOptions {
   streamTimings?: StreamTimings;
   /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
   serverPort?: () => number | null;
+  /** This build's version for paired machines. Defaults to `OTHERBENCH_APP_VERSION` (the desktop shell sets it), else the server package's. */
+  appVersion?: string;
   /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
   computer?: ComputerDriver;
 }
@@ -325,6 +328,18 @@ export async function resolveSecretsPassphrase(secretsPath: string): Promise<str
  * `reconcileInterruptedTurns` -- and released by `close()`, or straight
  * away if startup fails part-way.
  */
+/** The desktop shell's version when it started this server; otherwise this package's (a checkout run). */
+function appVersion(): string {
+  const fromShell = process.env['OTHERBENCH_APP_VERSION'];
+  if (fromShell) return fromShell;
+  try {
+    return (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+  } catch {
+    // The bundled server has no package.json beside it; the shell always sets the variable there.
+    return 'unknown';
+  }
+}
+
 export async function createContainer(options: ContainerOptions): Promise<Container> {
   if (options.dbPath !== ':memory:') {
     await mkdir(dirname(options.dbPath), { recursive: true });
@@ -591,6 +606,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
+    appVersion: options.appVersion ?? appVersion(),
     ...(options.streamTimings ? { monitor: { idleTimeoutMs: options.streamTimings.idleTimeoutMs } } : {}),
   });
   const syncer = new Syncer({ store, secrets, blobStore, peers, events });

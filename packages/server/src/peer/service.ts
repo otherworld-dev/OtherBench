@@ -78,6 +78,8 @@ export interface PeerServiceOptions {
   port: number;
   hosts: string[];
   schemaVersion: number;
+  /** This build's version, told to peers so a version mismatch can name both builds. */
+  appVersion?: string;
   platform?: string;
   now?: () => number;
   /** Backoff and hooks for the peer monitor (tests shorten the backoff). */
@@ -275,7 +277,9 @@ export class PeerService {
 
   info(): PeerInfo {
     const self = this.store.nodes.self();
-    return { nodeId: self.id, name: self.name, protocolVersion: PEER_PROTOCOL_VERSION, schemaVersion: this.options.schemaVersion, platform: this.platform };
+    const info: PeerInfo = { nodeId: self.id, name: self.name, protocolVersion: PEER_PROTOCOL_VERSION, schemaVersion: this.options.schemaVersion, platform: this.platform };
+    if (this.options.appVersion) info.appVersion = this.options.appVersion;
+    return info;
   }
 
   list(): PublicPeer[] {

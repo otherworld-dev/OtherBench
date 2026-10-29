@@ -219,6 +219,11 @@ export class ScheduleService {
     return this.starting.size + this.active.size;
   }
 
+  /** Scheduled runs starting or running now (the desktop updater waits for them: routes/desktop.ts). */
+  activeRunCount(): number {
+    return this.runningCount();
+  }
+
   /**
    * A reply is being written in the chat, messages sent during one are
    * still to go out (spec 2026-10-18-send-while-replying-design: they go

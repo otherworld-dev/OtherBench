@@ -26,10 +26,33 @@ function usableBlobSize(size: unknown): size is number {
   return typeof size === 'number' && Number.isInteger(size) && size >= 0 && size <= MAX_BLOB_BYTES;
 }
 
+/** Sync was refused because the two machines run different versions; kept until a pull succeeds. */
+export interface VersionMismatch {
+  peerAppVersion: string | null;
+  peerSchemaVersion: number;
+  peerProtocolVersion: number;
+  /** The peer is ahead, so updating this machine is what fixes it (the desktop app then checks for an update). */
+  thisMachineOlder: boolean;
+  at: number;
+}
+
 export interface SyncStatus {
   lastSyncedAt: number | null;
   /** Why the last sync failed, until one succeeds. */
   error: string | null;
+  versionMismatch: VersionMismatch | null;
+}
+
+/** Where a version mismatch is kept, so it's still shown after a restart while the peer is away. */
+function mismatchKey(nodeId: string): string {
+  return `sync-version-mismatch:${nodeId}`;
+}
+
+type StoredMismatch = VersionMismatch & { message: string };
+
+function isStoredMismatch(value: unknown): value is StoredMismatch {
+  const v = value as Partial<StoredMismatch> | null;
+  return typeof v === 'object' && v !== null && typeof v.message === 'string' && typeof v.thisMachineOlder === 'boolean' && typeof v.peerSchemaVersion === 'number';
 }
 
 export interface SyncerOptions {
@@ -76,7 +99,12 @@ export class Syncer {
   }
 
   status(nodeId: string): SyncStatus {
-    return this.statuses.get(nodeId) ?? { lastSyncedAt: null, error: null };
+    const known = this.statuses.get(nodeId);
+    if (known) return known;
+    const stored = this.options.store.settings.getValue(mismatchKey(nodeId));
+    if (!isStoredMismatch(stored)) return { lastSyncedAt: null, error: null, versionMismatch: null };
+    const { message, ...mismatch } = stored;
+    return { lastSyncedAt: null, error: message, versionMismatch: mismatch };
   }
 
   /** Starts the fallback pull and the check for local changes to announce. */
@@ -137,15 +165,27 @@ export class Syncer {
 
   private async pullOnce(nodeId: string): Promise<number> {
     const peers = this.options.peers;
+    let mismatch: VersionMismatch | null = null;
     try {
       const info = (await peers.call(nodeId, { method: 'GET', path: '/peer/info' })).body as PeerInfo;
       const self = peers.info();
       if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
-        const older = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION ? info.name : self.name;
-        throw new PeerError(
-          `${info.name} runs a different version of OtherBench (protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}). Update ${older} to sync.`,
-          409
-        );
+        const peerOlder = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION;
+        const older = peerOlder ? info.name : self.name;
+        const versions =
+          info.appVersion && self.appVersion
+            ? `${info.appVersion}; this machine ${self.appVersion}`
+            : `protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}`;
+        const message = `${info.name} runs a different version of OtherBench (${versions}). Update ${older} to sync.`;
+        mismatch = {
+          peerAppVersion: typeof info.appVersion === 'string' ? info.appVersion : null,
+          peerSchemaVersion: info.schemaVersion,
+          peerProtocolVersion: info.protocolVersion,
+          thisMachineOlder: !peerOlder,
+          at: this.now(),
+        };
+        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message });
+        throw new PeerError(message, 409);
       }
       let written = 0;
       for (;;) {
@@ -159,11 +199,14 @@ export class Syncer {
         if (!batch.more) break;
       }
       await this.fetchMissingBlobs(nodeId);
-      this.statuses.set(nodeId, { lastSyncedAt: this.now(), error: null });
+      this.statuses.set(nodeId, { lastSyncedAt: this.now(), error: null, versionMismatch: null });
+      this.options.store.settings.setValue(mismatchKey(nodeId), null);
       if (written > 0) this.options.events?.emit({ type: 'sync-applied', nodeId, changed: written });
       return written;
     } catch (err) {
-      this.statuses.set(nodeId, { lastSyncedAt: this.status(nodeId).lastSyncedAt, error: err instanceof Error ? err.message : String(err) });
+      // Another failure (the peer went away, say) keeps the last known mismatch: it's still the reason sync is stopped.
+      const before = this.status(nodeId);
+      this.statuses.set(nodeId, { lastSyncedAt: before.lastSyncedAt, error: err instanceof Error ? err.message : String(err), versionMismatch: mismatch ?? before.versionMismatch });
       throw err;
     }
   }
