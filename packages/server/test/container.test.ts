@@ -176,7 +176,7 @@ describe('createContainer', () => {
     expect(overview.view().checkedAt).not.toBeNull();
 
     // The same github the issue routes use: the container's own when set.
-    container.github = { activity: async () => [], login: async () => 'adam' } as unknown as NonNullable<Container['github']>;
+    container.github = { notifications: async () => ({ list: [], more: false }), login: async () => 'adam' } as unknown as NonNullable<Container['github']>;
     container.store.apps.create({ id: 'a1', name: 'OtherBench', githubRepo: 'o/ob', deckBoardId: 1 });
     const announce = vi.spyOn(container.peers!, 'announceActivity');
     await overview.refresh();
@@ -184,7 +184,7 @@ describe('createContainer', () => {
     expect(container.peers!.activity().githubLogin).toBe('adam');
     expect(announce).toHaveBeenCalled();
     // Nextcloud isn't set up here: the tile says so.
-    expect(overview.view().tiles.find((t) => t.key === 'a1')).toMatchObject({ issues: [], issuesError: null, deckError: "Nextcloud isn't set up" });
+    expect(overview.view().tiles.find((t) => t.key === 'a1')).toMatchObject({ notifications: [], notificationsError: null, deckError: "Nextcloud isn't set up" });
     container.close();
   });
 

@@ -1,8 +1,8 @@
 import { buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou } from '@otherbench/core/domain/overview.js';
-import type { IssueTick, Store } from '@otherbench/core/ports/store.js';
+import type { Store } from '@otherbench/core/ports/store.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { DeckBoardView } from '@otherbench/core/types/nextcloud.js';
-import type { IssueActivity, Overview } from '@otherbench/core/types/overview.js';
+import type { GithubNotification, Overview } from '@otherbench/core/types/overview.js';
 import type { GithubService } from '../code/github.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import type { NextcloudClient } from '../nextcloud/client.js';
@@ -24,7 +24,7 @@ export interface OverviewMachine {
 
 export interface OverviewDeps {
   store: Store;
-  github: () => Pick<GithubService, 'activity' | 'login'>;
+  github: () => Pick<GithubService, 'login' | 'notifications' | 'markDone' | 'markRead'>;
   /** null = Nextcloud isn't set up on this machine. */
   nextcloud: () => Promise<NextcloudClient | null>;
   /** This machine's chats waiting on an approval card or a question. */
@@ -37,19 +37,6 @@ export interface OverviewDeps {
   now?: () => number;
 }
 
-export type OverviewErrorCode = 'not-needing';
-
-export class OverviewError extends Error {
-  constructor(
-    readonly code: OverviewErrorCode,
-    message: string
-  ) {
-    super(message);
-    this.name = 'OverviewError';
-  }
-}
-
-type IssuesResult = { activity: IssueActivity[] } | { error: string };
 type DeckResult = { view: DeckBoardView } | { error: string };
 
 const NEXTCLOUD_NOT_SET_UP = "Nextcloud isn't set up";
@@ -59,32 +46,32 @@ function firstLine(err: unknown): string {
   return text.split('\n').find((l) => l.trim() !== '')?.trim() ?? 'unknown error';
 }
 
-const issuesError = (err: unknown): string => `couldn't check issues: ${firstLine(err)}`;
+const githubError = (err: unknown): string => `couldn't check GitHub: ${firstLine(err)}`;
 const deckError = (err: unknown): string => `couldn't check Deck: ${firstLine(err)}`;
 
 /**
- * The Overview (spec 2026-10-26-overview-design): checks GitHub (each app's
- * repo, through the machine's own gh) and Deck (each app's board) in the
+ * The Overview (spec 2026-10-26-overview-design): checks GitHub (the user's
+ * notifications inbox through the machine's own gh, spec
+ * 2026-10-29-github-inbox-design) and Deck (each app's board) in the
  * background every 15 minutes and on refresh, and builds the Overview on
  * request from that cache and the live store. Chats are never cached: they
  * are read from the store on every view, so they're always current.
  *
- * A check runs the calls one after another, and a failure is kept per app as
- * a one-line error the tile shows, so one bad repo or board never hides the
- * others. A check that can't read the gh login puts that error on every app
- * with a repo, since without it nothing can say which issues need the user;
- * while no app has a repo, a check runs no gh at all.
+ * A failure is kept as a one-line error the tile shows: a board's on its app
+ * only, the inbox's on every GitHub section, which keeps showing the last list
+ * it read. While no app has a repo, a check runs no gh at all.
  */
 export class OverviewService {
   private readonly store: Store;
   private readonly deps: OverviewDeps;
   private readonly scheduler: Scheduler;
   private readonly now: () => number;
-  private issues: Record<string, IssuesResult> = {};
+  /** The last inbox gh read; null before the first good read. */
+  private inbox: { list: GithubNotification[]; more: boolean } | null = null;
+  /** Why the last check couldn't read the inbox (or the login); null when it could. */
+  private inboxError: string | null = null;
   private decks: Record<string, DeckResult> = {};
   private login: string | null = null;
-  /** Why the last check couldn't read the gh login; null when it could (or before the first check). */
-  private loginError: string | null = null;
   private checkedAt: number | null = null;
   private inFlight: Promise<void> | null = null;
   private timer: unknown = null;
@@ -123,11 +110,8 @@ export class OverviewService {
     const machines = this.deps.machines();
     const waiting = new Set([...this.deps.waitingChatIds(), ...machines.flatMap((m) => m.waitingChatIds)]);
     const me = this.login;
-    // Without the login no issue can be judged, so every repo app says why, even one given its repo since the check.
-    const issues: Record<string, IssuesResult> =
-      this.loginError === null
-        ? this.issues
-        : Object.fromEntries(apps.filter((a) => a.githubRepo !== null).map((a) => [a.id, { error: this.loginError as string }]));
+    const notifications =
+      this.inbox === null && this.inboxError === null ? null : { list: this.inbox?.list ?? [], more: this.inbox?.more ?? false, error: this.inboxError };
     return buildOverview({
       apps,
       chats,
@@ -135,8 +119,7 @@ export class OverviewService {
       heads: this.store.messages.heads(),
       waitingChatIds: waiting,
       me,
-      issues,
-      ticks: this.store.issueTicks.list(),
+      notifications,
       decks: this.decks,
       checkedAt: this.checkedAt,
       checking: this.inFlight !== null,
@@ -158,23 +141,26 @@ export class OverviewService {
     return this.login;
   }
 
-  /** Ticks an issue off through its latest activity from someone else. Throws OverviewError('not-needing') if it doesn't need the user. */
-  tickIssue(appId: string, number: number): IssueTick {
-    const issue = this.view()
-      .tiles.find((t) => t.appId === appId)
-      ?.issues?.find((i) => i.number === number);
-    if (!issue) throw new OverviewError('not-needing', `Issue #${number} doesn't need you.`);
-    const tick = this.store.issueTicks.set(appId, number, issue.through);
+  /** GitHub's Done on a thread: once GitHub has it, it leaves the list. GitHub's refusal is thrown and changes nothing. */
+  async markDone(id: string): Promise<void> {
+    await this.deps.github().markDone(id);
+    if (this.inbox !== null) this.inbox = { ...this.inbox, list: this.inbox.list.filter((n) => n.id !== id) };
     this.changed();
-    return tick;
+  }
+
+  /** Marks a thread read on GitHub, then in the list. */
+  async markRead(id: string): Promise<void> {
+    await this.deps.github().markRead(id);
+    if (this.inbox !== null) this.inbox = { ...this.inbox, list: this.inbox.list.map((n) => (n.id === id ? { ...n, unread: false } : n)) };
+    this.changed();
   }
 
   /**
-   * Ticks off everything needing the user from before `before` (ms): chats
-   * whose latest reply is older (not ones waiting on a card or question,
-   * which only answering clears), and issues whose latest activity is older.
+   * Ticks off chats needing the user from before `before` (ms): ones whose latest reply is older (not ones
+   * waiting on a card or question, which only answering clears). The inbox is never touched: Done on GitHub
+   * can't be undone through its API, so notifications are cleared one at a time (spec 2026-10-29-github-inbox-design).
    */
-  tickOlder(before: number): { chats: number; issues: number } {
+  tickOlder(before: number): { chats: number } {
     const now = this.now();
     const machines = this.deps.machines();
     const waiting = new Set([...this.deps.waitingChatIds(), ...machines.flatMap((m) => m.waitingChatIds)]);
@@ -187,17 +173,8 @@ export class OverviewService {
       this.store.chats.update(chat.id, { dealtWithAt: now });
       chats++;
     }
-    let issues = 0;
-    for (const tile of this.view().tiles) {
-      if (tile.appId === null) continue;
-      for (const issue of tile.issues ?? []) {
-        if (!(Date.parse(issue.at) < before)) continue;
-        this.store.issueTicks.set(tile.appId, issue.number, issue.through);
-        issues++;
-      }
-    }
-    if (chats > 0 || issues > 0) this.changed();
-    return { chats, issues };
+    if (chats > 0) this.changed();
+    return { chats };
   }
 
   /** Stops the timer. A check already running finishes but changes nothing. */
@@ -224,33 +201,26 @@ export class OverviewService {
   private async check(): Promise<void> {
     const apps = this.store.apps.list();
 
-    // No gh at all while no app has a repo: nothing would use the login.
-    const repoApps = apps.filter((a) => a.githubRepo !== null);
-    const issues: Record<string, IssuesResult> = {};
-    if (repoApps.length > 0) {
+    // No gh at all while no app has a repo: nothing would use the login or the inbox.
+    let inbox = this.inbox;
+    let inboxError: string | null = null;
+    if (apps.some((a) => a.githubRepo !== null)) {
       let login: string | null = null;
-      let loginError: string | null = null;
       try {
         login = await this.deps.github().login();
       } catch (err) {
-        loginError = issuesError(err);
+        inboxError = githubError(err);
       }
       if (this.disposed) return;
       if (login !== this.login) {
         this.login = login;
         this.deps.onLoginChanged?.();
       }
-      this.loginError = loginError;
-
-      for (const app of repoApps) {
-        if (loginError !== null) {
-          issues[app.id] = { error: loginError };
-          continue;
-        }
+      if (inboxError === null) {
         try {
-          issues[app.id] = { activity: await this.deps.github().activity(app.githubRepo as string) };
+          inbox = await this.deps.github().notifications();
         } catch (err) {
-          issues[app.id] = { error: issuesError(err) };
+          inboxError = githubError(err);
         }
         if (this.disposed) return;
       }
@@ -282,7 +252,8 @@ export class OverviewService {
       }
     }
 
-    this.issues = issues;
+    this.inbox = inbox;
+    this.inboxError = inboxError;
     this.decks = decks;
     this.checkedAt = this.now();
   }

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutableMissingError, type RunResult } from '../../src/code/process.js';
 import { ExecutableNotFoundError } from '@otherbench/tools/mcp/spawn.js';
-import { issueNeed } from '@otherbench/core/domain/overview.js';
-import { ACTIVITY_QUERY, GhError, ghEnv, ghRunner, githubService, type Runner } from '../../src/code/github.js';
+import { GhError, ghEnv, ghRunner, githubService, type Runner } from '../../src/code/github.js';
 
 const ok = (stdout: string): RunResult => ({ code: 0, stdout, stderr: '', timedOut: false, truncated: false });
 const fail = (stderr: string, code = 1): RunResult => ({ code, stdout: '', stderr, timedOut: false, truncated: false });
@@ -143,69 +142,72 @@ describe('ghRunner (M5)', () => {
   });
 });
 
-describe('githubService activity and login', () => {
-  /** gh api graphql's real response shape (checked live against actions/stale): bots carry `__typename: 'Bot'`, no `[bot]`. */
-  const gql = (nodes: unknown[]) => JSON.stringify({ data: { repository: { issues: { nodes } } } });
-  const user = (login: string) => ({ __typename: 'User', login });
-  const bot = (login: string) => ({ __typename: 'Bot', login });
+/** A runner answering each call in turn. */
+function sequence(results: RunResult[]) {
+  const calls: string[][] = [];
+  const run: Runner = async (args) => {
+    calls.push(args);
+    const r = results.shift();
+    if (!r) throw new Error('no more results');
+    return r;
+  };
+  return { run, calls };
+}
 
-  it('activity runs one constant GraphQL query with owner and name as variables', async () => {
-    const f = fake(ok(gql([])));
-    await githubService(f.run).activity('evil-owner/evil.name');
-    expect(f.calls[0]!.args).toEqual(['api', 'graphql', '-f', `query=${ACTIVITY_QUERY}`, '-f', 'owner=evil-owner', '-f', 'name=evil.name']);
-    expect(ACTIVITY_QUERY).not.toContain('evil');
-    expect(ACTIVITY_QUERY).toContain('issues(first: 100, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN, CLOSED])');
-    expect(ACTIVITY_QUERY).toContain('comments(last: 100)');
-    expect(ACTIVITY_QUERY).toContain('__typename');
+describe('githubService inbox and login', () => {
+  const thread = (id: number) => ({
+    id: String(id), unread: true, reason: 'mention', updated_at: '2026-10-29T10:00:00Z',
+    subject: { title: `t${id}`, url: `https://api.github.com/repos/o/r/issues/${id}`, type: 'Issue' }, repository: { full_name: 'o/r' },
+  });
+  const page = (from: number, count: number) => ok(JSON.stringify(Array.from({ length: count }, (_, i) => thread(from + i))));
+
+  it('reads one page of the inbox, read and unread, and stops when it is not full', async () => {
+    const f = sequence([page(1, 3)]);
+    const out = await githubService(f.run).notifications();
+    expect(f.calls).toEqual([['api', 'notifications?all=true&per_page=50&page=1']]);
+    expect(out.more).toBe(false);
+    expect(out.list.map((n) => n.id)).toEqual(['1', '2', '3']);
+    expect(out.list[0]).toMatchObject({ repo: 'o/r', kind: 'issue', number: 1, url: 'https://github.com/o/r/issues/1' });
   });
 
-  it('activity maps authors, bots by __typename or login, ghosts and closedAt', async () => {
-    const nodes = [
-      {
-        number: 1, title: 'a', state: 'OPEN', url: 'u1', createdAt: '2026-01-01T00:00:00Z', closedAt: null, author: user('adam'),
-        comments: {
-          nodes: [
-            { author: bot('github-actions'), createdAt: '2026-01-02T00:00:00Z' },
-            { author: user('dependabot[bot]'), createdAt: '2026-01-03T00:00:00Z' },
-            { author: user('adam'), createdAt: '2026-01-04T00:00:00Z' },
-            { author: null, createdAt: '2026-01-05T00:00:00Z' },
-          ],
-        },
-      },
-      { number: 2, title: 'b', state: 'CLOSED', url: 'u2', createdAt: '2026-02-01T00:00:00Z', closedAt: '2026-02-02T00:00:00Z', author: bot('renovate'), comments: { nodes: [] } },
-      { number: 3, title: 'c', state: 'OPEN', url: 'u3', createdAt: '2026-03-01T00:00:00Z', closedAt: null, author: null, comments: { nodes: [] } },
-    ];
-    const out = await githubService(fake(ok(gql(nodes))).run).activity('o/r');
-    expect(out[0]).toMatchObject({ number: 1, title: 'a', state: 'open', author: 'adam', authorIsBot: false, createdAt: '2026-01-01T00:00:00Z', closedAt: null, url: 'u1' });
-    expect(out[0]!.comments).toEqual([
-      { author: 'github-actions', authorIsBot: true, createdAt: '2026-01-02T00:00:00Z' },
-      { author: 'dependabot[bot]', authorIsBot: true, createdAt: '2026-01-03T00:00:00Z' },
-      { author: 'adam', authorIsBot: false, createdAt: '2026-01-04T00:00:00Z' },
-      { author: 'ghost', authorIsBot: false, createdAt: '2026-01-05T00:00:00Z' },
+  it('reads a second page only after a full first one, and says there is more after a full second', async () => {
+    const f = sequence([page(1, 50), page(51, 50)]);
+    const out = await githubService(f.run).notifications();
+    expect(f.calls.map((a) => a[1])).toEqual(['notifications?all=true&per_page=50&page=1', 'notifications?all=true&per_page=50&page=2']);
+    expect(out).toMatchObject({ more: true });
+    expect(out.list).toHaveLength(100);
+    expect((await githubService(sequence([page(1, 50), page(51, 2)]).run).notifications()).more).toBe(false);
+  });
+
+  it('drops entries it cannot read, and maps a signed-out gh', async () => {
+    const f = sequence([ok(JSON.stringify([thread(1), { id: 'x' }, 'junk']))]);
+    expect((await githubService(f.run).notifications()).list.map((n) => n.id)).toEqual(['1']);
+    expect(await code(githubService(fake(fail('To get started with GitHub CLI, please run:  gh auth login')).run).notifications())).toBe('gh-signed-out');
+    expect(await code(githubService(fake(ok('{"message":"odd"}')).run).notifications())).toBe('gh-failed');
+  });
+
+  it('marks a thread done with DELETE and read with PATCH', async () => {
+    const f = fake(ok(''));
+    await githubService(f.run).markDone('123');
+    await githubService(f.run).markRead('456');
+    expect(f.calls.map((c) => c.args)).toEqual([
+      ['api', '-X', 'DELETE', 'notifications/threads/123'],
+      ['api', '-X', 'PATCH', 'notifications/threads/456'],
     ]);
-    expect(out[1]).toMatchObject({ state: 'closed', author: 'renovate', authorIsBot: true, closedAt: '2026-02-02T00:00:00Z', comments: [] });
-    expect(out[2]).toMatchObject({ author: 'ghost', authorIsBot: false });
   });
 
-  it("a github-actions comment (gh's real shape) does not make an issue need the user", async () => {
-    const nodes = [
-      {
-        number: 9, title: 'stale', state: 'OPEN', url: 'u9', createdAt: '2026-01-01T00:00:00Z', closedAt: null, author: user('me'),
-        comments: { nodes: [{ author: bot('github-actions'), createdAt: '2026-01-02T00:00:00Z' }] },
-      },
-    ];
-    const [activity] = await githubService(fake(ok(gql(nodes))).run).activity('o/r');
-    expect(issueNeed(activity!, 'me', null)).toBeNull();
-  });
-
-  it('activity maps a signed-out gh, an unknown repo, and refuses a bad repo without running gh', async () => {
-    expect(await code(githubService(fake(fail('To get started with GitHub CLI, please run:  gh auth login')).run).activity('o/r'))).toBe('gh-signed-out');
-    expect(await code(githubService(fake(fail("gh: Could not resolve to a Repository with the name 'o/nope'.")).run).activity('o/nope'))).toBe('repo-not-found');
-    expect(await code(githubService(fake(ok(JSON.stringify({ data: { repository: null } }))).run).activity('o/r'))).toBe('repo-not-found');
-    expect(await code(githubService(fake(ok('not json')).run).activity('o/r'))).toBe('gh-failed');
-    const f = fake(ok(gql([])));
-    expect(await code(githubService(f.run).activity('not a repo'))).toBe('repo-not-found');
+  it('refuses a thread id that is not digits without running gh', async () => {
+    const f = fake(ok(''));
+    expect(await code(githubService(f.run).markDone('1/../../user'))).toBe('gh-failed');
+    expect(await code(githubService(f.run).markRead(''))).toBe('gh-failed');
     expect(f.calls).toEqual([]);
+  });
+
+  it('views a pull request with its branch', async () => {
+    const f = fake(ok(JSON.stringify({ number: 456, title: 'Add it', body: 'Does it', url: 'https://github.com/o/r/pull/456', headRefName: 'feat/it' })));
+    expect(await githubService(f.run).pr('o/r', 456)).toEqual({ number: 456, title: 'Add it', body: 'Does it', url: 'https://github.com/o/r/pull/456', branch: 'feat/it' });
+    expect(f.calls[0]!.args).toEqual(['pr', 'view', '456', '--repo', 'o/r', '--json', 'number,title,body,url,headRefName']);
+    expect(await code(githubService(f.run).pr('not a repo', 1))).toBe('repo-not-found');
   });
 
   it('login runs gh api user and trims the output', async () => {

@@ -135,7 +135,7 @@ describe('buildOverview', () => {
   });
   it("files each notification under its repo's app, shown once and counted; no repo means null", () => {
     const base = { apps: [app('a', { githubRepo: 'O/A' }), app('b', { githubRepo: 'o/a' }), app('c')] };
-    const o = buildOverview(input({ ...base, notifications: { list: [note('1', 'o/a', false, 1), note('2', 'o/a', true, 0)], more: false } }));
+    const o = buildOverview(input({ ...base, notifications: { list: [note('1', 'o/a', false, 1), note('2', 'o/a', true, 0)], more: false, error: null } }));
     const byKey = (k: string) => o.tiles.find((x) => x.key === k);
     expect(byKey('a')).toMatchObject({ count: 2, notificationsError: null, notificationsMore: false });
     expect(byKey('a')?.notifications?.map((x) => x.id)).toEqual(['2', '1']);
@@ -145,12 +145,12 @@ describe('buildOverview', () => {
     expect(o.total).toBe(2);
   });
   it('puts notifications for repos that are not apps in a GitHub tile, which carries "more"', () => {
-    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' })], notifications: { list: [note('9', 'o/elsewhere', true, 0)], more: true } }));
+    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' })], notifications: { list: [note('9', 'o/elsewhere', true, 0)], more: true, error: null } }));
     expect(o.tiles.find((x) => x.key === 'github')).toMatchObject({ appId: null, name: 'GitHub', count: 1, notificationsMore: true });
     expect(o.tiles.find((x) => x.key === 'a')).toMatchObject({ notifications: [], notificationsMore: true });
   });
   it('puts an error on every GitHub section, and a GitHub tile only for the error', () => {
-    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' }), app('c')], notifications: { error: 'boom' } }));
+    const o = buildOverview(input({ apps: [app('a', { githubRepo: 'o/a' }), app('c')], notifications: { list: [], more: false, error: 'boom' } }));
     expect(o.tiles.find((x) => x.key === 'a')).toMatchObject({ notifications: [], notificationsError: 'boom' });
     expect(o.tiles.find((x) => x.key === 'github')).toMatchObject({ notifications: [], notificationsError: 'boom', count: 0 });
     expect(o.tiles.find((x) => x.key === 'c')?.notificationsError).toBeNull();

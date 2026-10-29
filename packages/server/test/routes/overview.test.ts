@@ -5,7 +5,8 @@ import type { Overview } from '@otherbench/core/types/overview.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';
-import { OverviewError, type OverviewService } from '../../src/overview/service.js';
+import { GhError } from '../../src/code/github.js';
+import type { OverviewService } from '../../src/overview/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -13,19 +14,20 @@ const VIEW = { tiles: [], checkedAt: 1 } as unknown as Overview;
 
 interface Calls {
   refresh: number;
-  tick: [string, number][];
+  done: string[];
+  read: string[];
   older: number[];
 }
 
 let container: Container;
 let store: InMemoryStore;
 let calls: Calls;
-let tickFails: OverviewError | null;
+let doneFails: GhError | null;
 
 beforeEach(() => {
   store = new InMemoryStore('node-pc');
-  calls = { refresh: 0, tick: [], older: [] };
-  tickFails = null;
+  calls = { refresh: 0, done: [], read: [], older: [] };
+  doneFails = null;
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);
   const overview = {
@@ -33,14 +35,16 @@ beforeEach(() => {
     async refresh() {
       calls.refresh++;
     },
-    tickIssue(appId: string, n: number) {
-      if (tickFails) throw tickFails;
-      calls.tick.push([appId, n]);
-      return { appId, number: n, through: 'x' };
+    async markDone(id: string) {
+      if (doneFails) throw doneFails;
+      calls.done.push(id);
+    },
+    async markRead(id: string) {
+      calls.read.push(id);
     },
     tickOlder(before: number) {
       calls.older.push(before);
-      return { chats: 2, issues: 1 };
+      return { chats: 2 };
     },
   } as unknown as OverviewService;
   container = {
@@ -99,31 +103,29 @@ describe('POST /api/overview/refresh', () => {
   });
 });
 
-describe('POST /api/overview/issues/:appId/:n/tick', () => {
-  it('ticks the issue and returns the overview', async () => {
-    const res = await send('POST', '/api/overview/issues/a1/48/tick');
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(VIEW);
-    expect(calls.tick).toEqual([['a1', 48]]);
+describe('POST /api/overview/notifications/:id/done and /read', () => {
+  it('marks it done, or read, and returns the overview', async () => {
+    const done = await send('POST', '/api/overview/notifications/123/done');
+    expect(done.status).toBe(200);
+    expect(await done.json()).toEqual(VIEW);
+    const read = await send('POST', '/api/overview/notifications/456/read');
+    expect(read.status).toBe(200);
+    expect(calls).toMatchObject({ done: ['123'], read: ['456'] });
   });
 
-  it('is 404 for an unknown app', async () => {
-    const res = await send('POST', '/api/overview/issues/nope/48/tick');
-    expect(res.status).toBe(404);
-    expect(calls.tick).toEqual([]);
+  it.each(['abc', '12a', '-1'])('is 400 for the id %s, and nothing reaches GitHub', async (id) => {
+    for (const action of ['done', 'read']) {
+      const res = await send('POST', `/api/overview/notifications/${id}/${action}`);
+      expect(res.status).toBe(400);
+    }
+    expect(calls).toMatchObject({ done: [], read: [] });
   });
 
-  it.each(['abc', '0', '-3', '1.5'])('is 400 for the number %s', async (n) => {
-    const res = await send('POST', `/api/overview/issues/a1/${n}/tick`);
-    expect(res.status).toBe(400);
-    expect(calls.tick).toEqual([]);
-  });
-
-  it("is 409 with code 'not-needing' when the issue doesn't need the user", async () => {
-    tickFails = new OverviewError('not-needing', "Issue #9 doesn't need you.");
-    const res = await send('POST', '/api/overview/issues/a1/9/tick');
+  it("answers GitHub's refusal with gh's error code", async () => {
+    doneFails = new GhError('gh-signed-out', 'The GitHub CLI is not signed in.');
+    const res = await send('POST', '/api/overview/notifications/123/done');
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: "Issue #9 doesn't need you.", code: 'not-needing' });
+    expect(await res.json()).toMatchObject({ code: 'gh-signed-out' });
   });
 });
 
@@ -132,7 +134,7 @@ describe('POST /api/overview/tick-older', () => {
     const before = Date.now() - 60_000;
     const res = await send('POST', '/api/overview/tick-older', { before });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ chats: 2, issues: 1 });
+    expect(await res.json()).toEqual({ chats: 2 });
     expect(calls.older).toEqual([before]);
   });
 
@@ -154,7 +156,7 @@ describe('POST /api/overview/tick-older', () => {
 describe('the peer listener', () => {
   it('has no /overview route', async () => {
     const api = forwardedApi(container);
-    for (const path of ['/overview', '/overview/refresh', '/overview/issues/a1/1/tick']) {
+    for (const path of ['/overview', '/overview/refresh', '/overview/notifications/1/done']) {
       const res = await api.request(path, {}, { peerNodeId: 'node-laptop' });
       expect(res.status, path).toBe(404);
     }

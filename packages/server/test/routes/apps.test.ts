@@ -60,6 +60,7 @@ interface GithubCalls {
   comment: [string, number, string][];
   close: [string, number][];
   reopen: [string, number][];
+  pr: [string, number][];
 }
 
 let container: Container;
@@ -93,7 +94,7 @@ beforeEach(() => {
   const bus = new AppEventBus();
   events = [];
   bus.subscribe((e) => events.push(e));
-  calls = { list: [], view: [], comment: [], close: [], reopen: [] };
+  calls = { list: [], view: [], comment: [], close: [], reopen: [], pr: [] };
   githubFails = null;
   const fail = (): void => {
     if (githubFails) throw githubFails;
@@ -132,6 +133,11 @@ beforeEach(() => {
       async reopen(repo, n) {
         calls.reopen.push([repo, n]);
         fail();
+      },
+      async pr(repo, n) {
+        calls.pr.push([repo, n]);
+        fail();
+        return { number: n, title: 'Add it', body: 'Does it', url: `https://github.com/${repo}/pull/${n}`, branch: 'feat/it' };
       },
     },
     close: () => {},
@@ -587,6 +593,15 @@ describe('issue routes', () => {
       ['o/r', 'closed'],
     ]);
     expect((await send('GET', '/api/apps/a1/issues?state=all')).status).toBe(400);
+  });
+
+  it('views a pull request with its branch, for a chat started on it', async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    expect(await json(await send('GET', '/api/apps/a1/pulls/456'))).toEqual({ number: 456, title: 'Add it', body: 'Does it', url: 'https://github.com/o/r/pull/456', branch: 'feat/it' });
+    expect(calls.pr).toEqual([['o/r', 456]]);
+    expect((await send('GET', '/api/apps/a1/pulls/x')).status).toBe(400);
+    newApp('a2', tmp());
+    expect((await send('GET', '/api/apps/a2/pulls/1')).status).toBe(409);
   });
 
   it('views, comments on, closes and reopens an issue', async () => {

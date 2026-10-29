@@ -65,8 +65,11 @@ export interface OverviewInput {
   apps: App[]; chats: Chat[]; projects: { id: string; name: string }[];
   heads: ChatHead[]; waitingChatIds: ReadonlySet<string>;
   me: string | null;
-  /** The GitHub inbox from the last check; null = not checked yet. */
-  notifications: { list: GithubNotification[]; more: boolean } | { error: string } | null;
+  /**
+   * The GitHub inbox: the last good list, and why the latest check couldn't read it (null when it could).
+   * null = not checked yet.
+   */
+  notifications: { list: GithubNotification[]; more: boolean; error: string | null } | null;
   /** By app id. */
   decks: Record<string, { view: DeckBoardView } | { error: string }>;
   checkedAt: number | null; checking: boolean;
@@ -99,11 +102,11 @@ export function buildOverview(input: OverviewInput): Overview {
 
   // Each notification goes to the first app whose repo it is, else to the GitHub tile.
   const inbox = input.notifications;
-  const inboxError = inbox !== null && 'error' in inbox ? inbox.error : null;
-  const inboxMore = inbox !== null && 'list' in inbox ? inbox.more : false;
+  const inboxError = inbox?.error ?? null;
+  const inboxMore = inbox?.more ?? false;
   const byApp = new Map<string, GithubNotification[]>();
   const elsewhere: GithubNotification[] = [];
-  for (const n of inbox !== null && 'list' in inbox ? sortNotifications(inbox.list) : []) {
+  for (const n of sortNotifications(inbox?.list ?? [])) {
     const owner = appForRepo(input.apps, n.repo);
     if (owner === null) elsewhere.push(n);
     else byApp.set(owner.id, [...(byApp.get(owner.id) ?? []), n]);

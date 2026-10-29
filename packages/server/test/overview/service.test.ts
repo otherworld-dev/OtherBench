@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
-import type { IssueActivity, OverviewTile } from '@otherbench/core/types/overview.js';
+import type { GithubNotification, OverviewTile } from '@otherbench/core/types/overview.js';
 import { GhError } from '../../src/code/github.js';
-import { OVERVIEW_INTERVAL_MS, OverviewError, OverviewService, type OverviewDeps, type OverviewMachine } from '../../src/overview/service.js';
+import { OVERVIEW_INTERVAL_MS, OverviewService, type OverviewDeps, type OverviewMachine } from '../../src/overview/service.js';
 import { ManualClock } from '../memory/manual-clock.js';
 import { FakeNextcloudClient } from '../nextcloud/fake-client.js';
 
@@ -12,29 +12,34 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const GH_SIGNED_OUT = 'The GitHub CLI is not signed in. Run `gh auth login` in a terminal.';
 
-/** Opened by alice yesterday, nobody has answered. */
-function issue(number: number, createdAt: string, over: Partial<IssueActivity> = {}): IssueActivity {
-  return {
-    number, title: `Issue ${number}`, state: 'open', url: `https://github.com/o/ob/issues/${number}`,
-    author: 'alice', authorIsBot: false, createdAt, closedAt: null, comments: [], ...over,
-  };
+/** A notification in `repo`, unread, updated at `at`. */
+function note(id: string, repo: string, at: string, over: Partial<GithubNotification> = {}): GithubNotification {
+  return { id, repo, kind: 'issue', title: `Note ${id}`, number: Number(id), reason: 'mention', unread: true, updatedAt: at, url: `https://github.com/${repo}/issues/${id}`, ...over };
 }
 
-/** A fake gh: `login` and `activity` per repo, each settable to throw. */
+/** A fake gh: `login`, the inbox, and Done/read, each settable to throw. */
 class FakeGh {
   me: string | Error = 'adam';
-  repos: Record<string, IssueActivity[] | Error> = {};
+  inbox: GithubNotification[] | Error = [];
+  more = false;
+  failDone: Error | null = null;
   calls: string[] = [];
   async login(): Promise<string> {
     this.calls.push('login');
     if (this.me instanceof Error) throw this.me;
     return this.me;
   }
-  async activity(repo: string): Promise<IssueActivity[]> {
-    this.calls.push(`activity ${repo}`);
-    const r = this.repos[repo] ?? [];
-    if (r instanceof Error) throw r;
-    return structuredClone(r);
+  async notifications(): Promise<{ list: GithubNotification[]; more: boolean }> {
+    this.calls.push('notifications');
+    if (this.inbox instanceof Error) throw this.inbox;
+    return { list: structuredClone(this.inbox), more: this.more };
+  }
+  async markDone(id: string): Promise<void> {
+    this.calls.push(`done ${id}`);
+    if (this.failDone) throw this.failDone;
+  }
+  async markRead(id: string): Promise<void> {
+    this.calls.push(`read ${id}`);
   }
 }
 
@@ -111,7 +116,7 @@ beforeEach(() => {
   store.apps.create({ id: 'a2', name: 'Site', githubRepo: 'o/site' });
   store.apps.create({ id: 'a3', name: 'Notes', deckBoardId: 1 });
   store.apps.create({ id: 'a4', name: 'Plain' });
-  gh.repos['o/ob'] = [issue(7, '2026-10-25T10:00:00Z')];
+  gh.inbox = [note('7', 'o/ob', '2026-10-25T10:00:00Z'), note('8', 'o/elsewhere', '2026-10-24T10:00:00Z', { unread: false })];
 });
 
 describe('OverviewService checks', () => {
@@ -139,15 +144,16 @@ describe('OverviewService checks', () => {
     const svc = service();
     await svc.refresh();
     const ob = tileOf(svc, 'a1');
-    expect(ob.issues?.map((i) => [i.number, i.kind, i.who])).toEqual([[7, 'new', 'alice']]);
-    expect(ob.issuesError).toBeNull();
+    expect(ob.notifications?.map((n) => n.id)).toEqual(['7']);
+    expect(ob.notificationsError).toBeNull();
     expect(ob.deck).toMatchObject({ doing: 1, todo: 1, backlog: 2 });
     expect(ob.deck?.due.map((d) => [d.cardId, d.overdueDays])).toEqual([[900, 2]]);
     expect(ob.chats.map((c) => c.chatId)).toEqual(['c1']);
     expect(ob.count).toBe(3);
-    expect(tileOf(svc, 'a2').issues).toEqual([]);
-    expect(tileOf(svc, 'a3').issues).toBeNull();
-    expect(tileOf(svc, 'a4')).toMatchObject({ issues: null, deck: null, faded: true });
+    expect(tileOf(svc, 'a2').notifications).toEqual([]);
+    expect(tileOf(svc, 'a3').notifications).toBeNull();
+    expect(tileOf(svc, 'a4')).toMatchObject({ notifications: null, deck: null, faded: true });
+    expect(tileOf(svc, 'github').notifications?.map((n) => n.id)).toEqual(['8']);
     expect(svc.view()).toMatchObject({ checkedAt: NOW, checking: false, githubLogin: 'adam' });
     expect(svc.githubLogin()).toBe('adam');
   });
@@ -172,18 +178,18 @@ describe('OverviewService checks', () => {
     const b = svc.refresh();
     await Promise.all([a, b]);
     expect(gh.calls.filter((c) => c === 'login')).toHaveLength(1);
-    expect(gh.calls.filter((c) => c === 'activity o/ob')).toHaveLength(1);
+    expect(gh.calls.filter((c) => c === 'notifications')).toHaveLength(1);
   });
 
-  it('a signed-out gh puts an issues error on every repo app; chats and Deck still show', async () => {
+  it('a signed-out gh puts a GitHub error on every repo app and the GitHub tile; chats and Deck still show', async () => {
     gh.me = new GhError('gh-signed-out', GH_SIGNED_OUT);
     chat('c1', 'a1', 'assistant', NOW - HOUR);
     const svc = service();
     await svc.refresh();
-    for (const key of ['a1', 'a2']) {
-      expect(tileOf(svc, key)).toMatchObject({ issues: [], issuesError: `couldn't check issues: ${GH_SIGNED_OUT}` });
+    for (const key of ['a1', 'a2', 'github']) {
+      expect(tileOf(svc, key)).toMatchObject({ notifications: [], notificationsError: `couldn't check GitHub: ${GH_SIGNED_OUT}` });
     }
-    expect(tileOf(svc, 'a3').issuesError).toBeNull();
+    expect(tileOf(svc, 'a3').notificationsError).toBeNull();
     const ob = tileOf(svc, 'a1');
     expect(ob.chats.map((c) => c.chatId)).toEqual(['c1']);
     expect(ob.deck?.due.map((d) => d.cardId)).toEqual([900]);
@@ -192,13 +198,13 @@ describe('OverviewService checks', () => {
     expect(svc.view().githubLogin).toBeNull();
   });
 
-  it('a repo that fails puts the error on that app only', async () => {
-    gh.repos['o/site'] = new GhError('repo-not-found', 'That repository was not found on GitHub.');
+  it('a failed inbox read keeps the last good list and shows why', async () => {
     const svc = service();
     await svc.refresh();
-    expect(tileOf(svc, 'a2').issuesError).toBe("couldn't check issues: That repository was not found on GitHub.");
-    expect(tileOf(svc, 'a1').issuesError).toBeNull();
-    expect(tileOf(svc, 'a1').issues?.map((i) => i.number)).toEqual([7]);
+    gh.inbox = new GhError('gh-failed', 'HTTP 502: Bad Gateway');
+    await svc.refresh();
+    expect(tileOf(svc, 'a1')).toMatchObject({ notificationsError: "couldn't check GitHub: HTTP 502: Bad Gateway" });
+    expect(tileOf(svc, 'a1').notifications?.map((n) => n.id)).toEqual(['7']);
   });
 
   it('Nextcloud not set up puts a Deck error on every board app', async () => {
@@ -209,7 +215,7 @@ describe('OverviewService checks', () => {
       expect(tileOf(svc, key)).toMatchObject({ deckError: "Nextcloud isn't set up", deck: { due: [], doing: 0, todo: 0, backlog: 0 } });
     }
     expect(tileOf(svc, 'a2').deckError).toBeNull();
-    expect(tileOf(svc, 'a1').issues?.map((i) => i.number)).toEqual([7]);
+    expect(tileOf(svc, 'a1').notifications?.map((n) => n.id)).toEqual(['7']);
   });
 
   it('calls onLoginChanged when the login changes, not on every check', async () => {
@@ -293,38 +299,36 @@ describe('OverviewService machines', () => {
   });
 });
 
-describe('OverviewService tick-offs', () => {
-  it('tickIssue hides the issue until someone else comments again', async () => {
+describe('OverviewService inbox actions', () => {
+  it('markDone clears it on GitHub, drops it straight away and says so', async () => {
     const svc = service();
     await svc.refresh();
-    const tick = svc.tickIssue('a1', 7);
-    expect(tick).toMatchObject({ appId: 'a1', number: 7, through: '2026-10-25T10:00:00Z' });
-    expect(tileOf(svc, 'a1').issues).toEqual([]);
-    expect(events.at(-1)).toEqual({ type: 'overview-changed' });
-
-    gh.repos['o/ob'] = [issue(7, '2026-10-25T10:00:00Z', { comments: [{ author: 'bob', authorIsBot: false, createdAt: '2026-10-26T08:00:00Z' }] })];
-    await svc.refresh();
-    expect(tileOf(svc, 'a1').issues?.map((i) => [i.number, i.kind, i.who])).toEqual([[7, 'comment', 'bob']]);
+    events.length = 0;
+    await svc.markDone('7');
+    expect(gh.calls).toContain('done 7');
+    expect(tileOf(svc, 'a1').notifications).toEqual([]);
+    expect(events).toEqual([{ type: 'overview-changed' }]);
   });
 
-  it('tickIssue refuses an issue that does not need him', async () => {
+  it('a markDone GitHub refuses changes nothing and passes the error on', async () => {
+    gh.failDone = new GhError('gh-failed', 'HTTP 500');
     const svc = service();
     await svc.refresh();
-    const err = (() => {
-      try {
-        svc.tickIssue('a1', 99);
-        return null;
-      } catch (e) {
-        return e;
-      }
-    })();
-    expect(err).toBeInstanceOf(OverviewError);
-    expect((err as OverviewError).code).toBe('not-needing');
-    expect(store.issueTicks.list()).toEqual([]);
+    events.length = 0;
+    await expect(svc.markDone('7')).rejects.toThrow('HTTP 500');
+    expect(tileOf(svc, 'a1').notifications?.map((n) => n.id)).toEqual(['7']);
+    expect(events).toEqual([]);
   });
 
-  it('tickOlder ticks off only older chats and issues, and leaves waiting chats', async () => {
-    gh.repos['o/ob'] = [issue(7, '2026-10-25T10:00:00Z'), issue(8, '2026-10-26T08:30:00Z')];
+  it('markRead marks it read on GitHub and in the list', async () => {
+    const svc = service();
+    await svc.refresh();
+    await svc.markRead('7');
+    expect(gh.calls).toContain('read 7');
+    expect(tileOf(svc, 'a1').notifications?.[0]).toMatchObject({ id: '7', unread: false });
+  });
+
+  it('tickOlder ticks off only older chats, and leaves waiting chats and the inbox alone', async () => {
     chat('c-old', 'a1', 'assistant', NOW - 3 * DAY);
     chat('c-new', 'a1', 'assistant', NOW - HOUR);
     chat('c-wait', 'a1', 'assistant', NOW - 3 * DAY);
@@ -334,15 +338,15 @@ describe('OverviewService tick-offs', () => {
     await svc.refresh();
     events.length = 0;
 
-    expect(svc.tickOlder(Date.parse('2026-10-26T00:00:00Z'))).toEqual({ chats: 1, issues: 1 });
+    expect(svc.tickOlder(Date.parse('2026-10-26T00:00:00Z'))).toEqual({ chats: 1 });
     expect(store.chats.get('c-old')?.dealtWithAt).toBe(NOW);
     expect(store.chats.get('c-new')?.dealtWithAt ?? null).toBeNull();
     expect(store.chats.get('c-wait')?.dealtWithAt ?? null).toBeNull();
     expect(store.chats.get('c-mine')?.dealtWithAt ?? null).toBeNull();
     const ob = tileOf(svc, 'a1');
     expect(ob.chats.map((c) => c.chatId)).toEqual(['c-wait', 'c-new']);
-    expect(ob.issues?.map((i) => i.number)).toEqual([8]);
-    expect(store.issueTicks.list()).toEqual([expect.objectContaining({ appId: 'a1', number: 7, through: '2026-10-25T10:00:00Z' })]);
+    expect(ob.notifications?.map((n) => n.id)).toEqual(['7']);
+    expect(gh.calls.filter((c) => c.startsWith('done'))).toEqual([]);
     expect(events).toEqual([{ type: 'overview-changed' }]);
   });
 });

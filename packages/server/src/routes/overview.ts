@@ -1,12 +1,14 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from '../container.js';
-import { OverviewError, type OverviewService } from '../overview/service.js';
+import { codeCall } from '../code/route-errors.js';
+import type { OverviewService } from '../overview/service.js';
 
 /**
  * The Overview (spec 2026-10-26-overview-design): what needs the user across
- * every app, plus the tick-offs that clear it. A user action on this machine,
- * so it is mounted on the authed API only and never on the peer listener.
+ * every app, plus the tick-offs and GitHub's Done that clear it (spec
+ * 2026-10-29-github-inbox-design). A user action on this machine, so it is
+ * mounted on the authed API only and never on the peer listener.
  */
 export function overviewRoutes(container: Container): Hono {
   const app = new Hono();
@@ -24,19 +26,24 @@ export function overviewRoutes(container: Container): Hono {
     return c.json(overview.view());
   });
 
-  app.post('/issues/:appId/:n/tick', (c) => {
+  /** A notification thread id from the path: digits only, since it goes into a GitHub API path. */
+  function threadIdOf(raw: string): string {
+    if (!/^\d+$/.test(raw)) throw new HTTPException(400, { message: 'The notification id must be a number.' });
+    return raw;
+  }
+
+  // GitHub's Done and mark-read on one notification; gh's errors answer as the apps routes' do.
+  app.post('/notifications/:id/done', async (c) => {
     const overview = service();
-    const appId = c.req.param('appId');
-    if (!container.store.apps.get(appId)) throw new HTTPException(404, { message: `No app "${appId}".` });
-    const raw = c.req.param('n');
-    const number = /^\d+$/.test(raw) ? Number(raw) : 0;
-    if (!Number.isSafeInteger(number) || number < 1) throw new HTTPException(400, { message: 'The issue number must be a positive whole number.' });
-    try {
-      overview.tickIssue(appId, number);
-    } catch (err) {
-      if (err instanceof OverviewError) return c.json({ error: err.message, code: err.code }, 409);
-      throw err;
-    }
+    const id = threadIdOf(c.req.param('id'));
+    await codeCall(() => overview.markDone(id));
+    return c.json(overview.view());
+  });
+
+  app.post('/notifications/:id/read', async (c) => {
+    const overview = service();
+    const id = threadIdOf(c.req.param('id'));
+    await codeCall(() => overview.markRead(id));
     return c.json(overview.view());
   });
 
