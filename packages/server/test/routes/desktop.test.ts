@@ -40,13 +40,14 @@ async function busy(container: Container, token: string | null = TOKEN): Promise
 
 describe('busyReasons', () => {
   it('says nothing when nothing runs', () => {
-    expect(busyReasons({ runningTurns: 0, scheduledRuns: 0 })).toEqual([]);
+    expect(busyReasons({ runningTurns: 0, scheduledRuns: 0, backgroundTasks: 0 })).toEqual([]);
   });
 
-  it('counts replies and scheduled runs', () => {
-    expect(busyReasons({ runningTurns: 1, scheduledRuns: 0 })).toEqual(['1 reply being written']);
-    expect(busyReasons({ runningTurns: 3, scheduledRuns: 2 })).toEqual(['3 replies being written', '2 scheduled runs']);
-    expect(busyReasons({ runningTurns: 0, scheduledRuns: 1 })).toEqual(['1 scheduled run']);
+  it('counts replies, scheduled runs and background tasks', () => {
+    expect(busyReasons({ runningTurns: 1, scheduledRuns: 0, backgroundTasks: 0 })).toEqual(['1 reply being written']);
+    expect(busyReasons({ runningTurns: 3, scheduledRuns: 2, backgroundTasks: 0 })).toEqual(['3 replies being written', '2 scheduled runs']);
+    expect(busyReasons({ runningTurns: 0, scheduledRuns: 1, backgroundTasks: 0 })).toEqual(['1 scheduled run']);
+    expect(busyReasons({ runningTurns: 0, scheduledRuns: 0, backgroundTasks: 2 })).toEqual(['2 background tasks']);
   });
 });
 
@@ -61,6 +62,12 @@ describe('GET /api/desktop/busy', () => {
     const { container, events } = makeContainer();
     events.emit({ type: 'turn-started', chatId: 'chat-1', messageIds: ['m-1'] } as never);
     expect(await (await busy(container)).json()).toEqual({ busy: true, reasons: ['1 reply being written'] });
+  });
+
+  it("a Claude Code agent's background tasks make it busy between replies", async () => {
+    const { container, events } = makeContainer();
+    events.emit({ type: 'background-tasks', chatId: 'chat-1', count: 1 } as never);
+    expect(await (await busy(container)).json()).toEqual({ busy: true, reasons: ['1 background task'] });
   });
 
   it('a scheduled run makes it busy', async () => {

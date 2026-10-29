@@ -103,6 +103,11 @@ export class Syncer {
     if (known) return known;
     const stored = this.options.store.settings.getValue(mismatchKey(nodeId));
     if (!isStoredMismatch(stored)) return { lastSyncedAt: null, error: null, versionMismatch: null };
+    // Kept from before an update that brought this machine level with the peer: it no longer holds.
+    if (stored.peerSchemaVersion === this.options.peers.info().schemaVersion && stored.peerProtocolVersion === PEER_PROTOCOL_VERSION) {
+      this.options.store.settings.setValue(mismatchKey(nodeId), null);
+      return { lastSyncedAt: null, error: null, versionMismatch: null };
+    }
     const { message, ...mismatch } = stored;
     return { lastSyncedAt: null, error: message, versionMismatch: mismatch };
   }

@@ -316,6 +316,15 @@ describe('syncing two machines over the peer listener', () => {
     expect(restarted.status('node-PC').error).toMatch(/different version/);
   });
 
+  it('forgets a stored mismatch once this machine has caught up', async () => {
+    const laptop = syncNode('Laptop');
+    laptop.store.settings.setValue('sync-version-mismatch:node-PC', {
+      peerAppVersion: '0.2.0-beta.44', peerSchemaVersion: SCHEMA_VERSION, peerProtocolVersion: laptop.service.info().protocolVersion, thisMachineOlder: true, at: 1, message: 'old',
+    });
+    expect(laptop.syncer.status('node-PC')).toEqual({ lastSyncedAt: null, error: null, versionMismatch: null });
+    expect(laptop.store.settings.getValue('sync-version-mismatch:node-PC')).toBeNull();
+  });
+
   it('a successful pull clears a version mismatch', async () => {
     const pc = syncNode('PC');
     const laptop = syncNode('Laptop');

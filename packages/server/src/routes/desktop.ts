@@ -6,10 +6,11 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /** What would be cut off by restarting now, in words for Settings. Open terminals don't count: an update closes them, and that's accepted. */
-export function busyReasons(counts: { runningTurns: number; scheduledRuns: number }): string[] {
+export function busyReasons(counts: { runningTurns: number; scheduledRuns: number; backgroundTasks: number }): string[] {
   const reasons: string[] = [];
   if (counts.runningTurns > 0) reasons.push(plural(counts.runningTurns, 'reply being written', 'replies being written'));
   if (counts.scheduledRuns > 0) reasons.push(plural(counts.scheduledRuns, 'scheduled run', 'scheduled runs'));
+  if (counts.backgroundTasks > 0) reasons.push(plural(counts.backgroundTasks, 'background task', 'background tasks'));
   return reasons;
 }
 
@@ -25,6 +26,8 @@ export function desktopRoutes(container: Container): Hono {
     const reasons = busyReasons({
       runningTurns: container.events?.runningTurns().length ?? 0,
       scheduledRuns: container.schedules?.activeRunCount() ?? 0,
+      // A Claude Code agent's helpers still running between replies.
+      backgroundTasks: (container.events?.backgroundChats() ?? []).reduce((n, c) => n + c.count, 0),
     });
     return c.json({ busy: reasons.length > 0, reasons });
   });
