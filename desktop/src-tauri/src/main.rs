@@ -12,6 +12,7 @@ mod notify;
 mod rpc;
 mod sidecar;
 mod tray;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
