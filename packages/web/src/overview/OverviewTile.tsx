@@ -91,9 +91,9 @@ export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
 /**
  * One notification from the GitHub inbox (spec 2026-10-29-github-inbox-design): its number and title, what it is,
  * and why and when GitHub notified, bold while unread. Done marks it done on GitHub; Chat, only in an app's tile
- * since a chat needs the app's folder, starts a chat on it. `repo` prefixes the title in the GitHub tile.
+ * since a chat needs the app's folder, starts a chat on it.
  */
-export function OverviewNotificationRow({ notification: n, appId, showRepo }: { notification: GithubNotification; appId: string | null; showRepo: boolean }): JSX.Element {
+export function OverviewNotificationRow({ notification: n, appId }: { notification: GithubNotification; appId: string | null }): JSX.Element {
   const app = useOtherBenchStore((s) => (appId === null ? undefined : s.apps.find((a) => a.id === appId)));
   const label = `${n.number === null ? '' : `#${n.number} `}${n.title}`;
   return (
@@ -110,7 +110,6 @@ export function OverviewNotificationRow({ notification: n, appId, showRepo }: { 
       >
         <span className={`min-w-0 truncate ${n.unread ? 'font-semibold' : ''}`}>
           <span className="mr-1 rounded-[3px] border border-[var(--border-strong)] px-1 text-[0.65rem] font-normal text-[var(--text-muted)]">{KIND_TAG[n.kind]}</span>
-          {showRepo && <span className="mr-1 font-normal text-[var(--text-muted)]">{n.repo}</span>}
           {label}
         </span>
         <span className={`${MUTED} shrink-0 whitespace-nowrap`}>
@@ -195,6 +194,13 @@ function ChatsSection({ chats, byProject }: { chats: OverviewChat[]; byProject: 
   );
 }
 
+/** `list` grouped by repo, in the order each repo first appears (so the group holding the first unread leads). */
+function byRepo(list: GithubNotification[]): [string, GithubNotification[]][] {
+  const groups = new Map<string, GithubNotification[]>();
+  for (const n of list) groups.set(n.repo, [...(groups.get(n.repo) ?? []), n]);
+  return [...groups.entries()];
+}
+
 function GithubSection({ tile }: { tile: Tile }): JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const notifications = tile.notifications ?? [];
@@ -207,9 +213,17 @@ function GithubSection({ tile }: { tile: Tile }): JSX.Element {
         <p className={MUTED}>None</p>
       ) : (
         <>
-          {shown.map((n) => (
-            <OverviewNotificationRow key={n.id} notification={n} appId={tile.appId} showRepo={tile.appId === null} />
-          ))}
+          {tile.appId !== null
+            ? shown.map((n) => <OverviewNotificationRow key={n.id} notification={n} appId={tile.appId} />)
+            : // The GitHub tile's rows come from several repos: each repo's under its name, as the Chats tile does projects.
+              byRepo(shown).map(([repo, rows]) => (
+                <div key={repo}>
+                  <div className={`${MUTED} pt-1`}>{repo}</div>
+                  {rows.map((n) => (
+                    <OverviewNotificationRow key={n.id} notification={n} appId={null} />
+                  ))}
+                </div>
+              ))}
           {hidden > 0 && (
             <button
               type="button"

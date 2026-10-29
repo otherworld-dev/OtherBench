@@ -126,7 +126,8 @@ describe('OverviewView', () => {
     expect(api.overview.markRead).not.toHaveBeenCalled();
     expect(screen.getByTestId('overview-notification-3')).toHaveTextContent('CI failed');
     expect(screen.getByTestId('overview-notification-3')).not.toHaveTextContent('#');
-    expect(screen.getByTestId('overview-notification-5')).toHaveTextContent('o/else');
+    expect(within(screen.getByTestId('overview-tile-github')).getByText('o/else')).toBeInTheDocument();
+    expect(screen.getByTestId('overview-notification-5')).not.toHaveTextContent('o/else');
   });
 
   it('offers Chat only in an app tile, since a chat needs an app', () => {
