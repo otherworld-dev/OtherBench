@@ -30,9 +30,12 @@ desktop app and lets two machines share chats. Built so far:
   `core/domain/child-env.ts`), tray, single
   instance, start at login, a global hotkey with a quick-chat window,
   native notifications, native file and folder pickers, drag and drop, and
-  `--open-folder` / `--send` arguments. Installers and a bundled Node
-  runtime (Tasks 40-41, Deck #777-#778) are **not** built: the app still
-  finds `node` on `PATH` and the server in this checkout.
+  `--open-folder` / `--send` arguments. `npm run app:installer` (in
+  `desktop/`) builds the NSIS installer, which carries the bundled server and
+  the Node runtime that ran the build (`scripts/stage.mjs`); a dev run still
+  uses `node` on `PATH` and the server in this checkout.
+- **Updates** (see "Updates" below): installed builds update themselves from
+  GitHub releases, full and beta channels.
 - **Machines** (`packages/server/src/peer/`): every install is a node with
   an id (`node_self`) and a self-signed ECDSA P-256 certificate, made on
   first use and kept beside the secrets file as `node-<id>.crt/.key`. Its
@@ -80,6 +83,60 @@ machine, stop it, run here, see the branch arrive when it's back). A
 seeded 500-operation run across two stores converges on five seeds
 (`store-sqlite/test/sync.test.ts`). It has **not** yet been tried across two
 physical machines.
+
+## Updates
+
+Spec *docs/superpowers/specs/2026-10-29-auto-update-design.md*. Machines on
+different builds stop syncing (a schema or protocol mismatch is refused), so
+every installed build keeps itself current.
+
+- **Releases.** CI (`.github/workflows/ci.yml`, job `release`, after `test`)
+  builds and publishes them with `desktop/scripts/release/publish.mjs`:
+  - Every push of `dev` to GitHub → a beta, `vX.Y.Z-beta.N` (a pre-release,
+    `N` = the run number, `X.Y.Z` the next full version: `desktop/package.json`'s
+    while that's ahead of every full release, else the newest one's patch + 1).
+    A newer push cancels a beta still building.
+  - A `vX.Y.Z` tag → a full release, marked latest. To cut one: merge `dev`
+    into `main`, tag `vX.Y.Z` on it, push the tag to `github`. Afterwards,
+    set `desktop/package.json` to the next version you mean to ship (betas
+    move to the next patch by themselves if you don't).
+  - Each release holds the installer, its `.sig` and `latest.json`.
+- **Feeds.** Full channel: `releases/latest/download/latest.json`. Beta
+  channel: the `latest.json` of the fixed pre-release `beta-channel`, which
+  `publish.mjs` only ever replaces with a higher version. A beta machine reads
+  both and takes the higher (a full release outranks its betas). GitHub's
+  release list is not in version order, so nothing ever takes "the first one
+  listed".
+- **The shell** (`desktop/src-tauri/src/update.rs`) checks 60 s after start and
+  every 4 hours (Settings → Desktop → Updates: Check now, and "Get beta
+  releases early", kept per machine in `<app config>/updates.json`). It
+  downloads (the signature is checked then), and installs only when nothing
+  is running and Adam is away: no reply being written and no scheduled run
+  (`GET /api/desktop/busy`), no unsent composer text, and no input in any app
+  window for 10 minutes or no window showing. A server that can't be reached
+  counts as idle, so a build whose server won't start is still replaced. After
+  a day of waiting it asks instead ("Restart and update now"). It stops the
+  server, then runs the installer passively; the installer relaunches the app,
+  which comes back hidden if it was (`update-relaunch.json`). Turning betas
+  off never downgrades. Dev runs never update.
+- **Database copy.** Before a new build migrates the database to a higher
+  schema it copies it to `otherbench.db.before-schema-<from>` (newest 3 kept,
+  `store-sqlite/src/backup.ts`); if the copy fails it doesn't start.
+- **Sync refusals.** The refusal names both builds, is kept in
+  `app_setting` `sync-version-mismatch:<node>` until a pull succeeds (so it
+  survives a restart), shows in Settings → Machines and the tray as "sync
+  stopped, versions differ", raises a toast once, and when the other machine
+  is ahead asks the updater to check now (`web/src/desktop/useUpdateHint.ts`).
+- **The key.** The updater's private key and password are the GitHub secrets
+  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the
+  public key is in `tauri.conf.json`. Adam keeps the offline copy
+  (`%USERPROFILE%\.tauri\otherbench-updater.key` and `.password`). Losing it
+  means reinstalling every machine by hand with a build carrying a new key.
+- **Fix forward.** There's no rollback: a broken beta is fixed by pushing the
+  next one. A fix to the updater itself that stops updates working has to be
+  installed by hand, as did the first build that had the updater.
+- **Not done.** No Windows code signing (SmartScreen warns on a fresh install;
+  updates aren't affected). Windows only.
 
 ## What works today
 
