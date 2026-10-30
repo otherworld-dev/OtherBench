@@ -13,9 +13,10 @@ import {
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { Peer, PeerInfo, PublicPeer } from '@otherbench/core/types/peer.js';
+import { isIP } from 'node:net';
 import type { Hono } from 'hono';
 import type { AppEventBus } from '../stream/events.js';
-import { PeerClient, PeerUnreachableError, parsePeerAddress, type PeerRequest, type PeerResponse, type ResponseLimits } from './client.js';
+import { DEFAULT_PEER_PORT, PeerClient, PeerUnreachableError, parsePeerAddress, type PeerRequest, type PeerResponse, type ResponseLimits } from './client.js';
 import type { IdentityStore } from './identity.js';
 import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
@@ -98,6 +99,9 @@ function toPublic({ issuedTokenHash: _issued, heldTokenRef: _held, ...peer }: Pe
 function plainIp(address: string): string {
   return address.startsWith('::ffff:') ? address.slice(7) : address;
 }
+
+/** At most this many addresses are kept for a paired machine: enough for the networks a laptop moves between. */
+const MAX_PEER_ADDRESSES = 5;
 
 /** At most this many of a peer's running chats are kept: far more than anyone has running at once. */
 const MAX_ACTIVE_CHATS = 200;
@@ -538,6 +542,26 @@ export class PeerService {
     const current = this.store.peers.get(peer.nodeId);
     if (!current) return;
     this.store.peers.update(peer.nodeId, { lastSeenAt: this.now(), addresses: [address, ...current.addresses.filter((a) => a !== address)] });
+  }
+
+  /**
+   * A paired machine called from `remoteAddress`, so it can probably be
+   * reached there too, at the port it listens on: a laptop that moved
+   * networks is found again without anyone typing its new address. It goes
+   * after the addresses already known (a call can come through a router a
+   * reply can't), and once a call to it works `noteReached` moves it first.
+   * Safe to learn from anyone authenticated: every connection is pinned to
+   * the machine's certificate, so a wrong address only fails.
+   */
+  noteCalledFrom(peer: Peer, remoteAddress: string | null): void {
+    if (!remoteAddress) return;
+    const current = this.store.peers.get(peer.nodeId);
+    if (!current) return;
+    const port = current.addresses[0] ? parsePeerAddress(current.addresses[0]).port : DEFAULT_PEER_PORT;
+    const ip = plainIp(remoteAddress);
+    const seen = isIP(ip) === 6 ? `[${ip}]:${port}` : `${ip}:${port}`;
+    if (current.addresses.includes(seen)) return;
+    this.store.peers.update(peer.nodeId, { addresses: [...current.addresses.slice(0, MAX_PEER_ADDRESSES - 1), seen] });
   }
 
   async heldToken(nodeId: string): Promise<string | null> {

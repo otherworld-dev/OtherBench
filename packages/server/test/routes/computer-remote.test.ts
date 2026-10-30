@@ -223,7 +223,7 @@ describe('computer use routes and the Host check', () => {
 
 describe('computer use routes and the peer listener', () => {
   const peerApp = (paired: boolean): Hono =>
-    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null) } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
+    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null), noteCalledFrom: () => {} } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
 
   it('has none of them: a paired machine gets 404 for Stop, the status and the events, and nothing is stopped', async () => {
     await holding();

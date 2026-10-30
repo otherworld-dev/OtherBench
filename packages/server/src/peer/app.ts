@@ -59,6 +59,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
   const pairedOnly = async (c: Context<PeerEnv>, next: () => Promise<void>): Promise<Response | void> => {
     const peer = service.authenticate(callerFingerprint(c), bearer(c));
     if (!peer) return c.json({ error: 'Not a paired machine.' }, 401);
+    service.noteCalledFrom(peer, c.env?.incoming?.socket?.remoteAddress ?? null);
     c.set('peer', peer);
     await next();
   };

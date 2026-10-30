@@ -218,7 +218,7 @@ describe("the model's browser routes and the Host check", () => {
 describe("the model's browser routes and the peer listener", () => {
   /** The peer listener's app, with a paired machine already authenticated (the TLS certificate and token check is the service's). */
   const peerApp = (paired: boolean): Hono =>
-    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null) } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
+    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null), noteCalledFrom: () => {} } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
 
   it('has none of them: a paired machine gets 404 for the state, the live view and the close, and the browser is never touched', async () => {
     const app = peerApp(true);
