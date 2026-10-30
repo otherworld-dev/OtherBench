@@ -15,6 +15,7 @@ import { parseContextCommand, type CommandRow } from '@otherbench/core/domain/co
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
+import { useUnsentText } from '../state/unsent.js';
 
 /** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
 type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
@@ -131,6 +132,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const storedChat = useOtherBenchStore((s) => s.chats.find((c) => c.id === chat.id));
 
   const [text, setText] = useState('');
+  useUnsentText(text);
   // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
   const history = useMemo(() => promptHistory(messages, parentId ?? (storedChat ?? chat).headMessageId), [messages, parentId, storedChat, chat]);
   const [browsing, setBrowsing] = useState<{ index: number; draft: string } | null>(null);

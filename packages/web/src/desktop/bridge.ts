@@ -230,3 +230,58 @@ export async function focusedWindow(): Promise<string | null> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string | null>('focused_window');
 }
+
+/** What the shell's updater is doing (desktop/src-tauri/src/update.rs `UpdateStatus`). */
+export interface UpdateStatus {
+  current: string;
+  /** Runs from its installer; a development build never updates itself. */
+  installed: boolean;
+  beta: boolean;
+  state: 'dev-build' | 'idle' | 'checking' | 'up-to-date' | 'ahead' | 'no-releases' | 'downloading' | 'ready' | 'ask' | 'installing' | 'error';
+  available: string | null;
+  newestFull: string | null;
+  lastCheckedAt: number | null;
+  /** What a ready update waits for before it installs. */
+  waitingFor: string[];
+  error: string | null;
+}
+
+/** The updater's status, or null in a browser. */
+export async function updateStatus(): Promise<UpdateStatus | null> {
+  if (!isDesktop()) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<UpdateStatus>('update_status');
+}
+
+/** Each change in the updater's status. */
+export function onUpdateStatus(cb: (status: UpdateStatus) => void): Promise<() => void> {
+  return onDesktopEvent<UpdateStatus>('update-status', cb);
+}
+
+/** Checks the release feeds now instead of at the next 4-hourly check. */
+export async function checkForUpdates(): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_check_now');
+}
+
+/** "Get beta releases early", for this machine. */
+export async function setBetaUpdates(beta: boolean): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_set_beta', { beta });
+}
+
+/** Installs the downloaded update now, restarting the app. */
+export async function installUpdateNow(): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_install_now');
+}
+
+/** Tells the updater Adam is using the app, and whether a composer holds unsent text. */
+export async function reportActivity(unsent: boolean): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_activity', { unsent });
+}

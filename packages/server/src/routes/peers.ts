@@ -54,7 +54,7 @@ export function peersRoutes(container: Container): Hono {
       listening: { running: peers.listener.running, addresses: peers.listener.addresses() },
       peers: peers.list().map((p) => {
         const sync = container.peers?.syncerOrNull()?.status(p.nodeId);
-        return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? null, activeChats: peers.activeChats(p.nodeId), backgroundChats: peers.backgroundChats(p.nodeId) };
+        return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? null, versionMismatch: sync?.versionMismatch ?? null, activeChats: peers.activeChats(p.nodeId), backgroundChats: peers.backgroundChats(p.nodeId) };
       }),
     });
   });

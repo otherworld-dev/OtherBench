@@ -433,6 +433,15 @@ export interface AdoptLocationBody {
   toRoot: string;
 }
 
+export interface VersionMismatchView {
+  peerAppVersion: string | null;
+  peerSchemaVersion: number;
+  peerProtocolVersion: number;
+  /** The peer is ahead: updating this machine fixes it. */
+  thisMachineOlder: boolean;
+  at: number;
+}
+
 /** A paired machine as Settings → Machines shows it: the stored peer plus whether it's reachable now. */
 export interface PeerView extends PublicPeer {
   status: 'unknown' | 'reachable' | 'unreachable';
@@ -441,6 +450,8 @@ export interface PeerView extends PublicPeer {
   /** When the last pull from it finished, and why the last one failed (until one succeeds). */
   lastSyncedAt: number | null;
   syncError: string | null;
+  /** Sync is stopped because the two machines run different versions (server peer/syncer.ts); absent from older servers. */
+  versionMismatch?: VersionMismatchView | null;
   /** Its own chats with a reply running there now, while it's reachable (#790); absent means none. */
   activeChats?: string[];
   /** Its own chats with background tasks running there now, while it's reachable; absent means none (or an older machine). */

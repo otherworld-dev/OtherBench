@@ -1,6 +1,6 @@
 {
   "name": "@otherbench/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,8 @@
     "app:bundle": "tauri build",
     "web:dev": "npm --prefix .. run build && npm --prefix ../packages/web run dev",
     "web:build": "npm --prefix .. run build",
-    "app:installer": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.bundle.conf.json"
+    "app:installer": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.bundle.conf.json",
+    "app:release": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.release.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.1"

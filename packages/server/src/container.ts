@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +23,7 @@ import { ProviderRegistry } from '@otherbench/engine-aisdk/registry.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '@otherbench/engine-claude-code/engine.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { backupBeforeMigration } from '@otherbench/store-sqlite/backup.js';
 import { openDatabase } from '@otherbench/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@otherbench/store-sqlite/secret-store.js';
@@ -239,6 +241,8 @@ export interface ContainerOptions {
   streamTimings?: StreamTimings;
   /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
   serverPort?: () => number | null;
+  /** This build's version for paired machines. Defaults to `OTHERBENCH_APP_VERSION` (the desktop shell sets it), else the server package's. */
+  appVersion?: string;
   /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
   computer?: ComputerDriver;
 }
@@ -324,6 +328,18 @@ export async function resolveSecretsPassphrase(secretsPath: string): Promise<str
  * `reconcileInterruptedTurns` -- and released by `close()`, or straight
  * away if startup fails part-way.
  */
+/** The desktop shell's version when it started this server; otherwise this package's (a checkout run). */
+function appVersion(): string {
+  const fromShell = process.env['OTHERBENCH_APP_VERSION'];
+  if (fromShell) return fromShell;
+  try {
+    return (createRequire(import.meta.url)('../package.json') as { version: string }).version;
+  } catch {
+    // The bundled server has no package.json beside it; the shell always sets the variable there.
+    return 'unknown';
+  }
+}
+
 export async function createContainer(options: ContainerOptions): Promise<Container> {
   if (options.dbPath !== ':memory:') {
     await mkdir(dirname(options.dbPath), { recursive: true });
@@ -346,6 +362,13 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
 async function openContainer(options: ContainerOptions): Promise<Container> {
   const db = openDatabase(options.dbPath);
+  // An update that brings a migration leaves the old database beside the new one (throws, so nothing migrates, if it can't).
+  try {
+    backupBeforeMigration(db, options.dbPath, SCHEMA_VERSION);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   runMigrations(db);
   // Every chat change, whoever makes it, is announced on the app-wide stream.
   const events = new AppEventBus();
@@ -583,6 +606,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
+    appVersion: options.appVersion ?? appVersion(),
     ...(options.streamTimings ? { monitor: { idleTimeoutMs: options.streamTimings.idleTimeoutMs } } : {}),
   });
   const syncer = new Syncer({ store, secrets, blobStore, peers, events });

@@ -44,6 +44,8 @@ pub struct LaunchSpec {
     pub script: PathBuf,
     pub cors_origins: Vec<String>,
     pub log_dir: PathBuf,
+    /// This build's version, handed to the server as `OTHERBENCH_APP_VERSION` for paired machines to see.
+    pub app_version: String,
 }
 
 pub struct Server {
@@ -96,6 +98,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
         cmd.args(["--cors-origin", origin]);
     }
     cmd.env("OTHERBENCH_TOKEN", &token)
+        .env("OTHERBENCH_APP_VERSION", &spec.app_version)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

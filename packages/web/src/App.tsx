@@ -20,6 +20,8 @@ import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
+import { useUpdateActivity } from './desktop/useUpdateActivity.js';
+import { useUpdateHint } from './desktop/useUpdateHint.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { OverviewView } from './overview/OverviewView.js';
 import { useOverview } from './overview/useOverview.js';
@@ -108,6 +110,7 @@ function OverviewWindow(): JSX.Element {
   useOverview();
   useDocks();
   useTextSizeShortcuts();
+  useUpdateActivity();
   return (
     <div className="h-screen overflow-hidden">
       <Toaster />
@@ -172,6 +175,8 @@ function MainApp(): JSX.Element {
   useOverview();
   useDocks();
   useTrayStatus();
+  useUpdateActivity();
+  useUpdateHint();
   useOpenArgs(loaded);
   useDesktopShell();
   useTextSizeShortcuts();

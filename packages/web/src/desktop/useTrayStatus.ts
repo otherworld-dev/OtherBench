@@ -27,6 +27,7 @@ function ago(at: number, now: number): string {
 export function trayMachineLines(machines: PeersOverview | null, now: number): string[] {
   if (!machines) return [];
   return machines.peers.map((peer) => {
+    if (peer.versionMismatch) return `${peer.name}: sync stopped, versions differ`;
     const status = peerStatusText(peer);
     const line = `${peer.name}: ${status.charAt(0).toLowerCase()}${status.slice(1)}`;
     return peer.status === 'reachable' && peer.lastSyncedAt !== null ? `${line}, synced ${ago(peer.lastSyncedAt, now)}` : line;

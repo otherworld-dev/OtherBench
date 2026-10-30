@@ -3,6 +3,7 @@ import { autostart, setHotkey } from '../../desktop/bridge.js';
 import { DEFAULT_HOTKEY, loadHotkey, saveHotkey } from '../../desktop/hotkey.js';
 import { loadNotifyPrefs, saveNotifyPrefs, type NotifyPrefs } from '../../desktop/notify.js';
 import { useOtherBenchStore } from '../../state/store.js';
+import { UpdatesSection } from './UpdatesSection.js';
 
 /**
  * Settings that only exist in the desktop app. `SettingsView` only offers
@@ -138,6 +139,7 @@ export function DesktopPanel(): JSX.Element {
         <p className="text-[var(--text-muted)]">Scheduled runs notify even while OtherBench is focused, since nobody was watching them.</p>
         <p className="text-[var(--text-muted)]">Clicking the tray icon afterwards opens the chat you were last notified about.</p>
       </fieldset>
+      <UpdatesSection />
       {error && (
         <p role="alert" className="text-[var(--danger)]">
           {error}

@@ -3,6 +3,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
+import { useUpdateActivity } from '../desktop/useUpdateActivity.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import { ApiError, api } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
@@ -10,6 +11,7 @@ import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
 import { useStopReply } from '../state/useStopReply.js';
+import { useUnsentText } from '../state/unsent.js';
 
 /**
  * The quick-chat window (v2 plan, Task 37), opened by the global hotkey: a
@@ -24,6 +26,9 @@ export function QuickChat(): JSX.Element {
   const registerMessage = useOtherBenchStore((s) => s.registerMessage);
   const [chat, setChat] = useState<Chat | null>(null);
   const [text, setText] = useState('');
+  useUnsentText(text);
+  // This window is used on its own while the main one stays hidden: it reports to the updater itself.
+  useUpdateActivity();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);

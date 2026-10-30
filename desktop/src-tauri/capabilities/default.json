@@ -25,6 +25,11 @@
     "allow-undocked",
     "allow-show-window",
     "allow-open-in",
-    "allow-focused-window"
+    "allow-focused-window",
+    "allow-update-status",
+    "allow-update-check-now",
+    "allow-update-set-beta",
+    "allow-update-install-now",
+    "allow-update-activity"
   ]
 }

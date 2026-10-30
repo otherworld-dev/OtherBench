@@ -9,6 +9,7 @@ import type { RemoteAccess } from './remote/index.js';
 import { appNextcloudRoutes } from './routes/app-nextcloud.js';
 import { appFoldersRoutes } from './routes/app-folders.js';
 import { appsRoutes } from './routes/apps.js';
+import { desktopRoutes } from './routes/desktop.js';
 import { overviewRoutes } from './routes/overview.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
@@ -141,6 +142,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // tools, so they never pass the PermissionBroker -- and for the same reason they are never on the peer listener
   // (peer/forward.ts): a paired machine must not be able to commit, push or comment from here.
   // An app's Deck, wiki and links: same prefix, other paths; mounted first, authed only like the rest.
+  authed.route('/desktop', desktopRoutes(container));
   authed.route('/apps', appNextcloudRoutes(container));
   authed.route('/apps', appsRoutes(container));
   authed.route('/app-folders', appFoldersRoutes(container));
