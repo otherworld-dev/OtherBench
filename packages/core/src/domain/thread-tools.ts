@@ -271,6 +271,7 @@ export function askReplyProblem(ask: AskInput, reply: AskReply): string | null {
     }
     return null;
   }
+  if (ask.kind === 'browser') return 'approve' in reply || 'declined' in reply ? null : "This is the browser: say you're done, or skip it.";
   if ('approve' in reply) return null;
   if (!('changes' in reply)) return 'This is a plan: approve it, or ask for changes.';
   if (reply.changes.trim() === '') return 'Say what to change.';

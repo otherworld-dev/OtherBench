@@ -1,6 +1,6 @@
 import type { EgressProxy, EgressProxyOptions } from '../../src/browser/proxy.js';
 import { siteOf } from '@otherbench/core/domain/browser-hosts.js';
-import { PageMovedError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from '../../src/browser/session.js';
+import { PageMovedError, type ActionGuard, type BrowserInput, type BrowserSession, type ProxyCredentials, type SessionFactory } from '../../src/browser/session.js';
 
 /** Like the real sessions: every navigation takes the next number, across sessions. */
 let navigations = 0;
@@ -13,10 +13,14 @@ export class FakeSession implements BrowserSession {
   readonly actions: string[] = [];
   notes: string[] = [];
   closed = false;
+  visible = true;
+  /** What was done to the window and the panel, in order. */
+  readonly windowLog: string[] = [];
   /** Set to make every action fail, as a page that died would. */
   fail: Error | null = null;
   onFrame: ((jpeg: Buffer) => void) | null = null;
   private readonly nav = new Set<() => void>();
+  private readonly closers = new Set<() => void>();
   private navId = 0;
   /** Runs once as an action starts, after the tool's own look at the page and before the session's check: where a test makes the page move "just now". */
   beforeAct: (() => void) | null = null;
@@ -60,9 +64,22 @@ export class FakeSession implements BrowserSession {
     this.nav.add(cb);
     return () => { this.nav.delete(cb); };
   }
+  onClosed(cb: () => void): () => void {
+    this.closers.add(cb);
+    return () => { this.closers.delete(cb); };
+  }
+  async reveal(): Promise<void> { this.windowLog.push('reveal'); }
+  async conceal(): Promise<void> { this.windowLog.push('conceal'); }
+  async input(event: BrowserInput): Promise<void> { this.windowLog.push(`input ${event.type}`); }
+  async saveProfile(): Promise<void> { this.windowLog.push('save'); }
   async close(): Promise<void> {
     await this.closeGate;
     this.closed = true;
+  }
+
+  /** Plays a person closing the window. */
+  closeByHand(): void {
+    for (const cb of [...this.closers]) cb();
   }
 
   navigate(url: string, title = ''): void {
@@ -112,6 +129,8 @@ export class FakeFactory implements SessionFactory {
     this.shutdowns += 1;
     await this.shutdownGate;
   }
+  profileForgotten = 0;
+  async forgetProfile(): Promise<void> { this.profileForgotten += 1; }
 }
 
 /** A promise you settle by hand. */

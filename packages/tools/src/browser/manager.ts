@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { browserHostDenial, isPublicAddress, siteOf } from '@otherbench/core/domain/browser-hosts.js';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './proxy.js';
-import { BrowserBusyError, type BrowserSession, type SessionFactory } from './session.js';
+import { BrowserBusyError, type BrowserInput, type BrowserSession, type SessionFactory } from './session.js';
 
 /** A chat's browser closes after this long with no command. */
 export const CHAT_IDLE_MS = 15 * 60_000;
@@ -19,8 +19,10 @@ export interface BrowserState {
   host: string | null;
   /** The reply (message id) holding the browser, or null. */
   holder: string | null;
+  /** The browser is a real window on the machine running this chat. */
+  visible: boolean;
 }
-export const CLOSED_STATE: BrowserState = { open: false, url: null, title: null, host: null, holder: null };
+export const CLOSED_STATE: BrowserState = { open: false, url: null, title: null, host: null, holder: null, visible: false };
 
 /** One live-view frame: a server-wide sequence number and the JPEG as base64. */
 export interface BrowserFrame {
@@ -81,6 +83,7 @@ class OpenBrowser implements ChatBrowser {
   title: string | null = null;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   stopNavigate: () => void = () => {};
+  stopClosed: () => void = () => {};
 
   constructor(
     readonly chatId: string,
@@ -99,7 +102,7 @@ class OpenBrowser implements ChatBrowser {
 
 /**
  * The model's browsers (spec 2026-10-12-model-browser-design §2): one
- * in-memory context per chat in one headless Chromium per server, started on
+ * context per chat, each its own window, in one browser per server, started on
  * first use. Enforces the holder rule (the reply that last acted keeps the
  * chat's browser until its turn's signal aborts), closes idle ones, keeps at
  * most four, and fans the live view out to watchers.
@@ -154,7 +157,30 @@ export class BrowserManager {
     if (!entry) return CLOSED_STATE;
     const url = entry.session.url();
     const holder = entry.holder && !entry.holder.signal.aborted ? entry.holder.messageId : null;
-    return { open: true, url, title: entry.title, host: siteOf(url), holder };
+    return { open: true, url, title: entry.title, host: siteOf(url), holder, visible: entry.session.visible };
+  }
+
+  /** Passes on what a person did in the Browser panel. False when the chat has no browser open. */
+  async input(chatId: string, event: BrowserInput): Promise<boolean> {
+    const entry = this.open.get(chatId);
+    if (!entry) return false;
+    this.touch(entry);
+    await entry.session.input(event);
+    return true;
+  }
+
+  /** Brings the chat's window to the person. False when the chat has no browser open. */
+  async show(chatId: string): Promise<boolean> {
+    const entry = this.open.get(chatId);
+    if (!entry) return false;
+    this.touch(entry);
+    await entry.session.reveal();
+    return true;
+  }
+
+  /** Drops the saved sign-ins and cookie choices. Browsers open now keep theirs until they close, and don't save them. */
+  forgetProfile(): Promise<void> {
+    return this.options.factory.forgetProfile();
   }
 
   /** Live view: frames while anyone watches (the screencast runs only then), and every state change. Returns an unsubscribe function. */
@@ -188,6 +214,7 @@ export class BrowserManager {
     this.byUser.delete(entry.proxyUser);
     clearTimeout(entry.idleTimer);
     entry.stopNavigate();
+    entry.stopClosed();
     if (entry.holder) entry.holder.signal.removeEventListener('abort', entry.holder.release);
     await entry.session.close().catch((err: unknown) => console.warn(`[browser] closing chat ${chatId}'s browser failed:`, err));
     this.emitState(chatId);
@@ -215,6 +242,10 @@ export class BrowserManager {
       this.open.set(chatId, entry);
       this.byUser.set(user, entry);
       entry.stopNavigate = session.onNavigate(() => this.navigated(entry));
+      entry.stopClosed = session.onClosed(() => {
+        if (this.open.get(chatId) !== entry) return;
+        this.close(chatId).catch((err: unknown) => console.warn(`[browser] closing chat ${chatId}'s browser failed:`, err));
+      });
       if ((this.watchers.get(chatId)?.size ?? 0) > 0) this.startScreencast(entry);
       return entry;
     } catch (err) {

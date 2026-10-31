@@ -539,7 +539,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     // Sub-agents (spec 2026-10-12-api-subagents-design): off unless the profile turns them on.
     if (policy.subagents === true) raw.push(subagentTool(this.store, policy));
     // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
-    if (policy.browser === true && this.browser) raw.push(browserTool(this.browser, policy));
+    if (policy.browser === true && this.browser) raw.push(browserTool(this.browser, policy, (ctx, input) => this.askUser(ctx, input)));
     // Computer use (spec 2026-10-12-computer-use-design section 4): only when the
     // profile turns it on AND the desktop shell on this machine can carry it out.
     if (policy.computer === true && this.computer?.available()) raw.push(computerTool(this.computer, this.store));
@@ -592,7 +592,7 @@ export class OtherBenchToolProvider implements ToolProvider {
    */
   async relayOtherBenchTools(policy: ToolPolicy): Promise<ToolSpec[]> {
     const specs: ToolSpec[] = [];
-    if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy)));
+    if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy, (ctx, input) => this.askUser(ctx, input))));
     if (policy.computer === true && this.computer?.available()) specs.push(this.relayed(computerTool(this.computer, this.store)));
     // The generators have no describeCall of their own (an API model's gate needs none). This one
     // copies the model's arguments, which is what turns on the ticket and the identity check:

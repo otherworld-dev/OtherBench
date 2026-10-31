@@ -510,7 +510,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
               Sub-agents
             </label>
           )}
-          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title="The model's own browser, kept apart from your everyday one. Asks before each new website.">
             <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
             Browser
           </label>
@@ -607,7 +607,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         )}
         {browser && (
           <div className="mt-2 flex w-full flex-col gap-1 text-xs text-[var(--text)]">
-            <p className="text-[var(--text-muted)]">The model's own browser, with no logins. Asks before each new website.</p>
+            <p className="text-[var(--text-muted)]">The model's own browser, kept apart from your everyday one. Asks before each new website.</p>
             <label className="flex flex-col gap-1">
               <span>
                 Blocked sites <span className="text-[var(--text-muted)]">(one per line; each also blocks its subdomains)</span>

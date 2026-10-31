@@ -9,7 +9,7 @@ import { BrowserManager, type BrowserFrame } from '../../src/browser/manager.js'
 import { browserTool } from '../../src/browser/tool.js';
 
 /**
- * A real headless Chromium against a fixture HTTP server on 127.0.0.1 (spec
+ * A real headless Chromium (never a window, with OTHERBENCH_BROWSER_HEADLESS) against a fixture HTTP server on 127.0.0.1 (spec
  * §8). Never the internet. Skipped, with the reason logged, when no Chromium
  * can be started; in CI (`CI` set, where a Chromium is installed with
  * `npx playwright install --only-shell chromium`) that fails instead, so a
@@ -17,6 +17,7 @@ import { browserTool } from '../../src/browser/tool.js';
  * another build (full Chromium, Chrome, Edge).
  */
 
+const ENV = { ...process.env, OTHERBENCH_BROWSER_HEADLESS: '1' };
 let site: Server;
 let other: Server;
 let port = 0;
@@ -55,6 +56,14 @@ const webrtcHtml = (stunPort: number) => `<!doctype html><title>WebRTC</title><h
 })().catch((e) => { document.querySelector('h1').textContent = 'Failed ' + e; });
 </script>`;
 
+/** A box like the ones a consent manager draws: fixed over the page, with consent words and a reject button. */
+const cookieBoxHtml = `<!doctype html><title>Cookies</title><h1>Laptop specs</h1>
+<div id="box" role="dialog" aria-label="Cookies" style="position:fixed;inset:auto 0 0 0;height:200px;background:#fff;z-index:99999">
+<p>We use cookies and similar technologies to personalise content and ads. By clicking accept you consent to our use of cookies. See our privacy policy.</p>
+<button onclick="document.getElementById('box').remove();document.querySelector('h1').textContent='Box gone'">Accept all</button>
+<button onclick="document.getElementById('box').remove();document.querySelector('h1').textContent='Box refused'">Reject all</button>
+</div>`;
+
 const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
 
 /** Every note any result carried, in order: a note lands on whichever result comes next, so tests look here. */
@@ -66,6 +75,13 @@ async function call(args: Record<string, unknown>): Promise<Record<string, unkno
   const result = (await tool.execute(d.args, ctx)) as Record<string, unknown>;
   allNotes.push(...((result['notes'] as string[] | undefined) ?? []));
   return result;
+}
+
+/** What a field holds on the page itself, read past the session. */
+async function pageValue(selector: string): Promise<string> {
+  const chat = manager.peek('c1');
+  if (!chat) throw new Error('No browser is open.');
+  return (chat.session as unknown as { page: { locator(s: string): { inputValue(): Promise<string> } } }).page.locator(selector).inputValue();
 }
 
 /** What describeCall hands the broker (and, once approved, execute): the call bound to the page it was described on. */
@@ -94,7 +110,7 @@ async function noteMatching(re: RegExp): Promise<string | undefined> {
 
 beforeAll(async () => {
   const reasons: string[] = [];
-  for (const attempt of browserAttempts(process.env)) {
+  for (const attempt of browserAttempts(ENV)) {
     try {
       const b = await chromium.launch({ headless: true, chromiumSandbox: true, ...attempt.options });
       await b.close();
@@ -127,6 +143,14 @@ beforeAll(async () => {
       return void res.end(webrtcHtml(stunPort));
     }
     if (req.url === '/second') return void res.end('<!doctype html><h1>Second</h1>');
+    if (req.url === '/signin') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return void res.end('<!doctype html><title>Sign in</title><label>User <input></label><label>Pass <input type="password"></label>');
+    }
+    if (req.url === '/cookies') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return void res.end(cookieBoxHtml);
+    }
     if (req.url === '/file.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="file.txt"' });
       return void res.end('file body');
@@ -135,9 +159,43 @@ beforeAll(async () => {
     res.end(pageHtml(otherPort));
   });
   port = await listen(site);
-  manager = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts: [port] });
+  manager = new BrowserManager({ factory: new ChromiumSessions(ENV), allowLoopbackPorts: [port] });
   tool = browserTool(manager, {});
 }, 60_000);
+
+describe('a person on the page', () => {
+  it('keeps what is in a password field out of the snapshot, and leaves it in the field', async () => {
+    if (skipReason) return;
+    const opened = await call({ command: 'open', url: `http://127.0.0.1:${port}/signin` });
+    const typed = await call({ command: 'type', ref: refFor(opened['snapshot'], 'textbox', 'User'), text: 'ada' });
+    await call({ command: 'type', ref: refFor(typed['snapshot'], 'textbox', 'Pass'), text: 'hunter2-secret' });
+    const read = await call({ command: 'snapshot' });
+    expect(String(read['snapshot'])).toContain('ada');
+    expect(String(read['snapshot'])).not.toContain('hunter2-secret');
+    expect(await pageValue('input[type=password]')).toBe('hunter2-secret');
+  }, 30_000);
+
+  it('takes what the panel sends: a click and typing land on the page', async () => {
+    if (skipReason) return;
+    await call({ command: 'open', url: `http://127.0.0.1:${port}/signin` });
+    await manager.input('c1', { type: 'click', x: 0.02, y: 0.02 }); // the first label, so its field
+    await manager.input('c1', { type: 'text', text: 'typed by hand' });
+    await manager.input('c1', { type: 'key', key: 'Tab' });
+    await manager.input('c1', { type: 'text', text: 'hidden by hand' });
+    const read = await call({ command: 'snapshot' });
+    expect(String(read['snapshot'])).toContain('typed by hand');
+    expect(String(read['snapshot'])).not.toContain('hidden by hand');
+    expect(await pageValue('input[type=password]')).toBe('hidden by hand');
+  }, 30_000);
+
+  it('answers a cookie box as the page loads, without a call from the model', async () => {
+    if (skipReason) return;
+    const notesBefore = allNotes.length;
+    const opened = await call({ command: 'open', url: `http://127.0.0.1:${port}/cookies` });
+    expect(String(opened['snapshot'])).toContain('Box refused');
+    expect(allNotes.slice(notesBefore).join(' ')).toContain('A cookie box on this page was answered for you.');
+  }, 30_000);
+});
 
 afterAll(async () => {
   turn.abort();

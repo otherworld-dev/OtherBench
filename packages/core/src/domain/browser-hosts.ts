@@ -8,11 +8,14 @@ import type { RiskClass } from '../ports/tool-provider.js';
 
 export const BROWSER_TOOL = 'browser';
 
-export const BROWSER_COMMANDS = ['open', 'snapshot', 'click', 'type', 'select', 'press', 'scroll', 'back', 'close'] as const;
+export const BROWSER_COMMANDS = ['open', 'snapshot', 'click', 'type', 'select', 'press', 'scroll', 'back', 'handover', 'close'] as const;
 export type BrowserCommand = (typeof BROWSER_COMMANDS)[number];
 
-/** Commands that change nothing on the page: under "ask on mutate" they need no card (by name, never by declared risk). */
-export const BROWSER_READ_COMMANDS: ReadonlySet<string> = new Set<string>(['snapshot', 'scroll', 'close']);
+/**
+ * Commands that change nothing on the page: under "ask on mutate" they need no
+ * card (by name, never by declared risk). `handover` raises a card of its own.
+ */
+export const BROWSER_READ_COMMANDS: ReadonlySet<string> = new Set<string>(['snapshot', 'scroll', 'handover', 'close']);
 
 export function isBrowserCommand(value: unknown): value is BrowserCommand {
   return typeof value === 'string' && (BROWSER_COMMANDS as readonly string[]).includes(value);
