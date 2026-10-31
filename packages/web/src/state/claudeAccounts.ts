@@ -56,6 +56,11 @@ export function reloadOnAccountEvent(event: AppEvent): void {
   useClaudeAccounts.getState().load().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
 }
 
+/** Whether a chat gets an account picker: with an account besides main to pick, or still naming one (a removed account, say) to be put back. */
+export function showsAccountPicker(accounts: AccountView[], chosen: string | null | undefined): boolean {
+  return accounts.length > 1 || (accounts.length > 0 && !!chosen);
+}
+
 /** True when the chat's profile runs through Claude Code on the Claude login (a `claude_code` connection with no endpoint). */
 export function isClaudeLoginChat(chat: Pick<Chat, 'profileId'> | undefined, profiles: Profile[], connections: Connection[]): boolean {
   const profile = profiles.find((p) => p.id === chat?.profileId);

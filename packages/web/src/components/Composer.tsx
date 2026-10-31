@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Clip
 import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
+import { AccountSelect } from './AccountSelect.js';
 import { ESCAPE_STOPS_REPLY_ATTR } from '../lib/escapeStopsReply.js';
 import { promptHistory } from '../lib/promptHistory.js';
 import { useStopReply } from '../state/useStopReply.js';
@@ -148,6 +149,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [autoError, setAutoError] = useState<string | null>(null);
   const [effortSaving, setEffortSaving] = useState(false);
   const [effortError, setEffortError] = useState<string | null>(null);
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [noteReturned, setNoteReturned] = useState(false);
@@ -211,6 +214,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const autoActive = autoMode && !autoUnavailable;
   const planMode = (storedChat ?? chat).planMode === true;
   const effort = (storedChat ?? chat).effort ?? null;
+  const claudeAccount = (storedChat ?? chat).claudeAccount ?? null;
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
@@ -360,6 +364,25 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       setEffortError(err instanceof ApiError ? err.message : "Couldn't change the effort. Please try again.");
     } finally {
       setEffortSaving(false);
+    }
+  }
+
+  /** Sets the chat's Claude account optimistically; a failed save reverts only `claudeAccount` and shows why. Applies from the next message. */
+  async function changeAccount(next: string | null): Promise<void> {
+    if (accountSaving) return;
+    const previous = claudeAccount;
+    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    setAccountError(null);
+    setAccountSaving(true);
+    upsertChat({ ...latest(), claudeAccount: next });
+    try {
+      upsertChat(await api.chats.patch(chat.id, { claudeAccount: next }));
+    } catch (err) {
+      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
+      if (current) upsertChat({ ...current, claudeAccount: previous });
+      setAccountError(err instanceof ApiError ? err.message : "Couldn't change the account. Please try again.");
+    } finally {
+      setAccountSaving(false);
     }
   }
 
@@ -662,6 +685,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         </div>
       )}
 
+      {accountError && (
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
+          {accountError}
+        </div>
+      )}
+
       {sendError && (
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {sendError}
@@ -840,6 +869,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               ))}
             </select>
           )}
+
+          {/* The Claude login's accounts, so like the plan meter not for a Claude Code profile on an endpoint. */}
+          {showAutoToggle && !autoUnavailable && <AccountSelect value={claudeAccount} disabled={accountSaving} onChange={(next) => void changeAccount(next)} />}
 
           {comparedProfiles.map((p) => (
             <span key={p.id} className="chip chip-on shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]">

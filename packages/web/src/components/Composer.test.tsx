@@ -7,6 +7,8 @@ import type { Connection, Profile } from '@otherbench/core/types/config.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
 import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
+import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { hasUnsentText } from '../state/unsent.js';
 import { Composer } from './Composer.js';
@@ -20,7 +22,7 @@ vi.mock('../state/api.js', () => ({
     },
     chats: { patch: vi.fn(), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
     notes: { send: vi.fn(), withdraw: vi.fn() },
-    claude: { planUsage: vi.fn(async () => ({ usage: null })) },
+    claude: { planUsage: vi.fn(async () => ({ usage: null })), accounts: { list: vi.fn(async () => ({ accounts: [] })) } },
     attachments: {
       upload: vi.fn(),
       list: vi.fn(),
@@ -924,6 +926,89 @@ describe('Composer auto mode toggle', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
       expect(effort()).toHaveValue('medium');
       expect(useOtherBenchStore.getState().chats[0]!.effort).toBe('medium');
+    });
+  });
+
+  describe('Claude account', () => {
+    const view = (slug: string, name: string, main = false): AccountView => ({
+      slug, name, colour: main ? null : '#336699', configDir: main ? null : `/home/me/.claude-${slug}`, main, limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false,
+    });
+    const MAIN = view('main', 'Main', true);
+    const VH = view('vh', 'VH');
+    const account = () => screen.findByRole('combobox', { name: 'Claude account' });
+    const accountsOnServer = (accounts: AccountView[]) => vi.mocked(api.claude.accounts.list).mockResolvedValue({ accounts });
+
+    beforeEach(() => useClaudeAccounts.setState({ accounts: [] }));
+    afterEach(() => {
+      useClaudeAccounts.setState({ accounts: [] });
+      accountsOnServer([]);
+    });
+
+    it('offers the accounts beside Effort on the Claude login, on the default until one is chosen', async () => {
+      accountsOnServer([MAIN, VH]);
+      renderWith({ profileId: 'sonnet' });
+      expect(await account()).toHaveValue('');
+      expect(await account()).toHaveDisplayValue('default account');
+      expect(within(await account()).getByRole('option', { name: 'Main' })).toHaveValue('main');
+      expect(within(await account()).getByRole('option', { name: 'VH' })).toHaveValue('vh');
+    });
+
+    it('is the same in an app chat, which is what the Code tab shows', async () => {
+      accountsOnServer([MAIN, VH]);
+      renderWith({ profileId: 'sonnet', appId: 'app-1', claudeAccount: 'vh' });
+      expect(await account()).toHaveValue('vh');
+    });
+
+    it('stays out of the way with no second account to pick', async () => {
+      accountsOnServer([MAIN]);
+      renderWith({ profileId: 'sonnet' });
+      await waitFor(() => expect(useClaudeAccounts.getState().accounts).toEqual([MAIN]));
+      expect(screen.queryByRole('combobox', { name: 'Claude account' })).not.toBeInTheDocument();
+    });
+
+    it('is not offered on an endpoint or another engine, which use no Claude login', async () => {
+      accountsOnServer([MAIN, VH]);
+      for (const profileId of ['local-cc', 'qwen']) {
+        vi.mocked(api.claude.accounts.list).mockClear();
+        renderWith({ profileId });
+        await act(async () => {});
+        expect(screen.queryByRole('combobox', { name: 'Claude account' })).not.toBeInTheDocument();
+        expect(api.claude.accounts.list).not.toHaveBeenCalled();
+        cleanup();
+      }
+    });
+
+    it('keeps a removed account on show, so the chat can be moved off it', async () => {
+      accountsOnServer([MAIN]);
+      renderWith({ profileId: 'sonnet', claudeAccount: 'gone' });
+      expect(await account()).toHaveValue('gone');
+      expect(await account()).toHaveDisplayValue('gone (missing)');
+    });
+
+    it("moves the chat from the next message, and back to the default", async () => {
+      accountsOnServer([MAIN, VH]);
+      mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...useOtherBenchStore.getState().chats[0]!, ...body }) as Chat);
+      renderWith({ profileId: 'sonnet' });
+      const user = userEvent.setup();
+
+      await user.selectOptions(await account(), 'VH');
+      expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { claudeAccount: 'vh' });
+      await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.claudeAccount).toBe('vh'));
+      expect(await account()).toHaveValue('vh');
+
+      await user.selectOptions(await account(), 'default account');
+      expect(mockedChatsPatch).toHaveBeenLastCalledWith('chat-1', { claudeAccount: null });
+      await waitFor(() => expect(useOtherBenchStore.getState().chats[0]!.claudeAccount).toBeNull());
+    });
+
+    it('goes back to what it was and says why when saving fails', async () => {
+      accountsOnServer([MAIN, VH]);
+      mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
+      renderWith({ profileId: 'sonnet', claudeAccount: 'main' });
+      await userEvent.setup().selectOptions(await account(), 'VH');
+      expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
+      expect(await account()).toHaveValue('main');
+      expect(useOtherBenchStore.getState().chats[0]!.claudeAccount).toBe('main');
     });
   });
 

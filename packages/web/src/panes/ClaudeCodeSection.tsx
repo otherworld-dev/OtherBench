@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type JSX } from 'react';
 import type { EngineMeta } from '@otherbench/core/types/messages.js';
 import { api } from '../state/api.js';
-import { isClaudeLoginChat, useClaudeAccounts } from '../state/claudeAccounts.js';
+import { isClaudeLoginChat, showsAccountPicker, useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useSectionSummary } from './InspectorSection.js';
 
@@ -91,8 +91,7 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
   }, [messages, chatId]);
   const toolCount = meta?.tools?.length ?? 0;
   const login = isClaudeLoginChat(chat, profiles, connections);
-  // Only with an account besides main to pick; a chat still naming one (a removed account, say) keeps the picker to be put back.
-  const showAccounts = login && (accounts.length > 1 || (accounts.length > 0 && !!chat?.claudeAccount));
+  const showAccounts = login && showsAccountPicker(accounts, chat?.claudeAccount);
   useEffect(() => {
     if (login && accounts.length === 0) loadAccounts().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
   }, [login, accounts.length, loadAccounts]);
