@@ -39,9 +39,9 @@ describe('GeneratedMedia', () => {
     const user = userEvent.setup();
     render(<GeneratedMedia result={image} scope={scope} />);
     await user.click(screen.getByTestId('generated-image'));
-    expect(screen.getByTestId('generated-image-full')).toBeInTheDocument();
+    expect(screen.getByTestId('image-lightbox-full')).toBeInTheDocument();
     await user.keyboard('{Escape}');
-    expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
+    expect(screen.queryByTestId('image-lightbox')).toBeNull();
   });
 
   it('keeps Escape to itself, so a Quick Chat window stays open', async () => {
@@ -52,7 +52,7 @@ describe('GeneratedMedia', () => {
       render(<GeneratedMedia result={image} scope={scope} />);
       await user.click(screen.getByTestId('generated-image'));
       await user.keyboard('{Escape}');
-      expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
+      expect(screen.queryByTestId('image-lightbox')).toBeNull();
       expect(outside).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('keydown', outside);
@@ -66,7 +66,7 @@ describe('GeneratedMedia', () => {
     await user.click(trigger);
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
     await user.click(screen.getByRole('button', { name: 'Close' }));
-    expect(screen.queryByTestId('generated-image-dialog')).toBeNull();
+    expect(screen.queryByTestId('image-lightbox')).toBeNull();
     expect(trigger).toHaveFocus();
     await user.click(trigger);
     await user.keyboard('{Escape}');

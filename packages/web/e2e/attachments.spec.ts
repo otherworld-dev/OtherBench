@@ -148,6 +148,47 @@ test('drag-and-drop attaches a file, shows a removable chip, and the sent messag
   await expect(page.locator('article[data-role="user"]').getByTestId('attachment-chip')).toBeVisible();
 });
 
+test('an attached image opens full size from the composer and, after sending, from the message -- over the whole window, even after a reload', async ({ page, request }) => {
+  const suffix = uniqueSuffix();
+  const { visionProfileName } = await seedProfiles(request, suffix);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ New chat' }).click();
+  await chooseProfile(page, visionProfileName);
+  await page.getByTestId('composer-file-input').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: png });
+
+  async function expectFullWindowPreview(open: import('@playwright/test').Locator): Promise<void> {
+    await open.click();
+    const dialog = page.getByTestId('image-lightbox');
+    await expect(page.getByTestId('image-lightbox-full')).toBeVisible();
+    expect(await dialog.boundingBox()).toEqual({ x: 0, y: 0, ...page.viewportSize() });
+    // On top as well as the right size: the corners are where the sidebar and the composer's neighbours would show through.
+    const onTop = await dialog.evaluate((el) => {
+      const { innerWidth: w, innerHeight: h } = window;
+      return [[1, 1], [w - 1, 1], [1, h - 1], [w - 1, h - 1]].every(([x, y]) => {
+        const hit = document.elementFromPoint(x ?? 0, y ?? 0);
+        return hit !== null && el.contains(hit);
+      });
+    });
+    expect(onTop).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+  }
+
+  await expectFullWindowPreview(page.getByTestId('composer-dropzone').getByRole('button', { name: 'Preview dot.png' }));
+
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('What do you see?');
+  await textbox.press('Enter');
+
+  const sent = page.locator('article[data-role="user"]').getByRole('button', { name: /^Preview / });
+  await expectFullWindowPreview(sent);
+
+  await page.reload();
+  await expectFullWindowPreview(sent);
+});
+
 test('paste-to-attach works, and a profile without vision support shows the degradation note on its reply -- not silence', async ({ page, request }) => {
   const suffix = uniqueSuffix();
   const { noVisionProfileName } = await seedProfiles(request, suffix);

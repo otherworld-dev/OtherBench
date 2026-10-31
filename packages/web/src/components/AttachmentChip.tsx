@@ -1,12 +1,13 @@
-import type { JSX } from 'react';
+import { useState, type JSX } from 'react';
 import { AuthedImage } from './AuthedImage.js';
+import { ImageLightbox } from './ImageLightbox.js';
 
 export interface AttachmentChipProps {
   filename: string;
   mime: string;
   /** Bytes, when known -- the composer has it from the upload response; a rendered historical message doesn't need it and can omit it. */
   size?: number;
-  /** Renders a small thumbnail instead of a generic icon when the mime type is an image -- typically `api.attachments.contentUrl(id)`. */
+  /** Renders a small thumbnail instead of a generic icon when the mime type is an image, and opens the image full size on click -- typically `api.attachments.contentUrl(id)`. */
   previewUrl?: string;
   /** Renders a remove ("×") button that calls this -- composer-only; omit for a read-only chip inside a rendered message. */
   onRemove?: () => void;
@@ -28,20 +29,31 @@ function formatBytes(bytes: number): string {
  */
 export function AttachmentChip({ filename, mime, size, previewUrl, onRemove, removeDisabled }: AttachmentChipProps): JSX.Element {
   const isImage = mime.startsWith('image/');
+  const [missing, setMissing] = useState(false);
+  const [open, setOpen] = useState(false);
+  const preview = isImage && !missing ? previewUrl : undefined;
+  const name = (
+    <span className="max-w-[12rem] truncate" title={filename}>
+      {filename}
+    </span>
+  );
 
   return (
     <span
       data-testid="attachment-chip"
       className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-sunken)] py-1 pr-1 pl-2 text-xs"
     >
-      {isImage && previewUrl ? (
-        <AuthedImage src={previewUrl} alt="" className="h-4 w-4 rounded-sm object-cover" />
+      {preview ? (
+        <button type="button" aria-label={`Preview ${filename}`} onClick={() => setOpen(true)} className="inline-flex min-w-0 cursor-zoom-in items-center gap-1.5 hover:underline">
+          <AuthedImage src={preview} alt="" onError={() => setMissing(true)} onFailed={() => setMissing(true)} className="h-4 w-4 rounded-sm object-cover" />
+          {name}
+        </button>
       ) : (
-        <span aria-hidden="true">{isImage ? '🖼️' : '📎'}</span>
+        <>
+          <span aria-hidden="true">{isImage ? '🖼️' : '📎'}</span>
+          {name}
+        </>
       )}
-      <span className="max-w-[12rem] truncate" title={filename}>
-        {filename}
-      </span>
       {size !== undefined && <span className="text-[var(--text-muted)]">{formatBytes(size)}</span>}
       {onRemove && (
         <button
@@ -54,6 +66,7 @@ export function AttachmentChip({ filename, mime, size, previewUrl, onRemove, rem
           ×
         </button>
       )}
+      {open && preview && <ImageLightbox src={preview} label={filename} onClose={() => setOpen(false)} />}
     </span>
   );
 }
