@@ -114,7 +114,7 @@ describe('startSelfStartedTurn', () => {
     await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
 
     const started = seen.find((e) => e.type === 'turn-started') as Extract<typeof seen[number], { type: 'turn-started' }>;
-    expect(started).toMatchObject({ chatId: 'chat-1' });
+    expect(started).toMatchObject({ chatId: 'chat-1', selfStarted: true });
     const id = started.messageIds[0]!;
     await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
     expect(store.messages.get(id)).toMatchObject({ parentId: 'a1', parts: [{ type: 'notice' }, { type: 'text', text: 'Reviewed.' }] });

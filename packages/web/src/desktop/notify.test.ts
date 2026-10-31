@@ -1,13 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEvent } from '@otherbench/core/types/events.js';
-import { DEFAULT_NOTIFY_PREFS, loadNotifyPrefs, Notifier, NOTIFY_STORAGE_KEY, saveNotifyPrefs, type NotifyPrefs } from './notify.js';
+import { DEFAULT_NOTIFY_PREFS, loadNotifyPrefs, Notifier, NOTIFY_STORAGE_KEY, saveNotifyPrefs, SETTLE_MS, type NotifyPrefs } from './notify.js';
 
-function setup(over: { focused?: boolean; prefs?: NotifyPrefs } = {}) {
+function setup(over: { focused?: boolean; prefs?: NotifyPrefs; busy?: boolean } = {}) {
   let focused = over.focused ?? false;
   let prefs = over.prefs ?? DEFAULT_NOTIFY_PREFS;
+  let busy = over.busy ?? false;
   const show = vi.fn(async () => {});
   const notifier = new Notifier({
     isFocused: async () => focused,
+    isBusy: () => busy,
     show,
     chatTitle: (id) => (id === 'c1' ? 'Trip plans' : null),
     prefs: () => prefs,
@@ -17,6 +19,7 @@ function setup(over: { focused?: boolean; prefs?: NotifyPrefs } = {}) {
     show,
     setFocused: (f: boolean) => (focused = f),
     setPrefs: (p: NotifyPrefs) => (prefs = p),
+    setBusy: (b: boolean) => (busy = b),
   };
 }
 
@@ -85,6 +88,76 @@ describe('Notifier', () => {
     expect(show).toHaveBeenLastCalledWith('OtherBench', 'Reply finished', 'unknown');
     expect(notifier.takeLastChat()).toBe('unknown');
     expect(notifier.takeLastChat()).toBeNull();
+  });
+});
+
+describe('Notifier and replies nobody asked for', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const selfStarted = (messageId: string): AppEvent => ({ type: 'turn-started', chatId: 'c1', messageIds: [messageId], selfStarted: true });
+
+  /** Runs a `turn-finished` to the end of its wait. */
+  async function finish(notifier: Notifier, messageId: string, status: 'complete' | 'error' = 'complete'): Promise<void> {
+    const handled = notifier.handle(finished(messageId, status));
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    await handled;
+  }
+
+  it('stays quiet while the chat is still working on something else', async () => {
+    const { notifier, show } = setup({ busy: true });
+    await notifier.handle(selfStarted('m1'));
+    await finish(notifier, 'm1');
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet when the chat goes straight on to another turn', async () => {
+    const { notifier, show, setBusy } = setup();
+    await notifier.handle(selfStarted('m1'));
+    const handled = notifier.handle(finished('m1'));
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+    setBusy(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await handled;
+    expect(show).not.toHaveBeenCalled();
+  });
+
+  it('notifies once the chat has settled', async () => {
+    const { notifier, show } = setup();
+    await notifier.handle(selfStarted('m1'));
+    await finish(notifier, 'm1');
+    expect(show.mock.calls).toEqual([['Trip plans', 'Reply finished', 'c1']]);
+  });
+
+  it('notifies once when the same end arrives twice', async () => {
+    const { notifier, show } = setup();
+    await notifier.handle(selfStarted('m1'));
+    const first = notifier.handle(finished('m1'));
+    const second = notifier.handle(finished('m1'));
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    await Promise.all([first, second]);
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a failure at once, whatever else the chat is doing', async () => {
+    const { notifier, show } = setup({ busy: true });
+    await notifier.handle(selfStarted('m1'));
+    await notifier.handle(finished('m1', 'error'));
+    expect(show.mock.calls).toEqual([['Trip plans', 'Reply failed', 'c1']]);
+  });
+
+  it('still asks for an approval while the chat is busy', async () => {
+    const { notifier, show } = setup({ busy: true });
+    await notifier.handle(selfStarted('m1'));
+    await notifier.handle(approval('r1'));
+    expect(show.mock.calls).toEqual([['Trip plans', 'Approval needed: write_file', 'c1']]);
+  });
+
+  it('leaves a reply the user asked for alone, even with background tasks running', async () => {
+    const { notifier, show } = setup({ busy: true });
+    await notifier.handle({ type: 'turn-started', chatId: 'c1', messageIds: ['m1'] });
+    await notifier.handle(finished('m1'));
+    expect(show.mock.calls).toEqual([['Trip plans', 'Reply finished', 'c1']]);
   });
 });
 

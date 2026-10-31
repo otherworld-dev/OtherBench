@@ -39,9 +39,18 @@ export function saveNotifyPrefs(prefs: NotifyPrefs): void {
   }
 }
 
+/**
+ * How long the end of a self-started reply waits before saying so: Claude Code
+ * runs the next queued task report straight after a turn, so a chat that goes
+ * on working has announced its next reply by then.
+ */
+export const SETTLE_MS = 3000;
+
 export interface NotifierDeps {
   /** Whether the window holding `chatId` has focus right now; nothing is shown while it does. */
   isFocused(chatId: string): Promise<boolean>;
+  /** Whether `chatId` still has a reply or a background task running. */
+  isBusy(chatId: string): boolean;
   /** `chatId` lets a click open the chat (Windows); null opens just OtherBench. */
   show(title: string, body: string, chatId: string | null): Promise<void>;
   /** The chat's title for the notification's heading, or null if it isn't loaded. */
@@ -73,7 +82,10 @@ function scheduledRunBody(status: ScheduleRunStatus, detail: string | null): str
  * the window isn't focused, once per message or request. A scheduled run
  * ending (or not starting) is shown even while the window is focused, since
  * nobody was watching it, once per run; the run's own reply doesn't also
- * raise "Reply finished". On Windows clicking
+ * raise "Reply finished". A reply the agent started by itself after a
+ * background task finished is only worth a look once the chat has settled, so
+ * its end says nothing while the chat has anything else running; its failures
+ * and approvals are shown as usual. On Windows clicking
  * the notification opens its chat; elsewhere clicks aren't reported, so it
  * also remembers the last chat it notified about, and opening OtherBench from the
  * tray goes there (`takeLastChat`).
@@ -83,10 +95,16 @@ export class Notifier {
   private lastChatId: string | null = null;
   /** Replies written by scheduled runs: their own notification says the run ended, so the plain "Reply finished" is skipped. */
   private readonly scheduledMessages = new Set<string>();
+  /** Replies the agent started by itself. */
+  private readonly selfStartedMessages = new Set<string>();
 
   constructor(private readonly deps: NotifierDeps) {}
 
   async handle(e: AppEvent): Promise<void> {
+    if (e.type === 'turn-started') {
+      if (e.selfStarted) for (const id of e.messageIds) this.selfStartedMessages.add(id);
+      return;
+    }
     if (e.type === 'schedule-run-started') {
       this.scheduledMessages.add(e.messageId);
       return;
@@ -109,6 +127,10 @@ export class Notifier {
       if (!this.deps.prefs().replies) return;
       key = `message:${e.messageId}`;
       body = e.status === 'complete' ? 'Reply finished' : 'Reply failed';
+      if (e.status === 'complete' && this.selfStartedMessages.has(e.messageId)) {
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+        if (this.deps.isBusy(e.chatId)) return;
+      }
     } else if (e.type === 'approval-requested') {
       if (!this.deps.prefs().approvals) return;
       key = `request:${e.requestId}`;

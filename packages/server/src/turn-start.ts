@@ -94,7 +94,7 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
     },
   });
   container.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
-  container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId] });
+  container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId], selfStarted: true });
 }
 
 /** Whether the thread to `headId` has a context line (/clear, /compact) after message `afterId` on it. */

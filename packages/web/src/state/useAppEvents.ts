@@ -53,6 +53,10 @@ export function useAppEvents(): void {
     const notifier = isDesktop() && WINDOW_ROLE === 'main'
       ? new Notifier({
           isFocused: async (chatId) => (await focusedWindow()) === windowOfChat(chatId),
+          isBusy: (chatId) => {
+            const { appRunningTurns, appBackgroundChats } = useOtherBenchStore.getState();
+            return chatId in appBackgroundChats || Object.values(appRunningTurns).includes(chatId);
+          },
           show: (title, body, chatId) => showNotification(title, body, chatId, null, windowOfChat(chatId)),
           chatTitle: (chatId) => useOtherBenchStore.getState().chats.find((c) => c.id === chatId)?.title ?? null,
           prefs: loadNotifyPrefs,

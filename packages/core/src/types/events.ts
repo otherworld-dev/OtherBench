@@ -11,7 +11,8 @@ import type { MessageStatus } from './messages.js';
 export type AppEvent =
   | { type: 'chat-created' | 'chat-updated'; chat: Chat }
   | { type: 'chat-deleted'; chatId: string }
-  | { type: 'turn-started'; chatId: string; messageIds: string[] }
+  /** `selfStarted`: nobody asked for this reply, the agent carried on by itself after a background task finished. */
+  | { type: 'turn-started'; chatId: string; messageIds: string[]; selfStarted?: boolean }
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
   | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser' }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
