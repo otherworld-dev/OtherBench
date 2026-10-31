@@ -405,7 +405,7 @@ export class FakeToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
       this.broker.discard(decision.request.id);
       return isDeferrableInAutoMode(tool, args) ? { deferred: true } : { allowed: true, grantedBy: 'auto' };
     }
@@ -1397,7 +1397,7 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   create(s: NewSchedule): Schedule {
     if (this.rows.has(s.id)) throw new Error(`Duplicate id: ${s.id}`);
     const now = Date.now();
-    const full: Schedule = { ...structuredClone(s), createdAt: s.createdAt ?? now, updatedAt: s.updatedAt ?? now };
+    const full: Schedule = { ...structuredClone(s), autoMode: s.autoMode ?? false, createdAt: s.createdAt ?? now, updatedAt: s.updatedAt ?? now };
     this.rows.set(full.id, full);
     return structuredClone(full);
   }

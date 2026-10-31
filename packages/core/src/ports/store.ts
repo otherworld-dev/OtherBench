@@ -962,6 +962,13 @@ export interface Schedule {
   timezone: string;
   enabled: boolean;
   nextRunAt: number | null;
+  /**
+   * Runs use Claude Code's auto mode (a Claude Code profile only): its
+   * classifier decides the calls a card would have been needed for, and
+   * OtherBench's own tools are approved, instead of all of them being
+   * refused. Off by default: nobody watches what the classifier allows.
+   */
+  autoMode: boolean;
   createdAt: number;
   updatedAt: number;
   /**
@@ -971,11 +978,11 @@ export interface Schedule {
   invalid?: string;
 }
 
-/** What `ScheduleRepo.create` takes: timestamps default to now. */
-export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid'> & { createdAt?: number; updatedAt?: number };
+/** What `ScheduleRepo.create` takes: timestamps default to now, `autoMode` to false. */
+export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' | 'autoMode'> & { createdAt?: number; updatedAt?: number; autoMode?: boolean };
 
 /** What `ScheduleRepo.update` may change. The target is fixed once made. */
-export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'updatedAt'>>;
 
 /** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
 export interface ScheduleRun {

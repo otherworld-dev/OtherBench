@@ -266,6 +266,8 @@ export interface ScheduledPromptInput {
   dueAt: number | null;
   /** When the last completed run started, or null for the first. */
   previousAt: number | null;
+  /** The run uses Claude Code's auto mode (`Schedule.autoMode` on a Claude Code profile). */
+  autoMode?: boolean;
 }
 
 /**
@@ -280,7 +282,11 @@ export function scheduledPromptText(input: ScheduledPromptInput): string {
   const sentences = [`${head}: ${formatInZone(at, timezone, 'long')} (${timezone}).`];
   if (trigger === 'late' && dueAt !== null) sentences.push(`It was due ${formatInZone(dueAt, timezone, 'long')}.`);
   sentences.push(previousAt === null ? 'This is the first run.' : `The previous run was ${formatInZone(previousAt, timezone, 'date')}.`);
-  sentences.push('Nobody is watching this run, so tool calls that need approval will be refused.');
+  sentences.push(
+    input.autoMode === true
+      ? 'Nobody is watching this run: auto mode decides tool calls, and any that would still need approval will be refused.'
+      : 'Nobody is watching this run, so tool calls that need approval will be refused.'
+  );
   return `[${sentences.join(' ')}]\n\n${input.prompt}`;
 }
 
@@ -301,17 +307,28 @@ function hostShell(policy: ToolPolicy): boolean {
  * File changes count on an API profile with read & write files, or on Claude
  * Code with read & write files and a folder (with no folder, or files off or
  * read-only, Claude Code's edits are denied by policy, not by a card).
+ * With the schedule's Auto on a Claude Code profile, Claude Code's classifier
+ * decides its calls and OtherBench's own tools are approved, as in a chat with
+ * Auto on, whatever the approval mode; what is left is a call the classifier
+ * blocks or Claude Code would still ask about, a sandbox host off the list,
+ * and computer use.
  */
-export function unattendedWarnings(policy: ToolPolicy, connectionKind: ConnectionKind, hasFolder: boolean): string[] {
-  if (policy.approvalMode === 'always_ask') return ['This profile asks before every tool call, so every tool call will be refused.'];
+export function unattendedWarnings(policy: ToolPolicy, connectionKind: ConnectionKind, hasFolder: boolean, autoMode = false): string[] {
   const claudeCode = connectionKind === 'claude_code';
+  if (claudeCode && autoMode) {
+    const lines = ["Auto mode decides Claude Code's tool calls. One it blocks is refused, and so is one it would still ask you about."];
+    if (runsShellInSandbox(policy) && hasFolder) lines.push(SANDBOX_HOSTS_WARNING);
+    if (policy.computer === true) lines.push(COMPUTER_WARNING);
+    return lines;
+  }
+  if (policy.approvalMode === 'always_ask') return ['This profile asks before every tool call, so every tool call will be refused.'];
   const lines: string[] = [];
   if (!claudeCode && hostShell(policy)) lines.push('Shell commands on this machine need approval. Run the shell in the sandbox to use it unattended.');
   if (policy.fs === 'readwrite' && (!claudeCode || hasFolder)) lines.push('File changes need approval unless an Always grant covers them.');
   if (claudeCode && hasFolder && hostShell(policy)) lines.push("Claude Code's shell commands need approval.");
   // A sandboxed command needs no card under "Ask on changes", but a host off its list is a card (never automatic).
   // Claude Code with no folder gets no sandboxed run_command at all.
-  if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push("Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).");
+  if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push(SANDBOX_HOSTS_WARNING);
   if (policy.mcpServerIds.length > 0) lines.push('MCP tools not marked read-only need approval.');
   if (policy.recall !== false) lines.push('Searching past chats asks first in each chat, so it will be refused.');
   // The browser asks once per website (never automatic), for both engines, with or without a folder.
@@ -320,6 +337,11 @@ export function unattendedWarnings(policy: ToolPolicy, connectionKind: Connectio
   if (!claudeCode && policy.subagents === true) lines.push('A sub-agent run as a profile that asks before every tool call will have every tool call refused.');
   // Computer use (spec 2026-10-12-computer-use-design) never runs unattended, whatever grants there are, for both
   // engines: every action is refused, a screenshot included, before the desktop app is asked anything.
-  if (policy.computer === true) lines.push('Computer use needs someone at the machine, so every computer action is refused, a screenshot included.');
+  if (policy.computer === true) lines.push(COMPUTER_WARNING);
   return lines;
 }
+
+const SANDBOX_HOSTS_WARNING =
+  "Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).";
+
+const COMPUTER_WARNING = 'Computer use needs someone at the machine, so every computer action is refused, a screenshot included.';

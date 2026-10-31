@@ -87,7 +87,8 @@ const errorMessage = (err: unknown): string => (err instanceof Error ? err.messa
  * records that slot as not started and moves on; one whose chat has a reply
  * being written, or that would make more than two runs at once, is left due.
  * `nextRunAt` moves on in the same synchronous step that marks a run as
- * starting, so a crash never repeats a slot. Every run is unattended.
+ * starting, so a crash never repeats a slot. Every run is unattended; one
+ * whose schedule allows Auto, on a Claude Code profile, runs in auto mode.
  */
 export class ScheduleService {
   private readonly store: Store;
@@ -299,6 +300,8 @@ export class ScheduleService {
       chatId = target.chatId;
       this.starting.set(schedule.id, target.chatId);
       const previous = this.store.schedules.lastCompleted(schedule.id);
+      // Auto mode is Claude Code's: on any other profile the schedule's Auto changes nothing.
+      const autoMode = schedule.autoMode && profile.connection.kind === 'claude_code';
       const text = scheduledPromptText({
         name: schedule.name,
         prompt: schedule.prompt,
@@ -307,8 +310,16 @@ export class ScheduleService {
         at: run.startedAt,
         dueAt: run.dueAt,
         previousAt: previous?.startedAt ?? null,
+        autoMode,
       });
-      const result = await this.startTurn({ chatId: target.chatId, parentId: target.parentId, userParts: [{ type: 'text', text }], profiles: [profile], unattended: true });
+      const result = await this.startTurn({
+        chatId: target.chatId,
+        parentId: target.parentId,
+        userParts: [{ type: 'text', text }],
+        profiles: [profile],
+        unattended: true,
+        ...(autoMode ? { unattendedAuto: true } : {}),
+      });
       // The turn has started, but the container's shutdown owns it now.
       if (this.disposed) return;
       const messageId = result.assistantMessageIds[0];

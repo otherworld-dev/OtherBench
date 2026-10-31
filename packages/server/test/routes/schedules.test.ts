@@ -129,6 +129,7 @@ describe('POST /api/schedules', () => {
       [{ rule: { cadence: 'hourly', time: '09:00' } }, /"rule.cadence"/],
       [{ rule: { cadence: 'weekly', time: '09:00', weekdays: [] } }, /"rule.weekdays"/],
       [{ enabled: 'yes' }, /"enabled"/],
+      [{ autoMode: 'yes' }, /"autoMode"/],
     ];
     for (const [over, message] of cases) {
       const res = await send('POST', '', body(over));
@@ -183,6 +184,29 @@ describe('PATCH and DELETE /api/schedules/:id', () => {
     expect(weekly.describe).toBe('Mondays at 09:00');
     expect((await send('PATCH', `/${made.id}`, { target: { chatId: 'chat-2' } })).status).toBe(400);
     expect((await send('PATCH', '/nope', { name: 'x' })).status).toBe(404);
+  });
+
+  it("Auto is off unless asked for, set on create or edit, and the warnings follow it on a Claude Code profile", async () => {
+    setup();
+    container.store.connections.create({ id: 'cc', name: 'Claude Code', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    container.store.profiles.create({
+      id: 'p-cc', name: 'Claude', description: null, colour: null, connectionId: 'cc', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null,
+    });
+    const refused = ['This profile asks before every tool call, so every tool call will be refused.'];
+    const decides = ["Auto mode decides Claude Code's tool calls. One it blocks is refused, and so is one it would still ask you about."];
+
+    const made = await create({ profileId: 'p-cc' });
+    expect(made).toMatchObject({ autoMode: false, warnings: refused });
+    expect(await create({ profileId: 'p-cc', autoMode: true })).toMatchObject({ autoMode: true, warnings: decides });
+
+    const on = (await (await send('PATCH', `/${made.id}`, { autoMode: true })).json()) as ScheduleView;
+    expect(on).toMatchObject({ autoMode: true, warnings: decides, nextRunAt: made.nextRunAt });
+    const kept = (await (await send('PATCH', `/${made.id}`, { name: 'Daily' })).json()) as ScheduleView;
+    expect(kept.autoMode).toBe(true);
+    const off = (await (await send('PATCH', `/${made.id}`, { autoMode: false })).json()) as ScheduleView;
+    expect(off).toMatchObject({ autoMode: false, warnings: refused });
+    expect((await send('PATCH', `/${made.id}`, { autoMode: 1 })).status).toBe(400);
   });
 
   it('DELETE removes it', async () => {

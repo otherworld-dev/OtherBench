@@ -149,6 +149,46 @@ beforeEach(() => {
 
 afterEach(() => service.dispose());
 
+describe("ScheduleService: the schedule's Auto", () => {
+  function addClaudeCodeProfile(): void {
+    store.connections.create({ id: 'cc', name: 'Claude Code', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    store.profiles.create({
+      id: 'p-cc', name: 'Claude', description: null, colour: null, connectionId: 'cc', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false, recall: true },
+      isDefault: false, archivedAt: null,
+    });
+  }
+
+  it('runs in auto mode, and says so in the bracketed paragraph, when the schedule allows it on a Claude Code profile', async () => {
+    addClaudeCodeProfile();
+    addSchedule('s1', { profileId: 'p-cc', autoMode: true });
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const req = engine.requests[0]!;
+    expect(req.unattended).toBe(true);
+    expect(req.autoMode).toBe(true);
+    expect(lastUserText(req)).toContain('Nobody is watching this run: auto mode decides tool calls, and any that would still need approval will be refused.');
+  });
+
+  it('stays out of auto mode when the schedule allows it but the profile is not Claude Code, or when the schedule leaves it off', async () => {
+    addClaudeCodeProfile();
+    addChat('chat-4');
+    addSchedule('s1', { autoMode: true });
+    addSchedule('s2', { profileId: 'p-cc', target: { kind: 'chat', chatId: 'chat-4' } });
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    for (const req of engine.requests) {
+      expect(req.unattended).toBe(true);
+      expect(req.autoMode).toBe(false);
+      expect(lastUserText(req)).toContain('Nobody is watching this run, so tool calls that need approval will be refused.');
+    }
+  });
+});
+
 describe('ScheduleService: when runs start', () => {
   it('runs a schedule at its time, unattended, with the bracketed first paragraph, and records it', async () => {
     addSchedule('s1');

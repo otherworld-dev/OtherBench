@@ -101,6 +101,7 @@ interface SchedulesViewProps {
 export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Element {
   const version = useOtherBenchStore((s) => s.schedulesVersion);
   const profiles = useOtherBenchStore((s) => s.profiles);
+  const connections = useOtherBenchStore((s) => s.connections);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const [schedules, setSchedules] = useState<ScheduleView[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -138,6 +139,11 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
   }, [editing, deleting, onClose]);
 
   const profileName = (id: string): string => profiles.find((p) => p.id === id)?.name ?? 'Unknown profile';
+  // As the run decides it: the schedule's Auto counts only on a Claude Code profile.
+  const runsInAuto = (s: ScheduleView): boolean => {
+    const connectionId = profiles.find((p) => p.id === s.profileId)?.connectionId;
+    return s.autoMode && connections.find((c) => c.id === connectionId)?.kind === 'claude_code';
+  };
   const clearRunError = (id: string): void =>
     setRunErrors((prev) => {
       const next = { ...prev };
@@ -216,6 +222,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                   <p>{s.describe}</p>
                   <p className="text-[var(--text-muted)]">
                     {s.target.kind === 'chat' ? `Chat: ${s.targetName}` : `New chat each run in ${s.targetName}`} · {profileName(s.profileId)}
+                    {runsInAuto(s) && ' · Auto mode'}
                   </p>
                   <p data-testid="schedule-next">Next run: {nextRunText(s, now)}</p>
                   {s.lastRun && (

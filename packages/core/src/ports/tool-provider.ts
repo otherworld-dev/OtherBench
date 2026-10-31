@@ -75,6 +75,14 @@ export interface ToolContext {
    */
   unattended?: boolean;
   /**
+   * With `unattended`: the schedule allows Claude Code's auto mode, so a
+   * `deferAsk` call is handed to the classifier (or, for OtherBench's own
+   * tools, approved) as it would be with someone there. Anything that still
+   * asks is refused as unattended. Set only by `toolContextFor`, from
+   * `TurnInput.unattendedAuto` by way of the request's `autoMode`.
+   */
+  unattendedAuto?: boolean;
+  /**
    * Set only by `OtherBenchToolProvider.runLiveCall`, never by an engine or
    * `toolContextFor`: this call is one a live artifact's page asked for (spec
    * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live
@@ -216,7 +224,8 @@ export interface ApprovalOptions {
    * A Claude Code tool is handed to its own classifier (`{ deferred: true }`,
    * `isDeferrableInAutoMode`); one of OtherBench's own tools is approved
    * (grantedBy `auto`). Deny/allow are unaffected, and an unattended run
-   * still refuses what it would have asked about.
+   * still refuses what it would have asked about, unless its schedule allows
+   * auto mode (`ToolContext.unattendedAuto`).
    */
   deferAsk?: boolean;
 }

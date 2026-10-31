@@ -2625,6 +2625,54 @@ describe('unattended turns (scheduled runs)', () => {
     expect(engine.requests[0]!.autoMode).toBe(false);
   });
 
+  it("uses auto mode when the schedule allows it, whatever the chat's own Auto says", async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()], unattended: true, unattendedAuto: true });
+
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.unattended).toBe(true);
+    expect(engine.requests[0]!.autoMode).toBe(true);
+  });
+
+  it("ignores the schedule's Auto on an attended run: the chat's own setting decides", async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()], unattendedAuto: true });
+
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.unattended).toBeUndefined();
+    expect(engine.requests[0]!.autoMode).toBe(false);
+  });
+
+  it("carries the schedule's Auto into a self-started reply that carries on unattended", async () => {
+    const store = new InMemoryStore();
+    newChat(store);
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const runner = new TurnRunner(store, new FakeChatEngine([]));
+    const requests: EngineRequest[] = [];
+    const stream = async function* (req: EngineRequest): AsyncGenerator<EngineEvent> {
+      requests.push(req);
+      yield { type: 'finish', usage, finishReason: 'stop' };
+    };
+
+    for (const unattendedAuto of [true, false]) {
+      const { assistantMessageId } = await runner.runSelfStarted({ chatId: 'chat-1', parentId: 'a1', profile: makeResolvedProfile(), notice: 'Carried on.', unattended: true, unattendedAuto, stream });
+      await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
+    }
+
+    expect(requests.map((r) => [r.unattended, r.autoMode])).toEqual([
+      [true, true],
+      [true, false],
+    ]);
+  });
+
   it('leaves an ordinary run, a retry and a regenerate attended', async () => {
     const store = new InMemoryStore();
     let calls = 0;

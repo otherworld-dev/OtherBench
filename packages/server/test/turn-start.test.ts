@@ -6,7 +6,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { startSelfStartedTurn, startTurn } from '../src/turn-start.js';
-import type { EngineEvent, SelfStart } from '@otherbench/core/ports/chat-engine.js';
+import type { EngineEvent, EngineRequest, SelfStart } from '@otherbench/core/ports/chat-engine.js';
 
 function profile(id = 'p1'): ResolvedProfile {
   return {
@@ -83,6 +83,28 @@ describe('startSelfStartedTurn', () => {
       ...over,
     };
   }
+
+  it("runs a scheduled run's self-start unattended, in auto mode only when the schedule allowed it", async () => {
+    for (const unattendedAuto of [true, false]) {
+      const { store, seen, deps } = setup();
+      store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+      const requests: EngineRequest[] = [];
+      const start = selfStart({
+        unattended: true,
+        unattendedAuto,
+        run: async function* (req): AsyncGenerator<EngineEvent> {
+          requests.push(req);
+          yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+        },
+      });
+
+      await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, start);
+
+      const started = seen.find((e) => e.type === 'turn-started') as Extract<typeof seen[number], { type: 'turn-started' }>;
+      await vi.waitFor(() => expect(store.messages.get(started.messageIds[0]!)!.status).toBe('complete'));
+      expect(requests.map((r) => [r.unattended, r.autoMode])).toEqual([[true, unattendedAuto]]);
+    }
+  });
 
   it('runs a self-start as a reply after the one it continues and announces it', async () => {
     const { store, seen, streamRegistry, deps } = setup();

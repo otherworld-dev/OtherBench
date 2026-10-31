@@ -89,7 +89,8 @@ export interface EngineRequest {
    * The chat's Auto toggle (`Chat.autoMode`), read fresh for every turn, so a
    * change applies from the next turn and never mid-turn. Only the Claude Code
    * engine reads it (Claude login only, never for utility calls); every other
-   * engine ignores it.
+   * engine ignores it. On an `unattended` request it is the schedule's Auto
+   * (`TurnInput.unattendedAuto`), never the chat's.
    */
   autoMode?: boolean;
   /** The chat's effort (`Chat.effort`), read fresh for every turn. Only the Claude Code engine reads it; unset follows the user's Claude Code settings. */
@@ -158,6 +159,8 @@ export interface SelfStart {
   notice: string;
   /** Carried over from the reply before it: a scheduled run's helpers carry on unattended. */
   unattended: boolean;
+  /** Carried over with `unattended`: the schedule allowed auto mode, so the self-started reply keeps it. */
+  unattendedAuto?: boolean;
   /** Set when Claude Code is running notes the user sent mid-reply as their own turn (a follow-on); `notice` is '' then. */
   noteIds?: string[];
   /** Runs the turn for the reply `req` describes, gated like a reply the user asked for. Iterate once. */

@@ -60,7 +60,9 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   const targetFixed = schedule !== undefined || prefill !== undefined;
   const profile = profiles.find((p) => p.id === draft.profileId);
   const connection = profile ? connections.find((c) => c.id === profile.connectionId) : undefined;
-  const warnings = profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, targetHasFolder(draft, chats, projects)) : [];
+  // Auto mode is Claude Code's: offered only for its profiles. A tick left over from another profile is kept, and ignored by the run.
+  const offersAuto = connection?.kind === 'claude_code';
+  const warnings = profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, targetHasFolder(draft, chats, projects), draft.autoMode) : [];
   const profileChoices = profiles.filter((p) => p.archivedAt === null || p.id === draft.profileId);
   const chatChoices = chats.filter((c) => c.archivedAt === null).sort((a, b) => b.createdAt - a.createdAt);
   const targetText =
@@ -147,6 +149,18 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
               </option>
             ))}
           </select>
+          {offersAuto && (
+            <div className="mt-2">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={draft.autoMode} onChange={(e) => set('autoMode', e.target.checked)} aria-describedby={`${id}-auto-help`} />
+                Use auto mode
+              </label>
+              <p id={`${id}-auto-help`} className="text-xs text-[var(--text-muted)]">
+                Claude Code's classifier decides the tool calls that would need your approval, instead of them being refused. Nobody checks what it allows, so only use
+                it for work you'd let run on its own, and keep in mind that text the run reads (an issue, a web page) can try to steer it.
+              </p>
+            </div>
+          )}
           {warnings.length > 0 && (
             <div data-testid="schedule-warnings" className="mt-1 text-[var(--warn)]">
               <p>Nobody approves anything during a scheduled run:</p>

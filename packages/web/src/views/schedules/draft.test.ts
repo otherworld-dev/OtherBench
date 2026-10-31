@@ -13,14 +13,14 @@ function profile(id: string, over: Partial<Profile> = {}): Profile {
   return { id, name: id, description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null, ...over };
 }
 function schedule(over: Partial<Schedule> = {}): Schedule {
-  return { id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' }, rule: { cadence: 'weekly', time: '07:30', weekdays: [1, 3] }, timezone: 'Europe/London', enabled: true, nextRunAt: 5, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' }, rule: { cadence: 'weekly', time: '07:30', weekdays: [1, 3] }, timezone: 'Europe/London', enabled: true, nextRunAt: 5, autoMode: false, createdAt: 1, updatedAt: 1, ...over };
 }
 const valid = (over: Partial<ScheduleDraft> = {}): ScheduleDraft => ({ ...emptyDraft({ kind: 'chat', chatId: 'c1' }, 'p1'), name: 'Report', prompt: 'hello', ...over });
 
 describe('drafts', () => {
   it('starts a new schedule daily at 09:00 on its prefilled target', () => {
     expect(emptyDraft({ kind: 'project', projectId: 'pr1' }, 'p1')).toEqual({
-      name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', targetKind: 'project', chatId: '', projectId: 'pr1',
+      name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false,
     });
     expect(emptyDraft(null, '')).toMatchObject({ targetKind: 'chat', chatId: '', projectId: '' });
   });
@@ -28,6 +28,8 @@ describe('drafts', () => {
   it('fills a draft from a schedule', () => {
     expect(draftFromSchedule(schedule())).toMatchObject({ cadence: 'weekly', time: '07:30', weekdays: [1, 3], targetKind: 'chat', chatId: 'c1' });
     expect(draftFromSchedule(schedule({ rule: { cadence: 'monthly', time: '09:00', monthDay: 31 } }))).toMatchObject({ cadence: 'monthly', monthDay: '31' });
+    expect(draftFromSchedule(schedule()).autoMode).toBe(false);
+    expect(draftFromSchedule(schedule({ autoMode: true })).autoMode).toBe(true);
   });
 
   it('names the first thing to fix', () => {
@@ -46,8 +48,9 @@ describe('drafts', () => {
 
   it('builds the create body, trimming the name and sorting the days', () => {
     expect(createBody(valid({ name: ' Report ', cadence: 'weekly', weekdays: [5, 1] }))).toEqual({
-      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] },
+      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] }, autoMode: false,
     });
+    expect(createBody(valid({ autoMode: true }))).toMatchObject({ autoMode: true });
     expect(createBody(valid({ targetKind: 'project', projectId: 'pr1', cadence: 'monthly', monthDay: '15' }))).toMatchObject({
       target: { projectId: 'pr1' }, rule: { cadence: 'monthly', time: '09:00', monthDay: 15 },
     });
@@ -57,6 +60,7 @@ describe('drafts', () => {
     const initial = draftFromSchedule(schedule());
     expect(patchBody(initial, initial)).toEqual({});
     expect(patchBody(initial, { ...initial, name: 'Daily', time: '08:00' })).toEqual({ name: 'Daily', rule: { cadence: 'weekly', time: '08:00', weekdays: [1, 3] } });
+    expect(patchBody(initial, { ...initial, autoMode: true })).toEqual({ autoMode: true });
   });
 });
 

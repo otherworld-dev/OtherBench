@@ -83,11 +83,19 @@ export interface TurnInput {
   /**
    * A scheduled run with nobody watching (spec 2026-10-12-scheduled-tasks-design):
    * the request is marked unattended, so tool calls that would raise a card are
-   * refused, and Claude Code's auto mode is off whatever the chat says. Only
+   * refused, and Claude Code's auto mode is off whatever the chat says
+   * (unless `unattendedAuto`). Only
    * the schedule service sets it; no route reads it from a request body.
    * `retry` and `regenerate` never set it: a person is pressing the button.
    */
   unattended?: boolean;
+  /**
+   * The schedule allows Claude Code's auto mode (`Schedule.autoMode`): an
+   * unattended run's calls go to Claude Code's classifier instead of being
+   * refused, and OtherBench's own tools are approved as in a chat with Auto
+   * on. Only with `unattended`; an attended turn follows the chat's Auto.
+   */
+  unattendedAuto?: boolean;
 }
 
 /**
@@ -494,7 +502,7 @@ export class TurnRunner {
     // `.catch` here is a last-resort backstop against a bug in that catch
     // logic turning into an unhandled rejection.
     for (const { message, profile } of variants) {
-      void this.runVariant(input.chatId, userMessage.id, message.id, profile, input.unattended === true).catch((err: unknown) => {
+      void this.runVariant(input.chatId, userMessage.id, message.id, profile, input.unattended === true, { unattendedAuto: input.unattendedAuto === true }).catch((err: unknown) => {
         console.error(`[TurnRunner] variant ${message.id} failed outside its own error handling:`, err);
       });
     }
@@ -659,6 +667,8 @@ export class TurnRunner {
     profile: ResolvedProfile;
     notice: string;
     unattended: boolean;
+    /** Carried over with `unattended`: the schedule that started the run allows auto mode. */
+    unattendedAuto?: boolean;
     stream: (req: EngineRequest) => AsyncIterable<EngineEvent>;
     /** Called once the reply has ended, however it ended (also when it ended before `stream` was called). */
     onEnd?: () => void;
@@ -674,7 +684,7 @@ export class TurnRunner {
       error: null,
       producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
     });
-    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice })
+    void this.runVariant(input.chatId, input.parentId, message.id, profile, input.unattended, { stream: input.stream, notice: input.notice, unattendedAuto: input.unattendedAuto === true })
       .catch((err: unknown) => {
         console.error(`[TurnRunner] self-started reply ${message.id} failed outside its own error handling:`, err);
       })
@@ -737,7 +747,7 @@ export class TurnRunner {
     messageId: string,
     profile: ResolvedProfile,
     unattended = false,
-    variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string } = {}
+    variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string; unattendedAuto?: boolean } = {}
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
@@ -955,8 +965,9 @@ export class TurnRunner {
         ...(attachmentSize ? { attachmentSize } : {}),
         purpose: 'turn',
         // Nobody can catch what auto mode's classifier allows in a scheduled
-        // run, so it is never used there (the classifier isn't a security boundary).
-        autoMode: unattended ? false : autoMode,
+        // run (the classifier isn't a security boundary), so it is used there
+        // only when the schedule says so, never because of the chat's Auto.
+        autoMode: unattended ? variant.unattendedAuto === true : autoMode,
         ...(unattended ? { unattended: true } : {}),
         ...(effort ? { effort } : {}),
         ...(plan ? { plan } : {}),

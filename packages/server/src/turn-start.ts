@@ -84,6 +84,7 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
     profile,
     notice: start.notice,
     unattended: start.unattended,
+    unattendedAuto: start.unattendedAuto === true,
     stream: (req) => {
       ran = true;
       return start.run(req);

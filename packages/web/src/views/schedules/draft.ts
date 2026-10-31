@@ -24,6 +24,8 @@ export interface ScheduleDraft {
   targetKind: 'chat' | 'project';
   chatId: string;
   projectId: string;
+  /** Runs use Claude Code's auto mode (`Schedule.autoMode`); offered only for a Claude Code profile. */
+  autoMode: boolean;
 }
 
 /** The day checkboxes, Monday first. */
@@ -51,6 +53,7 @@ export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): S
     targetKind: prefill?.kind ?? 'chat',
     chatId: prefill?.kind === 'chat' ? prefill.chatId : '',
     projectId: prefill?.kind === 'project' ? prefill.projectId : '',
+    autoMode: false,
   };
 }
 
@@ -67,6 +70,7 @@ export function draftFromSchedule(s: Schedule): ScheduleDraft {
     targetKind: s.target.kind,
     chatId: s.target.kind === 'chat' ? s.target.chatId : '',
     projectId: s.target.kind === 'project' ? s.target.projectId : '',
+    autoMode: s.autoMode,
   };
 }
 
@@ -113,6 +117,7 @@ export function createBody(d: ScheduleDraft): CreateScheduleBody {
     profileId: d.profileId,
     target: d.targetKind === 'chat' ? { chatId: d.chatId } : { projectId: d.projectId },
     rule: ruleOrThrow(d),
+    autoMode: d.autoMode,
   };
 }
 
@@ -124,6 +129,7 @@ export function patchBody(initial: ScheduleDraft, d: ScheduleDraft): PatchSchedu
   if (d.profileId !== initial.profileId) body.profileId = d.profileId;
   const rule = ruleOrThrow(d);
   if (JSON.stringify(rule) !== JSON.stringify(draftRule(initial))) body.rule = rule;
+  if (d.autoMode !== initial.autoMode) body.autoMode = d.autoMode;
   return body;
 }
 
