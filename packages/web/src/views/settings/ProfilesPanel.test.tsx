@@ -326,7 +326,7 @@ describe('ProfilesPanel', () => {
     expect(box).not.toBeChecked();
     expect(screen.queryByLabelText('Blocked sites')).toBeNull();
     await user.click(box);
-    expect(screen.getByText("The model's own browser, with no logins. Asks before each new website.")).toBeInTheDocument();
+    expect(screen.getByText("The model's own browser, kept apart from your everyday one. Asks before each new website.")).toBeInTheDocument();
     await user.type(screen.getByLabelText('Blocked sites'), 'ads.test{enter}{enter} tracker.example ');
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 

@@ -268,7 +268,8 @@ function firstHeading(snapshot: string): string | null {
  * rest of that line through the real tool when offered, then its output
  * ("I ran it in the sandbox: ..." for a sandboxed one). `#browser <url>` ->
  * a `browser` `open` of that address through the real tool when offered,
- * then the page's first heading. `#image <prompt>` / `#video <prompt>` -> a
+ * then the page's first heading; with ` handover` after the address, a
+ * `handover` call before that. `#image <prompt>` / `#video <prompt>` -> a
  * `generate_image` / `generate_video` call with the rest of that line through
  * the real tool when offered, then "Done.".
  * `#computer` -> a screenshot, a click at (10, 20) and a short `type` through
@@ -367,9 +368,9 @@ export class MockChatEngine implements ChatEngine {
       return;
     }
 
-    const browse = /#browser[ \t]+(\S+)/.exec(prompt);
+    const browse = /#browser[ \t]+(\S+)([ \t]+handover)?/.exec(prompt);
     if (browse) {
-      yield* this.streamBrowserTurn(req, browse[1]!, tokensIn);
+      yield* this.streamBrowserTurn(req, browse[1]!, browse[2] !== undefined, tokensIn);
       return;
     }
 
@@ -653,17 +654,22 @@ export class MockChatEngine implements ChatEngine {
   }
 
   /** `#browser <url>` (spec 2026-10-12-model-browser-design §8): one `open` through the real tool when offered, then the page's first heading. */
-  private async *streamBrowserTurn(req: EngineRequest, url: string, tokensIn: number): AsyncGenerator<EngineEvent> {
-    const callId = `mock-browser-${randomUUID()}`;
-    const args = { command: 'open', url };
-    if (req.signal.aborted) return;
-    yield { type: 'tool-call', id: callId, name: 'browser', args };
+  private async *streamBrowserTurn(req: EngineRequest, url: string, handover: boolean, tokensIn: number): AsyncGenerator<EngineEvent> {
     const tool = req.tools.find((t) => t.name === 'browser');
-    // toolContextFor, like every other tool branch: the browser must see the reply's plan gate, the unattended flag and a sub-agent's tag.
-    const result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: 'No browser tool was offered.' };
-    if (req.signal.aborted) return;
-    const isError = isToolErrorResult(result);
-    yield { type: 'tool-result', id: callId, name: 'browser', result: JSON.stringify(result), isError };
+    const calls: Record<string, unknown>[] = [{ command: 'open', url }, ...(handover ? [{ command: 'handover', reason: 'Please click the page to prove you are human.' }] : [])];
+    let result: unknown;
+    let isError = false;
+    for (const args of calls) {
+      const callId = `mock-browser-${randomUUID()}`;
+      if (req.signal.aborted) return;
+      yield { type: 'tool-call', id: callId, name: 'browser', args };
+      // toolContextFor, like every other tool branch: the browser must see the reply's plan gate, the unattended flag and a sub-agent's tag.
+      result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: 'No browser tool was offered.' };
+      if (req.signal.aborted) return;
+      isError = isToolErrorResult(result);
+      yield { type: 'tool-result', id: callId, name: 'browser', result: JSON.stringify(result), isError };
+      if (isError) break;
+    }
     const snapshot = (result as { snapshot?: unknown }).snapshot;
     const heading = !isError && typeof snapshot === 'string' ? firstHeading(snapshot) : null;
     const answer = isError

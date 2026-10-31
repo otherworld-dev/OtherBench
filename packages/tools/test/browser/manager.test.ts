@@ -103,7 +103,7 @@ describe('BrowserManager', () => {
     session.onFrame!(Buffer.from('jpeg-1'));
     expect(frames).toEqual([{ seq: 1, jpeg: Buffer.from('jpeg-1').toString('base64') }]);
     session.navigate('https://example.com/', 'Example');
-    await vi.waitFor(() => expect(states.at(-1)).toEqual({ open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: 'm1' }));
+    await vi.waitFor(() => expect(states.at(-1)).toEqual({ open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: 'm1', visible: true }));
     stop();
     await vi.waitFor(() => expect(session.onFrame).toBeNull());
   });
@@ -313,7 +313,7 @@ describe('BrowserManager', () => {
       await vi.waitFor(() => expect(factory.sessions[0]!.onFrame).not.toBeNull());
       factory.sessions[0]!.onFrame!(Buffer.from('f'));
       expect(frames).toHaveLength(1);
-      expect(states.at(-1)).toMatchObject({ open: true, holder: 'm1' });
+      expect(states.at(-1)).toMatchObject({ open: true, holder: 'm1', visible: true });
       expect(error).toHaveBeenCalled();
     } finally {
       error.mockRestore();

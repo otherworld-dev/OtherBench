@@ -228,7 +228,7 @@ describe('browserHostDenial', () => {
 
 describe('browser commands', () => {
   it('reads with snapshot, scroll and close, and changes the page with everything else', () => {
-    expect(BROWSER_COMMANDS.filter((c) => browserCommandRisk(c) === 'read')).toEqual(['snapshot', 'scroll', 'close']);
+    expect(BROWSER_COMMANDS.filter((c) => browserCommandRisk(c) === 'read')).toEqual(['snapshot', 'scroll', 'handover', 'close']);
     expect(BROWSER_COMMANDS.filter((c) => browserCommandRisk(c) === 'mutate')).toEqual(['open', 'click', 'type', 'select', 'press', 'back']);
   });
 });

@@ -17,6 +17,7 @@ import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { EditDiff } from './EditDiff.js';
 import { GeneratedMedia, GenerationFailure, generationFailure, GenerationProgress, hasGeneratedMedia, isGenerationTool } from './GeneratedMedia.js';
+import { BrowserHandoverCard } from './BrowserHandoverCard.js';
 import { GenerationCard } from './GenerationCard.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { PlanCard } from './PlanCard.js';
@@ -900,6 +901,8 @@ export function Message({
               <QuestionCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             ) : ask.kind === 'generation' ? (
               <GenerationCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            ) : ask.kind === 'browser' ? (
+              <BrowserHandoverCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             ) : (
               <PlanCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
             )

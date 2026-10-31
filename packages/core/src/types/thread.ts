@@ -43,7 +43,12 @@ export type AskInput =
    * the one that will be sent (`''` for none), or null when the backend takes none. `settings` is one line
    * naming only what is applied, e.g. "1024×1024 · seed 42 · SDXL (ComfyUI)".
    */
-  | { kind: 'generation'; toolName: string; media: 'image' | 'video'; prompt: string; negativePrompt: string | null; settings: string };
+  | { kind: 'generation'; toolName: string; media: 'image' | 'video'; prompt: string; negativePrompt: string | null; settings: string }
+  /**
+   * The model's browser needs a person: an "are you human" check, a sign-in. `site` is the page's committed site,
+   * `reason` the model's words, cleaned. `window` says a real window is open for it; without one there is the panel.
+   */
+  | { kind: 'browser'; toolName: string; site: string; reason: string; window: boolean };
 
 /** An ask waiting in the thread, tied to the reply that raised it. */
 export type UserAsk = AskInput & { id: string; chatId: string; messageId: string };

@@ -11,7 +11,15 @@ const page = [
   '<p>A page for the browser end-to-end test.</p>',
 ].join('\n');
 
-createServer((_req, res) => {
+/** A page that stays stuck until a person clicks it: anywhere will do, so the test needn't know where the button lands in the picture. */
+const check = [
+  '<!doctype html>',
+  '<title>Check</title>',
+  '<h1>Are you human?</h1>',
+  "<script>addEventListener('click', () => { document.querySelector('h1').textContent = 'Cleared by hand'; });</script>",
+].join('\n');
+
+createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(page);
+  res.end(req.url === '/check' ? check : page);
 }).listen(port, '127.0.0.1');

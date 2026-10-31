@@ -17,8 +17,17 @@ export interface ActionGuard {
   navId?: number;
 }
 
+/** Something a person did in the Browser panel. `x` and `y` are fractions of the page's width and height. */
+export type BrowserInput =
+  | { type: 'click'; x: number; y: number }
+  | { type: 'wheel'; x: number; y: number; dy: number }
+  | { type: 'key'; key: string }
+  | { type: 'text'; text: string };
+
 /** One chat's page, as the manager and the tool see it. The Playwright-backed version lives in chromium.ts. */
 export interface BrowserSession {
+  /** A real window on this machine, rather than a headless page only the panel can show. */
+  readonly visible: boolean;
   url(): string;
   /**
    * Counts the main frame's navigations (same-document ones, like the history
@@ -27,7 +36,7 @@ export interface BrowserSession {
    */
   navigationId(): number;
   title(): Promise<string>;
-  /** The page's accessibility snapshot (`ariaSnapshot({ mode: 'ai' })`), whole. */
+  /** The page's accessibility snapshot (`ariaSnapshot({ mode: 'ai' })`), whole, with what is in password fields left out. */
   snapshot(guard?: ActionGuard): Promise<string>;
   open(url: string): Promise<void>;
   click(ref: string, double: boolean, guard?: ActionGuard): Promise<void>;
@@ -44,6 +53,16 @@ export interface BrowserSession {
   stopScreencast(): Promise<void>;
   /** Called after each main-frame navigation; returns an unsubscribe function. */
   onNavigate(cb: () => void): () => void;
+  /** Called if the page goes away by itself (a person closed its window, the browser died), not on `close()`. Returns an unsubscribe function. */
+  onClosed(cb: () => void): () => void;
+  /** Brings the window to a person, and lets them open what they need from it (a sign-in popup). Does nothing without a window. */
+  reveal(): Promise<void>;
+  /** Puts the window away again and closes anything opened from it. */
+  conceal(): Promise<void>;
+  /** Passes on what a person did in the panel. Not a model's action: no guard and no broker. */
+  input(event: BrowserInput): Promise<void>;
+  /** Keeps what this browser has signed into and answered so far. Never throws. */
+  saveProfile(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -51,6 +70,8 @@ export interface BrowserSession {
 export interface SessionFactory {
   open(proxy: ProxyCredentials): Promise<BrowserSession>;
   shutdown(): Promise<void>;
+  /** Drops the saved sign-ins and cookie choices. */
+  forgetProfile(): Promise<void>;
 }
 
 /** A ref the page no longer has (spec: "e12 isn't on the page any more: take a new snapshot."). */

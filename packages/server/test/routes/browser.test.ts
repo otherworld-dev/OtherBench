@@ -11,8 +11,8 @@ import type { Container } from '../../src/container.js';
 import type { BrowserPort } from '../../src/routes/browser.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
-const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null };
-const CLOSED: BrowserState = { open: false, url: null, title: null, host: null, holder: null };
+const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true };
+const CLOSED: BrowserState = { open: false, url: null, title: null, host: null, holder: null, visible: false };
 
 let container: Container;
 let dir: string;
@@ -37,6 +37,9 @@ beforeEach(() => {
       };
     }),
     closeAll: vi.fn(async () => {}),
+    input: vi.fn(async () => true),
+    show: vi.fn(async () => true),
+    forgetProfile: vi.fn(async () => {}),
   };
   container = {
     store,
@@ -58,6 +61,51 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const app = () => createApp(container);
+const post = (path: string, body?: unknown) => app().request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+
+describe('a person using the page', () => {
+  it('passes on clicks, scrolling, keys and text', async () => {
+    for (const event of [{ type: 'click', x: 0.5, y: 1 }, { type: 'wheel', x: 0, y: 0, dy: -300 }, { type: 'key', key: 'Control+A' }, { type: 'text', text: 'hello' }]) {
+      expect((await post('/api/chats/c1/browser/input', event)).status).toBe(204);
+      expect(browser.input).toHaveBeenLastCalledWith('c1', event);
+    }
+  });
+
+  it('refuses anything the panel would not send', async () => {
+    for (const event of [{ type: 'click', x: 2, y: 0 }, { type: 'click', x: '0', y: 0 }, { type: 'wheel', x: 0, y: 0, dy: 99999 }, { type: 'key', key: 'a b' }, { type: 'text', text: '' }, { type: 'evaluate' }, null]) {
+      expect((await post('/api/chats/c1/browser/input', event)).status).toBe(400);
+    }
+    expect(browser.input).not.toHaveBeenCalled();
+  });
+
+  it('wants JSON, so a cross-site form post cannot reach the page', async () => {
+    const res = await app().request('/api/chats/c1/browser/input', { method: 'POST', body: '{"type":"text","text":"x"}' });
+    expect(res.status).toBe(415);
+    expect(browser.input).not.toHaveBeenCalled();
+  });
+
+  it('says so when the chat has no browser open, or it is on another machine', async () => {
+    browser.state.mockReturnValue(CLOSED);
+    expect((await post('/api/chats/c1/browser/input', { type: 'text', text: 'x' })).status).toBe(409);
+    expect((await post('/api/chats/c1/browser/show')).status).toBe(409);
+  });
+
+  it('a page that went away mid-click is not an error', async () => {
+    browser.input.mockRejectedValue(new Error('Target closed'));
+    expect((await post('/api/chats/c1/browser/input', { type: 'click', x: 0, y: 0 })).status).toBe(204);
+  });
+
+  it('brings up the window', async () => {
+    expect((await post('/api/chats/c1/browser/show')).status).toBe(204);
+    expect(browser.show).toHaveBeenCalledWith('c1');
+  });
+
+  it('forgets the saved sign-ins', async () => {
+    const res = await app().request('/api/browser/profile', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+    expect(res.status).toBe(204);
+    expect(browser.forgetProfile).toHaveBeenCalledTimes(1);
+  });
+});
 const json = async (res: Response) => (await res.json()) as Record<string, unknown>;
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, needle: string): Promise<string> {

@@ -79,6 +79,16 @@ for (const pkg of copies) {
 
 // OtherBench's copy of Mermaid for artifact diagrams (Deck #896): served from assets/ beside cli.js.
 const require_ = createRequire(join(serverDir, 'package.json'));
+
+// The rules that answer cookie boxes (tools/src/browser/consent.ts): read at run time, and only these
+// three files of a 13 MB package. Without its package.json the rules' path won't resolve.
+const consentFrom = join(repoRoot, 'node_modules', '@duckduckgo', 'autoconsent');
+const consentTo = join(out, 'node_modules', '@duckduckgo', 'autoconsent');
+for (const file of ['package.json', 'LICENSE', join('dist', 'autoconsent.playwright.js'), join('rules', 'compact-rules.json')]) {
+  await mkdir(dirname(join(consentTo, file)), { recursive: true });
+  await cp(join(consentFrom, file), join(consentTo, file));
+}
+
 await mkdir(join(out, 'assets'), { recursive: true });
 await cp(require_.resolve('mermaid/dist/mermaid.min.js'), join(out, 'assets', 'mermaid.min.js'));
 

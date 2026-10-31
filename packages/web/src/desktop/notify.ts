@@ -112,7 +112,7 @@ export class Notifier {
     } else if (e.type === 'approval-requested') {
       if (!this.deps.prefs().approvals) return;
       key = `request:${e.requestId}`;
-      body = e.kind === 'question' ? 'Waiting for your answer' : e.kind === 'plan' ? 'Plan waiting for your approval' : e.kind === 'generation' ? 'Prompt waiting for you to generate' : `Approval needed: ${e.toolName}`;
+      body = e.kind === 'question' ? 'Waiting for your answer' : e.kind === 'plan' ? 'Plan waiting for your approval' : e.kind === 'generation' ? 'Prompt waiting for you to generate' : e.kind === 'browser' ? 'Needs you in the browser' : `Approval needed: ${e.toolName}`;
     } else {
       return;
     }

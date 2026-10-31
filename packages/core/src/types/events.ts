@@ -13,7 +13,7 @@ export type AppEvent =
   | { type: 'chat-deleted'; chatId: string }
   | { type: 'turn-started'; chatId: string; messageIds: string[] }
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
-  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' }
+  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser' }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
   /** A chat moved to another Claude account after the first hit its usage limit. `from`/`to` are display names; `resetsAt` is ms epoch. */
   | { type: 'claude-account-switched'; chatId: string; from: string; to: string; resetsAt: number | null; midReply: boolean }
@@ -60,7 +60,7 @@ export interface PendingApprovalSummary {
   requestId: string;
   toolName: string;
   /** Set for a question or plan card (spec 2026-10-12-thread-cards-design); absent for a tool approval. */
-  kind?: 'question' | 'plan' | 'generation';
+  kind?: 'question' | 'plan' | 'generation' | 'browser';
 }
 
 /** A reply still being written, as the app-wide stream reports it. */

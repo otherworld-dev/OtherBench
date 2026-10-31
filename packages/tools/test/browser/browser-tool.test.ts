@@ -73,7 +73,7 @@ describe('browser tool: describeCall', () => {
   it('refuses addresses that are not http or https, and calls it cannot make sense of', async () => {
     const { tool, ctx } = setup();
     expect(await tool.describeCall!({ command: 'open', url: 'file:///etc/passwd' }, ctx())).toEqual({ refuse: 'Only http and https addresses can be opened, not "file:///etc/passwd".' });
-    expect(await tool.describeCall!({ command: 'fly' }, ctx())).toEqual({ refuse: 'Unknown browser command. Use one of: open, snapshot, click, type, select, press, scroll, back, close.' });
+    expect(await tool.describeCall!({ command: 'fly' }, ctx())).toEqual({ refuse: 'Unknown browser command. Use one of: open, snapshot, click, type, select, press, scroll, back, handover, close.' });
     expect(await tool.describeCall!({ command: 'click' }, ctx())).toEqual({ refuse: 'click needs a ref from the latest snapshot, like e12.' });
     expect(await tool.describeCall!({ command: 'type', ref: 'e2' }, ctx())).toEqual({ refuse: 'type needs the text to type.' });
   });

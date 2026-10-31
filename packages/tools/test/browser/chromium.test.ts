@@ -1,19 +1,29 @@
 import type { Browser } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
-import { browserAttempts, ChromiumSessions, CHROMIUM_ARGS, WEBRTC_SWITCHES } from '../../src/browser/chromium.js';
+import { browserAttempts, ChromiumSessions, CHROMIUM_ARGS, OFF_SCREEN, WEBRTC_SWITCHES } from '../../src/browser/chromium.js';
 import { BrowserUnavailableError } from '../../src/browser/session.js';
 
 describe('browserAttempts', () => {
-  it("tries OTHERBENCH_BROWSER_PATH alone when it's set", () => {
-    expect(browserAttempts({ OTHERBENCH_BROWSER_PATH: ' C:\\Edge\\msedge.exe ' })).toEqual([{ name: 'C:\\Edge\\msedge.exe', options: { executablePath: 'C:\\Edge\\msedge.exe' } }]);
+  it("tries only OTHERBENCH_BROWSER_PATH when it's set, in a window and then headless", () => {
+    expect(browserAttempts({ OTHERBENCH_BROWSER_PATH: ' C:\\Edge\\msedge.exe ' })).toEqual([
+      { name: 'C:\\Edge\\msedge.exe', options: { executablePath: 'C:\\Edge\\msedge.exe' }, visible: true },
+      { name: 'C:\\Edge\\msedge.exe', options: { executablePath: 'C:\\Edge\\msedge.exe' }, visible: false },
+    ]);
   });
 
-  it("otherwise tries Playwright's Chromium, then Chrome, then Edge", () => {
+  it('otherwise tries real windows first, then headless where no window can open', () => {
     expect(browserAttempts({})).toEqual([
-      { name: "Playwright's Chromium", options: {} },
-      { name: 'Chrome', options: { channel: 'chrome' } },
-      { name: 'Edge', options: { channel: 'msedge' } },
+      { name: 'Chrome', options: { channel: 'chrome' }, visible: true },
+      { name: 'Edge', options: { channel: 'msedge' }, visible: true },
+      { name: "Playwright's Chromium", options: {}, visible: true },
+      { name: "Playwright's Chromium", options: {}, visible: false },
+      { name: 'Chrome', options: { channel: 'chrome' }, visible: false },
+      { name: 'Edge', options: { channel: 'msedge' }, visible: false },
     ]);
+  });
+
+  it('never opens a window with OTHERBENCH_BROWSER_HEADLESS=1', () => {
+    expect(browserAttempts({ OTHERBENCH_BROWSER_HEADLESS: '1' }).map((a) => a.visible)).toEqual([false, false, false]);
   });
 });
 
@@ -36,9 +46,21 @@ function fakeBrowser(opts: { closeNever?: boolean; pid?: number; connected?: () 
 const creds = { server: 'http://127.0.0.1:1', username: 'u', password: 'p' };
 
 describe('ChromiumSessions launching', () => {
+  it('opens windows off screen, and with no display falls back to headless', async () => {
+    const launch = vi.fn(async (o: { headless?: boolean }) => {
+      if (!o.headless) throw new Error('Missing X server');
+      return fakeBrowser();
+    });
+    await new ChromiumSessions({}, { launch }).open(creds).catch(() => undefined);
+    const calls = launch.mock.calls.map(([o]) => o as { headless: boolean; args: string[] });
+    expect(calls.slice(0, 3).every((o) => !o.headless && o.args.includes(OFF_SCREEN))).toBe(true);
+    expect(calls[3]).toMatchObject({ headless: true });
+    expect(calls[3]!.args).not.toContain(OFF_SCREEN);
+  });
+
   it('starts headless with the sandbox on, the proxy (loopback not bypassed), both WebRTC switches and no signal handlers', async () => {
     const launch = vi.fn(async () => fakeBrowser());
-    const sessions = new ChromiumSessions({}, { launch });
+    const sessions = new ChromiumSessions({ OTHERBENCH_BROWSER_HEADLESS: '1' }, { launch });
     await sessions.open(creds).catch(() => undefined); // newContext throws in the fake: only the launch matters here
     expect(launch).toHaveBeenCalledTimes(1);
     expect(launch).toHaveBeenCalledWith(
@@ -67,7 +89,7 @@ describe('ChromiumSessions launching', () => {
     });
     const sessions = new ChromiumSessions({}, { launch });
     await sessions.open(creds).catch(() => undefined);
-    expect(tried).toEqual(['bundled', 'chrome', 'msedge']);
+    expect(tried).toEqual(['chrome', 'msedge']);
     await sessions.shutdown();
     tried.length = 0;
     await sessions.open(creds).catch(() => undefined);

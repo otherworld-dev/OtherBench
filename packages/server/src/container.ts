@@ -31,6 +31,7 @@ import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { liveToolRisks } from '@otherbench/tools/artifact-tool.js';
 import { ChromiumSessions } from '@otherbench/tools/browser/chromium.js';
 import { BrowserManager } from '@otherbench/tools/browser/manager.js';
+import { BrowserProfile } from '@otherbench/tools/browser/profile.js';
 import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
@@ -452,7 +453,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-data-${process.pid}`) : dirname(options.dbPath);
   const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
   // Lazy: no Chromium starts until the first browser call.
-  const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
+  const browser = new BrowserManager({ factory: new ChromiumSessions(process.env, { profile: new BrowserProfile(secrets) }), allowLoopbackPorts });
   // Computer use: the shell's driver when the CLI passed one (the desktop
   // channel exists: the shell started this server with --desktop-rpc). It is
   // not available, and the tool is not offered, until the shell has said

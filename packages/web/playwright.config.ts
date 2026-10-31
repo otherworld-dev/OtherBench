@@ -84,6 +84,7 @@ export default defineConfig({
         OTHERBENCH_SANDBOX: 'fake',
         // The model's browser may reach the fixture site on 127.0.0.1 (tests only).
         OTHERBENCH_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
+        OTHERBENCH_BROWSER_HEADLESS: '1',
         // Computer use is carried out by core's FakeComputerDriver, which touches nothing on this machine (computer.spec.ts).
         OTHERBENCH_COMPUTER_FAKE_DRIVER: '1',
       },
