@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquireDbLock, DatabaseLockedError } from '../src/db-lock.js';
+import { acquireDbLock, DatabaseLockedError, liveLockHolder } from '../src/db-lock.js';
 import { createContainer } from '../src/container.js';
 
 let dir: string;
@@ -56,6 +56,25 @@ describe('acquireDbLock', () => {
     lock!.release();
   });
 
+  it('takes over a lock written before the machine last booted, even if its pid is alive again', () => {
+    // After a reboot the old pid is often handed straight to a system process.
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: 4572, startedAt: 1_000_000 }));
+
+    const lock = acquireDbLock(dbPath, { isAlive: () => true, bootedAt: () => 2_000_000 });
+
+    const held = JSON.parse(readFileSync(`${dbPath}.lock`, 'utf8')) as { pid: number };
+    expect(held.pid).toBe(process.pid);
+    lock!.release();
+  });
+
+  it('still refuses a live holder that took the lock since the last boot', () => {
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: 4572, startedAt: 2_000_000 }));
+
+    expect(() => acquireDbLock(dbPath, { isAlive: () => true, bootedAt: () => 1_000_000 })).toThrow(
+      DatabaseLockedError
+    );
+  });
+
   it('treats an unreadable lock file (a crash mid-write) as stale', () => {
     writeFileSync(`${dbPath}.lock`, '{"pid": 12');
 
@@ -83,6 +102,15 @@ describe('acquireDbLock', () => {
 
   it('takes no lock for an in-memory database', () => {
     expect(acquireDbLock(':memory:')).toBeNull();
+  });
+});
+
+describe('liveLockHolder', () => {
+  it('names a live holder that took the lock since the last boot, and ignores one from before it', () => {
+    writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: 4572, startedAt: 2_000_000 }));
+
+    expect(liveLockHolder(dbPath, () => true, () => 1_000_000)).toBe(4572);
+    expect(liveLockHolder(dbPath, () => true, () => 3_000_000)).toBeNull();
   });
 });
 

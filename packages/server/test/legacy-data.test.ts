@@ -43,7 +43,7 @@ function gruntData(): string {
   db.exec('CREATE TABLE project (id TEXT, folders TEXT)');
   db.prepare('INSERT INTO project VALUES (?, ?)').run('p1', JSON.stringify([{ root: importedFolder(dir, 'grunt.db') }]));
   db.close();
-  writeFileSync(join(dir, 'grunt.db.lock'), JSON.stringify({ pid: 4242, startedAt: 1 }));
+  writeFileSync(join(dir, 'grunt.db.lock'), JSON.stringify({ pid: 4242, startedAt: Date.now() }));
   writeFileSync(join(dir, 'grunt.db.attachments', 'ab', 'abcd'), 'blob');
   writeFileSync(join(dir, 'secrets.json'), '{}');
   writeFileSync(join(dir, 'secrets.json.key'), 'key');

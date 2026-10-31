@@ -1,4 +1,5 @@
 import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { uptime } from 'node:os';
 
 /**
  * One OtherBench server process per database, enforced.
@@ -15,8 +16,13 @@ import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:f
  * The lock is a sibling file, `<db>.lock`, created with `O_EXCL` and holding
  * `{pid, startedAt}`. A lock whose holder is no longer running is stale and
  * is taken over; so is one that can't be parsed, since that can only be a
- * crash between create and write. PID reuse can make a stale lock look live
- * -- the error names the lock file so it can be deleted by hand in that case.
+ * crash between create and write, and so is one written before the machine
+ * last booted, since no process from before a boot survives it. That last
+ * rule is what catches the common case of PID reuse: after a reboot the old
+ * server's pid is often handed straight to a system process (it was "Memory
+ * Compression" on Windows). PID reuse without a reboot can still make a stale
+ * lock look live -- the error names the lock file so it can be deleted by
+ * hand in that case.
  */
 
 export class DatabaseLockedError extends Error {
@@ -48,6 +54,8 @@ export interface DbLockDeps {
   pid?: number;
   now?: () => number;
   isAlive?: (pid: number) => boolean;
+  /** When the machine last booted, in epoch ms. */
+  bootedAt?: () => number;
 }
 
 interface LockContents {
@@ -67,6 +75,20 @@ function processIsAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+/**
+ * Accurate to a second or so; the slack in {@link isHeld} covers that, and a
+ * small clock correction between the lock being written and now.
+ */
+function machineBootedAt(): number {
+  return Date.now() - uptime() * 1000;
+}
+
+const BOOT_SLACK_MS = 60_000;
+
+function isHeld(holder: LockContents, isAlive: (pid: number) => boolean, bootedAt: () => number): boolean {
+  return holder.startedAt >= bootedAt() - BOOT_SLACK_MS && isAlive(holder.pid);
 }
 
 function readLock(path: string): LockContents | null {
@@ -111,9 +133,13 @@ function unlinkIfPresent(path: string): void {
 }
 
 /** The pid of the live process holding `dbPath`'s lock, or null when none does. */
-export function liveLockHolder(dbPath: string, isAlive: (pid: number) => boolean = processIsAlive): number | null {
+export function liveLockHolder(
+  dbPath: string,
+  isAlive: (pid: number) => boolean = processIsAlive,
+  bootedAt: () => number = machineBootedAt
+): number | null {
   const holder = readLock(lockPathFor(dbPath));
-  return holder && isAlive(holder.pid) ? holder.pid : null;
+  return holder && isHeld(holder, isAlive, bootedAt) ? holder.pid : null;
 }
 
 /**
@@ -126,12 +152,13 @@ export function acquireDbLock(dbPath: string, deps: DbLockDeps = {}): DbLock | n
 
   const pid = deps.pid ?? process.pid;
   const isAlive = deps.isAlive ?? processIsAlive;
+  const bootedAt = deps.bootedAt ?? machineBootedAt;
   const path = lockPathFor(dbPath);
   const ours: LockContents = { pid, startedAt: (deps.now ?? Date.now)() };
 
   if (!tryCreate(path, ours)) {
     const holder = readLock(path);
-    if (holder && isAlive(holder.pid)) {
+    if (holder && isHeld(holder, isAlive, bootedAt)) {
       throw new DatabaseLockedError(dbPath, holder.pid, holder.startedAt);
     }
     // Stale: take it over. If another process took it over in between, the
