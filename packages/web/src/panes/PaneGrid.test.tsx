@@ -84,6 +84,35 @@ describe('PaneGrid (#824)', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe('c');
   });
 
+  it('the pin button pins a pane so the next chat opens in the other one, even after replying in the pinned pane', async () => {
+    openTabs('a', 'b');
+    useOtherBenchStore.getState().setLayout('columns-2');
+    render(<PaneGrid narrow={false} />);
+    await userEvent.click(within(screen.getByTestId('pane-0')).getByRole('button', { name: 'Pin pane' }));
+    expect(within(screen.getByTestId('pane-0')).getByRole('button', { name: 'Unpin pane' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.mouseDown(screen.getByTestId('pane-0'));
+    useOtherBenchStore.getState().setActiveChatId('c');
+    expect(useOtherBenchStore.getState().paneState).toMatchObject({ panes: ['b', 'c'], focusedPane: 1 });
+  });
+
+  it('an empty pane has nothing to pin', () => {
+    useOtherBenchStore.getState().setLayout('columns-2');
+    render(<PaneGrid narrow={false} />);
+    expect(within(screen.getByTestId('pane-0')).getByRole('button', { name: 'Pin pane' })).toBeDisabled();
+  });
+
+  it('a chat dropped onto a pinned pane replaces it, and the pane stays pinned', () => {
+    openTabs('a', 'b');
+    useOtherBenchStore.getState().setLayout('columns-2');
+    useOtherBenchStore.getState().togglePanePin(0);
+    render(<PaneGrid narrow={false} />);
+    fireEvent.drop(screen.getByTestId('pane-0'), {
+      dataTransfer: { types: [CHAT_DRAG_MIME], getData: (t: string) => (t === CHAT_DRAG_MIME ? 'c' : ''), dropEffect: 'none' },
+    });
+    expect(useOtherBenchStore.getState().paneState).toMatchObject({ panes: ['c', 'a'], pinned: [0] });
+  });
+
   it('a narrow window shows only the focused pane; the others stay mounted, hidden, so nothing reconnects', () => {
     openTabs('a', 'b');
     useOtherBenchStore.getState().setLayout('columns-2');

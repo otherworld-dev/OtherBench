@@ -50,12 +50,11 @@ function pendingStart(target: StartTarget): Chat | undefined {
  * to something else is left alone: the chat waits in the sidebar.
  */
 function showInPagePane(tabId: string, chatId: string, stayed: boolean): void {
-  const { paneState, focusPane, setActiveChatId, focusComposer } = useOtherBenchStore.getState();
+  const { paneState, focusPane, placeChat, focusComposer } = useOtherBenchStore.getState();
   const at = paneState.panes.indexOf(tabId);
   if (at === -1) return;
   const back = paneState.focusedPane;
-  focusPane(at);
-  setActiveChatId(chatId);
+  placeChat(at, chatId);
   focusPane(back);
   // Still at the start box: the cursor follows into the chat's own box, for the next message.
   if (stayed && back === at) focusComposer(chatId);

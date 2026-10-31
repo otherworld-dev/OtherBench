@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
+import { PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { useChatActivity } from '../state/chatStatus.js';
@@ -41,7 +42,7 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  * ("Open in new tab", or dragging a chat here), from any project, plus the
  * layout picker. A tab shows its chat in the focused pane, or focuses the
  * pane already showing it; in a multi-pane layout each visible tab is
- * numbered with its pane. ✕ only closes the tab. A dot marks a chat that is
+ * numbered with its pane, and one in a pinned pane has a pin. ✕ only closes the tab. A dot marks a chat that is
  * replying or waiting for an approval, a question or a plan. Shown even with no tabs, as it holds
  * the layout picker and is where a chat is dragged to become a tab; hidden only on a narrow
  * screen with no tabs, where there is no picker.
@@ -174,6 +175,11 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                 className={`flex min-w-0 items-center gap-1.5 py-1 pl-2.5 pr-1 text-xs ${active ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
               >
                 {status && <StatusDot status={status} testId={`tab-status-${t.id}`} />}
+                {paneState.pinned.some((i) => paneState.panes[i] === t.id) && (
+                  <span data-testid={`tab-pinned-${t.id}`} className="shrink-0" title="Pinned">
+                    <PinIcon filled className="h-3 w-3" />
+                  </span>
+                )}
                 <span className="truncate">{t.title}</span>
                 {multi && pane !== -1 && (
                   <span data-testid={`tab-pane-${t.id}`} className="shrink-0 rounded bg-[var(--bg-sunken)] px-1 text-[0.65rem] tabular-nums" aria-label={`in pane ${pane + 1}`}>

@@ -177,6 +177,56 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   await expect(nav.getByTestId(`chat-row-${loose.id}`)).toBeVisible();
 });
 
+test('a pinned pane keeps its chat while the sidebar changes the other, even after replying in it, and across a reload', async ({ page, request }) => {
+  const run = randomUUID().slice(0, 8);
+  const profiles = (await (await request.get(`${BASE_URL}/api/profiles`)).json()) as { id: string }[];
+  const ids: string[] = [];
+  for (const title of [`Long task ${run}`, `Side ${run}`, `Other ${run}`, `Third ${run}`]) {
+    ids.push(((await (await request.post(`${BASE_URL}/api/chats`, { data: { profileId: profiles[0]!.id, title } })).json()) as { id: string }).id);
+  }
+  const [longTask, side, other, third] = ids as [string, string, string, string];
+
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  const pick = (id: string) => nav.getByTestId(`chat-row-${id}`).locator('[data-row-main]').click();
+  await pick(longTask);
+  await nav.getByTestId(`chat-row-${side}`).locator('[data-row-main]').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
+  const main = page.getByRole('main');
+  const left = main.getByTestId('pane-0');
+  const right = main.getByTestId('pane-1');
+  await expect(left).toContainText(`Long task ${run}`);
+  await expect(right).toContainText(`Side ${run}`);
+
+  await left.getByRole('button', { name: 'Pin pane' }).click();
+  await expect(left.getByRole('button', { name: 'Unpin pane' })).toHaveAttribute('aria-pressed', 'true');
+
+  // The reported case: back to the long task to reply, then on to the next chat from the sidebar.
+  await left.getByRole('textbox').first().click();
+  await expect(left).toHaveAttribute('data-focused', 'true');
+  await pick(other);
+  await expect(left).toContainText(`Long task ${run}`);
+  await expect(right).toContainText(`Other ${run}`);
+  await expect(right).toHaveAttribute('data-focused', 'true');
+
+  await pick(longTask);
+  await expect(left).toHaveAttribute('data-focused', 'true');
+  await pick(third);
+  await expect(left).toContainText(`Long task ${run}`);
+  await expect(right).toContainText(`Third ${run}`);
+  await page.screenshot({ path: test.info().outputPath('pinned-pane.png') });
+
+  await page.reload();
+  await expect(left.getByRole('button', { name: 'Unpin pane' })).toBeVisible();
+  await pick(other);
+  await expect(left).toContainText(`Long task ${run}`);
+  await expect(right).toContainText(`Other ${run}`);
+
+  // Back to one chat for whatever runs next in this browser.
+  await chooseLayout(page, 'One chat');
+  await page.getByRole('button', { name: `Close tab Side ${run}` }).click();
+});
+
 test('dragging a divider resizes panes and is remembered; Ctrl+Shift+Enter maximises the focused pane (#824)', async ({ page, request }) => {
   const run = randomUUID().slice(0, 8);
   const profiles = (await (await request.get(`${BASE_URL}/api/profiles`)).json()) as { id: string }[];

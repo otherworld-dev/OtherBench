@@ -197,7 +197,11 @@ of work landed after that plan closed out:
   focused pane reports the header's connection status). The focused pane's
   chat is always `activeChatId`, so anything that opens a chat fills the
   focused pane, or focuses the pane already showing it; the Inspector
-  follows. Drag a chat or a tab onto a pane to show it there; drag tabs to
+  follows. A pane's pin button keeps its chat there: anything opened
+  elsewhere goes to the unpinned pane used last, even while the pinned pane
+  has focus, and with every pane pinned the layout gains a pane (four pinned
+  panes refuse, with a toast). Drag a chat or a tab onto a pane to show it
+  there, pinned or not; drag tabs to
   reorder. ✕ only closes the tab. Dots mark a tab replying or waiting for an
   approval (the app-wide stream's `hello` lists running replies). Tabs,
   layout and panes are stored per device (`state/panes.ts`); a narrow window

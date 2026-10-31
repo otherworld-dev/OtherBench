@@ -1,6 +1,7 @@
 import { Fragment, useState, type DragEvent, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { AppHome } from '../code/AppHome.js';
+import { PinIcon } from '../components/icons.js';
 import { parseAppTab } from '../state/appTab.js';
 import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
@@ -21,10 +22,11 @@ interface PaneProps {
   /** The layout has more than one pane: show a header, accept drops. */
   multi: boolean;
   maximised: boolean;
+  pinned: boolean;
 }
 
 /** One pane: its own live connection to its chat, and a full thread with its own message box. */
-function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Element {
+function Pane({ index, chatId, focused, multi, maximised, pinned }: PaneProps): JSX.Element {
   // A viewer item popped out into its own tab (Deck #826), or a project's home page, holds the pane instead of a chat.
   const view = isViewTab(chatId) ? parseViewTab(chatId) : null;
   const projectId = parseProjectTab(chatId);
@@ -36,7 +38,8 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
   const appName = useOtherBenchStore((s) => (appId === null ? null : (s.apps.find((a) => a.id === appId)?.name ?? (s.appsLoaded ? 'Missing app' : 'Loading…'))));
   const chat = useOtherBenchStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useOtherBenchStore((s) => s.focusPane);
-  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
+  const placeChat = useOtherBenchStore((s) => s.placeChat);
+  const togglePanePin = useOtherBenchStore((s) => s.togglePanePin);
   const toggleMaximised = useOtherBenchStore((s) => s.toggleMaximised);
   const [dropActive, setDropActive] = useState(false);
   useChatSync(isChatTab(chatId) ? chatId : null, focused);
@@ -68,8 +71,7 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
         const id = e.dataTransfer.getData(TAB_DRAG_MIME) || e.dataTransfer.getData(CHAT_DRAG_MIME);
         if (!multi || !id) return;
         e.preventDefault();
-        focusPane(index);
-        setActiveChatId(id);
+        placeChat(index, id);
       }}
       className={`flex h-full min-h-0 w-full min-w-0 flex-col ${multi ? 'border border-[var(--border)]' : ''} ${
         multi && focused ? 'border-[var(--accent)]' : ''
@@ -82,6 +84,19 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
         >
           <span className="tabular-nums text-[var(--text-faint)]">{index + 1}</span>
           <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (projectName ?? appName ?? chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
+          <button
+            type="button"
+            aria-label={pinned ? 'Unpin pane' : 'Pin pane'}
+            aria-pressed={pinned}
+            disabled={chatId === null}
+            title={pinned ? 'Unpin: chats opened from elsewhere can replace this one again' : 'Pin: chats opened from elsewhere go to another pane, even after you click in here'}
+            onClick={() => togglePanePin(index)}
+            className={`shrink-0 rounded px-1 py-0.5 hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] disabled:opacity-40 disabled:hover:bg-transparent ${
+              pinned ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
+            }`}
+          >
+            <PinIcon filled={pinned} className="h-3 w-3" />
+          </button>
           <button
             type="button"
             aria-label={maximised ? 'Restore pane' : 'Maximise pane'}
@@ -183,6 +198,7 @@ export function PaneGrid({ narrow }: { narrow: boolean }): JSX.Element {
       focused={i === paneState.focusedPane}
       multi={multi}
       maximised={multi && paneState.maximised}
+      pinned={paneState.pinned.includes(i)}
     />
   );
 

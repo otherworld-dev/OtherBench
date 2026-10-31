@@ -38,6 +38,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('TabBar (#824)', () => {
+  it('marks the tab of a chat in a pinned pane', () => {
+    useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: ['a', 'b'], panes: ['a', 'b'], pinned: [0] }, activeChatId: 'a' });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByTestId('tab-pinned-a')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-pinned-b')).not.toBeInTheDocument();
+  });
+
   it('with no tabs it still shows, for the layout picker and as a drop target, but not on a narrow screen; opening a tab opens the chat', () => {
     const { rerender } = render(<TabBar narrow={true} />);
     expect(screen.queryByTestId('tab-bar')).not.toBeInTheDocument();

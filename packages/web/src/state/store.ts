@@ -13,6 +13,7 @@ import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherben
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
+import { toast } from '../lib/toasts.js';
 import { parseViewTab } from '../viewer/items.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
@@ -29,11 +30,13 @@ import {
   PANE_STATE_STORAGE_KEY,
   moveTab as movePaneTab,
   openTab as openPaneTab,
+  placeInPane,
   savePaneState,
   setLayout as setPaneLayout,
   setSplitSizes as setPaneSplitSizes,
   showChat,
   toggleMaximised as togglePaneMaximised,
+  togglePanePin as togglePanePinIn,
   type Layout,
   type PaneState,
 } from './panes.js';
@@ -147,6 +150,10 @@ export interface OtherBenchState {
   moveTab(chatId: string, beforeId: string | null): void;
   setLayout(layout: Layout): void;
   focusPane(index: number): void;
+  /** Pins pane `index` so nothing opened elsewhere replaces its chat, or unpins it. */
+  togglePanePin(index: number): void;
+  /** Fills pane `index` even if it's pinned, for when the user chose that pane: a drop on it, or a chat started from the page in it. */
+  placeChat(index: number, chatId: string): void;
   /** Remembers a dragged divider's sizes (`splitKey`). */
   setSplitSizes(key: string, sizes: number[]): void;
   /** Maximises the focused pane, or puts it back. */
@@ -480,6 +487,11 @@ function synced(state: { paneState: PaneState; activeChatId: string | null }): P
 /** A pane-state change, with `activeChatId` following the focused pane. */
 function withPanes(next: PaneState): { paneState: PaneState; activeChatId: string | null } {
   return { paneState: next, activeChatId: next.panes[next.focusedPane] ?? null };
+}
+
+/** After opening `chatId`: it isn't in any pane only when four pinned panes left it nowhere to go. */
+function toastIfNoRoom(panes: PaneState, chatId: string | null): void {
+  if (chatId !== null && !panes.panes.includes(chatId)) toast({ text: 'Every pane is pinned. Unpin one to open this chat.', tone: 'ok' });
 }
 
 /*
@@ -885,12 +897,23 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
       return { ...view, overviewOpen: false, ...withPanes(openPaneTab(synced(view), chatId)) };
     });
+    toastIfNoRoom(get().paneState, chatId);
   },
   // A closed viewer tab can hand its pane back to its chat, so the active chat follows the pane.
   closeTab: (chatId) => set((state) => withPanes(closePaneTab(synced(state), chatId))),
   moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
   setLayout: (layout) => set((state) => withPanes(setPaneLayout(synced(state), layout))),
   focusPane: (index) => set((state) => withPanes(focusPaneIn(synced(state), index))),
+  togglePanePin: (index) => set((state) => ({ paneState: togglePanePinIn(synced(state), index) })),
+  placeChat: (index, chatId) => {
+    if (sentElsewhere(modeOfTab(chatId, get().chats) ?? get().mode, { kind: 'chat', chatId })) return;
+    set((state) => {
+      const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
+      // Another mode's panes aren't the ones the user pointed at.
+      const panes = view.mode === state.mode ? placeInPane(synced(view), index, chatId) : showChat(synced(view), chatId);
+      return { ...view, overviewOpen: false, ...withPanes(panes) };
+    });
+  },
   setSplitSizes: (key, sizes) => set((state) => ({ paneState: setPaneSplitSizes(state.paneState, key, sizes) })),
   toggleMaximised: () => set((state) => ({ paneState: togglePaneMaximised(state.paneState) })),
   // The whole list, so every chat is checked: the saved tabs may predate a move made on another machine.
@@ -917,13 +940,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         ...(wikiView ? { wikiViews } : {}),
       };
     }),
-  // Fills the focused pane, or focuses the pane already showing the chat, in the chat's own mode.
+  // Fills the focused pane (or, with that pinned, the next free one), or focuses the pane already showing the chat, in the chat's own mode.
   setActiveChatId: (chatId) => {
     if (chatId !== null && sentElsewhere(modeOfTab(chatId, get().chats) ?? get().mode, { kind: 'chat', chatId })) return;
     set((state) => {
       const view = inMode(state, modeOfTab(chatId, state.chats) ?? state.mode);
       return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), chatId)) };
     });
+    toastIfNoRoom(get().paneState, chatId);
   },
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
@@ -1145,6 +1169,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       // Shown in the pane, not made a tab: only what the user asks to be a tab becomes one.
       return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), appTabId(appId))) };
     });
+    toastIfNoRoom(get().paneState, appTabId(appId));
   },
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),

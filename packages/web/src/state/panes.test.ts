@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { useToasts } from '../lib/toasts.js';
 import { viewTabId } from '../viewer/items.js';
 import { useOtherBenchStore } from './store.js';
 import {
@@ -11,12 +12,14 @@ import {
   moveTab,
   openTab,
   PANE_STATE_STORAGE_KEY,
+  placeInPane,
   resizeSplit,
   savePaneState,
   setLayout,
   setSplitSizes,
   showChat,
   toggleMaximised,
+  togglePanePin,
   type PaneState,
 } from './panes.js';
 
@@ -143,7 +146,7 @@ describe('pane state (#824)', () => {
         JSON.stringify({ tabs: ['a', 7, 'a'], layout: 'columns-3', panes: ['a'], focusedPane: 9, sizes: { 'columns-3/root': [1, 0, 2], 'grid-4/top': [1, 3] }, maximised: true })
       );
       expect(loadPaneState()).toEqual({
-        tabs: ['a'], layout: 'columns-3', panes: ['a', null, null], focusedPane: 0, sizes: { 'grid-4/top': [1, 3] }, maximised: true,
+        tabs: ['a'], layout: 'columns-3', panes: ['a', null, null], focusedPane: 0, sizes: { 'grid-4/top': [1, 3] }, maximised: true, pinned: [], lastFree: 0,
       });
 
       window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify({ layout: 'mosaic' }));
@@ -189,5 +192,143 @@ describe('pane state (#824)', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe(view);
     useOtherBenchStore.getState().closeTab(view);
     expect(useOtherBenchStore.getState()).toMatchObject({ activeChatId: 'c1', paneState: { tabs: ['c1'], panes: ['c1'] } });
+  });
+});
+
+describe('pinned panes', () => {
+  const two = (over: Partial<PaneState> = {}): PaneState => state({ layout: 'columns-2', tabs: ['main'], panes: ['main', 'side'], focusedPane: 0, pinned: [0], lastFree: 1, ...over });
+
+  it('a chat opened while a pinned pane has focus goes to the unpinned pane, which takes focus', () => {
+    // The case that was reported: replying in the long task must not make it the next one replaced.
+    expect(showChat(two(), 'other')).toMatchObject({ panes: ['main', 'other'], focusedPane: 1 });
+  });
+
+  it('the unpinned pane used last takes it, when there are several', () => {
+    const three = state({ layout: 'columns-3', panes: ['main', 'x', 'y'], focusedPane: 1, pinned: [0], lastFree: 1 });
+    const replying = focusPane(focusPane(three, 2), 0);
+    expect(replying).toMatchObject({ focusedPane: 0, lastFree: 2 });
+    expect(showChat(replying, 'other').panes).toEqual(['main', 'x', 'other']);
+  });
+
+  it('picking the pinned chat focuses it, and the next chat still goes to the unpinned pane', () => {
+    const back = showChat(two({ focusedPane: 1 }), 'main');
+    expect(back).toMatchObject({ panes: ['main', 'side'], focusedPane: 0 });
+    expect(showChat(back, 'next').panes).toEqual(['main', 'next']);
+  });
+
+  it('an unpinned focused pane is replaced as usual', () => {
+    expect(showChat(two({ focusedPane: 1 }), 'other')).toMatchObject({ panes: ['main', 'other'], focusedPane: 1 });
+  });
+
+  it('with every pane pinned the layout gains a pane for the chat', () => {
+    expect(showChat(two({ pinned: [0, 1] }), 'other')).toMatchObject({ layout: 'columns-3', panes: ['main', 'side', 'other'], focusedPane: 2, pinned: [0, 1] });
+    expect(showChat(state({ layout: 'rows-2', panes: ['a', 'b'], pinned: [0, 1] }), 'c')).toMatchObject({ layout: 'columns-3', panes: ['a', 'b', 'c'] });
+    expect(showChat(state({ layout: 'main-right-2', panes: ['a', 'b', 'c'], pinned: [0, 1, 2] }), 'd')).toMatchObject({ layout: 'grid-4', panes: ['a', 'b', 'c', 'd'], focusedPane: 3 });
+  });
+
+  it('four pinned panes replace nothing', () => {
+    const full = state({ layout: 'grid-4', panes: ['a', 'b', 'c', 'd'], pinned: [0, 1, 2, 3] });
+    expect(showChat(full, 'e')).toBe(full);
+  });
+
+  it('a chat sent away from a pinned pane restores a maximised layout, so both show', () => {
+    expect(showChat(two({ maximised: true }), 'other')).toMatchObject({ panes: ['main', 'other'], maximised: false });
+    // Replacing the maximised pane itself keeps it maximised, as it always did.
+    expect(showChat(two({ focusedPane: 1, maximised: true }), 'other')).toMatchObject({ maximised: true });
+  });
+
+  it('clearing the focused pane clears it even when pinned, and drops the pin', () => {
+    // Deleting or archiving the chat on show: it must not stay behind in the pane.
+    expect(showChat(two(), null)).toMatchObject({ panes: [null, 'side'], focusedPane: 0, pinned: [] });
+  });
+
+  it('a new tab never covers a pinned pane or the chat on show', () => {
+    expect(openTab(two({ focusedPane: 1 }), 'new')).toMatchObject({ layout: 'columns-3', panes: ['main', 'side', 'new'], focusedPane: 2 });
+    expect(openTab(two(), 'new')).toMatchObject({ panes: ['main', 'new'], focusedPane: 1 });
+    const three = state({ layout: 'columns-3', panes: ['a', 'b', 'c'], focusedPane: 0, pinned: [1] });
+    expect(openTab(three, 'new').panes).toEqual(['a', 'b', 'new']);
+    // Nowhere to grow and one free pane left: it takes that rather than be lost.
+    const full = state({ layout: 'grid-4', panes: ['a', 'b', 'c', 'd'], focusedPane: 3, pinned: [0, 1, 2] });
+    expect(openTab(full, 'new').panes).toEqual(['a', 'b', 'c', 'new']);
+  });
+
+  it('placing a chat in a pane goes over a pin, which stays', () => {
+    expect(placeInPane(two({ focusedPane: 1 }), 0, 'dropped')).toMatchObject({ panes: ['dropped', 'side'], focusedPane: 0, pinned: [0] });
+    expect(placeInPane(two(), 0, 'side')).toMatchObject({ panes: ['main', 'side'], focusedPane: 1 });
+  });
+
+  it('pins and unpins a pane holding something, in a layout with panes to pin', () => {
+    const open = state({ layout: 'columns-2', panes: ['a', null] });
+    expect(togglePanePin(open, 0).pinned).toEqual([0]);
+    expect(togglePanePin(togglePanePin(open, 0), 0).pinned).toEqual([]);
+    expect(togglePanePin(open, 1)).toBe(open);
+    const single = state({ panes: ['a'] });
+    expect(togglePanePin(single, 0)).toBe(single);
+  });
+
+  it('a closed or forgotten chat takes its pin with it', () => {
+    const tabs = state({ layout: 'columns-2', tabs: ['a', 'b', 'c'], panes: ['a', 'b'], pinned: [0] });
+    expect(closeTab(tabs, 'a')).toMatchObject({ panes: ['c', 'b'], pinned: [] });
+    expect(closeTab(tabs, 'b').pinned).toEqual([0]);
+    expect(forgetChat(tabs, 'a')).toMatchObject({ panes: [null, 'b'], pinned: [] });
+  });
+
+  it('a layout keeps the pins of panes it keeps, and one chat has none', () => {
+    const three = state({ layout: 'columns-3', panes: ['a', 'b', 'c'], focusedPane: 0, pinned: [0, 2] });
+    expect(setLayout(three, 'columns-2')).toMatchObject({ panes: ['a', 'b'], pinned: [0] });
+    expect(setLayout(three, 'single')).toMatchObject({ panes: ['a'], pinned: [] });
+  });
+
+  it('shrinking the layout does not hand the focused chat over a pinned pane', () => {
+    const three = state({ layout: 'columns-3', panes: ['a', 'pin', 'c'], focusedPane: 2, pinned: [1] });
+    expect(setLayout(three, 'columns-2')).toMatchObject({ panes: ['a', 'pin'], focusedPane: 1, pinned: [1] });
+  });
+
+  it('saves and repairs pins', () => {
+    window.localStorage.clear();
+    savePaneState(state({ layout: 'columns-2', panes: ['a', 'b'], pinned: [0], lastFree: 1 }));
+    expect(loadPaneState()).toMatchObject({ pinned: [0], lastFree: 1 });
+    window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify({ layout: 'columns-2', panes: ['a', null], pinned: [0, 0, 1, 7, 'x'], lastFree: 9 }));
+    expect(loadPaneState()).toMatchObject({ pinned: [0], lastFree: 0 });
+    window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify({ layout: 'columns-2', panes: ['a', 'b'] }));
+    expect(loadPaneState()).toMatchObject({ pinned: [], lastFree: 0 });
+  });
+});
+
+describe('pinned panes in the store', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useToasts.setState({ toasts: [] });
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+  });
+
+  const start = (over: Partial<PaneState>): void => {
+    const paneState = state({ layout: 'columns-2', panes: ['main', 'side'], ...over });
+    useOtherBenchStore.setState({ paneState, activeChatId: paneState.panes[paneState.focusedPane] ?? null });
+  };
+
+  it('setActiveChatId leaves a focused pinned pane alone, and the active chat follows', () => {
+    start({ pinned: [0], focusedPane: 0 });
+    useOtherBenchStore.getState().setActiveChatId('other');
+    expect(useOtherBenchStore.getState()).toMatchObject({ activeChatId: 'other', paneState: { panes: ['main', 'other'], focusedPane: 1 } });
+  });
+
+  it('says so when four pinned panes leave nowhere to open a chat', () => {
+    start({ layout: 'grid-4', panes: ['a', 'b', 'c', 'd'], pinned: [0, 1, 2, 3] });
+    useOtherBenchStore.getState().setActiveChatId('e');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('a');
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(['Every pane is pinned. Unpin one to open this chat.']);
+  });
+
+  it('togglePanePin pins the pane', () => {
+    start({ focusedPane: 1 });
+    useOtherBenchStore.getState().togglePanePin(0);
+    expect(useOtherBenchStore.getState().paneState.pinned).toEqual([0]);
+  });
+
+  it('placeChat fills a pane over its pin', () => {
+    start({ pinned: [0], focusedPane: 1 });
+    useOtherBenchStore.getState().placeChat(0, 'dropped');
+    expect(useOtherBenchStore.getState()).toMatchObject({ activeChatId: 'dropped', paneState: { panes: ['dropped', 'side'], focusedPane: 0, pinned: [0] } });
   });
 });
