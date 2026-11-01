@@ -106,7 +106,7 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
     body = source ? (
       <TextBody chatId={chatId} opened={opened} as="code" />
     ) : (
-      <iframe title={opened.name} src={src} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="h-full w-full border-0 bg-white" />
+      <iframe title={opened.name} src={src} sandbox="allow-scripts allow-forms allow-downloads" referrerPolicy="no-referrer" className="h-full w-full border-0 bg-white" />
     );
   } else if (opened.kind === 'image') {
     body = (

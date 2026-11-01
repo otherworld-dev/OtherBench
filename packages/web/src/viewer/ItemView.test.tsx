@@ -48,7 +48,7 @@ describe('ItemView', () => {
     vi.mocked(api.view.text).mockResolvedValue({ path: 'C:\\ws\\page.html', content: '<p>hi</p>', truncated: false, size: 9 });
     render(<ItemView chatId="c1" item={item('page.html')} />);
     const frame = await screen.findByTitle('page.html');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
     expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Source' }));
     // highlight.js splits the source into spans, so check the code block's whole text.

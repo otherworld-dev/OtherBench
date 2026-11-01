@@ -55,7 +55,7 @@ describe('GET /view/<id>/', () => {
     expect(page.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(page.headers.get('Content-Security-Policy')).toBe(
-      `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:; form-action https:`
+      `sandbox allow-scripts allow-forms allow-downloads; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:; form-action https:`
     );
 
     const css = await app.request(`/view/${id}/style.css`);
@@ -75,7 +75,7 @@ describe('GET /view/<id>/', () => {
     const res = await app.request(url);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
-    expect(res.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms;/);
+    expect(res.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms allow-downloads;/);
     const id = url.split('/')[2]!;
     expect((await app.request(`/view/${id}/other.png`)).status).toBe(404);
   });
@@ -188,7 +188,7 @@ describe('GET /view/<id>/', () => {
     const served = await app.request(page.url!);
     expect(await served.text()).toBe('<p>calc</p>');
     expect(served.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-    expect(served.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms;.*form-action https:$/);
+    expect(served.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms allow-downloads;.*form-action https:$/);
 
     const svg = await open(make('s', 'logo', 'svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'));
     expect(svg).toMatchObject({ name: 'logo.svg', kind: 'image' });

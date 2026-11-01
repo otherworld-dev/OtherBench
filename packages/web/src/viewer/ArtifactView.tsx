@@ -322,7 +322,8 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
         onLoad={live ? onFrameLoad : undefined}
         title={name}
         src={serverUrl(opened.url)}
-        sandbox="allow-scripts allow-forms"
+        // Not for a live page, whose policy names only what it needs (view-serve.ts, livePolicy).
+        sandbox={live ? 'allow-scripts allow-forms' : 'allow-scripts allow-forms allow-downloads'}
         referrerPolicy="no-referrer"
         className="h-full w-full border-0 bg-white"
       />

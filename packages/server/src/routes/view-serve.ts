@@ -23,10 +23,13 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
  * `Sec-Fetch-Site: cross-site` and `Origin: null`, which the auth gate and the
  * cross-site check refuse. Forms too: `form-action`
  * doesn't fall back to `default-src`, and without it a page could post a
- * form to OtherBench's API, which takes a text/plain body as JSON.
+ * form to OtherBench's API, which takes a text/plain body as JSON. Downloads
+ * too, so a page can save what it makes (a Word export, a CSV): it can reach
+ * the web already, so a download link adds no new way out. The iframes that
+ * hold these pages must say allow-downloads as well; the two sandboxes add up.
  */
 export function sandboxPolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
+  return `sandbox allow-scripts allow-forms allow-downloads; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
 }
 
 /**
@@ -38,6 +41,9 @@ export function sandboxPolicy(folderUrl: string): string {
  * - `sandbox allow-scripts allow-forms`: an opaque origin, so nothing of
  *   OtherBench's (cookies, storage, the API) is in reach; no popups, no top-level
  *   navigation, no same-origin. allow-forms only so submit handlers fire.
+ *   No allow-downloads, unlike sandboxPolicy: this policy names only what a
+ *   live page needs. A download link to another host is followed as a plain
+ *   link, the frame navigation of spec §12, with or without it.
  * - `default-src 'none'` closes whatever isn't named below, and each fetch
  *   directive is also set to 'none' outright rather than left to the
  *   fallback, so the closing doesn't hang on fallback rules (worker-src, for

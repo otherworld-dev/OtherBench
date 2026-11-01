@@ -61,6 +61,37 @@ test('the model makes a page; it opens sandboxed, takes an edit, and saves to th
   expect(readFileSync(join(ws, 'page.html'), 'utf8')).toContain('Edited');
 });
 
+test('a page in the sandbox can save a file it makes itself', async ({ page, request }) => {
+  const title = await mockChat(request);
+  await page.goto('/');
+  await page.getByRole('button', { name: title }).click();
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('#artifact');
+  await textbox.press('Enter');
+  await expect(page.getByLabel('streaming')).toHaveCount(0);
+
+  await page.getByRole('button', { name: /Mock page.*Created v1/ }).click();
+  const viewer = page.getByRole('complementary', { name: 'Viewer' });
+  await viewer.getByRole('button', { name: 'Edit' }).click();
+  await viewer.getByRole('textbox', { name: 'Artifact source' }).fill(
+    `<!doctype html><button id="dl">Download as Word</button><script>
+document.getElementById('dl').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['hello'], { type: 'application/msword' }));
+  a.download = 'notes.doc';
+  document.body.appendChild(a); a.click(); a.remove();
+};
+</script>`
+  );
+  await viewer.getByRole('button', { name: 'Save', exact: true }).click();
+
+  const download = page.waitForEvent('download', { timeout: 5_000 });
+  await viewer.frameLocator('iframe[title="page.html"]').locator('#dl').click();
+  const saved = await download;
+  expect(saved.suggestedFilename()).toBe('notes.doc');
+  expect(readFileSync(await saved.path(), 'utf8')).toBe('hello');
+});
+
 test("an open viewer lists the page as the reply makes it, and opens it following the branch", async ({ page, request }) => {
   const title = await mockChat(request);
   await page.goto('/');

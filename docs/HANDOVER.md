@@ -1080,7 +1080,9 @@ again on every request, and the link dies as soon as its folder stops being
 the chat's or the chat is deleted. Making a link needs a JSON request, so a
 cross-site form can't. The served type is from a fixed list with `nosniff`;
 everything but PDF gets the sandbox CSP (opaque origin, network https/wss
-only), and HTML iframes are `sandbox="allow-scripts allow-forms"`. PDF is the
+only), and HTML iframes are `sandbox="allow-scripts allow-forms allow-downloads"`,
+so a page can save a file it makes (live pages keep their stricter policy and
+get no downloads). PDF is the
 exception (Chromium won't show one sandboxed): it can't script the page, but
 it isn't sandboxed either. Websites open in the default browser, never in
 OtherBench: links and the viewer's address box call `openInBrowser`, and

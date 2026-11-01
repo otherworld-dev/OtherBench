@@ -76,7 +76,7 @@ describe('ArtifactView', () => {
   it("shows the branch's current version in the sandbox, and switches versions, other branches included", async () => {
     render(<ArtifactView chatId="c1" item={item} />);
     const frame = await screen.findByTitle('calc.html');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
     expect(frame).toHaveAttribute('src', '/view/x-v2/calc.html');
     const picker = screen.getByRole('combobox', { name: 'Version' });
     expect(screen.getByRole('option', { name: 'v3 (other branch)' })).toBeInTheDocument();
@@ -385,6 +385,11 @@ describe('ArtifactView live pages (spec 2026-10-12-live-artifacts)', () => {
     expect(screen.queryByTitle('calc.html')).toBeNull();
     act(() => answer(liveStatus('needs_ok')));
     expect(await screen.findByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('gets no downloads, unlike a plain page', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
   });
 
   it('Allow calls the API, then reloads the frame on a fresh link and shows the strip', async () => {
