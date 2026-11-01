@@ -85,7 +85,7 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
   return (
     <details className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <summary className="cursor-pointer font-medium text-[var(--text-muted)] select-none">Reasoning</summary>
-      <p className="mt-1 whitespace-pre-wrap text-[var(--text-muted)]">{text}</p>
+      <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-[var(--text-muted)]">{text}</p>
     </details>
   );
 }
@@ -462,7 +462,7 @@ function ThreadRecord({ call, result }: { call: ToolCallPart; result: ToolResult
           ))}
         </ul>
       )}
-      <p className={`mt-1 whitespace-pre-wrap ${result.isError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>{text}</p>
+      <p className={`mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] ${result.isError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>{text}</p>
     </div>
   );
 }
@@ -865,7 +865,7 @@ export function Message({
       {isUser && editing ? (
         <MessageEditor message={message} editing={editing} />
       ) : (
-      <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
+      <div className={isUser ? 'whitespace-pre-wrap text-sm [overflow-wrap:anywhere]' : ''}>
         {isUser
           ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')
           : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), askingTools: new Set(pendingAsks.flatMap((a) => (a.kind === 'generation' ? [a.toolName] : []))), scope: { chatId: message.chatId, messageId: message.id } })}

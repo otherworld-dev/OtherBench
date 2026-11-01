@@ -277,9 +277,10 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
   const viewer = useViewer();
   const text = typeof props.children === 'string' ? props.children : null;
   if (!viewer || props.className || text === null || !looksLikePath(text)) return <code {...props} />;
+  // A button can't flow across lines as inline text, so a long one fills the message: the chip must be a box to hold it inside.
   return (
-    <code {...props}>
-      <button type="button" title="Open in the viewer" onClick={() => viewer.openPath(text)} className="cursor-pointer underline decoration-dotted underline-offset-2">
+    <code {...props} className="inline-block max-w-full">
+      <button type="button" title="Open in the viewer" onClick={() => viewer.openPath(text)} className="cursor-pointer text-left underline decoration-dotted underline-offset-2">
         {text}
       </button>
     </code>
