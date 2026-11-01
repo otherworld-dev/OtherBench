@@ -354,40 +354,81 @@ describe('ChatList groups', () => {
 
 });
 
-describe('ChatList status dots', () => {
-  it('marks chats with a reply ready, replying or waiting for an approval, and each group heading by its most urgent chat', () => {
+describe('ChatList status', () => {
+  const finished = (id: string, over: Partial<Chat> = {}): Chat =>
+    makeChat({ id, head: { chatId: id, role: 'assistant', status: 'complete', createdAt: Date.now() - 60_000 }, ...over });
+
+  it('lifts chats that need you out of their groups into one list, saying what each wants and whose it is', () => {
     useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
-      chats: [
-        makeChat({ id: 'ready', unread: true }),
-        makeChat({ id: 'busy' }),
-        makeChat({ id: 'asking', unread: true }),
-        makeChat({ id: 'quiet' }),
-        makeChat({ id: 'hidden', projectId: 'p-a', unread: true }),
-      ],
-      appRunningTurns: { m1: 'busy', m2: 'asking' },
-      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'write_file' } },
+      chats: [finished('done', { projectId: 'p-a' }), finished('asking'), makeChat({ id: 'quiet' })],
+      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'ask_user', kind: 'question' } },
+    });
+    render(<ChatList />);
+
+    const list = screen.getByTestId('group-needs-you');
+    expect(within(list).getByRole('heading', { name: /Needs you/ })).toHaveTextContent('2');
+    expect(rowIds('group-needs-you')).toEqual(['asking', 'done']);
+    expect(screen.getByTestId('chat-status-asking')).toHaveTextContent('Answer');
+    expect(screen.getByTestId('chat-status-done')).toHaveTextContent('Your turn');
+    expect(within(screen.getByTestId('chat-row-done')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
+    expect(rowIds('group-p-a')).toEqual([]);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['quiet']);
+    // The project still has the chat: only its row has moved.
+    expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('1');
+    expect(within(screen.getByTestId('group-p-a')).queryByText('No chats yet')).toBeNull();
+  });
+
+  it('shows no list while nothing needs you, and keeps a chat with background tasks under its project', () => {
+    useOtherBenchStore.setState({ chats: [finished('tasks'), makeChat({ id: 'quiet' })], appBackgroundChats: { tasks: 1 } });
+    render(<ChatList />);
+    expect(screen.queryByTestId('group-needs-you')).toBeNull();
+    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['quiet', 'tasks']);
+    expect(screen.getByTestId('chat-status-tasks')).toHaveTextContent('Background');
+  });
+
+  it('keeps a chat in the list while it is open', () => {
+    useOtherBenchStore.setState({ chats: [finished('open')] });
+    useOtherBenchStore.getState().setActiveChatId('open');
+    render(<ChatList />);
+    expect(rowIds('group-needs-you')).toEqual(['open']);
+  });
+
+  it('ticking a chat off takes it out of the list', async () => {
+    const chat = finished('done');
+    vi.mocked(api.chats.patch).mockResolvedValue({ ...chat, dealtWithAt: Date.now() });
+    useOtherBenchStore.setState({ chats: [chat] });
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('chat-row-done')).getByRole('button', { name: 'Nothing to do here' }));
+    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: expect.any(Number) });
+    await waitFor(() => expect(screen.queryByTestId('group-needs-you')).toBeNull());
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['done']);
+  });
+
+  it('lists a chat from the other mode too', () => {
+    useOtherBenchStore.setState({ chats: [finished('coded', { appId: 'A' })], apps: [makeApp({ id: 'A', name: 'Bench' })] });
+    render(<ChatList />);
+    expect(rowIds('group-needs-you')).toEqual(['coded']);
+    expect(within(screen.getByTestId('chat-row-coded')).getByTestId('row-project-name')).toHaveTextContent('Bench');
+  });
+
+  it('while searching, chats stay in their groups with their word, and the list goes', async () => {
+    useOtherBenchStore.setState({ chats: [finished('done', { title: 'Needle' })] });
+    render(<ChatList />);
+    await userEvent.setup().type(screen.getByRole('searchbox', { name: 'Search chats' }), 'Needle');
+    expect(screen.queryByTestId('group-needs-you')).toBeNull();
+    expect(screen.getByTestId('chat-status-done')).toHaveTextContent('Your turn');
+  });
+
+  it("says on a collapsed heading what its chats are doing", () => {
+    useOtherBenchStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [makeChat({ id: 'busy', projectId: 'p-a' })],
+      appRunningTurns: { m1: 'busy' },
     });
     setGroupCollapsed('p-a', true);
     render(<ChatList />);
-
-    expect(screen.getByTestId('chat-status-ready')).toHaveAttribute('data-status', 'ready');
-    expect(screen.getByTestId('chat-status-busy')).toHaveAttribute('data-status', 'working');
-    expect(screen.getByTestId('chat-status-asking')).toHaveAttribute('data-status', 'waiting');
-    expect(screen.queryByTestId('chat-status-quiet')).toBeNull();
-    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'ready');
-    expect(screen.getByTestId(`group-status-${NO_PROJECT_KEY}`)).toHaveAttribute('data-status', 'waiting');
-  });
-
-  it('shows no ready dot on a chat that is on screen in a focused window: it is being read', () => {
-    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
-    useOtherBenchStore.setState({ chats: [makeChat({ id: 'open', unread: true }), makeChat({ id: 'other', unread: true })] });
-    useOtherBenchStore.getState().setActiveChatId('open');
-    render(<ChatList />);
-
-    expect(screen.queryByTestId('chat-status-open')).toBeNull();
-    expect(screen.getByTestId('chat-status-other')).toHaveAttribute('data-status', 'ready');
-    vi.restoreAllMocks();
+    expect(screen.getByTestId('group-status-p-a')).toHaveTextContent('1 replying');
   });
 });
 
@@ -1351,19 +1392,20 @@ describe('ChatList search and filter chips', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c3']);
   });
 
-  it('Unread / working keeps only chats with a status, and the open chat', async () => {
+  it('Needs you / working keeps only chats with a status, and the open chat', async () => {
     const user = userEvent.setup();
     useOtherBenchStore.setState({
-      chats: [makeChat({ id: 'ready', unread: true }), makeChat({ id: 'quiet' }), makeChat({ id: 'open' })],
+      chats: [makeChat({ id: 'busy' }), makeChat({ id: 'quiet' }), makeChat({ id: 'open' })],
+      appRunningTurns: { m1: 'busy' },
       activeChatId: 'open',
     });
     render(<ChatList />);
-    const chip = screen.getByRole('button', { name: 'Unread / working' });
+    const chip = screen.getByRole('button', { name: 'Needs you / working' });
     expect(chip).toHaveAttribute('aria-pressed', 'false');
 
     await user.click(chip);
     expect(chip).toHaveAttribute('aria-pressed', 'true');
-    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['open', 'ready']);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['busy', 'open']);
 
     await user.click(chip);
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toHaveLength(3);
@@ -1372,7 +1414,7 @@ describe('ChatList search and filter chips', () => {
   it('says so when the chips match nothing', async () => {
     useOtherBenchStore.setState({ chats: [makeChat({ id: 'quiet' })] });
     render(<ChatList />);
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Unread / working' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Needs you / working' }));
     expect(screen.getByText('No chats match these filters.')).toBeInTheDocument();
   });
 
@@ -1414,7 +1456,7 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     });
   });
 
-  it("shows sub-projects inside their parent's group, with the parent counting their chats and showing their status", () => {
+  it("shows sub-projects inside their parent's group, with the parent counting their chats", () => {
     render(<ChatList />);
     expect(headingOrder()).toEqual(['p-g', 'p-d', 'p-s', 'p-x', NO_PROJECT_KEY]);
     const desktop = screen.getByTestId('group-p-d');
@@ -1422,9 +1464,15 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     expect(rowIds('group-p-d')).toEqual(['d1', 'd2']);
     expect(screen.getByTestId('group-count-p-g')).toHaveTextContent('3');
     expect(screen.getByTestId('group-count-p-d')).toHaveTextContent('2');
-    expect(screen.getByTestId('group-status-p-g')).toBeInTheDocument();
     // An empty sub-project shows its own "No chats yet", not its parent's.
     expect(within(screen.getByTestId('group-p-s')).getByText('No chats yet')).toBeInTheDocument();
+  });
+
+  it("says on a collapsed parent what its sub-projects' chats are doing", () => {
+    useOtherBenchStore.setState({ appRunningTurns: { m1: 'd1' } });
+    setGroupCollapsed('p-g', true);
+    render(<ChatList />);
+    expect(screen.getByTestId('group-status-p-g')).toHaveTextContent('1 replying');
   });
 
   it('collapsing the parent hides its sub-projects too', async () => {
@@ -1887,7 +1935,7 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       setGroupCollapsed('folder:F1', true);
       setupFolders({ appRunningTurns: { m1: 'ca' } });
       expect(screen.queryByTestId('chat-row-ca')).toBeNull();
-      expect(screen.getByTestId('group-status-folder:F1')).toHaveAttribute('data-status', 'working');
+      expect(screen.getByTestId('group-status-folder:F1')).toHaveTextContent('1 replying');
       expect(screen.queryByTestId('group-status-folder:F2')).toBeNull();
     });
 

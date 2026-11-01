@@ -21,6 +21,24 @@ function folder(id: string, name: string, sortOrder = 0): AppFolder {
 
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
 
+describe('lifted chats (the Needs you list)', () => {
+  it('leaves them out of Pinned and the groups, still counting them', () => {
+    const project = { id: 'p', name: 'P', sortOrder: 0 } as Project;
+    const lifted = new Set(['moved', 'pinned']);
+    const model = buildSidebar([chat('moved', { projectId: 'p' }), chat('stays', { projectId: 'p' }), chat('pinned', { pinned: true })], [project], null, () => 'manual', lifted);
+    expect(model.pinned).toEqual([]);
+    expect(model.groups[0]?.chats.map((c) => c.id)).toEqual(['stays']);
+    expect(model.groups[0]?.total).toBe(2);
+  });
+
+  it("leaves them out of an app's group in Code mode, still counting them", () => {
+    const app = { id: 'A', name: 'A', sortOrder: 0, folderId: null } as App;
+    const model = buildCodeSidebar([chat('moved', { appId: 'A' }), chat('stays', { appId: 'A' })], [app], [], null, '', null, new Set(['moved']));
+    expect(model.groups[0]?.chats.map((c) => c.id)).toEqual(['stays']);
+    expect(model.groups[0]?.total).toBe(2);
+  });
+});
+
 describe('buildSidebar and apps (spec 2026-10-20-code-tab-design, "Chats live in one mode only")', () => {
   it('lists only the plain chat when one chat is in an app', () => {
     const model = buildSidebar([chat('in-app', { appId: 'A' }), chat('plain')], [], null);

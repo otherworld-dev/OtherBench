@@ -114,13 +114,15 @@ export class AppEventBus {
  * shows it's ready; a reply the user stopped isn't marked. Covers replies run
  * on a paired machine too, whose `turn-finished` the forwarding emits here.
  * `store` should be the evented one, so the change reaches every window. It
- * leaves `updatedAt` alone. Returns the unsubscribe.
+ * leaves `updatedAt` alone. A chat already unread is announced anyway: the
+ * sidebar reads the finished reply from the chat. Returns the unsubscribe.
  */
 export function markUnreadOnFinish(events: AppEventBus, store: Store): () => void {
   return events.subscribe((e) => {
     if (e.type !== 'turn-finished' || (e.status !== 'complete' && e.status !== 'error')) return;
     const chat = store.chats.get(e.chatId);
-    if (chat && !chat.unread) store.chats.update(e.chatId, { unread: true });
+    if (chat?.unread) events.emit({ type: 'chat-updated', chat });
+    else if (chat) store.chats.update(e.chatId, { unread: true });
   });
 }
 

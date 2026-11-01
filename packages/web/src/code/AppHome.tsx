@@ -2,13 +2,14 @@ import { useMemo, useState, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import { StartBox } from '../components/StartBox.js';
-import { StatusDot } from '../components/StatusDot.js';
+import { StatusWord } from '../components/StatusWord.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { buildCodeSidebar } from '../panes/sidebar/model.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
-import { chatStatus, useChatActivity } from '../state/chatStatus.js';
+import { useNow } from '../lib/useNow.js';
+import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { IssuesTab } from './IssuesTab.js';
 import { NO_GITHUB_REPO } from './CodeError.js';
@@ -146,7 +147,8 @@ function AppChats({ app }: { app: App }): JSX.Element {
   const apps = useOtherBenchStore((s) => s.apps);
   const appFolders = useOtherBenchStore((s) => s.appFolders);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
-  const { waiting, working, background } = useChatActivity();
+  const activity = useChatActivity();
+  const now = useNow(60_000);
   // The Code sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
     const model = buildCodeSidebar(chats, apps, appFolders, null);
@@ -165,15 +167,15 @@ function AppChats({ app }: { app: App }): JSX.Element {
       ) : (
         <ul className="space-y-0.5">
           {listed.map((c) => {
-            const status = chatStatus(c, waiting, working, background);
+            const status = chatStatus(c, activity, now);
             return (
               <li key={c.id} data-chat-id={c.id} className="flex items-center rounded-sm hover:bg-[var(--bg-sunken)]">
                 <button type="button" onClick={() => setActiveChatId(c.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
-                  <span className={`min-w-0 flex-1 truncate ${status === 'ready' ? 'font-medium' : ''}`}>{c.title}</span>
+                  <span className={`min-w-0 flex-1 truncate ${isNeedsYou(status) ? 'font-medium' : ''}`}>{c.title}</span>
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>
                 {/* Beside the button, not in it, so a screen reader reads the status (as in ChatRow). */}
-                {status && <StatusDot status={status} testId={`app-home-chat-status-${c.id}`} className="mx-2" />}
+                {status && <StatusWord status={status} testId={`app-home-chat-status-${c.id}`} className="mx-2" />}
               </li>
             );
           })}

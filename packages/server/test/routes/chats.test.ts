@@ -1241,6 +1241,19 @@ describe('chats in projects', () => {
     expect((await json(bad))['error']).toBe('"unread" must be a boolean.');
   });
 
+  it('shows each chat with the message at its tip, in the list and on its own, so the sidebar can say what it needs', async () => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    const empty = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    container.store.messages.create({ id: 'm-1', chatId: id, parentId: null, role: 'assistant', parts: [], status: 'error', error: null, producedBy: null, createdAt: 50 });
+    container.store.chats.update(id, { headMessageId: 'm-1' });
+    const head = { chatId: id, role: 'assistant', status: 'error', createdAt: 50 };
+
+    expect(await json(await app().request(`/api/chats/${id}`))).toMatchObject({ head });
+    const list = (await (await app().request('/api/chats')).json()) as { id: string; head?: unknown }[];
+    expect(list.find((c) => c.id === id)?.head).toEqual(head);
+    expect(list.find((c) => c.id === empty)?.head).toBeNull();
+  });
+
   it('PATCH dealtWithAt ticks a chat off and back on without counting as activity, and refuses a non-number', async () => {
     const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
     const updatedAt = container.store.chats.get(id)!.updatedAt;

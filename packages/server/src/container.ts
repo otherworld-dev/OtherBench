@@ -786,6 +786,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       }
     },
     waitingChatIds: () => events.pendingApprovals().map((p) => p.chatId),
+    backgroundChatIds: () => events.backgroundChats().map((c) => c.chatId),
     machines: () => {
       const paired = container.peers;
       if (!paired) return [];
@@ -794,6 +795,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         name: p.name,
         reachable: paired.status(p.nodeId).status === 'reachable',
         waitingChatIds: paired.waitingChats(p.nodeId),
+        backgroundChatIds: paired.backgroundChats(p.nodeId),
         githubLogin: paired.githubLogin(p.nodeId),
       }));
     },

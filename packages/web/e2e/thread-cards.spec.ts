@@ -74,7 +74,7 @@ test('#ask: the question card marks the tab, survives a reload, and its answer r
 
   await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${chatId}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: /Open in new tab|Go to tab/ }).click();
-  await expect(page.getByTestId(`tab-status-${chatId}`)).toHaveAttribute('data-status', 'waiting');
+  await expect(page.getByTestId(`tab-status-${chatId}`)).toHaveAttribute('data-status', 'answer');
 
   await page.reload();
   await expect(card).toBeVisible();

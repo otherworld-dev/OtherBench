@@ -1,21 +1,27 @@
 import { useMemo } from 'react';
-import { chatsInBackgroundElsewhere, chatsWorkingElsewhere } from './peerActivity.js';
+import { CHAT_NEED_WINDOW_MS, chatNeedsYou } from '@otherbench/core/domain/overview.js';
+import { chatsInBackgroundElsewhere, chatsWaitingElsewhere, chatsWorkingElsewhere } from './peerActivity.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
+import type { PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import type { PaneState } from './panes.js';
 import { useOtherBenchStore } from './store.js';
 
+/** A pending card, by what it asks of the user; `waiting` when it's on a paired machine, which doesn't say. */
+export type CardStatus = 'approve' | 'answer' | 'plan' | 'generate' | 'browser' | 'waiting';
+
 /**
- * What a chat's dot says: an approval, question or plan is waiting for the user, a reply is
- * being written, a reply finished that the user hasn't had on screen since
- * (`Chat.unread`), or no reply is running but background tasks are.
+ * What a chat wants or is doing, as the word on its row: a card waits on the user, a finished reply (`your-turn`,
+ * or `failed`) hasn't been answered or ticked off, a reply is being written, or only background tasks are running.
  */
-export type ChatStatus = 'waiting' | 'working' | 'ready' | 'background';
+export type ChatStatus = CardStatus | 'failed' | 'your-turn' | 'working' | 'background';
 
-/** Most urgent first. A reply ready is news; background work carries on by itself. */
-const URGENCY: readonly ChatStatus[] = ['waiting', 'working', 'ready', 'background'];
-
-const NONE: ReadonlySet<string> = new Set();
+/** The chats with a card pending (and what it asks), with a reply running, and with background tasks running. */
+export interface ChatActivity {
+  waiting: ReadonlyMap<string, CardStatus>;
+  working: ReadonlySet<string>;
+  background: ReadonlySet<string>;
+}
 
 /** The chats on screen: every pane's, or only the focused pane's with a pane maximised or in a narrow window. */
 export function shownChatIds(state: PaneState, narrow: boolean): string[] {
@@ -23,54 +29,74 @@ export function shownChatIds(state: PaneState, narrow: boolean): string[] {
   return ids.filter((id): id is string => id !== null);
 }
 
-/** `waiting`, `working` and `background` are the chat ids with an approval pending, a reply running and background tasks running. */
-export function chatStatus(
-  chat: Pick<Chat, 'id' | 'unread'>,
-  waiting: ReadonlySet<string>,
-  working: ReadonlySet<string>,
-  background: ReadonlySet<string> = NONE
-): ChatStatus | null {
-  if (waiting.has(chat.id)) return 'waiting';
-  if (working.has(chat.id)) return 'working';
-  if (chat.unread) return 'ready';
-  return background.has(chat.id) ? 'background' : null;
+/**
+ * A chat's status. Having the chat open changes nothing: a finished reply stays the user's turn until they answer it
+ * or tick it off, so the sidebar always says which chats are stopped on them (`chatNeedsYou`, the Overview's rule).
+ */
+export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' | 'head'>, activity: ChatActivity, now: number): ChatStatus | null {
+  const card = activity.waiting.get(chat.id);
+  if (card) return card;
+  if (activity.working.has(chat.id)) return 'working';
+  if (activity.background.has(chat.id)) return 'background';
+  if (!chatNeedsYou(chat, chat.head ?? null, false, now - CHAT_NEED_WINDOW_MS)) return null;
+  return chat.head?.status === 'error' ? 'failed' : 'your-turn';
 }
 
-/** A group's status: the most urgent of its chats'. */
-export function groupStatus(statuses: readonly (ChatStatus | null)[]): ChatStatus | null {
-  return URGENCY.find((s) => statuses.includes(s)) ?? null;
+/** Whether a status means the chat has stopped until the user acts. */
+export function isNeedsYou(status: ChatStatus | null): boolean {
+  return status !== null && status !== 'working' && status !== 'background';
 }
 
-/** A group's statuses counted, most urgent first: "1 waiting for you · 2 replies ready". Empty with none. */
+/** A chat stopped on a card: only answering it clears it, so it has no tick (the reply it holds up would land after the tick). */
+export function isOnCard(status: ChatStatus | null): boolean {
+  return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn';
+}
+
+/** The chats needing the user: those stopped on a card first, then the rest, newest first (the Overview's order). */
+export function needsYouChats(chats: readonly Chat[], activity: ChatActivity, now: number): Chat[] {
+  const at = (c: Chat): number => c.head?.createdAt ?? c.updatedAt;
+  return chats
+    .map((chat) => ({ chat, status: chatStatus(chat, activity, now) }))
+    .filter(({ chat, status }) => chat.archivedAt === null && isNeedsYou(status))
+    .sort((a, b) => Number(isOnCard(b.status)) - Number(isOnCard(a.status)) || at(b.chat) - at(a.chat))
+    .map(({ chat }) => chat);
+}
+
+/** What a group's chats are doing, for a collapsed heading: "2 replying · 1 in background". Empty with none. */
 export function groupStatusSummary(statuses: readonly (ChatStatus | null)[]): string {
-  const words: Record<ChatStatus, [string, string]> = {
-    waiting: ['waiting for you', 'waiting for you'],
-    working: ['replying', 'replying'],
-    ready: ['reply ready', 'replies ready'],
-    background: ['working in the background', 'working in the background'],
-  };
-  return URGENCY.flatMap((s) => {
-    const n = statuses.filter((x) => x === s).length;
-    return n > 0 ? [`${n} ${words[s][n === 1 ? 0 : 1]}`] : [];
-  }).join(' · ');
+  const count = (s: ChatStatus): number => statuses.filter((x) => x === s).length;
+  const parts: [number, string][] = [[count('working'), 'replying'], [count('background'), 'in background']];
+  return parts.flatMap(([n, word]) => (n > 0 ? [`${n} ${word}`] : [])).join(' · ');
 }
 
 /**
- * The chats with an approval pending, with a reply running, and with
- * background tasks running, from the app-wide events. A paired machine's
- * activity counts too (state/machines.ts), so a chat replying or working in
- * the background on the PC shows the same on the laptop.
+ * What each chat's cards, replies and background tasks are doing, from the app-wide events. A paired machine's
+ * activity counts too (state/machines.ts), so a chat replying or working in the background on the PC shows the same
+ * on the laptop.
  */
-export function useChatActivity(): { waiting: ReadonlySet<string>; working: ReadonlySet<string>; background: ReadonlySet<string> } {
+export function useChatActivity(): ChatActivity {
   const pending = useOtherBenchStore((s) => s.appPendingApprovals);
   const running = useOtherBenchStore((s) => s.appRunningTurns);
   const machines = useOtherBenchStore((s) => s.machines);
   const backgroundChats = useOtherBenchStore((s) => s.appBackgroundChats);
-  const waiting = useMemo(() => new Set(Object.values(pending).map((p) => p.chatId)), [pending]);
+  const waiting = useMemo(() => {
+    const cards = new Map<string, CardStatus>();
+    for (const id of chatsWaitingElsewhere(machines)) cards.set(id, 'waiting');
+    for (const p of Object.values(pending)) if (!cards.has(p.chatId) || cards.get(p.chatId) === 'waiting') cards.set(p.chatId, CARD_STATUS[p.kind ?? 'tool']);
+    return cards;
+  }, [pending, machines]);
   const working = useMemo(() => new Set([...Object.values(running), ...chatsWorkingElsewhere(machines)]), [running, machines]);
   const background = useMemo(() => new Set([...Object.keys(backgroundChats), ...chatsInBackgroundElsewhere(machines)]), [backgroundChats, machines]);
-  return { waiting, working, background };
+  return useMemo(() => ({ waiting, working, background }), [waiting, working, background]);
 }
+
+const CARD_STATUS: Record<NonNullable<PendingApprovalSummary['kind']> | 'tool', CardStatus> = {
+  tool: 'approve',
+  question: 'answer',
+  plan: 'plan',
+  generation: 'generate',
+  browser: 'browser',
+};
 
 /** The chats the user is reading: on screen while the window has focus. */
 export function useReadingChatIds(narrow: boolean): ReadonlySet<string> {

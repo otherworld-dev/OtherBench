@@ -1,8 +1,6 @@
 import type { DragEvent, JSX, ReactNode } from 'react';
 import { PROJECT_NAME_MAX } from '@otherbench/core/domain/projects.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
-import { STATUS_LABELS, StatusDot } from '../../components/StatusDot.js';
-import type { ChatStatus } from '../../state/chatStatus.js';
 import { groupDomId } from '../../state/sidebarGroups.js';
 import { CHAT_DRAG_MIME, isContextMenuKey, positionIn, type DropPosition, type MenuSource } from './ChatRow.js';
 
@@ -52,9 +50,7 @@ export interface ProjectGroupProps {
   menuLabel?: string;
   onRename?: (name: string) => void;
   onRenameCancel?: () => void;
-  /** The most urgent status among the group's chats, shown on the heading whether it's open or collapsed. */
-  status?: ChatStatus | null;
-  /** The group's statuses counted ("2 replies ready · 1 replying"): the heading dot's hover text and what a screen reader hears. */
+  /** What the group's chats are doing ("2 replying · 1 in background"): shown only while collapsed, when their rows can't say. */
   statusSummary?: string;
   /** Projects only: the name opens the project's page, and the arrow alone collapses the group. */
   onOpen?: () => void;
@@ -87,7 +83,7 @@ function carriesProject(e: DragEvent): boolean {
  */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
-  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, statusSummary, onOpen, active = false } = props;
+  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, statusSummary, onOpen, active = false } = props;
   const { menuLabel = 'Project actions', reorder, renameLabel = 'Project name', renameMaxLength = PROJECT_NAME_MAX, openTitle = 'Open the project page' } = props;
   const { countNoun = 'chat', emptyText = 'No chats yet' } = props;
   const counted = count === 1 ? countNoun : `${countNoun}s`;
@@ -199,15 +195,17 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           >
             {!onOpen && <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>}
             <span className="truncate">{name}</span>{' '}
-            {/* The count first and the dot well clear of it, so the two don't read as "27 unread". */}
-            <span className="ml-auto flex items-center gap-2.5 pl-1">
+            <span className="ml-auto flex min-w-0 items-center gap-2.5 pl-1">
+              {collapsed && statusSummary && (
+                <span data-testid={`group-status-${groupKey}`} title={statusSummary} className="truncate font-normal tracking-normal normal-case text-[var(--accent)]">
+                  {statusSummary}
+                </span>
+              )}
               <span className="font-normal tabular-nums" title={`${count} ${counted}`} data-testid={`group-count-${groupKey}`}>
                 {count}
               </span>
-              {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden {...(statusSummary ? { title: statusSummary } : {})} />}
             </span>
             <span className="sr-only"> {counted}</span>
-            {status && <span className="sr-only">, {statusSummary || STATUS_LABELS[status]}</span>}
           </button>
           </h3>
           </>

@@ -463,6 +463,8 @@ export interface PeerView extends PublicPeer {
   activeChats?: string[];
   /** Its own chats with background tasks running there now, while it's reachable; absent means none (or an older machine). */
   backgroundChats?: string[];
+  /** Its own chats waiting on a card there now, while it's reachable; absent means none (or an older machine). */
+  waitingChats?: string[];
 }
 
 export interface PeersOverview {

@@ -38,25 +38,22 @@ describe('ProjectGroup', () => {
     expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it("shows its chats' status on the heading, open or collapsed, and says it in the heading button", () => {
-    renderGroup({ collapsed: true, status: 'ready' });
-    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'ready');
-    expect(screen.getByRole('button', { name: /^Alpha.*reply ready/ })).toHaveAttribute('aria-expanded', 'false');
+  it("says what its chats are doing on the heading while collapsed, when the rows can't", () => {
+    renderGroup({ collapsed: true, statusSummary: '2 replying' });
+    expect(screen.getByTestId('group-status-p-a')).toHaveTextContent('2 replying');
+    expect(screen.getByRole('button', { name: /^Alpha.*2 replying/ })).toHaveAttribute('aria-expanded', 'false');
     cleanup();
 
-    renderGroup({ collapsed: false, status: 'working' });
-    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'working');
-    expect(screen.getByRole('button', { name: /^Alpha.*replying/ })).toHaveAttribute('aria-expanded', 'true');
+    renderGroup({ collapsed: false, statusSummary: '2 replying' });
+    expect(screen.queryByTestId('group-status-p-a')).toBeNull();
     cleanup();
 
-    renderGroup({ collapsed: false, status: null });
+    renderGroup({ collapsed: true, statusSummary: '' });
     expect(screen.queryByTestId('group-status-p-a')).toBeNull();
   });
 
-  it("gives the heading's dot the group's counts on hover and to a screen reader, and the count its own hover text", () => {
-    renderGroup({ status: 'ready', statusSummary: '2 replies ready · 1 working in the background' });
-    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('title', '2 replies ready · 1 working in the background');
-    expect(screen.getByRole('button', { name: /^Alpha.*2 replies ready · 1 working in the background/ })).toBeInTheDocument();
+  it('gives the count its own hover text', () => {
+    renderGroup();
     expect(screen.getByTestId('group-count-p-a')).toHaveAttribute('title', expect.stringMatching(/^\d+ chats?$/));
   });
 

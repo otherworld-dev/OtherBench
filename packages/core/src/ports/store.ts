@@ -83,6 +83,11 @@ export interface Chat {
    * needs them again only once a newer reply arrives. Absent is null.
    */
   dealtWithAt?: number | null;
+  /**
+   * The message at the chat's tip, or null when it has none (or is archived). Only in what the API sends, never
+   * stored: the sidebar needs it to tell which chats need the user (`chatNeedsYou`).
+   */
+  head?: ChatHead | null;
   archivedAt: number | null;
   /**
    * Claude Code auto mode for this chat's turns (spec
@@ -525,7 +530,8 @@ export interface MessageRepo {
    */
   listWithSubagentStatus(status: SubagentStatus): CanonMessage[];
   /** One row per non-archived chat that has a head message: the tip of the current branch (newest message at or below the head, by time then id): its role, status and time. For the Overview. */
-  heads(): ChatHead[];
+  /** Each unarchived chat's tip, or only `chatId`'s. */
+  heads(chatId?: string): ChatHead[];
   /** Stores engine-owned state on a message. Throws when the id does not exist. */
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */

@@ -2,7 +2,7 @@ import type { DragEvent, JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { PinIcon } from '../../components/icons.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
-import { StatusDot } from '../../components/StatusDot.js';
+import { StatusWord } from '../../components/StatusWord.js';
 import { formatAge, formatRelativeTime } from '../../lib/relativeTime.js';
 import type { ChatStatus } from '../../state/chatStatus.js';
 
@@ -64,8 +64,12 @@ export interface ChatRowProps {
   projectName?: string;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
-  /** The dot at the end of the row; a reply ready also makes the title bold. */
+  /** The word at the end of the row, in place of the age. */
   status?: ChatStatus | null;
+  /** A row in the Needs you list: tinted, bold and not draggable, since its place there isn't the user's to choose. */
+  needsYou?: boolean;
+  /** Shows the hover tick: there is nothing to do here. Absent while a card waits, which only answering clears. */
+  onTick?: () => void;
   /** The current time: shows the chat's age ("3h") from its last activity at the end of the row. */
   now?: number;
 }
@@ -79,7 +83,7 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, now } = props;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, needsYou = false, onTick, now } = props;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -123,7 +127,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             }
           : undefined
       }
-      className={`group relative flex items-center rounded ${
+      className={`group relative flex items-center rounded ${needsYou ? 'bg-[var(--warn)]/10' : ''} ${
         reorder?.indicator === 'before'
           ? 'shadow-[inset_0_2px_0_var(--accent)]'
           : reorder?.indicator === 'after'
@@ -134,7 +138,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
       <button
         type="button"
         data-row-main=""
-        draggable={!muted}
+        draggable={!muted && !needsYou}
         onDragStart={(e) => {
           e.dataTransfer.setData(CHAT_DRAG_MIME, chat.id);
           e.dataTransfer.effectAllowed = 'move';
@@ -177,15 +181,15 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             <PinIcon className="h-3 w-3" />
           </span>
         )}
-        <span className={`min-w-0 truncate ${status === 'ready' ? 'font-medium' : ''}`}>{chat.title}</span>
+        <span className={`min-w-0 truncate ${needsYou ? 'font-medium' : ''}`}>{chat.title}</span>
         {projectName && (
-          <span data-testid="row-project-name" className="ml-auto max-w-[45%] shrink-0 truncate pl-2 text-xs text-[var(--text-faint)]">
+          <span data-testid="row-project-name" className={`ml-auto max-w-[45%] truncate pl-2 text-xs text-[var(--text-faint)] ${needsYou ? 'min-w-8 shrink-[9]' : 'shrink-0'}`}>
             <span className="sr-only">, in</span> {projectName}
           </span>
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
-      {now !== undefined && (
+      {status ? <StatusWord status={status} testId={`chat-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
         <span
           data-testid="row-age"
           title={`Last active ${new Date(chat.updatedAt).toLocaleString()}`}
@@ -195,7 +199,6 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
           <span className="sr-only">Last active {formatRelativeTime(chat.updatedAt, now)}</span>
         </span>
       )}
-      {status && <StatusDot status={status} testId={`chat-status-${chat.id}`} className="mx-1.5" />}
       {chat.memoryExcluded && (
         <span
           data-testid="memory-excluded-marker"
@@ -207,7 +210,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
           ⊘
         </span>
       )}
-      {(onTogglePin || onOpenMenu) && (
+      {(onTick || onTogglePin || onOpenMenu) && (
         <div
           data-row-actions=""
           className={`absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-sm pr-0.5 pl-3 ${
@@ -218,6 +221,17 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
               : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100'
           }`}
         >
+          {onTick && (
+            <button
+              type="button"
+              aria-label="Nothing to do here"
+              title="Nothing to do here"
+              onClick={onTick}
+              className="rounded px-1.5 py-0.5 text-xs leading-none text-[var(--text-muted)] hover:bg-[var(--bg-raised)] hover:text-[var(--text)]"
+            >
+              ✓
+            </button>
+          )}
           {onTogglePin && (
             <button
               type="button"
