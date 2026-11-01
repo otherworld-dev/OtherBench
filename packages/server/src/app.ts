@@ -109,7 +109,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   const token = options.token ?? null;
 
   if (options.hostCheckPort) {
-    app.use('*', hostCheck(options.hostCheckPort, remote?.publicHosts ?? []));
+    app.use('*', hostCheck(options.hostCheckPort, remote?.publicHosts ?? [], (options.corsOrigins?.length ?? 0) > 0));
   }
   if (options.corsOrigins && options.corsOrigins.length > 0) {
     app.use('/api/*', corsAllowlist(options.corsOrigins));

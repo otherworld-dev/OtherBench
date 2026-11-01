@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react';
 import { api, type BrowserLiveEvent, type BrowserLiveState, type BrowserPanelInput } from '../state/api.js';
 import { SseClient, type SseConnect } from '../state/sse.js';
-import { apiUrl } from '../state/transport.js';
+import { streamApiUrl } from '../state/transport.js';
 import { oneLine } from './browser.js';
 
 /** A frame is shown only as plain base64 under the fixed inert type below, never anything else. */
@@ -73,7 +73,7 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
       if (!s.open) setFrame(null);
     };
     const client = new SseClient<BrowserLiveState, BrowserLiveEvent>({
-      url: apiUrl(`/chats/${encodeURIComponent(chatId)}/browser/live`),
+      url: streamApiUrl(`/chats/${encodeURIComponent(chatId)}/browser/live`),
       readHello: (payload) => payload as BrowserLiveState,
       onHello: show,
       onEvent: (e) => {

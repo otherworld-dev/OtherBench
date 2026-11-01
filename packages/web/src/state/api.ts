@@ -21,7 +21,7 @@ import type { ReplyNote } from '@otherbench/core/types/notes.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, NextcloudErrorCode, NextcloudSettingsView, NextcloudTestResult, ProjectLinksSuggestion, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import type { TerminalInfo, TerminalStatus } from '@otherbench/core/types/terminal.js';
 import type { Overview } from '@otherbench/core/types/overview.js';
-import { apiFetch, apiUrl } from './transport.js';
+import { apiFetch, apiUrl, streamApiUrl } from './transport.js';
 
 /** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
 export interface AuthStatus {
@@ -799,7 +799,7 @@ export const api = {
         `/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/output?from=${from}`
       ),
     /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader, for the terminal on screen only. */
-    streamUrl: (appId: string, id: string) => apiUrl(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/stream`),
+    streamUrl: (appId: string, id: string) => streamApiUrl(`/apps/${encodeURIComponent(appId)}/terminals/${encodeURIComponent(id)}/stream`),
   },
 
   /** A project's shared memory note (spec 2026-10-03-project-memory-design §4). */
@@ -1064,7 +1064,7 @@ export const api = {
   },
 
   /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader. */
-  streamUrl: (chatId: string) => apiUrl(`/chats/${chatId}/stream`),
+  streamUrl: (chatId: string) => streamApiUrl(`/chats/${chatId}/stream`),
   /** The app-wide event stream (v2 plan, Task 34). */
-  eventsUrl: () => apiUrl('/events'),
+  eventsUrl: () => streamApiUrl('/events'),
 };

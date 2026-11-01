@@ -27,6 +27,20 @@ export function apiUrl(path: string): string {
   return `${config.baseUrl}/api${path}`;
 }
 
+/**
+ * The URL for a long-held stream. A browser keeps about 6 connections per host name for everything on it, across all
+ * the app's windows, and each stream holds one for as long as it's open: three windows and three chats, and a message
+ * waits with no error until something closes. So in the desktop app each stream gets a name of its own: the browser
+ * sends any `*.localhost` to this machine without asking DNS, and the server accepts this shape (desktop.ts's
+ * `hostCheck`) and only from the desktop shell. Browser mode has no such name to use: there it's the plain URL.
+ */
+export function streamApiUrl(path: string): string {
+  const url = apiUrl(path);
+  if (!url.startsWith('http://127.0.0.1:')) return url;
+  const name = crypto.getRandomValues(new Uint32Array(1))[0]!.toString(16).padStart(8, '0');
+  return url.replace('127.0.0.1', `s${name}.localhost`);
+}
+
 /** A URL on the OtherBench server outside `/api` (the viewer's `/view/` links, Deck #826). */
 export function serverUrl(path: string): string {
   return `${config.baseUrl}${path}`;

@@ -20,6 +20,8 @@ export function announceLine(port: number, rpc: string | null = null): string {
   return `${JSON.stringify(rpc === null ? { port } : { port, rpc })}\n`;
 }
 
+const STREAM_HOST = /^s[0-9a-f]{8}\.localhost:\d+$/;
+
 /**
  * DNS-rebinding defence for a loopback-bound server. A web page on any
  * origin can resolve its own hostname to 127.0.0.1 and then talk to this
@@ -28,14 +30,19 @@ export function announceLine(port: number, rpc: string | null = null): string {
  * are accepted, plus, in sign-in mode, each `--public-url`'s host
  * (`extraHosts`, as `new URL(u).host` gives it). `port` is read per request
  * because with `--port 0` it isn't known until after the app is built.
+ *
+ * `streamHosts` also accepts the desktop app's stream names (the web client's
+ * `streamApiUrl` says why it uses them). They don't weaken the defence: a
+ * browser never asks DNS about `*.localhost`, so a page can't rebind one.
  */
-export function hostCheck(port: () => number, extraHosts: readonly string[] = []): MiddlewareHandler {
+export function hostCheck(port: () => number, extraHosts: readonly string[] = [], streamHosts = false): MiddlewareHandler {
   const extra = extraHosts.map((h) => h.toLowerCase());
   return async (c, next) => {
     const host = c.req.header('host')?.toLowerCase();
     const p = port();
     const allowed = [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`, ...extra];
-    if (!host || !allowed.includes(host)) {
+    const isStreamHost = streamHosts && host !== undefined && STREAM_HOST.test(host) && host.endsWith(`:${p}`);
+    if (!host || (!allowed.includes(host) && !isStreamHost)) {
       return c.json({ error: `Host "${host ?? ''}" is not allowed; this server only answers on ${allowed[0]}.` }, 421);
     }
     await next();

@@ -102,6 +102,30 @@ describe('hostCheck', () => {
     }
     expect((await appWithHostCheck(4747).request('/api/ping', { headers: { Host: 'otherbench.lan:4747' } })).status).toBe(421);
   });
+
+  describe('stream hosts', () => {
+    function appWithStreamHosts(enabled: boolean) {
+      const app = new Hono();
+      app.use('*', hostCheck(() => 4747, [], enabled));
+      app.get('/x', (c) => c.text('ok'));
+      return app;
+    }
+
+    it('lets a stream host through when the desktop shell turns them on', async () => {
+      expect((await appWithStreamHosts(true).request('/x', { headers: { Host: 's0a1b2c3d.localhost:4747' } })).status).toBe(200);
+    });
+
+    it('refuses them otherwise', async () => {
+      expect((await appWithStreamHosts(false).request('/x', { headers: { Host: 's0a1b2c3d.localhost:4747' } })).status).toBe(421);
+    });
+
+    it.each(['s0a1b2c3d.localhost:9999', 's0a1b2c3d.localhost', 'evil.localhost:4747', 's0a1b2c3d.localhost.evil.example:4747', 'evil.example.s0a1b2c3d.localhost:4747', 's0a1b2c3.localhost:4747'])(
+      'still refuses Host "%s" with them on',
+      async (host) => {
+        expect((await appWithStreamHosts(true).request('/x', { headers: { Host: host } })).status).toBe(421);
+      }
+    );
+  });
 });
 
 describe('corsAllowlist', () => {

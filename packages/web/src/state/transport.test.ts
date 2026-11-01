@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken, onUnauthorized } from './transport.js';
+import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken, onUnauthorized, streamApiUrl } from './transport.js';
 
 afterEach(() => {
   configureTransport({ baseUrl: '', token: null });
@@ -46,6 +46,29 @@ describe('transport', () => {
     await apiFetch('/chats', { headers: { 'Content-Type': 'application/json' } });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/chats', { headers: { 'Content-Type': 'application/json' } });
+  });
+});
+
+describe('streamApiUrl', () => {
+  it('gives each stream of the desktop app a loopback name of its own, so streams never hold the connections requests need', () => {
+    configureTransport({ baseUrl: 'http://127.0.0.1:51234', token: 't' });
+
+    const first = streamApiUrl('/events');
+    const second = streamApiUrl('/events');
+
+    expect(first).toMatch(/^http:\/\/s[0-9a-f]{8}\.localhost:51234\/api\/events$/);
+    expect(second).toMatch(/^http:\/\/s[0-9a-f]{8}\.localhost:51234\/api\/events$/);
+    expect(second).not.toBe(first);
+  });
+
+  it('keeps the same-origin path in browser mode, where no other name is known to reach the server', () => {
+    expect(streamApiUrl('/events')).toBe('/api/events');
+  });
+
+  it('leaves a server that is not this machine alone', () => {
+    configureTransport({ baseUrl: 'https://otherbench.example.com', token: 't' });
+
+    expect(streamApiUrl('/events')).toBe('https://otherbench.example.com/api/events');
   });
 });
 
