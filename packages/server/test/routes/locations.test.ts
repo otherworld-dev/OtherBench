@@ -9,7 +9,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
-import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
+import { AppEventBus, withStoreEvents } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 import { eventView } from '../../src/workspace-view.js';
 
@@ -33,7 +33,7 @@ beforeEach(async () => {
   bus.subscribe((e) => events.push(e));
   container = {
     // Announcing chat changes, as createContainer's store does.
-    store: withChatEvents(store, bus),
+    store: withStoreEvents(store, bus),
     secrets: new FakeSecretStore(),
     engine,
     registry: {} as never,

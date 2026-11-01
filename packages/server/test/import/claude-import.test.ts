@@ -14,7 +14,7 @@ import { runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
 import { SqliteStore } from '@otherbench/store-sqlite/store.js';
 import { ClaudeImportService, ImportBusyError, ImportInputError } from '../../src/import/claude-import.js';
 import { MemoryQueue } from '../../src/memory/shared.js';
-import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
+import { AppEventBus, withStoreEvents } from '../../src/stream/events.js';
 
 const ZERO = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 const reply = (text: string): EngineEvent[] => [{ type: 'text-delta', text }, { type: 'finish', usage: ZERO, finishReason: 'stop' }];
@@ -99,7 +99,7 @@ beforeEach(async () => {
   bus = new AppEventBus();
   events = [];
   bus.subscribe((e) => events.push(e));
-  store = withChatEvents(new SqliteStore(db), bus);
+  store = withStoreEvents(new SqliteStore(db), bus);
   store.connections.create({ id: 'conn', name: 'Anthropic', kind: 'anthropic', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
   for (const id of ['claude', 'old']) {
     store.profiles.create({

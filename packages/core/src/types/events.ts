@@ -49,6 +49,8 @@ export type AppEvent =
   | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string }
   /** How many background tasks a chat's agent has running now (spec 2026-10-17-claude-background-helpers-design); 0 when none. */
   | { type: 'background-tasks'; chatId: string; count: number }
+  /** An app or app folder was made, changed or deleted on this machine: re-read both lists, as an undocked window holds its own. */
+  | { type: 'apps-changed' }
   /** An app's terminals were opened, renamed, ended or closed (spec 2026-10-21-code-terminal-design): re-read its list. */
   | { type: 'terminals-changed'; appId: string }
   /** The Overview's GitHub and Deck check started or finished, or something was ticked off: re-read it (spec 2026-10-26-overview-design). */

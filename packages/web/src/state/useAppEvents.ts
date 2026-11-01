@@ -40,6 +40,35 @@ export function refreshAfterSync(): void {
     .catch((err: unknown) => console.error('[otherbench-web] failed to reload after a sync:', err));
 }
 
+let readingApps = false;
+let readAppsAgain = false;
+
+/**
+ * An app or app folder changed on this machine, maybe in another window. Each window holds its own lists, and Move to
+ * app… reads them. A burst (a drag writes one row at a time) gets one more read after the one out, which has the last
+ * of it, so an older answer can't be the one that stays.
+ */
+function refreshApps(): void {
+  if (readingApps) {
+    readAppsAgain = true;
+    return;
+  }
+  readingApps = true;
+  Promise.all([api.apps.list(), api.appFolders.list()])
+    .then(([apps, appFolders]) => {
+      const { setApps, setAppFolders } = useOtherBenchStore.getState();
+      setApps(apps);
+      setAppFolders(appFolders);
+    })
+    .catch((err: unknown) => console.error('[otherbench-web] failed to reload the apps:', err))
+    .finally(() => {
+      readingApps = false;
+      if (!readAppsAgain) return;
+      readAppsAgain = false;
+      refreshApps();
+    });
+}
+
 /** The window holding `chatId` (desktop/windows.ts), which a notification about it opens and whose focus hides it. */
 function windowOfChat(chatId: string | null): 'main' | 'code' {
   const { chats, undocked } = useOtherBenchStore.getState();
@@ -74,6 +103,7 @@ export function useAppEvents(): void {
         applyAppEvent(event);
         emitAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
+        if (event.type === 'apps-changed') refreshApps();
         if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[otherbench-web] failed to show a notification:', err));
       },

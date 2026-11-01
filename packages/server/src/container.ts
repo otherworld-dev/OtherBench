@@ -60,7 +60,7 @@ import { createMediaHost } from './media.js';
 import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { ScheduleService } from './schedule/service.js';
-import { AppEventBus, markUnreadOnFinish, withChatEvents } from './stream/events.js';
+import { AppEventBus, markUnreadOnFinish, withStoreEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
@@ -373,7 +373,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   runMigrations(db);
   // Every chat change, whoever makes it, is announced on the app-wide stream.
   const events = new AppEventBus();
-  const store = withChatEvents(new SqliteStore(db), events);
+  const store = withStoreEvents(new SqliteStore(db), events);
 
   // A message row left `status: 'streaming'` means the process that was
   // writing it is gone -- ASSUMING a single OtherBench server process per

@@ -27,6 +27,41 @@ test('a chat created, renamed and deleted elsewhere updates the open sidebar liv
   await expect(nav.getByTestId(`chat-row-${chat.id}`)).toHaveCount(0);
 });
 
+test('an app made, renamed and deleted elsewhere updates the Move to app… menu of a window already open', async ({ page, request }) => {
+  const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
+  const { id: connectionId } = await conn.json();
+  const profile = (await (await request.post(`${BASE_URL}/api/profiles`, { data: { name: 'Mock Profile', connectionId, modelId: 'mock-standard' } })).json()) as { id: string };
+  const suffix = randomUUID().slice(0, 8);
+  const chat = (await (await request.post(`${BASE_URL}/api/chats`, { data: { profileId: profile.id, title: `Chat to file ${suffix}` } })).json()) as { id: string };
+  // At least one app from the start, so the menu item is there either side of the changes.
+  const first = `Already here ${suffix}`;
+  await request.post(`${BASE_URL}/api/apps`, { data: { name: first, workspacePath: process.cwd(), githubRepo: null } });
+
+  await page.goto('/');
+  const row = page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${chat.id}`);
+  await expect(row).toBeVisible();
+  const appsInMenu = async () => {
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Move to app…' }).click();
+    const names = await page.getByRole('menu', { name: 'Move to app…' }).getByRole('menuitemradio').allTextContents();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    return names;
+  };
+
+  // The Code window, which is another page holding its own lists, makes the app.
+  const name = `Made elsewhere ${suffix}`;
+  const created = await request.post(`${BASE_URL}/api/apps`, { data: { name, workspacePath: process.cwd(), githubRepo: null } });
+  const { id } = (await created.json()) as { id: string };
+  await expect.poll(appsInMenu).toContain(name);
+
+  await request.patch(`${BASE_URL}/api/apps/${id}`, { data: { name: `${name} renamed` } });
+  await expect.poll(appsInMenu).toContain(`${name} renamed`);
+
+  await request.delete(`${BASE_URL}/api/apps/${id}`);
+  await expect.poll(appsInMenu).not.toContain(`${name} renamed`);
+});
+
 test('a reply sent from another window shows up in a chat already open here', async ({ page, request }) => {
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
   const { id: connectionId } = await conn.json();

@@ -4,9 +4,9 @@ import type { AppEvent, BackgroundChatSummary, ComputerSessionSummary, PendingAp
 
 /**
  * The app-wide event bus behind `GET /api/events` (v2 plan, Task 34). Chat
- * events come from `withChatEvents`, which wraps the store's chat repo so
+ * events come from `withStoreEvents`, which wraps the store's chat repo so
  * every create, update and delete is announced whoever made it (a route,
- * auto-title, project memory). Turn and approval events come from the
+ * auto-title, project memory), and its app repos the same way. Turn and approval events come from the
  * `TurnRunner` via `attach`; turn starts are emitted by the turn routes,
  * which know the chat and the new reply ids.
  *
@@ -157,7 +157,47 @@ class EventedChatRepo implements ChatRepo {
   }
 }
 
-/** `store` with its chat repo announcing changes on `events`; every other repo is the same object. */
-export function withChatEvents(store: Store, events: AppEventBus): Store {
-  return { ...store, chats: new EventedChatRepo(store.chats, events), transaction: (fn) => store.transaction(fn), close: () => store.close() };
+/** A repo that says `apps-changed` on `events` after each write. `AppRepo` and `AppFolderRepo` are both this shape. */
+class EventedAppsRepo<Row, New, Patch> {
+  constructor(
+    private readonly inner: { create(row: New): Row; get(id: string): Row | null; list(): Row[]; update(id: string, patch: Patch): Row; delete(id: string): void },
+    private readonly events: AppEventBus
+  ) {}
+
+  create(row: New): Row {
+    const created = this.inner.create(row);
+    this.events.emit({ type: 'apps-changed' });
+    return created;
+  }
+
+  get(id: string): Row | null {
+    return this.inner.get(id);
+  }
+
+  list(): Row[] {
+    return this.inner.list();
+  }
+
+  update(id: string, patch: Patch): Row {
+    const updated = this.inner.update(id, patch);
+    this.events.emit({ type: 'apps-changed' });
+    return updated;
+  }
+
+  delete(id: string): void {
+    this.inner.delete(id);
+    this.events.emit({ type: 'apps-changed' });
+  }
+}
+
+/** `store` with its chat, app and app folder repos announcing changes on `events`; every other repo is the same object. */
+export function withStoreEvents(store: Store, events: AppEventBus): Store {
+  return {
+    ...store,
+    chats: new EventedChatRepo(store.chats, events),
+    apps: new EventedAppsRepo(store.apps, events),
+    appFolders: new EventedAppsRepo(store.appFolders, events),
+    transaction: (fn) => store.transaction(fn),
+    close: () => store.close(),
+  };
 }

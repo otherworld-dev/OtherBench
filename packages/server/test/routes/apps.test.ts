@@ -14,7 +14,7 @@ import { GhError, githubService } from '../../src/code/github.js';
 import type { Container } from '../../src/container.js';
 import type { OverviewService } from '../../src/overview/service.js';
 import { forwardedApi } from '../../src/peer/forward.js';
-import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
+import { AppEventBus, withStoreEvents } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 const hasGit = spawnSync('git', ['--version']).status === 0;
@@ -101,7 +101,7 @@ beforeEach(() => {
   };
   container = {
     // Announcing chat changes, as createContainer's store does.
-    store: withChatEvents(store, bus),
+    store: withStoreEvents(store, bus),
     secrets: new FakeSecretStore(),
     engine,
     registry: {} as never,
@@ -331,7 +331,7 @@ describe('apps CRUD', () => {
     expect(store.apps.get('a1')).toBeNull();
     expect(store.chats.get('c1')).toMatchObject({ appId: null });
     expect(store.chats.get('other')).not.toBeNull();
-    expect(events).toEqual([{ type: 'chat-updated', chat: expect.objectContaining({ id: 'c1', appId: null }) }]);
+    expect(events).toEqual([{ type: 'apps-changed' }, { type: 'chat-updated', chat: expect.objectContaining({ id: 'c1', appId: null }) }]);
   });
 
   it("archiving a profile stops it being any app's default", async () => {

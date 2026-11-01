@@ -13,7 +13,7 @@ import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
-import { AppEventBus, markUnreadOnFinish, withChatEvents } from '../src/stream/events.js';
+import { AppEventBus, markUnreadOnFinish, withStoreEvents } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { sseStream } from '../src/stream/sse.js';
 
@@ -44,7 +44,7 @@ let seen: AppEvent[];
 
 function build(engine: ChatEngine): void {
   events = new AppEventBus();
-  const store = withChatEvents(new InMemoryStore(), events);
+  const store = withStoreEvents(new InMemoryStore(), events);
   const secrets = new FakeSecretStore();
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
@@ -252,6 +252,34 @@ describe('app-wide events', () => {
     expect(events.pendingApprovals()).toHaveLength(1);
     container.turnRunner.cancel(messageId);
     await vi.waitFor(() => expect(events.pendingApprovals()).toEqual([]));
+  });
+
+  it('every write to an app or app folder announces apps-changed, so the other windows re-read them', async () => {
+    build(new FakeChatEngine([]));
+    const changes = () => seen.filter((e) => e.type === 'apps-changed').length;
+
+    const folder = await (await post('/api/app-folders', { name: 'Work' })).json() as { id: string };
+    expect(changes()).toBe(1);
+    const created = await post('/api/apps', { name: 'Tool', workspacePath: ws });
+    expect(created.status).toBe(201);
+    expect(changes()).toBe(2);
+    const { id } = await created.json() as { id: string };
+
+    await app().request(`/api/apps/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Renamed' }) });
+    expect(changes()).toBe(3);
+    await app().request(`/api/app-folders/${folder.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Play' }) });
+    expect(changes()).toBe(4);
+    await app().request(`/api/app-folders/${folder.id}`, { method: 'DELETE' });
+    expect(changes()).toBe(5);
+    await app().request(`/api/apps/${id}`, { method: 'DELETE' });
+    expect(changes()).toBe(6);
+  });
+
+  it('reading the apps announces nothing', async () => {
+    build(new FakeChatEngine([]));
+    await app().request('/api/apps');
+    await app().request('/api/app-folders');
+    expect(seen).toEqual([]);
   });
 
   it('deleting a project announces each chat it moved to No project', async () => {

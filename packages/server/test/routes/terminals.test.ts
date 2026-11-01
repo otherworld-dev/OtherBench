@@ -10,7 +10,7 @@ import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';
-import { AppEventBus, withChatEvents } from '../../src/stream/events.js';
+import { AppEventBus, withStoreEvents } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 import { killTerminalsOfGoneApps, TerminalManager } from '../../src/terminal/manager.js';
 import type { PtyProcess } from '../../src/terminal/pty.js';
@@ -81,7 +81,7 @@ beforeEach(() => {
     env: {},
   });
   container = {
-    store: withChatEvents(store, bus),
+    store: withStoreEvents(store, bus),
     secrets: new FakeSecretStore(),
     engine,
     registry: {} as never,
