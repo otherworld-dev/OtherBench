@@ -9,6 +9,9 @@ const KEEP_ENDED = 50;
 /** How many helper cards are remembered beyond those of the tasks kept. */
 const KEEP_CARDS = 200;
 
+/** Why a task's card ended when nobody asked it to stop. */
+const PROCESS_GONE = 'Its Claude Code process closed before it finished.';
+
 /** One task Claude Code reported, and where its card is. */
 interface Task {
   helper: BackgroundHelper;
@@ -133,7 +136,7 @@ export class BackgroundTasks {
     for (const task of this.tasks.values()) {
       if (task.ended) continue;
       task.ended = true;
-      this.cardEvent(task, { type: 'end', status: 'cancelled', at: this.now() });
+      this.cardEvent(task, { type: 'end', status: 'cancelled', error: PROCESS_GONE, at: this.now() });
     }
     this.sendList();
   }

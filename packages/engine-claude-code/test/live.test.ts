@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { BackgroundTasks } from '../src/background.js';
 import { LivePool, LiveProcess, NOTE_PICKED, PromptQueue, lifecycleOf, liveKey } from '../src/live.js';
 
 /** A fake Claude Code output the test pushes messages into. */
@@ -170,6 +171,51 @@ describe('LivePool.makeRoom', () => {
     other.live.sessionId = 's2';
     pool.release(other.live);
     expect(busy.live.isClosed).toBe(false);
+  });
+
+  /** A pooled process with background task `taskId` running, unused since `lastUsed`. */
+  function working(pool: LivePool, sessionId: string, taskId: string, lastUsed: number) {
+    const proc = process();
+    proc.live.sessionId = sessionId;
+    proc.live.background = new BackgroundTasks('chat-' + sessionId, () => {});
+    proc.live.background.handle({ type: 'system', subtype: 'task_started', task_id: taskId, description: 'implementer', task_type: 'local_agent', is_backgrounded: true });
+    pool.release(proc.live);
+    proc.live.lastUsed = lastUsed;
+    return proc;
+  }
+
+  it('goes over the cap rather than close a process with a background task running', () => {
+    const pool = new LivePool(60_000, 1);
+    const first = working(pool, 's1', 'k1', 0);
+    const second = working(pool, 's2', 'k2', 1);
+    const third = process();
+    third.live.sessionId = 's3';
+    pool.release(third.live);
+    pool.makeRoom();
+    expect(first.live.isClosed).toBe(false);
+    expect(second.live.isClosed).toBe(false);
+    expect(third.live.isClosed).toBe(true);
+    expect(pool.size).toBe(2);
+  });
+
+  it('closes a process again once its background task has ended', () => {
+    const pool = new LivePool(60_000, 1);
+    const { live } = working(pool, 's1', 'k1', 0);
+    pool.makeRoom();
+    expect(live.isClosed).toBe(false);
+    live.background!.handle({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: '', output_file: '' });
+    pool.makeRoom();
+    expect(live.isClosed).toBe(true);
+  });
+
+  it("doesn't count a process that died as still running its background tasks", async () => {
+    const pool = new LivePool(60_000, 1);
+    const { live, out } = working(pool, 's1', 'k1', 0);
+    out.end();
+    await tick();
+    expect(live.background!.running).toBe(false);
+    pool.makeRoom();
+    expect(pool.size).toBe(0);
   });
 });
 

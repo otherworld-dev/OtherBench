@@ -601,6 +601,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       prepared.binding.results.clear();
       req.signal.removeEventListener('abort', onAbort);
       live.binding = null;
+      // It stayed pooled, so no release marks it as used just now.
+      live.lastUsed = Date.now();
       if (!finished && !live.isClosed) this.cancelNotes(live, req.messageId);
       // Stopped mid-turn: read the rest in the background (the process stays pooled, as it already is).
       if (req.signal.aborted && !ended && !live.isClosed) void this.finishSelfStopped(live, feed, pending);

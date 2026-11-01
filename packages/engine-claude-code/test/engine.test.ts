@@ -2759,6 +2759,43 @@ describe('ClaudeCodeChatEngine carrying on by itself (spec 2026-10-17-claude-bac
     e.dispose();
   });
 
+  it('a self-started reply counts as use: a process idle for longer goes first when room is needed', async () => {
+    let helperReports!: () => void;
+    const reported = new Promise<void>((resolve) => (helperReports = resolve));
+    let processes = 0;
+    const { query, starts } = scripted(async function* ({ nextPrompt }) {
+      processes += 1;
+      if (processes === 1) {
+        yield* firstReply(nextPrompt);
+        await reported;
+        yield msg({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: 'Fixed.', output_file: '' });
+        yield delta('Reviewed.');
+        yield selfResult();
+      } else {
+        const prompt = await nextPrompt();
+        yield init(`sess-${processes}`);
+        yield resultOf(prompt);
+      }
+      await nextPrompt();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, maxLive: 2 });
+    const seen: EngineBackgroundEvent[] = [];
+    e.onBackground((ev) => seen.push(ev));
+    const later = () => new Promise((resolve) => setTimeout(resolve, 5));
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await later();
+    await collect(e.stream(req({ chatId: 'other-chat', messageId: 'm2' })));
+    await later();
+    helperReports();
+    await vi.waitFor(() => expect(selfStarts(seen)).toHaveLength(1));
+    await collect(selfStarts(seen)[0]!.run(req({ messageId: 'm-self' })));
+    await later();
+    await collect(e.stream(req({ chatId: 'third-chat', messageId: 'm3' })));
+    expect(starts[0]!.abortController?.signal.aborted).toBe(false);
+    expect(starts[1]!.abortController?.signal.aborted).toBe(true);
+    e.dispose();
+  });
+
   it('a self-started reply on another Claude account says so in its meta', async () => {
     const VH: ClaudeAccountRef = { slug: 'vh', name: 'VH', configDir: join(ws, '.claude-vh') };
     const { query, starts } = scripted(async function* ({ nextPrompt }) {

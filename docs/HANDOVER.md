@@ -1352,7 +1352,8 @@ refused.
   process that resumes the session, closing the old one. A reply ending in
   an error closes its process. Idle processes close after 30 minutes (not
   while a background task runs) and at most 3 are kept (each runs its own
-  MCP servers; one with background tasks is closed last); `container.close()`
+  MCP servers; one running a turn or a background task is never closed for
+  room, so the cap can be exceeded until that ends); `container.close()`
   stops them all. Hooks are fixed when a process starts, so they call
   through a per-reply binding.
 - Reading and Stop. Each live process is read continuously by one reader

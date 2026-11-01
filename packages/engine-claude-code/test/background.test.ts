@@ -104,13 +104,23 @@ describe('BackgroundTasks', () => {
     expect(cardEvents().at(-1)).toMatchObject({ messageId: 'm59', callId: 't59', event: { type: 'background' } });
   });
 
-  it('close ends every helper as stopped', () => {
+  it('close ends every helper as stopped, and its card says why', () => {
     const { tasks, helpers, cardEvents } = make();
     tasks.noteCard('t1', 'm1');
     tasks.handle(system('task_started', { task_id: 'k1', tool_use_id: 't1', description: 'implementer', is_backgrounded: true }));
     tasks.closeAll();
-    expect(cardEvents().at(-1)).toMatchObject({ messageId: 'm1', callId: 't1', event: { type: 'end', status: 'cancelled' } });
+    expect(cardEvents().at(-1)).toMatchObject({ messageId: 'm1', callId: 't1', event: { type: 'end', status: 'cancelled', error: expect.stringMatching(/\S/) } });
     expect(helpers()).toEqual([]);
     expect(tasks.running).toBe(false);
+  });
+
+  it('gives no reason for a helper stopped on request: it was asked to stop', () => {
+    const { tasks, cardEvents } = make();
+    tasks.noteCard('t1', 'm1');
+    tasks.handle(system('task_started', { task_id: 'k1', tool_use_id: 't1', description: 'implementer', is_backgrounded: true }));
+    tasks.handle(system('task_notification', { task_id: 'k1', status: 'stopped', summary: '', output_file: '' }));
+    tasks.closeAll();
+    const ends = cardEvents().filter((e) => e.event.type === 'end');
+    expect(ends).toEqual([{ type: 'helper-event', chatId: 'chat-1', messageId: 'm1', callId: 't1', event: { type: 'end', status: 'cancelled', at: 1000 } }]);
   });
 });

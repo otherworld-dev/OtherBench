@@ -11,7 +11,7 @@ import type { RelayedCall } from './relay.js';
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
 export const LIVE_IDLE_MS = 30 * 60_000;
 
-/** At most this many live processes; starting another closes the longest-idle one. Each runs its own MCP servers. */
+/** At most this many live processes; starting another closes the longest-idle one with no work running. Each runs its own MCP servers. */
 export const MAX_LIVE = 3;
 
 /** An input stream that stays open: each message pushed is the next user turn of the same process. */
@@ -299,6 +299,12 @@ export class LiveProcess {
     } finally {
       this.outputEnded = true;
       this.detach();
+      // Its tasks ended with its output, and the pool never closes a process still running one.
+      try {
+        this.background?.closeAll();
+      } catch (err) {
+        console.error('[engine-claude-code] could not report the background tasks of a process that ended:', err);
+      }
       this.reportClosed();
     }
   }
@@ -504,17 +510,17 @@ export class LivePool {
 
   /**
    * Makes room for one more process: closes the longest-idle ones past the
-   * cap, any running background tasks last. One running a turn (a stopped
-   * reply's, one Claude Code started by itself, or a note's follow-on, also
-   * about to begin) is never closed: the cap is exceeded until it ends.
+   * cap. One running a turn (a stopped reply's, one Claude Code started by
+   * itself, or a note's follow-on, also about to begin) or a background task
+   * is never closed: closing it would end that work, so the cap is exceeded
+   * until it ends.
    */
   makeRoom(): void {
     while (this.idle.size >= this.max) {
       let oldest: [string, LiveProcess] | null = null;
-      const rank = (live: LiveProcess): number => (live.background?.running ? 1 : 0);
       for (const entry of this.idle) {
-        if (entry[1].inTurn) continue;
-        if (!oldest || rank(entry[1]) < rank(oldest[1]) || (rank(entry[1]) === rank(oldest[1]) && entry[1].lastUsed < oldest[1].lastUsed)) oldest = entry;
+        if (entry[1].inTurn || entry[1].background?.running) continue;
+        if (!oldest || entry[1].lastUsed < oldest[1].lastUsed) oldest = entry;
       }
       if (!oldest) return;
       this.idle.delete(oldest[0]);
