@@ -45,16 +45,19 @@ export const CHAT_NEED_WINDOW_MS = 7 * 86_400_000;
 
 /**
  * Whether a chat wants the user: waiting on them, or a finished reply from
- * `since` (ms) on that they haven't dealt with.
+ * `since` (ms) on that they haven't dealt with. A chat still `busy` (background
+ * tasks running) wants them only if it's waiting on them: it may not be done.
  */
 export function chatNeedsYou(
   chat: { archivedAt: number | null; dealtWithAt?: number | null },
   head: ChatHead | null,
   waiting: boolean,
   since: number,
+  busy = false,
 ): boolean {
   if (chat.archivedAt !== null) return false;
   if (waiting) return true;
+  if (busy) return false;
   if (!head || head.role !== 'assistant') return false;
   if (head.status !== 'complete' && head.status !== 'error') return false;
   if (head.createdAt < since) return false;
@@ -63,7 +66,7 @@ export function chatNeedsYou(
 
 export interface OverviewInput {
   apps: App[]; chats: Chat[]; projects: { id: string; name: string }[];
-  heads: ChatHead[]; waitingChatIds: ReadonlySet<string>;
+  heads: ChatHead[]; waitingChatIds: ReadonlySet<string>; backgroundChatIds: ReadonlySet<string>;
   me: string | null;
   /**
    * The GitHub inbox: the last good list, and why the latest check couldn't read it (null when it could).
@@ -90,7 +93,7 @@ export function buildOverview(input: OverviewInput): Overview {
       if ((chat.appId ?? null) !== appId) continue;
       const head = heads.get(chat.id) ?? null;
       const waiting = input.waitingChatIds.has(chat.id);
-      if (!chatNeedsYou(chat, head, waiting, since)) continue;
+      if (!chatNeedsYou(chat, head, waiting, since, input.backgroundChatIds.has(chat.id))) continue;
       const projectId = chat.projectId ?? null;
       out.push({
         chatId: chat.id, title: chat.title, waiting, at: head?.createdAt ?? chat.updatedAt,

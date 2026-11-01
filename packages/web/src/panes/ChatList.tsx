@@ -9,12 +9,11 @@ import { Menu } from '../components/Menu.js';
 import { dock, onDesktopEvent, undock } from '../desktop/bridge.js';
 import { inDesktopApp, windowForMode, type DockView } from '../desktop/windows.js';
 import { saveFile } from '../lib/saveFile.js';
-import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { setChatPinned } from '../state/chatActions.js';
-import { chatStatus, groupStatus, groupStatusSummary, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
+import { chatStatus, groupStatusSummary, isOnCard, needsYouChats, useChatActivity, type ChatStatus } from '../state/chatStatus.js';
 import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
@@ -173,8 +172,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const collapsedGroups = useCollapsedGroups();
   const groupSorts = useGroupSorts();
   const now = useNow(60_000);
-  const { waiting, working, background } = useChatActivity();
-  const reading = useReadingChatIds(useMediaQuery(NARROW_BREAKPOINT));
+  const activity = useChatActivity();
 
   const [query, setQuery] = useState('');
   /** The server's message-text hits for the query; a previous query's stay until the new answer, so rows don't blink while typing. */
@@ -225,16 +223,16 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const machineFilter = machines?.peers.length ? machine : null;
   const searching = trimmedQuery !== '' || statusOnly || machineFilter !== null;
   // The chats the status and machine chips allow (null with neither on); the open chat is never hidden by them:
-  // reading a reply clears its dot, and a new chat runs here.
+  // a new chat runs here.
   const chipMatches = useMemo(() => {
     if (!statusOnly && machineFilter === null) return null;
     return new Set(
       chats
-        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working, background) !== null)
+        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, activity, now) !== null)
         .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
         .map((c) => c.id)
     );
-  }, [chats, statusOnly, machineFilter, activeChatId, waiting, working, background]);
+  }, [chats, statusOnly, machineFilter, activeChatId, activity, now]);
   const matches = useMemo(() => {
     if (!searching) return null;
     return new Set(
@@ -244,8 +242,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         .map((c) => c.id)
     );
   }, [searching, chats, trimmedQuery, searchChatIds, chipMatches]);
-  const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
-  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches), [chats, apps, appFolders, matches, trimmedQuery, chipMatches]);
+  // While searching every chat stays in its group, so a result is found where it lives.
+  const needsYou = useMemo(() => (searching ? [] : needsYouChats(chats, activity, now)), [searching, chats, activity, now]);
+  const lifted = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
+  const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key), lifted), [chats, projects, matches, groupSorts, lifted]);
+  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches, lifted), [chats, apps, appFolders, matches, trimmedQuery, chipMatches, lifted]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
@@ -433,12 +434,12 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * The section the sidebar shows `chat` in, or null when it isn't shown in one: archived, or an app chat. Code mode
+   * The section the sidebar shows `chat` in, or null when it isn't shown in one: under Needs you, archived, or an app chat. Code mode
    * has no Pinned section and no ordering by hand (a pinned app chat leads its group), so an app chat is in none of
    * Chat mode's sections and its menu offers no Move up / Move down (spec 2026-10-20-code-tab-design, Goal 1).
    */
   function sectionOf(chat: Chat): Section | null {
-    if (chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
+    if (lifted.has(chat.id) || chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
     if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
     for (const group of allGroups(sidebar)) {
       const projectId = group.project?.id ?? null;
@@ -944,9 +945,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     }
   }
 
-  /** A reply ready in a chat the user is reading isn't news: useMarkRead is clearing it. */
   function statusOf(chat: Chat): ChatStatus | null {
-    return chatStatus(reading.has(chat.id) ? { id: chat.id, unread: false } : chat, waiting, working, background);
+    return chatStatus(chat, activity, now);
   }
 
   /** A pinned chat's project, named after its parent when it's a sub-project. */
@@ -955,7 +955,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     return project ? projectDisplayName(project, lookup) : undefined;
   }
 
-  /** Every chat shown in a group and its sub-projects, for the heading's status dot. */
+  /** Every chat shown in a group and its sub-projects, for the heading's status. */
   function groupChats(group: SidebarGroup): Chat[] {
     return [...group.pinnedChats, ...group.chats, ...group.children.flatMap(groupChats)];
   }
@@ -972,7 +972,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const expanded = searching || expandedGroups.has(group.key);
     const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
     const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
-    const groupStatuses = groupChats(group).map(statusOf);
     return (
       <ProjectGroup
         key={group.key}
@@ -981,8 +980,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         count={group.total}
         empty={group.total === 0 && group.children.length === 0}
         collapsed={!searching && collapsedGroups.has(group.key)}
-        status={groupStatus(groupStatuses)}
-        statusSummary={groupStatusSummary(groupStatuses)}
+        statusSummary={groupStatusSummary(groupChats(group).map(statusOf))}
         dropActive={dropTarget === group.key}
         onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
         onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}
@@ -1040,7 +1038,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const expanded = searching || expandedGroups.has(group.key);
     const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
     const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
-    const statuses = group.chats.map(statusOf);
     return (
       <ProjectGroup
         key={group.key}
@@ -1049,8 +1046,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         count={group.total}
         empty={false}
         collapsed={!searching && collapsedGroups.has(group.key)}
-        status={groupStatus(statuses)}
-        statusSummary={groupStatusSummary(statuses)}
+        statusSummary={groupStatusSummary(group.chats.map(statusOf))}
         dropActive={app !== null && dropTarget === group.key}
         onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
         // Dropping a chat on an app's heading files it there, as Move to app… does; Unknown app takes no drops.
@@ -1137,11 +1133,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /**
    * An app folder in Code mode (plan 2026-10-25-app-folders): a group heading whose list holds its apps' groups, nested
-   * as sub-projects nest in Chat mode. The heading's dot sums every chat in its apps, so a folded folder still shows
-   * that something is replying or waiting.
+   * as sub-projects nest in Chat mode. The heading sums every chat in its apps, so a folded folder still says what's running.
    */
   function renderFolder(entry: CodeSidebarFolder): JSX.Element {
-    const statuses = entry.groups.flatMap((g) => g.chats).map(statusOf);
     return (
       <ProjectGroup
         key={entry.key}
@@ -1152,8 +1146,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         empty={entry.total === 0}
         emptyText="No apps yet"
         collapsed={!searching && collapsedGroups.has(entry.key)}
-        status={groupStatus(statuses)}
-        statusSummary={groupStatusSummary(statuses)}
+        statusSummary={groupStatusSummary(entry.groups.flatMap((g) => g.chats).map(statusOf))}
         dropActive={draggingAppId !== null && folderDrop?.folderId === entry.folder.id}
         onToggle={() => setGroupCollapsed(entry.key, !collapsedGroups.has(entry.key))}
         // A folder holds apps, not chats: a chat goes on an app's heading.
@@ -1215,8 +1208,19 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     };
   }
 
+  /** What a row in the Needs you list is filed under: its project, or its app. */
+  function homeName(chat: Chat): string | undefined {
+    if (chat.appId !== null) return apps.find((a) => a.id === chat.appId)?.name;
+    return chat.projectId ? pinnedProjectName(chat.projectId) : undefined;
+  }
+
+  /** Ticks a chat off: nothing to do here until a newer reply lands. Never before the reply, whatever this device's clock says. */
+  function tickOff(chat: Chat): void {
+    void patchChat(chat, { dealtWithAt: Math.max(Date.now(), chat.head?.createdAt ?? 0) }, 'tick off the chat');
+  }
+
   /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */
-  function renderRow(chat: Chat, section: Section | null, muted = section === null): JSX.Element {
+  function renderRow(chat: Chat, section: Section | null, muted = section === null, listed = false): JSX.Element {
     return (
       <ChatRow
         key={chat.id}
@@ -1251,7 +1255,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
-        projectName={section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
+        projectName={listed ? homeName(chat) : section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
+        needsYou={listed}
+        onTick={listed && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
         now={now}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
@@ -1377,7 +1383,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         )}
         <div className="mt-1.5 flex flex-wrap items-center gap-1" data-testid="chat-filters">
           <button type="button" aria-pressed={statusOnly} onClick={() => setStatusOnly((on) => !on)} className={chipClass(statusOnly)}>
-            Unread / working
+            Needs you / working
           </button>
           {machines && machines.peers.length > 0 && (
             <select
@@ -1406,6 +1412,16 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           <OverviewJumpList />
         ) : (
           <>
+          {needsYou.length > 0 && (
+            <div className="mb-1.5" data-testid="group-needs-you">
+              <h2 className="label-caps flex justify-between px-2 pb-1 text-[var(--warn)]">
+                <span>Needs you</span>
+                <span className="font-normal tabular-nums">{needsYou.length}</span>
+              </h2>
+              <ul>{needsYou.map((c) => renderRow(c, null, false, true))}</ul>
+            </div>
+          )}
+
           {!codeMode && sidebar.pinned.length > 0 && (
             <div className="mb-1.5" data-testid="group-pinned">
               <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>

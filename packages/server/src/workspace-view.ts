@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { classifyPath, MAX_EXTRA_FOLDERS, mergeFolders, parseFolders, resolveWorkspace, sameWorkspace } from '@otherbench/core/domain/workspace.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
+import type { ChatHead } from '@otherbench/core/types/overview.js';
 import type { ExtraFolder, FolderView, Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import type { Container } from './container.js';
 import { optionalWorkspaceRoot } from './validation.js';
@@ -52,15 +53,19 @@ function folderViews(folders: ExtraFolder[] | undefined, resolve: (ws: Workspace
   };
 }
 
-/** A chat as the API shows it: its folder (and extra folders) resolved on the machine it runs on. */
-export function chatView(container: Container, chat: Chat, resolve = workspaceResolver(container)): Chat {
+/**
+ * A chat as the API shows it: its folder (and extra folders) resolved on the machine it runs on, and the message at
+ * its tip. `head` is that message when the caller already has it, as `chatViews` does for a whole list.
+ */
+export function chatView(container: Container, chat: Chat, resolve = workspaceResolver(container), head = container.store.messages.heads(chat.id)[0] ?? null): Chat {
   const status = resolve(chat.workspace, chat.runsOn);
-  return { ...chat, workspaceRoot: viewRoot(status), workspaceStatus: status, ...folderViews(chat.folders, resolve, chat.runsOn) };
+  return { ...chat, head, workspaceRoot: viewRoot(status), workspaceStatus: status, ...folderViews(chat.folders, resolve, chat.runsOn) };
 }
 
 export function chatViews(container: Container, chats: Chat[]): Chat[] {
   const resolve = workspaceResolver(container);
-  return chats.map((chat) => chatView(container, chat, resolve));
+  const heads = new Map<string, ChatHead>(container.store.messages.heads().map((h) => [h.chatId, h]));
+  return chats.map((chat) => chatView(container, chat, resolve, heads.get(chat.id) ?? null));
 }
 
 export function projectView(container: Container, project: Project, resolve = workspaceResolver(container)): Project {

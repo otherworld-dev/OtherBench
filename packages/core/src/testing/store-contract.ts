@@ -765,6 +765,19 @@ export function runStoreContract(
         ]);
       });
 
+      it('narrows to one chat when given its id, and gives nothing for an archived one', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'user', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        expect(store.messages.heads('chat-b')).toEqual([{ chatId: 'chat-b', role: 'user', status: 'complete', createdAt: 20 }]);
+        store.chats.update('chat-b', { archivedAt: 30 });
+        expect(store.messages.heads('chat-b')).toEqual([]);
+      });
+
       it('follows a user head to the completed reply below it', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

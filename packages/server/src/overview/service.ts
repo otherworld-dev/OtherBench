@@ -18,6 +18,8 @@ export interface OverviewMachine {
   reachable: boolean;
   /** Its chats waiting on an approval card or a question; empty while it isn't reachable. */
   waitingChatIds: string[];
+  /** Its chats with background tasks running; empty while it isn't reachable. */
+  backgroundChatIds: string[];
   /** Its `gh` login; null if none, unknown, or while it isn't reachable. */
   githubLogin: string | null;
 }
@@ -29,6 +31,8 @@ export interface OverviewDeps {
   nextcloud: () => Promise<NextcloudClient | null>;
   /** This machine's chats waiting on an approval card or a question. */
   waitingChatIds: () => string[];
+  /** This machine's chats with background tasks running. */
+  backgroundChatIds: () => string[];
   machines: () => OverviewMachine[];
   emit: (e: AppEvent) => void;
   /** Called when a check finds a different `gh` login (including none). */
@@ -109,6 +113,7 @@ export class OverviewService {
     const chats = this.store.chats.list();
     const machines = this.deps.machines();
     const waiting = new Set([...this.deps.waitingChatIds(), ...machines.flatMap((m) => m.waitingChatIds)]);
+    const background = new Set([...this.deps.backgroundChatIds(), ...machines.flatMap((m) => m.backgroundChatIds)]);
     const me = this.login;
     const notifications =
       this.inbox === null && this.inboxError === null ? null : { list: this.inbox?.list ?? [], more: this.inbox?.more ?? false, error: this.inboxError };
@@ -118,6 +123,7 @@ export class OverviewService {
       projects: this.store.projects.list().map((p) => ({ id: p.id, name: p.name })),
       heads: this.store.messages.heads(),
       waitingChatIds: waiting,
+      backgroundChatIds: background,
       me,
       notifications,
       decks: this.decks,
@@ -164,12 +170,13 @@ export class OverviewService {
     const now = this.now();
     const machines = this.deps.machines();
     const waiting = new Set([...this.deps.waitingChatIds(), ...machines.flatMap((m) => m.waitingChatIds)]);
+    const background = new Set([...this.deps.backgroundChatIds(), ...machines.flatMap((m) => m.backgroundChatIds)]);
     const heads = new Map(this.store.messages.heads().map((h) => [h.chatId, h]));
     let chats = 0;
     for (const chat of this.store.chats.list()) {
       if (waiting.has(chat.id)) continue;
       const head = heads.get(chat.id) ?? null;
-      if (!head || head.createdAt >= before || !chatNeedsYou(chat, head, false, now - CHAT_NEED_WINDOW_MS)) continue;
+      if (!head || head.createdAt >= before || !chatNeedsYou(chat, head, false, now - CHAT_NEED_WINDOW_MS, background.has(chat.id))) continue;
       this.store.chats.update(chat.id, { dealtWithAt: now });
       chats++;
     }

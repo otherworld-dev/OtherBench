@@ -167,9 +167,12 @@ of work landed after that plan closed out:
   by recent activity, under Today / Previous 7 days / Previous 30 days /
   Older headings (its menu's sort item; No project starts that way), where
   rows don't reorder. Each group shows 10 chats, then "Show N more"; every
-  row shows its age ("3h", "2w"). Search matches titles and message text
+  row shows its age ("3h", "2w"), or a word for what it's doing. Chats stopped
+  on the user sit in a Needs you list at the top, from either mode, by the
+  Overview's `chatNeedsYou` rule: opening one leaves it there, and replying or
+  ticking it off clears it. Search matches titles and message text
   (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
-  keep only chats with a status dot, or that run on one machine (shown only
+  keep only chats with a status, or that run on one machine (shown only
   with a peer paired). Projects reorder by dragging a heading's name onto the
   top or bottom half of a sibling's heading (top-level with top-level, a
   parent's sub-projects with each other; `placeProjectPatches`), or with Move

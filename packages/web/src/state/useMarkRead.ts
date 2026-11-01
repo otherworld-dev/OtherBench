@@ -7,8 +7,8 @@ import { useOtherBenchStore } from './store.js';
  * Marks read every unread chat the user is reading (on screen, window
  * focused): when it's opened, when a reply finishes while it's showing, and
  * when the window comes back to the front. Here first, before the browser
- * paints, so its sidebar dot doesn't flash; then on the server, which tells
- * the other windows. A failed PATCH is only logged: the server still has the
+ * paints; then on the server, which tells the other windows. Read isn't the
+ * same as dealt with: the sidebar's Needs you list goes by `chatNeedsYou`. A failed PATCH is only logged: the server still has the
  * chat unread, and says so the next time the chat changes.
  */
 export function useMarkRead(narrow: boolean): void {

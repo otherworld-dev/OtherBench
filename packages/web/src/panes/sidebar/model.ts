@@ -73,6 +73,8 @@ export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder |
 /** A `recent` group's order: last activity first; id breaks ties so the order is stable. */
 const byRecent = (a: Chat, b: Chat): number => byActivity(a, b) || byId(a, b);
 
+const NOT_LIFTED: ReadonlySet<string> = new Set();
+
 /** How many of a group's (unpinned-in-project) chats show before its "Show N more". */
 export const GROUP_ROW_CAP = 10;
 
@@ -144,18 +146,22 @@ export function titleMatches(title: string, query: string): boolean {
  * app isn't loaded stays out too, in Code mode's Unknown app group, since it
  * is still an app chat and `modeOfChat` would send it to Code mode anyway.
  * While searching, the matching ones come back in `otherMode` only.
+ *
+ * `lifted` chats are shown in the Needs you list instead, so no list here has
+ * them, but they still count towards their group.
  */
 export function buildSidebar(
   chats: Chat[],
   projects: Project[],
   matches: ReadonlySet<string> | null,
-  sortOf: (key: string) => GroupSort = () => 'manual'
+  sortOf: (key: string) => GroupSort = () => 'manual',
+  lifted: ReadonlySet<string> = NOT_LIFTED
 ): SidebarModel {
   const own = chats.filter((c) => c.appId === null);
   const live = own.filter((c) => c.archivedAt === null);
   const known = new Set(projects.map((p) => p.id));
   const keyOf = (c: Chat): string => (c.projectId !== null && known.has(c.projectId) ? c.projectId : NO_PROJECT_KEY);
-  const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
+  const shown = (c: Chat): boolean => (matches === null || matches.has(c.id)) && !lifted.has(c.id);
 
   const ordered = [...projects].sort(compareProjects);
   const lookup = projectLookup(projects);
@@ -246,14 +252,14 @@ export interface CodeSidebarModel {
  * Apps sit in folders (plan 2026-10-25-app-folders): `folders` holds each loaded folder with its apps' groups, and
  * `groups` the top-level ones. While searching, a folder whose name matches `query` shows all its apps, each with
  * all its chats, narrowed by the status and machine chips (`chipMatches`: the chats they allow, null with none on); any other folder shows only the app groups with a match and is dropped when it has none. Without a
- * search every folder shows, empty ones too.
+ * search every folder shows, empty ones too. `lifted` chats are left out of every list, still counting, as in `buildSidebar`.
  */
-export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = '', chipMatches: ReadonlySet<string> | null = null): CodeSidebarModel {
+export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = '', chipMatches: ReadonlySet<string> | null = null, lifted: ReadonlySet<string> = NOT_LIFTED): CodeSidebarModel {
   const appChats = chats.filter((c) => c.appId !== null);
   const live = appChats.filter((c) => c.archivedAt === null);
   const known = new Set(apps.map((a) => a.id));
   const keyOf = (c: Chat): string => (c.appId !== null && known.has(c.appId) ? c.appId : UNKNOWN_APP_KEY);
-  const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
+  const shown = (c: Chat): boolean => (matches === null || matches.has(c.id)) && !lifted.has(c.id);
   const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
 
   const chipShown = (c: Chat): boolean => chipMatches === null || chipMatches.has(c.id);

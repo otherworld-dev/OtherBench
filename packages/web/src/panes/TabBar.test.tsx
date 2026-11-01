@@ -116,20 +116,19 @@ describe('TabBar (#824)', () => {
     expect(button).toHaveFocus();
   });
 
-  it('marks a tab replying, or waiting for an approval', () => {
+  it('says in a word what a tab is doing, or what it wants', () => {
     openTabs('a', 'b');
     useOtherBenchStore.setState({ appRunningTurns: { m1: 'a' }, appPendingApprovals: { r1: { chatId: 'b', messageId: 'm2', requestId: 'r1', toolName: 'Write' } } });
     render(<TabBar narrow={false} />);
-    expect(screen.getByTestId('tab-status-a')).toHaveAttribute('data-status', 'working');
-    expect(screen.getByTestId('tab-status-b')).toHaveAttribute('data-status', 'waiting');
+    expect(screen.getByTestId('tab-status-a')).toHaveTextContent('Replying');
+    expect(screen.getByTestId('tab-status-b')).toHaveTextContent('Approve');
   });
 
-  it('marks a tab waiting for you when its reply asks a question', () => {
+  it('says Answer on a tab when its reply asks a question', () => {
     useOtherBenchStore.getState().openTab('a');
     useOtherBenchStore.setState({ appPendingApprovals: { a1: { chatId: 'a', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' } } });
     render(<TabBar narrow={false} />);
-    expect(screen.getByTestId('tab-status-a')).toHaveAttribute('data-status', 'waiting');
-    expect(screen.getByRole('img', { name: 'waiting for you' })).toBeInTheDocument();
+    expect(screen.getByTestId('tab-status-a')).toHaveTextContent('Answer');
   });
 
   it('a chat dragged from the sidebar onto a tab opens as a tab there; a dragged tab moves', () => {
@@ -178,7 +177,7 @@ describe('TabBar (#824)', () => {
     expect(screen.queryByRole('tab', { name: /Missing project/ })).toBeNull();
   });
 
-  it('labels a project tab with the project name, or Missing project, with no status dot', () => {
+  it('labels a project tab with the project name, or Missing project, with no status', () => {
     useOtherBenchStore.getState().setProjects([{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
     useOtherBenchStore.setState({
       paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1'), projectTabId('gone')], panes: [projectTabId('p1')] },

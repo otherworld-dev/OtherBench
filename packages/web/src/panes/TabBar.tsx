@@ -2,8 +2,9 @@ import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
-import { StatusDot } from '../components/StatusDot.js';
-import { useChatActivity } from '../state/chatStatus.js';
+import { StatusWord } from '../components/StatusWord.js';
+import { useNow } from '../lib/useNow.js';
+import { chatStatus, useChatActivity } from '../state/chatStatus.js';
 import { parseAppTab } from '../state/appTab.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
@@ -42,8 +43,8 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  * ("Open in new tab", or dragging a chat here), from any project, plus the
  * layout picker. A tab shows its chat in the focused pane, or focuses the
  * pane already showing it; in a multi-pane layout each visible tab is
- * numbered with its pane, and one in a pinned pane has a pin. ✕ only closes the tab. A dot marks a chat that is
- * replying or waiting for an approval, a question or a plan. Shown even with no tabs, as it holds
+ * numbered with its pane, and one in a pinned pane has a pin. ✕ only closes the tab. A word says what a chat
+ * wants or is doing, as its sidebar row does. Shown even with no tabs, as it holds
  * the layout picker and is where a chat is dragged to become a tab; hidden only on a narrow
  * screen with no tabs, where there is no picker.
  */
@@ -55,7 +56,8 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const appsLoaded = useOtherBenchStore((s) => s.appsLoaded);
   const paneState = useOtherBenchStore((s) => s.paneState);
   const activeChatId = useOtherBenchStore((s) => s.activeChatId);
-  const { waiting, working, background } = useChatActivity();
+  const activity = useChatActivity();
+  const now = useNow(60_000);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const openTab = useOtherBenchStore((s) => s.openTab);
   const closeTab = useOtherBenchStore((s) => s.closeTab);
@@ -141,8 +143,9 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         {tabs.map((t, index) => {
           const pane = paneOf(t.id);
           const active = t.id === activeChatId;
-          // Only a chat has a reply to wait on; a viewer or project tab never shows a dot.
-          const status = !isChatTab(t.id) ? null : waiting.has(t.id) ? 'waiting' : working.has(t.id) ? 'working' : background.has(t.id) ? 'background' : null;
+          // Only a chat has a reply to wait on; a viewer or project tab never shows a word.
+          const chat = isChatTab(t.id) ? chats.find((c) => c.id === t.id) : undefined;
+          const status = chat ? chatStatus(chat, activity, now) : null;
           return (
             <div
               key={t.id}
@@ -174,7 +177,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                 title={t.title}
                 className={`flex min-w-0 items-center gap-1.5 py-1 pl-2.5 pr-1 text-xs ${active ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
               >
-                {status && <StatusDot status={status} testId={`tab-status-${t.id}`} />}
+                {status && <StatusWord status={status} testId={`tab-status-${t.id}`} />}
                 {paneState.pinned.some((i) => paneState.panes[i] === t.id) && (
                   <span data-testid={`tab-pinned-${t.id}`} className="shrink-0" title="Pinned">
                     <PinIcon filled className="h-3 w-3" />

@@ -1176,7 +1176,7 @@ class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
   constructor(private readonly selfNodeId: string, private readonly chats: ChatRepo) {}
 
-  heads(): ChatHead[] {
+  heads(chatId?: string): ChatHead[] {
     const children = new Map<string, CanonMessage[]>();
     for (const m of this.byId.values()) {
       if (m.parentId === null) continue;
@@ -1186,6 +1186,7 @@ class InMemoryMessageRepo implements MessageRepo {
     }
     const heads: ChatHead[] = [];
     for (const c of this.chats.list()) {
+      if (chatId !== undefined && c.id !== chatId) continue;
       const head = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
       if (!head) continue;
       // The tip: the newest message (then the largest id) at or below the head.

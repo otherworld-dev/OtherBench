@@ -87,6 +87,7 @@ function service(over: Partial<OverviewDeps> = {}): OverviewService {
     github: () => gh,
     nextcloud: async () => nc,
     waitingChatIds: () => waiting,
+    backgroundChatIds: () => [],
     machines: () => machines,
     emit: (e) => events.push(e),
     onLoginChanged: () => loginChanges++,
@@ -277,11 +278,11 @@ describe('OverviewService machines', () => {
     chat('c-remote', null, 'user', NOW - HOUR, { runsOn: 'n-desk' });
     chat('c-archived', null, 'user', NOW - HOUR, { runsOn: 'n-old', archivedAt: NOW - DAY });
     machines = [
-      { nodeId: 'n-laptop', name: 'Laptop', reachable: false, waitingChatIds: [], githubLogin: null },
-      { nodeId: 'n-desk', name: 'Desk', reachable: true, waitingChatIds: ['c-remote'], githubLogin: 'someone-else' },
-      { nodeId: 'n-old', name: 'Old', reachable: false, waitingChatIds: [], githubLogin: null },
-      { nodeId: 'n-idle', name: 'Idle', reachable: false, waitingChatIds: [], githubLogin: null },
-      { nodeId: 'n-same', name: 'Same', reachable: true, waitingChatIds: [], githubLogin: 'adam' },
+      { nodeId: 'n-laptop', name: 'Laptop', reachable: false, waitingChatIds: [], backgroundChatIds: [], githubLogin: null },
+      { nodeId: 'n-desk', name: 'Desk', reachable: true, waitingChatIds: ['c-remote'], backgroundChatIds: [], githubLogin: 'someone-else' },
+      { nodeId: 'n-old', name: 'Old', reachable: false, waitingChatIds: [], backgroundChatIds: [], githubLogin: null },
+      { nodeId: 'n-idle', name: 'Idle', reachable: false, waitingChatIds: [], backgroundChatIds: [], githubLogin: null },
+      { nodeId: 'n-same', name: 'Same', reachable: true, waitingChatIds: [], backgroundChatIds: [], githubLogin: 'adam' },
     ];
     const svc = service();
     await svc.refresh();
@@ -289,6 +290,15 @@ describe('OverviewService machines', () => {
     expect(v.unreachableMachines).toEqual(['Laptop']);
     expect(v.loginMismatches).toEqual([{ machine: 'Desk', login: 'someone-else' }]);
     expect(tileOf(svc, 'chats').chats).toEqual([expect.objectContaining({ chatId: 'c-remote', waiting: true })]);
+  });
+
+  it('leaves a finished chat out while its background tasks run, here or on a paired machine', () => {
+    chat('c-here', null, 'assistant', NOW - HOUR);
+    chat('c-away', null, 'assistant', NOW - HOUR);
+    chat('c-done', null, 'assistant', NOW - HOUR);
+    machines = [{ nodeId: 'n-desk', name: 'Desk', reachable: true, waitingChatIds: [], backgroundChatIds: ['c-away'], githubLogin: null }];
+    const svc = service({ backgroundChatIds: () => ['c-here'] });
+    expect(tileOf(svc, 'chats').chats.map((c) => c.chatId)).toEqual(['c-done']);
   });
 
   it('local waiting chats count as waiting', () => {

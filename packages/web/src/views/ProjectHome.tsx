@@ -4,11 +4,12 @@ import { compareProjects, projectLookup, projectParentOf } from '@otherbench/cor
 import type { Project } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { StartBox } from '../components/StartBox.js';
-import { StatusDot } from '../components/StatusDot.js';
+import { StatusWord } from '../components/StatusWord.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { allGroups, buildSidebar } from '../panes/sidebar/model.js';
-import { chatStatus, useChatActivity } from '../state/chatStatus.js';
+import { useNow } from '../lib/useNow.js';
+import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
@@ -122,7 +123,8 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
-  const { waiting, working, background } = useChatActivity();
+  const activity = useChatActivity();
+  const now = useNow(60_000);
   // The sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
     const group = allGroups(buildSidebar(chats, projects, null)).find((g) => g.key === projectId);
@@ -137,15 +139,15 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
       ) : (
         <ul className="space-y-0.5">
           {listed.map((c) => {
-            const status = chatStatus(c, waiting, working, background);
+            const status = chatStatus(c, activity, now);
             return (
               <li key={c.id} data-chat-id={c.id} className="flex items-center rounded-sm hover:bg-[var(--bg-sunken)]">
                 <button type="button" onClick={() => setActiveChatId(c.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
-                  <span className={`min-w-0 flex-1 truncate ${status === 'ready' ? 'font-medium' : ''}`}>{c.title}</span>
+                  <span className={`min-w-0 flex-1 truncate ${isNeedsYou(status) ? 'font-medium' : ''}`}>{c.title}</span>
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>
                 {/* Beside the button, not in it, so a screen reader reads the status (as in ChatRow). */}
-                {status && <StatusDot status={status} testId={`home-chat-status-${c.id}`} className="mx-2" />}
+                {status && <StatusWord status={status} testId={`home-chat-status-${c.id}`} className="mx-2" />}
               </li>
             );
           })}

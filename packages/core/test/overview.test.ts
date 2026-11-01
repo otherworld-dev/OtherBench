@@ -57,6 +57,10 @@ describe('chatNeedsYou', () => {
     expect(chatNeedsYou(open, head('streaming'), false, 0)).toBe(false);
     expect(chatNeedsYou(open, head('cancelled'), false, 0)).toBe(false);
   });
+  it('a chat still busy does not, unless it is waiting on them', () => {
+    expect(chatNeedsYou(open, head('complete'), false, 0, true)).toBe(false);
+    expect(chatNeedsYou(open, head('complete'), true, 0, true)).toBe(true);
+  });
   it('dealtWithAt after the head settles it, before does not', () => {
     expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 150 }, head('complete'), false, 0)).toBe(false);
     expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 50 }, head('complete'), false, 0)).toBe(true);
@@ -91,7 +95,7 @@ function note(id: string, repo: string, unread: boolean, day: number): GithubNot
 }
 function input(over: Partial<OverviewInput>): OverviewInput {
   return {
-    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), me: 'me', notifications: null, decks: {},
+    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), backgroundChatIds: new Set(), me: 'me', notifications: null, decks: {},
     checkedAt: null, checking: false, loginMismatches: [], unreachableMachines: [], now, ...over,
   };
 }
@@ -123,6 +127,14 @@ describe('buildOverview', () => {
     }));
     expect(o.tiles[0]?.chats.map((x) => x.chatId)).toEqual(['3', '2', '1']);
     expect(o.tiles[0]?.chats[0]).toMatchObject({ waiting: true, projectName: 'Proj' });
+  });
+  it('leaves out a finished chat whose background tasks are still running, until it waits on the user', () => {
+    const o = buildOverview(input({
+      chats: [chat('1', null), chat('2', null), chat('3', null)],
+      heads: [done('1', recent(10)), done('2', recent(20)), done('3', recent(30))],
+      waitingChatIds: new Set(['3']), backgroundChatIds: new Set(['1', '3']),
+    }));
+    expect(o.tiles[0]?.chats.map((x) => x.chatId)).toEqual(['3', '2']);
   });
   it('leaves out replies older than the chat window, but not waiting chats', () => {
     const old = now.getTime() - CHAT_NEED_WINDOW_MS - 1;

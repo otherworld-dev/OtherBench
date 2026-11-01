@@ -51,47 +51,51 @@ describe('ChatRow', () => {
     expect(screen.queryByTestId('row-age')).toBeNull();
   });
 
-  it('marks a reply ready in bold with a dot, announced beside the button; no status, no dot', () => {
-    renderRow({ status: 'ready' });
-    const dot = screen.getByRole('img', { name: 'reply ready' });
-    expect(dot).toHaveAttribute('data-status', 'ready');
-    expect(dot.closest('button')).toBeNull();
-    expect(screen.getByText('Notes')).toHaveClass('font-medium');
+  it('says the status in a word beside the button, in place of the age; no status, no word', () => {
+    renderRow({ status: 'approve', now: 1 + 3 * 3_600_000 });
+    const word = screen.getByTestId('chat-status-chat-1');
+    expect(word).toHaveTextContent('Approve');
+    expect(word).toHaveAttribute('data-status', 'approve');
+    expect(word.closest('button')).toBeNull();
+    expect(screen.queryByTestId('row-age')).toBeNull();
     // The row's name stays the title.
     expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
     cleanup();
 
     renderRow();
     expect(screen.queryByTestId('chat-status-chat-1')).toBeNull();
-    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
   });
 
-  it('marks a chat replying, or waiting for an approval, with the same dots as its tab', () => {
-    renderRow({ status: 'working' });
-    expect(screen.getByRole('img', { name: 'replying' })).toHaveAttribute('data-status', 'working');
-    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
-    cleanup();
-
-    renderRow({ status: 'waiting' });
-    expect(screen.getByRole('img', { name: 'waiting for you' })).toHaveAttribute('data-status', 'waiting');
-    cleanup();
-
-    renderRow({ status: 'background' });
-    expect(screen.getByRole('img', { name: 'working in the background' })).toHaveAttribute('data-status', 'background');
-    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
-  });
-
-  it('says what each dot means on hover', () => {
-    for (const [status, title] of [
-      ['ready', "Reply ready: you haven't opened it since"],
+  it('has a word for every status', () => {
+    for (const [status, word] of [
+      ['approve', 'Approve'],
+      ['answer', 'Answer'],
+      ['plan', 'Review plan'],
+      ['generate', 'Generate'],
+      ['browser', 'Browser'],
+      ['waiting', 'Waiting'],
+      ['failed', 'Failed'],
+      ['your-turn', 'Your turn'],
       ['working', 'Replying'],
-      ['waiting', 'Waiting for you: an approval, question or plan'],
-      ['background', 'Working in the background: no reply running, but its tasks are'],
+      ['background', 'Background'],
     ] as const) {
       renderRow({ status });
-      expect(screen.getByTestId('chat-status-chat-1')).toHaveAttribute('title', title);
+      expect(screen.getByTestId('chat-status-chat-1')).toHaveTextContent(word);
       cleanup();
     }
+  });
+
+  it('a row needing you is bold, can be ticked off, and stays put when dragged', async () => {
+    const onTick = vi.fn();
+    renderRow({ status: 'your-turn', needsYou: true, onTick });
+    expect(screen.getByText('Notes')).toHaveClass('font-medium');
+    expect(screen.getByRole('button', { name: 'Notes' })).toHaveAttribute('draggable', 'false');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Nothing to do here' }));
+    expect(onTick).toHaveBeenCalled();
+    cleanup();
+
+    renderRow({ status: 'approve', needsYou: true });
+    expect(screen.queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
   });
 
   it('selects on click and marks the active row', async () => {

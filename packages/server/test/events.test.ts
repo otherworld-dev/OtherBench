@@ -227,16 +227,22 @@ describe('app-wide events', () => {
     expect(container.store.chats.get('stopped')!.unread).toBe(false);
   });
 
-  it('a chat already unread, or gone, is left alone when another reply finishes', () => {
+  it('a chat already unread is still announced when another reply finishes, so every window sees the new reply', () => {
     build(new FakeChatEngine([FINISH]));
     container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     events.emit({ type: 'turn-finished', chatId: 'chat-1', messageId: 'm1', status: 'complete' });
     seen.length = 0;
 
     events.emit({ type: 'turn-finished', chatId: 'chat-1', messageId: 'm2', status: 'complete' });
-    events.emit({ type: 'turn-finished', chatId: 'deleted', messageId: 'm3', status: 'complete' });
 
-    expect(seen.map((e) => e.type)).toEqual(['turn-finished', 'turn-finished']);
+    expect(seen.map((e) => e.type).sort()).toEqual(['chat-updated', 'turn-finished']);
+  });
+
+  it('a chat that is gone is left alone when a reply finishes', () => {
+    build(new FakeChatEngine([FINISH]));
+    seen.length = 0;
+    events.emit({ type: 'turn-finished', chatId: 'deleted', messageId: 'm3', status: 'complete' });
+    expect(seen.map((e) => e.type)).toEqual(['turn-finished']);
   });
 
   it('a question emits approval-requested with kind question, the hello lists it, and the turn finishing clears it', async () => {
