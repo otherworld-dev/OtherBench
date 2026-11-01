@@ -167,7 +167,7 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
 /** How the viewer shows a file (Deck #826); the server decides. */
 export type ViewKind = 'image' | 'video' | 'pdf' | 'html' | 'markdown' | 'text' | 'other';
 /** A file opened for the viewer: `url` is a short-lived `/view/` link for what the browser loads itself, else null. */
-export interface ViewOpened { path: string; name: string; kind: ViewKind; url: string | null; size: number }
+export interface ViewOpened { path: string; name: string; kind: ViewKind; url: string | null; size: number; /** This link lets the page save files. */ downloads?: boolean }
 
 /** One artifact in a chat's list (Deck #896): its current version on the branch the chat shows. */
 export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user';
@@ -943,8 +943,8 @@ export const api = {
     },
   },
   view: {
-    open: (chatId: string, path: string) => post<ViewOpened>('/view/links', { chatId, path }),
-    openArtifact: (chatId: string, artifactVersionId: string) => post<ViewOpened>('/view/links', { chatId, artifactVersionId }),
+    open: (chatId: string, path: string, downloads?: boolean) => post<ViewOpened>('/view/links', { chatId, path, ...(downloads ? { downloads } : {}) }),
+    openArtifact: (chatId: string, artifactVersionId: string, downloads?: boolean) => post<ViewOpened>('/view/links', { chatId, artifactVersionId, ...(downloads ? { downloads } : {}) }),
     text: (chatId: string, path: string) => request<ViewText>(`/view/text?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
     roots: (chatId: string) => request<{ roots: ViewRoot[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}`),
     dir: (chatId: string, path: string) => request<{ path: string; entries: ViewEntry[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),

@@ -76,12 +76,49 @@ describe('ArtifactView', () => {
   it("shows the branch's current version in the sandbox, and switches versions, other branches included", async () => {
     render(<ArtifactView chatId="c1" item={item} />);
     const frame = await screen.findByTitle('calc.html');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
     expect(frame).toHaveAttribute('src', '/view/x-v2/calc.html');
     const picker = screen.getByRole('combobox', { name: 'Version' });
     expect(screen.getByRole('option', { name: 'v3 (other branch)' })).toBeInTheDocument();
     await userEvent.setup().selectOptions(picker, 'v1');
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+  });
+
+  it('lets a page save files only once asked, on a fresh link, and asks again for another version', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.view.openArtifact).mockImplementation(async (_c, id, downloads) => ({ path: '', name: 'calc.html', kind: 'html', url: `/view/${downloads ? 'save' : 'x'}-${id}/calc.html`, size: 1, downloads: downloads === true }));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    const allow = screen.getByRole('button', { name: 'Let this page save files' });
+    expect(allow).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(allow);
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/save-v2/calc.html'));
+    expect(screen.getByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
+    expect(api.view.openArtifact).toHaveBeenLastCalledWith('c1', 'v2', true);
+    expect(screen.getByRole('button', { name: 'Let this page save files' })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+    expect(screen.getByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    expect(screen.getByRole('button', { name: 'Let this page save files' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('takes the permission back, and a failure keeps the page and says why', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.view.openArtifact).mockImplementation(async (_c, id, downloads) => ({ path: '', name: 'calc.html', kind: 'html', url: `/view/${downloads ? 'save' : 'x'}-${id}/calc.html`, size: 1, downloads: downloads === true }));
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await user.click(screen.getByRole('button', { name: 'Let this page save files' }));
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/save-v2/calc.html'));
+    await user.click(screen.getByRole('button', { name: 'Let this page save files' }));
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v2/calc.html'));
+    expect(screen.getByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+
+    vi.mocked(api.view.openArtifact).mockRejectedValueOnce(new ApiError(500, 'Nope.'));
+    await user.click(screen.getByRole('button', { name: 'Let this page save files' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nope.');
+    expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v2/calc.html');
   });
 
   it("follows the branch when no version is pinned: a new head reloads it, in the panel or a popped-out tab", async () => {
@@ -390,6 +427,7 @@ describe('ArtifactView live pages (spec 2026-10-12-live-artifacts)', () => {
   it('gets no downloads, unlike a plain page', async () => {
     render(<ArtifactView chatId="c1" item={item} />);
     expect(await screen.findByTitle('calc.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    expect(screen.queryByRole('button', { name: 'Let this page save files' })).toBeNull();
   });
 
   it('Allow calls the API, then reloads the frame on a fresh link and shows the strip', async () => {

@@ -56,12 +56,12 @@ test('the model makes a page; it opens sandboxed, takes an edit, and saves to th
   await expect(viewer.frameLocator('iframe[title="page.html"]').locator('#h')).toHaveText('Edited');
 
   await viewer.getByRole('button', { name: 'Save to workspace' }).click();
-  await viewer.getByRole('button', { name: 'Save file' }).click();
+  await viewer.getByRole('button', { name: 'Save file', exact: true }).click();
   await expect(viewer.getByRole('status')).toContainText('Saved to');
   expect(readFileSync(join(ws, 'page.html'), 'utf8')).toContain('Edited');
 });
 
-test('a page in the sandbox can save a file it makes itself', async ({ page, request }) => {
+test("a page can't save a file until you let it, and then only that version can", async ({ page, request }) => {
   const title = await mockChat(request);
   await page.goto('/');
   await page.getByRole('button', { name: title }).click();
@@ -85,11 +85,29 @@ document.getElementById('dl').onclick = () => {
   );
   await viewer.getByRole('button', { name: 'Save', exact: true }).click();
 
+  let downloads = 0;
+  page.on('download', () => (downloads += 1));
+  const frame = viewer.frameLocator('iframe[title="page.html"]');
+  await frame.locator('#dl').click();
+  // A negative check needs a moment for a download that should not happen.
+  await page.waitForTimeout(500);
+  expect(downloads).toBe(0);
+
+  const allow = viewer.getByRole('button', { name: 'Let this page save files' });
+  await allow.click();
+  await expect(allow).toHaveAttribute('aria-pressed', 'true');
   const download = page.waitForEvent('download', { timeout: 5_000 });
-  await viewer.frameLocator('iframe[title="page.html"]').locator('#dl').click();
+  await frame.locator('#dl').click();
   const saved = await download;
   expect(saved.suggestedFilename()).toBe('notes.doc');
   expect(readFileSync(await saved.path(), 'utf8')).toBe('hello');
+
+  // A new version is a new page: it has to be let again.
+  await viewer.getByRole('button', { name: 'Edit' }).click();
+  await viewer.getByRole('textbox', { name: 'Artifact source' }).fill('<!doctype html><h1 id="h">Edited</h1>');
+  await viewer.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(frame.locator('#h')).toHaveText('Edited');
+  await expect(allow).toHaveAttribute('aria-pressed', 'false');
 });
 
 test("an open viewer lists the page as the reply makes it, and opens it following the branch", async ({ page, request }) => {

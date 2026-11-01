@@ -30,6 +30,8 @@ export type ViewLink =
        * anywhere, and on a network another machine could use it.
        */
       client?: string;
+      /** The person let this page save files: the sandbox gets allow-downloads. Only ever set for an HTML page. */
+      downloads?: boolean;
     }
   | {
       chatId: string;
@@ -38,6 +40,8 @@ export type ViewLink =
       expiresAt: number;
       /** As on the file member: the client address that made the link (sign-in mode). */
       client?: string;
+      /** As on the file member, and never set for a live page or a diagram. */
+      downloads?: boolean;
     };
 
 /** A link to make: everything but its expiry. */

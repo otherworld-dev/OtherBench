@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened, type ViewText } from '../state/api.js';
@@ -73,6 +73,11 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
   const [source, setSource] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const openedAt = useRef(0);
+  // The file on screen now: a link asked for another one must not land on it.
+  const pathRef = useRef(path);
+  useLayoutEffect(() => {
+    pathRef.current = path;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +98,17 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
   if (error) return <p role="alert" className="p-3 text-sm text-[var(--danger)]">{error}</p>;
   if (!opened) return <p className="p-3 text-sm text-[var(--text-faint)]">Opening…</p>;
 
+  /** Let this page save files, or take it back: a fresh link in a new frame, which the sandbox needs. The page starts again. */
+  async function toggleDownloads(): Promise<void> {
+    const asked = path;
+    try {
+      const o = await api.view.open(chatId, asked, opened?.downloads !== true);
+      if (pathRef.current === asked) setOpened(o);
+    } catch (err) {
+      if (pathRef.current === asked) setError(failure(err));
+    }
+  }
+
   const src = opened.url ? serverUrl(opened.url) : '';
   const canToggle = opened.kind === 'markdown' || opened.kind === 'html';
   // Markdown formatted, or its source; text always as code; anything else
@@ -106,7 +122,7 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
     body = source ? (
       <TextBody chatId={chatId} opened={opened} as="code" />
     ) : (
-      <iframe title={opened.name} src={src} sandbox="allow-scripts allow-forms allow-downloads" referrerPolicy="no-referrer" className="h-full w-full border-0 bg-white" />
+      <iframe key={src} title={opened.name} src={src} sandbox={opened.downloads ? 'allow-scripts allow-forms allow-downloads' : 'allow-scripts allow-forms'} referrerPolicy="no-referrer" className="h-full w-full border-0 bg-white" />
     );
   } else if (opened.kind === 'image') {
     body = (
@@ -136,6 +152,11 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
         <span className="min-w-0 flex-1 truncate font-mono" title={opened.path}>
           {opened.name}
         </span>
+        {opened.kind === 'html' && !source && (
+          <button type="button" aria-pressed={opened.downloads === true} title="Reloads the page. While this is on, the page can save files to your Downloads folder without asking." onClick={() => void toggleDownloads()} className={TOGGLE}>
+            Let this page save files
+          </button>
+        )}
         {canToggle && (
           <button type="button" aria-pressed={source} onClick={() => setSource((s) => !s)} className={TOGGLE}>
             Source

@@ -55,7 +55,7 @@ describe('GET /view/<id>/', () => {
     expect(page.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(page.headers.get('Content-Security-Policy')).toBe(
-      `sandbox allow-scripts allow-forms allow-downloads; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:; form-action https:`
+      `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:; form-action https:`
     );
 
     const css = await app.request(`/view/${id}/style.css`);
@@ -75,7 +75,7 @@ describe('GET /view/<id>/', () => {
     const res = await app.request(url);
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
-    expect(res.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms allow-downloads;/);
+    expect(res.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms;/);
     const id = url.split('/')[2]!;
     expect((await app.request(`/view/${id}/other.png`)).status).toBe(404);
   });
@@ -188,7 +188,7 @@ describe('GET /view/<id>/', () => {
     const served = await app.request(page.url!);
     expect(await served.text()).toBe('<p>calc</p>');
     expect(served.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-    expect(served.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms allow-downloads;.*form-action https:$/);
+    expect(served.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms;.*form-action https:$/);
 
     const svg = await open(make('s', 'logo', 'svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'));
     expect(svg).toMatchObject({ name: 'logo.svg', kind: 'image' });
@@ -212,6 +212,57 @@ describe('GET /view/<id>/', () => {
     store.chats.delete('c1');
     expect((await app.request(page.url!)).status).toBe(404);
   }, 20_000);
+});
+
+describe('a page allowed to save files', () => {
+  const post = (app: ReturnType<typeof createApp>, body: Record<string, unknown>) =>
+    app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', ...body }) });
+  const opened = async (res: Response) => (await res.json()) as { url: string; downloads: boolean };
+  const policyOf = async (app: ReturnType<typeof createApp>, url: string) => (await app.request(url)).headers.get('Content-Security-Policy');
+
+  it('can only save files when its link asked to, for a file or a plain artifact', async () => {
+    writeFileSync(join(ws, 'page.html'), '<p>hi</p>');
+    const store = container.store;
+    store.artifacts.create({ id: 'p', chatId: 'c1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'p-v1', artifactId: 'p', title: 'calc', content: '<p>calc</p>', madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2 });
+    const app = createApp(container);
+    for (const target of [{ path: 'page.html' }, { artifactVersionId: 'p-v1' }]) {
+      const plain = await opened(await post(app, target));
+      expect(plain.downloads).toBe(false);
+      expect(await policyOf(app, plain.url)).toMatch(/^sandbox allow-scripts allow-forms;/);
+      const saving = await opened(await post(app, { ...target, downloads: true }));
+      expect(saving.downloads).toBe(true);
+      expect(await policyOf(app, saving.url)).toMatch(/^sandbox allow-scripts allow-forms allow-downloads;/);
+      // The other link is unchanged: the grant is that one link's.
+      expect(await policyOf(app, plain.url)).toMatch(/^sandbox allow-scripts allow-forms;/);
+    }
+  });
+
+  it("is never granted to a live page, a diagram, an SVG or a file that isn't HTML, and only by true", async () => {
+    writeFileSync(join(ws, 'pic.png'), Buffer.from([0x89, 0x50]));
+    writeFileSync(join(ws, 'page.html'), '<p>hi</p>');
+    const store = container.store;
+    const make = (id: string, kind: 'html' | 'mermaid' | 'svg', content: string, live?: { calls: { id: string; tool: string; args: Record<string, never>; params: Record<string, never> }[] }) => {
+      store.artifacts.create({ id, chatId: 'c1', slug: id, kind, language: null, createdAt: 1 });
+      return store.artifacts.addVersion({ id: `${id}-v1`, artifactId: id, title: id, content, madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2, ...(live ? { live } : {}) }).id;
+    };
+    const app = createApp(container);
+    const refused = [
+      { artifactVersionId: make('l', 'html', '<p>live</p>', { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] }) },
+      { artifactVersionId: make('m', 'mermaid', 'graph TD; A-->B') },
+      { artifactVersionId: make('s', 'svg', '<svg xmlns="http://www.w3.org/2000/svg"/>') },
+      { path: 'pic.png' },
+    ];
+    for (const target of refused) {
+      const link = await opened(await post(app, { ...target, downloads: true }));
+      expect(link.downloads, JSON.stringify(target)).toBe(false);
+      expect(await policyOf(app, link.url), JSON.stringify(target)).not.toContain('allow-downloads');
+    }
+    for (const value of ['true', 1, {}]) {
+      const link = await opened(await post(app, { path: 'page.html', downloads: value }));
+      expect(link.downloads).toBe(false);
+    }
+  });
 });
 
 describe('relativeOf and parseRange', () => {

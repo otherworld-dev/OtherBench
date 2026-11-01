@@ -235,6 +235,19 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     if (loadsRef.current > 1) setLeft(true);
   }
 
+  /** Let this page save files, or take it back: a fresh link in a new frame, which the sandbox needs. The page starts again. */
+  async function toggleDownloads(): Promise<void> {
+    if (!versionId) return;
+    const asked = versionId;
+    setActionError(null);
+    try {
+      const o = await api.view.openArtifact(chatId, asked, opened?.downloads !== true);
+      if (versionRef.current === asked) setOpened(o);
+    } catch (err) {
+      failAction(asked, err);
+    }
+  }
+
   /** A fresh link in a new frame: Reopen, Refresh (`fresh`: skip the server's cache once per call), and after Allow or Stop. */
   async function reloadFrame(fresh: boolean): Promise<void> {
     if (!versionId) return;
@@ -322,8 +335,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
         onLoad={live ? onFrameLoad : undefined}
         title={name}
         src={serverUrl(opened.url)}
-        // Not for a live page, whose policy names only what it needs (view-serve.ts, livePolicy).
-        sandbox={live ? 'allow-scripts allow-forms' : 'allow-scripts allow-forms allow-downloads'}
+        sandbox={opened.downloads ? 'allow-scripts allow-forms allow-downloads' : 'allow-scripts allow-forms'}
         referrerPolicy="no-referrer"
         className="h-full w-full border-0 bg-white"
       />
@@ -345,6 +357,9 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
         </select>
         {kind !== 'code' && draft === null && (
           <button type="button" aria-pressed={source} onClick={() => setSource((s) => !s)} className={BUTTON}>Source</button>
+        )}
+        {kind === 'html' && !live && !source && draft === null && opened?.url && (
+          <button type="button" aria-pressed={opened.downloads === true} title="Reloads the page. While this is on, the page can save files to your Downloads folder without asking." onClick={() => void toggleDownloads()} className={BUTTON}>Let this page save files</button>
         )}
         {draft === null && version && (
           <button type="button" onClick={() => { setActionError(null); setDraft(version.content); }} className={BUTTON}>Edit</button>

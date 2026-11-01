@@ -48,12 +48,33 @@ describe('ItemView', () => {
     vi.mocked(api.view.text).mockResolvedValue({ path: 'C:\\ws\\page.html', content: '<p>hi</p>', truncated: false, size: 9 });
     render(<ItemView chatId="c1" item={item('page.html')} />);
     const frame = await screen.findByTitle('page.html');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
     expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Source' }));
     // highlight.js splits the source into spans, so check the code block's whole text.
     await waitFor(() => expect(document.querySelector('pre code')?.textContent).toBe('<p>hi</p>'));
     expect(screen.queryByTitle('page.html')).toBeNull();
+  });
+
+  it('lets an HTML page save files only once asked, on a fresh link, and takes it back', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.view.open).mockImplementation(async (_c, _p, downloads) => opened({ kind: 'html', name: 'page.html', url: `/view/${downloads ? 'save' : 'h'}/page.html`, downloads: downloads === true }));
+    render(<ItemView chatId="c1" item={item('page.html')} />);
+    await screen.findByTitle('page.html');
+    await user.click(screen.getByRole('button', { name: 'Let this page save files' }));
+    await waitFor(() => expect(screen.getByTitle('page.html')).toHaveAttribute('src', '/view/save/page.html'));
+    expect(screen.getByTitle('page.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
+    expect(api.view.open).toHaveBeenLastCalledWith('c1', 'page.html', true);
+    await user.click(screen.getByRole('button', { name: 'Let this page save files' }));
+    await waitFor(() => expect(screen.getByTitle('page.html')).toHaveAttribute('src', '/view/h/page.html'));
+    expect(screen.getByTitle('page.html')).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+  });
+
+  it('offers no save permission on anything but an HTML page', async () => {
+    vi.mocked(api.view.open).mockResolvedValue(opened({ kind: 'image', name: 'pic.png', url: '/view/x/pic.png' }));
+    render(<ItemView chatId="c1" item={item('pic.png')} />);
+    await screen.findByRole('img', { name: 'pic.png' });
+    expect(screen.queryByRole('button', { name: 'Let this page save files' })).toBeNull();
   });
 
   it('formats Markdown, shows its source, and says when text was cut off', async () => {

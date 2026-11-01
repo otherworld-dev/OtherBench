@@ -1080,9 +1080,12 @@ again on every request, and the link dies as soon as its folder stops being
 the chat's or the chat is deleted. Making a link needs a JSON request, so a
 cross-site form can't. The served type is from a fixed list with `nosniff`;
 everything but PDF gets the sandbox CSP (opaque origin, network https/wss
-only), and HTML iframes are `sandbox="allow-scripts allow-forms allow-downloads"`,
-so a page can save a file it makes (live pages keep their stricter policy and
-get no downloads). PDF is the
+only), and HTML iframes are `sandbox="allow-scripts allow-forms"`. A page can't
+save a file unless the person presses Let this page save files in the viewer,
+which reloads it on a new link with `allow-downloads` on both the CSP and the
+iframe; a new version or a reopen starts without it. It is off by default
+because Chromium lets such a page save a file as it loads, with no click. Live
+pages and Mermaid diagrams can't have it. PDF is the
 exception (Chromium won't show one sandboxed): it can't script the page, but
 it isn't sandboxed either. Websites open in the default browser, never in
 OtherBench: links and the viewer's address box call `openInBrowser`, and

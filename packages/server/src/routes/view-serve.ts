@@ -23,13 +23,15 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
  * `Sec-Fetch-Site: cross-site` and `Origin: null`, which the auth gate and the
  * cross-site check refuse. Forms too: `form-action`
  * doesn't fall back to `default-src`, and without it a page could post a
- * form to OtherBench's API, which takes a text/plain body as JSON. Downloads
- * too, so a page can save what it makes (a Word export, a CSV): it can reach
- * the web already, so a download link adds no new way out. The iframes that
- * hold these pages must say allow-downloads as well; the two sandboxes add up.
+ * form to OtherBench's API, which takes a text/plain body as JSON.
+ *
+ * `downloads`: the person pressed Let this page save files, for this link.
+ * Off by default because Chromium lets a sandboxed page with allow-downloads
+ * save a file as soon as it loads, with no click, so opening a page mustn't
+ * be enough. The iframe must say allow-downloads too; the two sandboxes add up.
  */
-export function sandboxPolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms allow-downloads; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
+export function sandboxPolicy(folderUrl: string, downloads = false): string {
+  return `sandbox allow-scripts allow-forms${downloads ? ' allow-downloads' : ''}; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
 }
 
 /**
@@ -160,7 +162,7 @@ export function viewServeRoutes(
       // its helper; every other version the ordinary sandbox, as before.
       const folder = `${url.origin}/view/${id}/`;
       const live = version.kind === 'html' && version.live !== null;
-      const policy = live ? livePolicy(folder) : sandboxPolicy(folder);
+      const policy = live ? livePolicy(folder) : sandboxPolicy(folder, link.downloads);
       const extra: Record<string, string> = live ? { 'X-DNS-Prefetch-Control': 'off' } : {};
       const send = (body: string | Buffer, mime: string): Response =>
         c.body(typeof body === 'string' ? body : new Uint8Array(body), 200, { ...ALWAYS, ...extra, 'Content-Type': mime, 'Content-Disposition': 'inline', 'Content-Security-Policy': policy });
@@ -221,7 +223,7 @@ export function viewServeRoutes(
       'Accept-Ranges': 'bytes',
       'Content-Length': String(size === 0 ? 0 : end - start + 1),
     };
-    if (type.kind !== 'pdf') headers['Content-Security-Policy'] = sandboxPolicy(`${url.origin}/view/${id}/`);
+    if (type.kind !== 'pdf') headers['Content-Security-Policy'] = sandboxPolicy(`${url.origin}/view/${id}/`, link.downloads);
     if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
     if (size === 0) {
       await handle.close();

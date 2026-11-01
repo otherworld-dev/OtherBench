@@ -89,8 +89,10 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
     if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
       throw new HTTPException(415, { message: 'Send the request as JSON.' });
     }
-    const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown; artifactVersionId?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown; artifactVersionId?: unknown; downloads?: unknown };
     const chat = chatOf(container, body.chatId);
+    // Let this page save files: asked for by the viewer's button, and only an HTML page can have it.
+    const wantsDownloads = body.downloads === true;
     // An artifact version (Deck #896): pages, SVGs and diagrams are served in
     // the sandbox like a file; Markdown and code are shown from their text.
     if (body.artifactVersionId !== undefined) {
@@ -101,8 +103,10 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
       const linked = version.kind === 'html' || version.kind === 'svg' || version.kind === 'mermaid';
       const name = version.kind === 'mermaid' ? 'diagram.html' : versionFileName(artifact, version);
       const kinds: Record<typeof version.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text', document: 'markdown', spreadsheet: 'text', presentation: 'text' };
-      const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id, ...(clientOf ? { client: clientOf(c) } : {}) })}/${encodeURIComponent(name)}` : null;
-      return c.json({ path: '', name, kind: kinds[version.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
+      // Never a live page: its policy stays exactly what it needs (view-serve.ts).
+      const downloads = wantsDownloads && version.kind === 'html' && version.live === null;
+      const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id, ...(clientOf ? { client: clientOf(c) } : {}), ...(downloads ? { downloads } : {}) })}/${encodeURIComponent(name)}` : null;
+      return c.json({ path: '', name, kind: kinds[version.kind], url, size: Buffer.byteLength(version.content, 'utf8'), downloads });
     }
     const path = pathOf(body.path);
     const { root, target } = locateForView(chatRoots(container, chat), path);
@@ -119,8 +123,9 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
     }
     const name = basename(resolved);
     const linked = kind === 'image' || kind === 'video' || kind === 'pdf' || kind === 'html';
-    const url = linked ? `/view/${links.create({ chatId: chat.id, root, target: resolved, scope: kind === 'html' ? 'folder' : 'file', ...(clientOf ? { client: clientOf(c) } : {}) })}/${encodeURIComponent(name)}` : null;
-    return c.json({ path: resolved, name, kind, url, size });
+    const downloads = wantsDownloads && kind === 'html';
+    const url = linked ? `/view/${links.create({ chatId: chat.id, root, target: resolved, scope: kind === 'html' ? 'folder' : 'file', ...(clientOf ? { client: clientOf(c) } : {}), ...(downloads ? { downloads } : {}) })}/${encodeURIComponent(name)}` : null;
+    return c.json({ path: resolved, name, kind, url, size, downloads });
   });
 
   app.get('/text', async (c) => {

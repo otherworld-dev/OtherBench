@@ -50,7 +50,7 @@ describe('POST /api/view/links', () => {
     writeFileSync(join(ws, 'main.ts'), 'export {};');
     writeFileSync(join(ws, 'blob.bin'), Buffer.from([1, 0, 2, 0]));
 
-    expect(await json(await open('notes.md'))).toEqual({ path: join(ws, 'notes.md'), name: 'notes.md', kind: 'markdown', url: null, size: 4 });
+    expect(await json(await open('notes.md'))).toEqual({ path: join(ws, 'notes.md'), name: 'notes.md', kind: 'markdown', url: null, size: 4, downloads: false });
     const pic = await json(await open(join(ws, 'pic.png')));
     expect(pic).toMatchObject({ kind: 'image', name: 'pic.png' });
     expect(pic['url']).toMatch(/^\/view\/[A-Za-z0-9_-]{22}\/pic\.png$/);
