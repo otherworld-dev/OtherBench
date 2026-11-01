@@ -833,6 +833,13 @@ describe('Message sub-agent cards', () => {
       expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent(/^⚠ Used 2 helpers: A, B$/);
     });
 
+    it('says in its summary when a helper was stopped, with a warning when nobody asked for it', () => {
+      const { rerender } = render(<Message message={base({ parts: [helper('h1', 'A', { status: 'cancelled' }), helper('h2', 'B')] })} />);
+      expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent(/^Used 2 helpers: A, B · 1 stopped$/);
+      rerender(<Message message={base({ parts: [helper('h1', 'A', { status: 'cancelled', error: 'Claude Code closed.' }), helper('h2', 'B')] })} />);
+      expect(screen.getByTestId('activity-fold').querySelector('summary')).toHaveTextContent(/^⚠ Used 2 helpers: A, B · 1 stopped$/);
+    });
+
     it('stays open while another block streams into it', async () => {
       const first: Part[] = [...bash('b1'), helper('h1', 'A')];
       const { rerender } = render(<Message message={base({ status: 'streaming', parts: first })} />);

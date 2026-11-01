@@ -413,10 +413,12 @@ function activitySummary(items: Activity[]): string {
     bits.push(`${counted.length} ${counted.length === 1 ? 'tool' : 'tools'} (${breakdown})`);
   }
   if (helpers.length > 0) bits.push(`${helpers.length} ${helpers.length === 1 ? 'helper' : 'helpers'}: ${helpers.map((h) => h.part.label).join(', ')}`);
-  const failed = run.some((p) => p.type === 'tool-result' && p.isError) || helpers.some((h) => h.status === 'error');
+  // A stopped helper with an error was lost, not asked to stop.
+  const failed = run.some((p) => p.type === 'tool-result' && p.isError) || helpers.some((h) => h.status === 'error' || (h.status === 'cancelled' && h.part.error));
   const waiting = helpers.filter((h) => h.waiting).length;
   const working = helpers.filter((h) => !h.waiting && (h.status === 'running' || h.status === 'queued' || h.status === 'background')).length;
-  const state = [waiting > 0 ? `${waiting} needs your approval` : '', working > 0 ? `${working} working` : ''].filter(Boolean);
+  const stopped = helpers.filter((h) => h.status === 'cancelled').length;
+  const state = [waiting > 0 ? `${waiting} needs your approval` : '', working > 0 ? `${working} working` : '', stopped > 0 ? `${stopped} stopped` : ''].filter(Boolean);
   return `${failed ? '⚠ ' : ''}Used ${bits.join(' and ')}${state.length > 0 ? ` · ${state.join(' · ')}` : ''}`;
 }
 
