@@ -46,8 +46,21 @@ export const CHAT_NEED_WINDOW_MS = 7 * 86_400_000;
 /**
  * Whether a chat wants the user: waiting on them, or a finished reply from
  * `since` (ms) on that they haven't dealt with. A chat still `busy` (background
- * tasks running) wants them only if it's waiting on them: it may not be done.
+ * tasks running) may not be done, so it wants them only if it's waiting on them
+ * or its reply asks them something: a server left running for them to look at
+ * never finishes, and the chat has stopped.
  */
+/** How much of the end of a reply `asksUser` needs to see, so the chat list doesn't read whole replies. */
+export const QUESTION_TAIL = 1000;
+
+/**
+ * Whether a reply's text asks the user something: a question in its last two paragraphs, since the options or a closing
+ * line can follow it. A `?` with text straight after it isn't one, so a link's query string doesn't count.
+ */
+export function asksUser(text: string): boolean {
+  return text.trim().split(/\r?\n\s*\n/).slice(-2).some((paragraph) => /\?[*_`"')\]]*(\s|$)/.test(paragraph));
+}
+
 export function chatNeedsYou(
   chat: { archivedAt: number | null; dealtWithAt?: number | null },
   head: ChatHead | null,
@@ -57,7 +70,7 @@ export function chatNeedsYou(
 ): boolean {
   if (chat.archivedAt !== null) return false;
   if (waiting) return true;
-  if (busy) return false;
+  if (busy && !head?.asks) return false;
   if (!head || head.role !== 'assistant') return false;
   if (head.status !== 'complete' && head.status !== 'error') return false;
   if (head.createdAt < since) return false;

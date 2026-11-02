@@ -27,7 +27,7 @@ test('a reply finished in another chat stays under Needs you after it is opened'
 
   const word = nav.getByTestId(`chat-status-${other.id}`);
   await expect(word).toHaveText('Your turn');
-  await expect(nav.getByTestId('group-needs-you').getByTestId(`chat-row-${other.id}`)).toBeVisible();
+  await expect(nav.getByTestId('group-needs-you').getByTestId(`needs-you-row-${other.id}`)).toBeVisible();
   await expect(nav.getByTestId(`chat-status-${open.id}`)).toHaveCount(0);
 
   // Opening it reads it, but it still needs an answer. By the row, not its title: auto-title renames the chat after its first reply.

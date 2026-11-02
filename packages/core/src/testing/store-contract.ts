@@ -778,6 +778,18 @@ export function runStoreContract(
         expect(store.messages.heads('chat-b')).toEqual([]);
       });
 
+      it('says when the reply a chat stopped on asks the user something, and only then', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'assistant', status: 'complete', parts: [{ type: 'text', text: 'Which one do you want?' }], createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'assistant', status: 'complete', parts: [{ type: 'text', text: 'All done.' }], createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20, asks: true }]);
+        expect(store.messages.heads('chat-b')).toEqual([{ chatId: 'chat-b', role: 'assistant', status: 'complete', createdAt: 20 }]);
+      });
+
       it('follows a user head to the completed reply below it', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

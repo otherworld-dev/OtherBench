@@ -354,11 +354,16 @@ describe('ChatList groups', () => {
 
 });
 
+/** The chats in the Needs you list, top to bottom. */
+function listIds(): string[] {
+  return screen.queryAllByTestId(/^needs-you-row-/).map((el) => el.getAttribute('data-testid')!.slice('needs-you-row-'.length));
+}
+
 describe('ChatList status', () => {
   const finished = (id: string, over: Partial<Chat> = {}): Chat =>
     makeChat({ id, head: { chatId: id, role: 'assistant', status: 'complete', createdAt: Date.now() - 60_000 }, ...over });
 
-  it('lifts chats that need you out of their groups into one list, saying what each wants and whose it is', () => {
+  it('shows chats that need you in one list as well as their groups, saying what each wants and whose it is', () => {
     useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [finished('done', { projectId: 'p-a' }), finished('asking'), makeChat({ id: 'quiet' })],
@@ -368,15 +373,50 @@ describe('ChatList status', () => {
 
     const list = screen.getByTestId('group-needs-you');
     expect(within(list).getByRole('heading', { name: /Needs you/ })).toHaveTextContent('2');
-    expect(rowIds('group-needs-you')).toEqual(['asking', 'done']);
-    expect(screen.getByTestId('chat-status-asking')).toHaveTextContent('Answer');
+    expect(listIds()).toEqual(['done', 'asking']);
+    expect(within(list).getByTestId('needs-you-status-asking')).toHaveTextContent('Answer');
+    expect(within(list).getByTestId('needs-you-status-done')).toHaveTextContent('Your turn');
+    expect(within(screen.getByTestId('needs-you-row-done')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
+    expect(rowIds('group-p-a')).toEqual(['done']);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['asking', 'quiet']);
     expect(screen.getByTestId('chat-status-done')).toHaveTextContent('Your turn');
-    expect(within(screen.getByTestId('chat-row-done')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
-    expect(rowIds('group-p-a')).toEqual([]);
-    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['quiet']);
-    // The project still has the chat: only its row has moved.
     expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('1');
-    expect(within(screen.getByTestId('group-p-a')).queryByText('No chats yet')).toBeNull();
+  });
+
+  it('gives the whole project name as a tooltip, on the hover buttons that overlap it too', () => {
+    useOtherBenchStore.setState({ projects: [makeProject({ id: 'p-a', name: 'A project name too long to fit' })], chats: [finished('done', { projectId: 'p-a' })] });
+    render(<ChatList />);
+    const row = screen.getByTestId('needs-you-row-done');
+    expect(within(row).getByTestId('row-project-name')).toHaveAttribute('title', 'A project name too long to fit');
+    expect(row.querySelector('[data-row-actions]')).toHaveAttribute('title', 'A project name too long to fit');
+    expect(within(row).getByRole('button', { name: 'Nothing to do here' })).toHaveAttribute('title', 'Nothing to do here');
+  });
+
+  it("keeps a Code mode chat in its app's group as well", () => {
+    useOtherBenchStore.setState({ mode: 'code', chats: [finished('coded', { appId: 'A' })], apps: [makeApp({ id: 'A', name: 'Bench' })] });
+    render(<ChatList />);
+    expect(listIds()).toEqual(['coded']);
+    expect(rowIds('group-A')).toEqual(['coded']);
+  });
+
+  it('renames in the row the menu was opened from, and only there', async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ chats: [finished('done')] });
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('needs-you-row-done')).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    expect(within(screen.getByTestId('needs-you-row-done')).getByRole('textbox', { name: 'Chat title' })).toBeInTheDocument();
+    expect(screen.getAllByRole('textbox', { name: 'Chat title' })).toHaveLength(1);
+  });
+
+  it('renames in the group when the menu was opened there', async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ chats: [finished('done')] });
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('chat-row-done')).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    expect(within(screen.getByTestId('chat-row-done')).getByRole('textbox', { name: 'Chat title' })).toBeInTheDocument();
+    expect(screen.getAllByRole('textbox', { name: 'Chat title' })).toHaveLength(1);
   });
 
   it('shows no list while nothing needs you, and keeps a chat with background tasks under its project', () => {
@@ -387,11 +427,27 @@ describe('ChatList status', () => {
     expect(screen.getByTestId('chat-status-tasks')).toHaveTextContent('Background');
   });
 
+  it('puts a chat at the bottom when it stops, however long ago its reply started, and again when it comes back', () => {
+    const longReply = finished('long', { head: { chatId: 'long', role: 'assistant', status: 'complete', createdAt: Date.now() - 3_600_000 } });
+    useOtherBenchStore.setState({ chats: [finished('first'), finished('second'), longReply], appRunningTurns: { m1: 'long' } });
+    render(<ChatList />);
+    expect(listIds()).toEqual(['first', 'second']);
+
+    act(() => useOtherBenchStore.setState({ appRunningTurns: {} }));
+    expect(listIds()).toEqual(['first', 'second', 'long']);
+
+    act(() => useOtherBenchStore.setState({ appRunningTurns: { m2: 'first' } }));
+    expect(listIds()).toEqual(['second', 'long']);
+
+    act(() => useOtherBenchStore.setState({ appRunningTurns: {} }));
+    expect(listIds()).toEqual(['second', 'long', 'first']);
+  });
+
   it('keeps a chat in the list while it is open', () => {
     useOtherBenchStore.setState({ chats: [finished('open')] });
     useOtherBenchStore.getState().setActiveChatId('open');
     render(<ChatList />);
-    expect(rowIds('group-needs-you')).toEqual(['open']);
+    expect(listIds()).toEqual(['open']);
   });
 
   it('ticking a chat off takes it out of the list', async () => {
@@ -399,17 +455,25 @@ describe('ChatList status', () => {
     vi.mocked(api.chats.patch).mockResolvedValue({ ...chat, dealtWithAt: Date.now() });
     useOtherBenchStore.setState({ chats: [chat] });
     render(<ChatList />);
-    await userEvent.setup().click(within(screen.getByTestId('chat-row-done')).getByRole('button', { name: 'Nothing to do here' }));
+    await userEvent.setup().click(within(screen.getByTestId('needs-you-row-done')).getByRole('button', { name: 'Nothing to do here' }));
     expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: expect.any(Number) });
     await waitFor(() => expect(screen.queryByTestId('group-needs-you')).toBeNull());
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['done']);
   });
 
-  it('lists a chat from the other mode too', () => {
-    useOtherBenchStore.setState({ chats: [finished('coded', { appId: 'A' })], apps: [makeApp({ id: 'A', name: 'Bench' })] });
+  it("leaves Code mode's chats out of the list in Chat mode", () => {
+    useOtherBenchStore.setState({ chats: [finished('coded', { appId: 'A' }), finished('talked')], apps: [makeApp({ id: 'A', name: 'Bench' })] });
     render(<ChatList />);
-    expect(rowIds('group-needs-you')).toEqual(['coded']);
-    expect(within(screen.getByTestId('chat-row-coded')).getByTestId('row-project-name')).toHaveTextContent('Bench');
+    expect(listIds()).toEqual(['talked']);
+    expect(screen.queryByTestId('needs-you-row-coded')).toBeNull();
+  });
+
+  it("lists only Code mode's chats in Code mode, each under its app's name", () => {
+    useOtherBenchStore.setState({ mode: 'code', chats: [finished('coded', { appId: 'A' }), finished('talked')], apps: [makeApp({ id: 'A', name: 'Bench' })] });
+    render(<ChatList />);
+    expect(listIds()).toEqual(['coded']);
+    expect(within(screen.getByTestId('needs-you-row-coded')).getByTestId('row-project-name')).toHaveTextContent('Bench');
+    expect(screen.queryByTestId('needs-you-row-talked')).toBeNull();
   });
 
   it('while searching, chats stay in their groups with their word, and the list goes', async () => {

@@ -13,7 +13,7 @@ import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { setChatPinned } from '../state/chatActions.js';
-import { chatStatus, groupStatusSummary, isOnCard, needsYouChats, useChatActivity, type ChatStatus } from '../state/chatStatus.js';
+import { chatStatus, groupStatusSummary, isOnCard, useChatActivity, useNeedsYouQueue, type ChatStatus } from '../state/chatStatus.js';
 import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
@@ -73,6 +73,10 @@ const LIST_SELECTOR = '[data-chat-list]';
 
 function chatRowSelector(chatId: string): string {
   return `[data-testid="chat-row-${chatId}"] [data-row-main]`;
+}
+
+function needsYouRowSelector(chatId: string): string {
+  return `[data-testid="needs-you-row-${chatId}"] [data-row-main]`;
 }
 
 /** localStorage key: whether the "Show archived" section is open. Per device. */
@@ -206,6 +210,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  // Whether the chat menu was opened from the Needs you list, for a chat with a row there as well as in its group.
+  const [menuInList, setMenuInList] = useState(false);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; position: { x: number; y: number } } | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
@@ -243,10 +249,12 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }, [searching, chats, trimmedQuery, searchChatIds, chipMatches]);
   // While searching every chat stays in its group, so a result is found where it lives.
-  const needsYou = useMemo(() => (searching ? [] : needsYouChats(chats, activity, now)), [searching, chats, activity, now]);
-  const lifted = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
-  const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key), lifted), [chats, projects, matches, groupSorts, lifted]);
-  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches, lifted), [chats, apps, appFolders, matches, trimmedQuery, chipMatches, lifted]);
+  // Queued across both modes, so a chat keeps its place while the other mode is showing.
+  const queue = useNeedsYouQueue(chats, activity, now);
+  const needsYou = useMemo(() => (searching ? [] : queue.filter((c) => modeOfChat(c) === mode)), [searching, queue, mode]);
+  const needsYouIds = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
+  const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
+  const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches), [chats, apps, appFolders, matches, trimmedQuery, chipMatches]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
@@ -375,7 +383,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const updated = await patchChat(chat, body, action);
     if (!updated) return;
     if (wasOpen && modeOfChat(updated) !== modeOfChat(chat)) setActiveChatId(updated.id);
-    focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   /**
@@ -423,7 +431,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         // the error line above already says something went wrong.
       }
     }
-    focusLater(chatRowSelector(chatId), LIST_SELECTOR);
+    focusLater(currentRowSelector(chatId), LIST_SELECTOR);
   }
 
   /** The chat that a drop `position` relative to row `targetId` lands above, skipping the dragged chat itself. */
@@ -434,12 +442,12 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * The section the sidebar shows `chat` in, or null when it isn't shown in one: under Needs you, archived, or an app chat. Code mode
+   * The section the sidebar shows `chat` in, or null when it isn't shown in one: archived, or an app chat. Code mode
    * has no Pinned section and no ordering by hand (a pinned app chat leads its group), so an app chat is in none of
    * Chat mode's sections and its menu offers no Move up / Move down (spec 2026-10-20-code-tab-design, Goal 1).
    */
   function sectionOf(chat: Chat): Section | null {
-    if (lifted.has(chat.id) || chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
+    if (chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
     if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
     for (const group of allGroups(sidebar)) {
       const projectId = group.project?.id ?? null;
@@ -477,6 +485,16 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     }
   }
 
+  /** Whether a chat's menu and rename belong to its row in the Needs you list, rather than the one in its group. */
+  function onListRow(chatId: string): boolean {
+    return menuInList && needsYouIds.has(chatId);
+  }
+
+  /** The row to return focus to: the one the user was on, so focus doesn't scroll the sidebar to the chat's other row. */
+  function currentRowSelector(chatId: string): string {
+    return onListRow(chatId) ? needsYouRowSelector(chatId) : chatRowSelector(chatId);
+  }
+
   /** The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. */
   function neighbourSelector(chatId: string): string {
     const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="chat-row-"]'));
@@ -493,7 +511,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setFolderMenu(null);
     if (source === 'button' && chatMenu?.chatId === chatId) {
       setChatMenu(null);
-      focusLater(chatRowSelector(chatId), LIST_SELECTOR);
+      focusLater(currentRowSelector(chatId), LIST_SELECTOR);
       return;
     }
     setChatMenu({ chatId, position });
@@ -501,7 +519,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   async function renameChat(chat: Chat, title: string): Promise<void> {
     setRenamingChatId(null);
-    if (await patchChat(chat, { title }, "Couldn't rename the chat")) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    if (await patchChat(chat, { title }, "Couldn't rename the chat")) focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   /**
@@ -513,7 +531,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setError(null);
     try {
       await setChatPinned(chat.id, pinned);
-      focusLater(chatRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
+      focusLater(currentRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
     } catch (err) {
       console.error(`[otherbench-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
@@ -522,12 +540,12 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   async function setProjectPinned(chat: Chat, pinned: boolean): Promise<void> {
     const action = pinned ? "Couldn't pin the chat in its project" : "Couldn't unpin the chat from its project";
-    if (await patchChat(chat, { projectPinned: pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    if (await patchChat(chat, { projectPinned: pinned }, action)) focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
     const action = excluded ? "Couldn't stop this chat adding to project memory" : "Couldn't let this chat add to project memory";
-    if (await patchChat(chat, { memoryExcluded: excluded }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    if (await patchChat(chat, { memoryExcluded: excluded }, action)) focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   async function exportChat(chat: Chat, format: 'markdown' | 'json'): Promise<void> {
@@ -538,7 +556,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       console.error(`[otherbench-web] failed to export chat ${chat.id}:`, err);
       setError(errorText(err, "Couldn't export the chat"));
     }
-    focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   /** Hides the chat from the sidebar (spec §3: reuses `archivedAt`). */
@@ -551,7 +569,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   async function unarchiveChat(chat: Chat): Promise<void> {
-    if (await patchChat(chat, { archivedAt: null }, "Couldn't unarchive the chat")) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    if (await patchChat(chat, { archivedAt: null }, "Couldn't unarchive the chat")) focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
   }
 
   /** Rejects on failure, which keeps the confirmation dialog open with the message. */
@@ -1221,6 +1239,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */
   function renderRow(chat: Chat, section: Section | null, muted = section === null, listed = false): JSX.Element {
+    const current = listed === onListRow(chat.id);
     return (
       <ChatRow
         key={chat.id}
@@ -1249,8 +1268,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               }
             : undefined
         }
-        menuOpen={chatMenu?.chatId === chat.id}
-        renaming={renamingChatId === chat.id}
+        menuOpen={current && chatMenu?.chatId === chat.id}
+        renaming={current && renamingChatId === chat.id}
         muted={muted}
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
@@ -1259,11 +1278,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         needsYou={listed}
         onTick={listed && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
         now={now}
-        onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
+        onOpenMenu={(position, source) => {
+          setMenuInList(listed);
+          openChatMenu(chat.id, position, source);
+        }}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
           setRenamingChatId(null);
-          focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+          focusLater(currentRowSelector(chat.id), LIST_SELECTOR);
         }}
       />
     );
@@ -1576,7 +1598,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           onClose={(reason) => {
             setChatMenu(null);
             // Esc, Tab or a scroll: back to the opener. A click elsewhere keeps focus where the user put it.
-            if (reason === 'dismiss') focusLater(chatRowSelector(menuChat.id), LIST_SELECTOR);
+            if (reason === 'dismiss') focusLater(currentRowSelector(menuChat.id), LIST_SELECTOR);
           }}
         />
       )}
@@ -1588,7 +1610,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           onConfirm={() => deleteChat(deletingChat.id)}
           onCancel={() => {
             setDeletingChatId(null);
-            focusLater(chatRowSelector(deletingChat.id), LIST_SELECTOR);
+            focusLater(currentRowSelector(deletingChat.id), LIST_SELECTOR);
           }}
         />
       )}

@@ -23,7 +23,11 @@ export interface GithubNotification {
 }
 
 /** A chat's latest message, as far as the Overview cares. */
-export interface ChatHead { chatId: string; role: Role; status: MessageStatus; createdAt: number }
+export interface ChatHead {
+  chatId: string; role: Role; status: MessageStatus; createdAt: number;
+  /** A finished reply that asks the user something (`asksUser`). */
+  asks?: true;
+}
 
 export interface OverviewChat { chatId: string; title: string; waiting: boolean; at: number; projectId: string | null; projectName: string | null }
 export interface OverviewDueCard { cardId: number; title: string; duedate: string; overdueDays: number }

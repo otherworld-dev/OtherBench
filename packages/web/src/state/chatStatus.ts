@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { CHAT_NEED_WINDOW_MS, chatNeedsYou } from '@otherbench/core/domain/overview.js';
 import { chatsInBackgroundElsewhere, chatsWaitingElsewhere, chatsWorkingElsewhere } from './peerActivity.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
@@ -32,13 +32,14 @@ export function shownChatIds(state: PaneState, narrow: boolean): string[] {
 /**
  * A chat's status. Having the chat open changes nothing: a finished reply stays the user's turn until they answer it
  * or tick it off, so the sidebar always says which chats are stopped on them (`chatNeedsYou`, the Overview's rule).
+ * Background tasks only show when the chat doesn't want the user meanwhile.
  */
 export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' | 'head'>, activity: ChatActivity, now: number): ChatStatus | null {
   const card = activity.waiting.get(chat.id);
   if (card) return card;
   if (activity.working.has(chat.id)) return 'working';
-  if (activity.background.has(chat.id)) return 'background';
-  if (!chatNeedsYou(chat, chat.head ?? null, false, now - CHAT_NEED_WINDOW_MS)) return null;
+  const background = activity.background.has(chat.id);
+  if (!chatNeedsYou(chat, chat.head ?? null, false, now - CHAT_NEED_WINDOW_MS, background)) return background ? 'background' : null;
   return chat.head?.status === 'error' ? 'failed' : 'your-turn';
 }
 
@@ -52,14 +53,36 @@ export function isOnCard(status: ChatStatus | null): boolean {
   return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn';
 }
 
-/** The chats needing the user: those stopped on a card first, then the rest, newest first (the Overview's order). */
+/** The chats needing the user, oldest reply first: the order `queued` starts from. */
 export function needsYouChats(chats: readonly Chat[], activity: ChatActivity, now: number): Chat[] {
   const at = (c: Chat): number => c.head?.createdAt ?? c.updatedAt;
   return chats
     .map((chat) => ({ chat, status: chatStatus(chat, activity, now) }))
     .filter(({ chat, status }) => chat.archivedAt === null && isNeedsYou(status))
-    .sort((a, b) => Number(isOnCard(b.status)) - Number(isOnCard(a.status)) || at(b.chat) - at(a.chat))
+    .sort((a, b) => at(a.chat) - at(b.chat))
     .map(({ chat }) => chat);
+}
+
+/** `chats` as a queue behind `previous` (ids, in queue order): those already in it keep their places, newcomers go last. */
+export function queued(previous: readonly string[], chats: readonly Chat[]): Chat[] {
+  const byId = new Map(chats.map((c) => [c.id, c]));
+  const waiting = new Set(previous);
+  return [...previous.flatMap((id) => byId.get(id) ?? []), ...chats.filter((c) => !waiting.has(c.id))];
+}
+
+/**
+ * The Needs you list as a queue, so working down it reaches every chat: one that stops joins the bottom rather than
+ * jumping ahead of those still waiting, and one that leaves (it was answered and is working) joins it again. Kept here,
+ * not worked out from a time, because a message records when its reply started and a card records no time at all. A
+ * reload starts again from `needsYouChats`' order.
+ */
+export function useNeedsYouQueue(chats: readonly Chat[], activity: ChatActivity, now: number): Chat[] {
+  const queue = useRef<readonly string[]>([]);
+  return useMemo(() => {
+    const list = queued(queue.current, needsYouChats(chats, activity, now));
+    queue.current = list.map((c) => c.id);
+    return list;
+  }, [chats, activity, now]);
 }
 
 /** What a group's chats are doing, for a collapsed heading: "2 replying · 1 in background". Empty with none. */

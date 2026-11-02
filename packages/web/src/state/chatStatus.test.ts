@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { CHAT_NEED_WINDOW_MS } from '@otherbench/core/domain/overview.js';
-import { chatStatus, groupStatusSummary, isNeedsYou, needsYouChats, shownChatIds, type ChatActivity } from './chatStatus.js';
+import { chatStatus, groupStatusSummary, isNeedsYou, needsYouChats, queued, shownChatIds, type ChatActivity } from './chatStatus.js';
 import { DEFAULT_PANE_STATE, type PaneState } from './panes.js';
 
 const state = (over: Partial<PaneState> = {}): PaneState => ({ ...DEFAULT_PANE_STATE, ...over });
@@ -29,6 +29,14 @@ const finished = (over: Partial<Chat> = {}): Pick<Chat, 'id' | 'archivedAt' | 'd
 });
 
 describe('chatStatus', () => {
+  it("is the user's turn with background tasks running when the reply asks them something, until it's ticked off", () => {
+    const asking = finished({ head: { chatId: 'c', role: 'assistant', status: 'complete', createdAt: NOW - 60_000, asks: true } });
+    const background = activity({ background: new Set(['c']) });
+    expect(chatStatus(asking, background, NOW)).toBe('your-turn');
+    expect(chatStatus({ ...asking, dealtWithAt: NOW }, background, NOW)).toBe('background');
+    expect(chatStatus(finished(), background, NOW)).toBe('background');
+  });
+
   it('says what a pending card asks for, ahead of anything else going on', () => {
     expect(chatStatus(finished(), activity({ waiting: new Map([['c', 'answer']]), working: new Set(['c']), background: new Set(['c']) }), NOW)).toBe('answer');
   });
@@ -70,15 +78,34 @@ describe('needsYouChats', () => {
   const chat = (id: string, createdAt: number, over: Partial<Chat> = {}): Chat =>
     ({ id, archivedAt: null, dealtWithAt: null, head: { chatId: id, role: 'assistant', status: 'complete', createdAt }, updatedAt: 1, ...over }) as Chat;
 
-  it('puts chats stopped on a card first, then the rest, newest first', () => {
-    const chats = [chat('old', NOW - 300), chat('new', NOW - 100), chat('card', NOW - 900), chat('failed', NOW - 200, { head: { chatId: 'failed', role: 'assistant', status: 'error', createdAt: NOW - 200 } })];
-    expect(needsYouChats(chats, activity({ waiting: new Map([['card', 'approve']]) }), NOW).map((c) => c.id)).toEqual(['card', 'new', 'failed', 'old']);
+  it('is oldest first, with a card no different from a reply', () => {
+    const chats = [chat('old', NOW - 300), chat('new', NOW - 100), chat('card', NOW - 200), chat('failed', NOW - 250, { head: { chatId: 'failed', role: 'assistant', status: 'error', createdAt: NOW - 250 } })];
+    expect(needsYouChats(chats, activity({ waiting: new Map([['card', 'approve']]) }), NOW).map((c) => c.id)).toEqual(['old', 'failed', 'card', 'new']);
   });
 
   it('leaves out a chat still working, in the background or archived, unless a card is waiting on them', () => {
     const chats = [chat('busy', NOW - 100), chat('tasks', NOW - 100), chat('gone', NOW - 100, { archivedAt: 5 }), chat('both', NOW - 100)];
     const result = needsYouChats(chats, activity({ working: new Set(['busy']), background: new Set(['tasks', 'both']), waiting: new Map([['both', 'answer'], ['gone', 'answer']]) }), NOW);
     expect(result.map((c) => c.id)).toEqual(['both']);
+  });
+});
+
+describe('queued', () => {
+  const chat = (id: string, createdAt = 1): Chat => ({ id, head: { chatId: id, role: 'assistant', status: 'complete', createdAt } }) as Chat;
+  const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
+
+  it('keeps the chats already queued in their order, whatever order they come in', () => {
+    expect(ids(queued(['b', 'a'], [chat('a'), chat('b')]))).toEqual(['b', 'a']);
+  });
+
+  it('puts a newcomer last, even when its reply started before the others', () => {
+    expect(ids(queued(['a', 'b'], [chat('long', 1), chat('a', 5), chat('b', 9)]))).toEqual(['a', 'b', 'long']);
+  });
+
+  it('forgets a chat that left, so it comes back last', () => {
+    const without = ids(queued(['a', 'b', 'c'], [chat('b'), chat('c')]));
+    expect(without).toEqual(['b', 'c']);
+    expect(ids(queued(without, [chat('a'), chat('b'), chat('c')]))).toEqual(['b', 'c', 'a']);
   });
 });
 

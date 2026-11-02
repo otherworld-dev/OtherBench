@@ -168,10 +168,15 @@ of work landed after that plan closed out:
   Older headings (its menu's sort item; No project starts that way), where
   rows don't reorder. Each group shows 10 chats, then "Show N more"; every
   row shows its age ("3h", "2w"), or a word for what it's doing. Chats stopped
-  on the user sit in a Needs you list at the top, from either mode, by the
-  Overview's `chatNeedsYou` rule: opening one leaves it there, and replying or
-  ticking it off clears it. Search matches titles and message text
-  (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
+  on the user sit in a Needs you list at the top, for the mode showing only, by
+  the Overview's `chatNeedsYou` rule: opening one leaves it there, and replying
+  or ticking it off clears it. The list is a queue: a chat that stops joins the
+  bottom, cards included (`useNeedsYouQueue`; a reload falls back to oldest
+  reply first). The chat stays in its group too, so it has two rows. Background
+  tasks keep a chat out of the list unless its reply asks the user something
+  (`asksUser`, a `?` in its last two paragraphs): a server left running never
+  finishes, and that reply has stopped on them. Search matches titles and
+  message text (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
   keep only chats with a status, or that run on one machine (shown only
   with a peer paired). Projects reorder by dragging a heading's name onto the
   top or bottom half of a sibling's heading (top-level with top-level, a

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, type OverviewInput,
+  asksUser, buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, type OverviewInput,
 } from '../src/domain/overview.js';
 import type { App, Chat } from '../src/ports/store.js';
 import type { DeckBoardView, DeckCardSummary } from '../src/types/nextcloud.js';
@@ -47,6 +47,29 @@ describe('deckSummary', () => {
 const head = (status: ChatHead['status'], role: ChatHead['role'] = 'assistant', createdAt = 100): ChatHead =>
   ({ chatId: 'c', role, status, createdAt });
 
+describe('asksUser', () => {
+  it('sees a question at the end of a reply, in bold or brackets too', () => {
+    expect(asksUser("I've put the mockups up.\n\nWhat's wrong or missing?")).toBe(true);
+    expect(asksUser('Shall I go ahead with **option B?**')).toBe(true);
+    expect(asksUser('Next is the sidebar (does that suit you?)')).toBe(true);
+  });
+
+  it('sees a question with a closing line or the options after it', () => {
+    expect(asksUser("Which do you want?\n\nI'll leave the server running in the meantime.")).toBe(true);
+    expect(asksUser('Which do you want?\n\n- The first\n- The second')).toBe(true);
+  });
+
+  it("isn't fooled by a link's query string", () => {
+    expect(asksUser('The site is running at http://localhost:52495/?key=5f93d038')).toBe(false);
+  });
+
+  it('ignores a statement, and a question further back than the end', () => {
+    expect(asksUser("I've started the build, I will carry on when it finishes.")).toBe(false);
+    expect(asksUser('Why did it fail? A missing import.\n\nFixed that.\n\nThe tests are running.')).toBe(false);
+    expect(asksUser('')).toBe(false);
+  });
+});
+
 describe('chatNeedsYou', () => {
   const open = { archivedAt: null };
   it('a finished assistant reply needs me', () => {
@@ -59,6 +82,8 @@ describe('chatNeedsYou', () => {
   });
   it('a chat still busy does not, unless it is waiting on them', () => {
     expect(chatNeedsYou(open, head('complete'), false, 0, true)).toBe(false);
+    expect(chatNeedsYou(open, { ...head('complete'), asks: true }, false, 0, true)).toBe(true);
+    expect(chatNeedsYou({ ...open, dealtWithAt: Date.now() + 1000 }, { ...head('complete'), asks: true }, false, 0, true)).toBe(false);
     expect(chatNeedsYou(open, head('complete'), true, 0, true)).toBe(true);
   });
   it('dealtWithAt after the head settles it, before does not', () => {

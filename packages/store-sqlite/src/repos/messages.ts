@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { asksUser, QUESTION_TAIL } from '@otherbench/core/domain/overview.js';
 import type { MessageRepo } from '@otherbench/core/ports/store.js';
 import type { ChatHead } from '@otherbench/core/types/overview.js';
 import type {
@@ -276,14 +277,17 @@ export class SqliteMessageRepo implements MessageRepo {
            SELECT b.chat_id, m.id FROM message m JOIN below b ON m.parent_id = b.id
          ),
          ranked AS (
-           SELECT b.chat_id, m.role, m.status, m.created_at,
+           SELECT b.chat_id, m.role, m.status, m.created_at, substr(m.search_text, -?2) AS tail,
                   ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
              FROM below b JOIN message m ON m.id = b.id
          )
-         SELECT chat_id, role, status, created_at FROM ranked WHERE rn = 1`
+         SELECT chat_id, role, status, created_at, tail FROM ranked WHERE rn = 1`
       )
-      .all(chatId ?? null) as Record<string, unknown>[];
-    return rows.map((r) => ({ chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number }));
+      .all(chatId ?? null, QUESTION_TAIL) as Record<string, unknown>[];
+    return rows.map((r) => {
+      const head = { chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number };
+      return head.role === 'assistant' && head.status === 'complete' && asksUser(r.tail as string) ? { ...head, asks: true } : head;
+    });
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {

@@ -66,7 +66,10 @@ export interface ChatRowProps {
   onDragStart?: () => void;
   /** The word at the end of the row, in place of the age. */
   status?: ChatStatus | null;
-  /** A row in the Needs you list: tinted, bold and not draggable, since its place there isn't the user's to choose. */
+  /**
+   * A row in the Needs you list, a second row for a chat still in its group: tinted, bold and not draggable, since its
+   * place there isn't the user's to choose. Its test ids differ, so `chat-row-<id>` always means the row in the group.
+   */
   needsYou?: boolean;
   /** Shows the hover tick: there is nothing to do here. Absent while a card waits, which only answering clears. */
   onTick?: () => void;
@@ -84,9 +87,10 @@ export interface ChatRowProps {
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
   const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, needsYou = false, onTick, now } = props;
+  const rowId = needsYou ? `needs-you-row-${chat.id}` : `chat-row-${chat.id}`;
   if (renaming && onRename && onRenameCancel) {
     return (
-      <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
+      <li data-testid={rowId} className="px-1 py-0.5">
         <InlineNameInput initial={chat.title} label="Chat title" onCommit={onRename} onCancel={onRenameCancel} />
       </li>
     );
@@ -94,7 +98,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
 
   return (
     <li
-      data-testid={`chat-row-${chat.id}`}
+      data-testid={rowId}
       data-drop-position={reorder?.indicator ?? undefined}
       onDragOver={
         reorder
@@ -183,13 +187,13 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
         )}
         <span className={`min-w-0 truncate ${needsYou ? 'font-medium' : ''}`}>{chat.title}</span>
         {projectName && (
-          <span data-testid="row-project-name" className={`ml-auto max-w-[45%] truncate pl-2 text-xs text-[var(--text-faint)] ${needsYou ? 'min-w-8 shrink-[9]' : 'shrink-0'}`}>
+          <span data-testid="row-project-name" title={projectName} className={`ml-auto max-w-[45%] truncate pl-2 text-xs text-[var(--text-faint)] ${needsYou ? 'min-w-8 shrink-[9]' : 'shrink-0'}`}>
             <span className="sr-only">, in</span> {projectName}
           </span>
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
-      {status ? <StatusWord status={status} testId={`chat-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
+      {status ? <StatusWord status={status} testId={needsYou ? `needs-you-status-${chat.id}` : `chat-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
         <span
           data-testid="row-age"
           title={`Last active ${new Date(chat.updatedAt).toLocaleString()}`}
@@ -213,6 +217,8 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
       {(onTick || onTogglePin || onOpenMenu) && (
         <div
           data-row-actions=""
+          // On hover this overlaps the end of the project name, so the name's tooltip has to work here too.
+          title={projectName}
           className={`absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-sm pr-0.5 pl-3 ${
             active ? 'bg-[linear-gradient(to_right,transparent,var(--bg)_0.75rem)]' : 'bg-[linear-gradient(to_right,transparent,var(--bg-sunken)_0.75rem)]'
           } ${
