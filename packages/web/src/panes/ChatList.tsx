@@ -495,13 +495,18 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     return onListRow(chatId) ? needsYouRowSelector(chatId) : chatRowSelector(chatId);
   }
 
-  /** The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. */
+  /**
+   * The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. Within Needs you
+   * when the user was there, as a row in a group further down would scroll the sidebar away from where they were.
+   */
   function neighbourSelector(chatId: string): string {
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="chat-row-"]'));
-    const i = rows.findIndex((el) => el.getAttribute('data-testid') === `chat-row-${chatId}`);
+    const prefix = onListRow(chatId) ? 'needs-you-row-' : 'chat-row-';
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="${prefix}"]`));
+    const i = rows.findIndex((el) => el.getAttribute('data-testid') === `${prefix}${chatId}`);
     const neighbour = i === -1 ? undefined : (rows[i + 1] ?? rows[i - 1]);
-    const id = neighbour?.getAttribute('data-testid')?.slice('chat-row-'.length);
-    return id ? chatRowSelector(id) : LIST_SELECTOR;
+    const id = neighbour?.getAttribute('data-testid')?.slice(prefix.length);
+    if (!id) return LIST_SELECTOR;
+    return prefix === 'needs-you-row-' ? needsYouRowSelector(id) : chatRowSelector(id);
   }
 
   function openChatMenu(chatId: string, position: { x: number; y: number }, source: MenuSource): void {

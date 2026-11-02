@@ -409,6 +409,40 @@ describe('ChatList status', () => {
     expect(screen.getAllByRole('textbox', { name: 'Chat title' })).toHaveLength(1);
   });
 
+  it('after Archive from the list, focus stays in the list rather than jumping down to a group', async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ chats: [finished('one'), finished('two')], activeChatId: null });
+    render(<ChatList />);
+    const [first, second] = listIds();
+    await user.click(within(screen.getByTestId(`needs-you-row-${first}`)).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(listIds()).toEqual([second]));
+    await waitFor(() => expect(screen.getByTestId(`needs-you-row-${second}`).querySelector('[data-row-main]')).toHaveFocus());
+  });
+
+  it('after archiving the last chat in the list, focus goes to the chat list, not a group row', async () => {
+    const user = userEvent.setup();
+    useOtherBenchStore.setState({ chats: [finished('done'), makeChat({ id: 'quiet' })], activeChatId: null });
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('needs-you-row-done')).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(listIds()).toEqual([]));
+    await waitFor(() => expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveFocus());
+  });
+
+  it('after Delete from the list, focus stays in the list', async () => {
+    const user = userEvent.setup();
+    mockedDelete.mockResolvedValue(undefined);
+    useOtherBenchStore.setState({ chats: [finished('one'), finished('two')], activeChatId: null });
+    render(<ChatList />);
+    const [first, second] = listIds();
+    await user.click(within(screen.getByTestId(`needs-you-row-${first}`)).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(listIds()).toEqual([second]));
+    await waitFor(() => expect(screen.getByTestId(`needs-you-row-${second}`).querySelector('[data-row-main]')).toHaveFocus());
+  });
+
   it('renames in the group when the menu was opened there', async () => {
     const user = userEvent.setup();
     useOtherBenchStore.setState({ chats: [finished('done')] });
