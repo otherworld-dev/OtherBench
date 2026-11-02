@@ -1496,6 +1496,14 @@ refused.
   reply's tool context, so the sandboxed shell and relayed tools don't get
   them. Never the config folder itself, which holds the login. A skill
   installed as a link to somewhere else is refused as outside.
+- The same way, Claude Code's file tools get its own project folder for the
+  chat's workspace, `projects/<name>` in that config folder (the name made
+  by the Agent SDK's own rule, `claudeProjectName`): read-only, with its
+  `memory/` writable, so its auto memory works. A transcript there is never
+  writable (Claude Code would resume a forged one), and `.md` notes directly
+  in `memory/` count as data, not config (`isProtectedAgentPath`), so they
+  follow Auto and grants like any write instead of always asking. Another
+  project's folder is still outside.
 - Skill and slash-command inline shell (`` !`cmd` ``) is disabled for OtherBench
   turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
   the Skill tool itself gets no card.
