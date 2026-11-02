@@ -32,6 +32,14 @@ import { Splitter } from './Splitter.js';
 const NEAR_BOTTOM_PX = 80;
 
 /**
+ * How many messages a chat draws when it opens, and how many more each time the reader nears the top. Drawing a
+ * 586-message chat whole froze the window for about two seconds; the end of it is what's read.
+ */
+export const THREAD_WINDOW = 40;
+/** How close (px) to the top the reader gets before earlier messages are drawn. */
+const DRAW_EARLIER_PX = 600;
+
+/**
  * Centre pane: the active branch (head -> root), extended forward through
  * any run of single-child replies, plus the composer. An unresolved compare
  * turn (more than one child at the effective tail, none kept yet) renders as
@@ -121,6 +129,16 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
 
   const tailId = displayPath.at(-1)?.id ?? null;
 
+  // Where the drawn messages start: fixed once a chat is drawn, so a message arriving at the end doesn't take one off
+  // the top under a reader who has scrolled up, and moved earlier only as they near the top or pick an older prompt.
+  // Never so late that fewer than THREAD_WINDOW are drawn (switching to a shorter branch).
+  const [drawnFrom, setDrawnFrom] = useState<{ chatId: string | null; start: number } | null>(null);
+  const latestStart = Math.max(0, displayPath.length - THREAD_WINDOW);
+  const start = drawnFrom?.chatId === chatId ? Math.min(drawnFrom.start, latestStart) : latestStart;
+  if (displayPath.length > 0 && drawnFrom?.chatId !== chatId) setDrawnFrom({ chatId, start });
+  const startRef = useRef(start);
+  startRef.current = start;
+
   // Auto-follow: stay pinned to the bottom while the user is already there,
   // but never yank the view while they've scrolled up to read. `nearBottom`
   // is updated ONLY by scroll events, so at content-change time it still
@@ -146,7 +164,43 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const near = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     nearBottomRef.current = near;
     setShowJump(!near);
+    if (el.scrollTop < DRAW_EARLIER_PX && startRef.current > 0) drawEarlierRef.current();
   }, []);
+
+  // Drawing earlier messages puts them above the reader. The message that was first is noted with where it sat, and
+  // after drawing the view moves by however far it was pushed down, so what's being read stays put. Relative, not a
+  // scrollTop worked out beforehand: the browser's own scroll anchoring may already have moved it, and a wheel scroll
+  // may still be gliding.
+  const keepPlaceRef = useRef<{ id: string; y: number } | null>(null);
+  const drawEarlier = (): void => {
+    const first = displayPath[start];
+    const el = first ? document.getElementById(`msg-${first.id}`) : null;
+    keepPlaceRef.current = first && el ? { id: first.id, y: el.getBoundingClientRect().top } : null;
+    setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW) });
+  };
+  const drawEarlierRef = useRef(drawEarlier);
+  drawEarlierRef.current = drawEarlier;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const before = keepPlaceRef.current;
+    keepPlaceRef.current = null;
+    const kept = before ? document.getElementById(`msg-${before.id}`) : null;
+    if (!el || !before || !kept) return;
+    el.scrollTop += kept.getBoundingClientRect().top - before.y;
+  }, [start]);
+
+  // A prompt picked in the conversation outline: draw back to it first if it's earlier than what's drawn, then go there.
+  const [goingTo, setGoingTo] = useState<string | null>(null);
+  const goTo = (messageId: string): void => {
+    const at = displayPath.findIndex((m) => m.id === messageId);
+    if (at !== -1 && at < start) setDrawnFrom({ chatId, start: at });
+    setGoingTo(messageId);
+  };
+  useLayoutEffect(() => {
+    if (!goingTo) return;
+    setGoingTo(null);
+    document.getElementById(`msg-${goingTo}`)?.scrollIntoView({ block: 'start' });
+  }, [goingTo]);
 
   const jumpToLatest = useCallback((): void => {
     const el = scrollRef.current;
@@ -395,7 +449,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               </button>
             </div>
           )}
-          <ConversationStrip chat={chat} viewer={{ open: viewer.open, onToggle: () => setViewerOpen(chat.id, !viewer.open) }} />
+          <ConversationStrip chat={chat} viewer={{ open: viewer.open, onToggle: () => setViewerOpen(chat.id, !viewer.open) }} onGoTo={goTo} />
           {/* An app chat's git bar (spec 2026-10-20-code-tab-design, Goals 2 and 6), never a Chat mode chat's. It gets the chat's whole
               tree, every branch and variant this window holds (GET /chats/:id/messages sends all of it), not just the path shown. */}
           {chat.appId !== null && <GitBar chat={chat} messages={chatMessages} />}
@@ -414,7 +468,15 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     No messages yet -- say something below.
                   </div>
                 ) : (
-                  displayPath.map((m) => {
+                  <>
+                  {start > 0 && (
+                    <div className="flex justify-center">
+                      <button type="button" onClick={drawEarlier} className="btn px-3 py-1 text-xs">
+                        Show earlier messages ({start} more)
+                      </button>
+                    </div>
+                  )}
+                  {displayPath.slice(start).map((m) => {
                     let siblings = [m];
                     try {
                       siblings = siblingsOf(chatMessages, m.id);
@@ -486,7 +548,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         }
                       />
                     );
-                  })
+                  })}
+                  </>
                 )}
 
                 {openCompare && (

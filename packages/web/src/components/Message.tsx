@@ -320,6 +320,33 @@ function ToolResultBlock({ name, result, isError, scope }: { name: string; resul
   );
 }
 
+/** A user message longer than this shows its start, folded: past this many lines, or characters for one long line. */
+const USER_TEXT_LINES = 40;
+const USER_TEXT_CHARS = 4000;
+
+/**
+ * A user message's plain text, folded when it's long. A pasted log of 2,500 lines laid out at 60,000px and froze the
+ * window for over 100ms each time its chat opened; its start says what it is, and the rest is a click away.
+ */
+function UserText({ text }: { text: string }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const lines = text.split('\n');
+  const long = lines.length > USER_TEXT_LINES || text.length > USER_TEXT_CHARS;
+  if (!long) return <>{text}</>;
+  const size = lines.length > USER_TEXT_LINES ? `${lines.length.toLocaleString()} lines` : `${text.length.toLocaleString()} characters`;
+  return (
+    <>
+      {open ? text : lines.slice(0, USER_TEXT_LINES).join('\n').slice(0, USER_TEXT_CHARS)}
+      {!open && '…'}
+      <span className="mt-1 block">
+        <button type="button" onClick={() => setOpen(!open)} className="btn px-2 py-0.5 text-xs">
+          {open ? 'Show less' : `Show all (${size})`}
+        </button>
+      </span>
+    </>
+  );
+}
+
 function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element | null {
   switch (part.type) {
     case 'text':
@@ -869,7 +896,7 @@ export function Message({
       ) : (
       <div className={isUser ? 'whitespace-pre-wrap text-sm [overflow-wrap:anywhere]' : ''}>
         {isUser
-          ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')
+          ? <UserText text={message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')} />
           : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), askingTools: new Set(pendingAsks.flatMap((a) => (a.kind === 'generation' ? [a.toolName] : []))), scope: { chatId: message.chatId, messageId: message.id } })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>

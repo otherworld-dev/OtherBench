@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { useOtherBenchStore } from '../state/store.js';
-import { Thread } from './Thread.js';
+import { THREAD_WINDOW, Thread } from './Thread.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
 
@@ -1201,5 +1201,83 @@ describe('Thread regenerate, edit and branch switching', () => {
     mount('a1');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
     expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Profile p1');
+  });
+});
+
+describe('Thread in a long chat', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  /** A chat of `n` messages in one line, user and reply in turn, its head on the last. */
+  function longChat(n: number): void {
+    const chain = Array.from({ length: n }, (_, i) =>
+      makeMessage(`m${i}`, 'chat-1', { parentId: i === 0 ? null : `m${i - 1}`, role: i % 2 === 0 ? 'user' : 'assistant', createdAt: i })
+    );
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: `m${n - 1}` })] });
+    useOtherBenchStore.getState().loadMessages('chat-1', chain, null);
+  }
+  const drawn = (): string[] => Array.from(screen.getByTestId('thread-scroll').querySelectorAll('[id^="msg-"]')).map((el) => el.id.slice(4));
+
+  it('draws only the end of a long chat when it opens, and earlier messages on request', async () => {
+    longChat(100);
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(drawn()).toHaveLength(THREAD_WINDOW);
+    expect(drawn().at(-1)).toBe('m99');
+    await userEvent.setup().click(screen.getByRole('button', { name: `Show earlier messages (${100 - THREAD_WINDOW} more)` }));
+    expect(drawn()).toHaveLength(THREAD_WINDOW * 2);
+    expect(drawn()[0]).toBe(`m${100 - THREAD_WINDOW * 2}`);
+  });
+
+  it('draws a short chat whole, with no button', () => {
+    longChat(12);
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(drawn()).toHaveLength(12);
+    expect(screen.queryByRole('button', { name: /Show earlier messages/ })).toBeNull();
+  });
+
+  it('draws earlier messages as the reader nears the top, keeping their place', () => {
+    longChat(100);
+    render(<ThreadForChat chatId="chat-1" />);
+    const scroller = screen.getByTestId('thread-scroll');
+    // jsdom has no layout: 100px a message, stacked from the top of the scroller.
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => drawn().length * 100 });
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 150 });
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const top = this.id.startsWith('msg-') ? drawn().indexOf(this.id.slice(4)) * 100 - scroller.scrollTop : 0;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    try {
+      fireEvent.scroll(scroller);
+      expect(drawn()).toHaveLength(THREAD_WINDOW * 2);
+      expect(scroller.scrollTop).toBe(150 + THREAD_WINDOW * 100);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it('keeps the messages it drew when new ones arrive at the end', () => {
+    longChat(100);
+    render(<ThreadForChat chatId="chat-1" />);
+    const first = drawn()[0];
+    act(() => {
+      useOtherBenchStore.getState().loadMessages('chat-1', [makeMessage('m100', 'chat-1', { parentId: 'm99', role: 'user', createdAt: 100 })], null);
+      useOtherBenchStore.getState().setHeadMessageId('chat-1', 'm100');
+    });
+    expect(drawn()[0]).toBe(first);
+    expect(drawn().at(-1)).toBe('m100');
+  });
+
+  it('draws back to a prompt picked in the outline before going to it', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    longChat(100);
+    render(<ThreadForChat chatId="chat-1" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Show conversation outline' }));
+    await user.click(screen.getByTestId('outline-m2'));
+    expect(drawn()).toContain('m2');
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('msg-m2'));
   });
 });

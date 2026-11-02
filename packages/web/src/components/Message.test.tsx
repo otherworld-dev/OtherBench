@@ -130,6 +130,33 @@ describe('Message', () => {
     expect(screen.queryByText('world')).not.toBeInTheDocument();
   });
 
+  it('folds a long pasted user message to its start, with the rest a click away', async () => {
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: lines.join('\n') }] });
+    const { container } = render(<Message message={message} />);
+    expect(container).toHaveTextContent('line 40');
+    expect(container).not.toHaveTextContent('line 41 ');
+    expect(container).not.toHaveTextContent('line 300');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Show all (300 lines)' }));
+    expect(container).toHaveTextContent('line 300');
+    await user.click(screen.getByRole('button', { name: 'Show less' }));
+    expect(container).not.toHaveTextContent('line 300');
+  });
+
+  it('folds one very long line too, by its length', () => {
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: `${'a'.repeat(5000)}END` }] });
+    const { container } = render(<Message message={message} />);
+    expect(container).not.toHaveTextContent('END');
+    expect(screen.getByRole('button', { name: 'Show all (5,003 characters)' })).toBeInTheDocument();
+  });
+
+  it('leaves a short user message whole', () => {
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: 'Just a question' }] });
+    render(<Message message={message} />);
+    expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull();
+  });
+
   it("shows a user message's notices, as for an imported message whose image the export didn't have", () => {
     const message = base({
       role: 'user',

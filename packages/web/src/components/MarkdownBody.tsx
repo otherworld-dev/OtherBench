@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ComponentPropsWithoutRef, type JSX } from 'react';
+import { memo, useMemo, useRef, useState, type ComponentPropsWithoutRef, type JSX } from 'react';
 import type { Link as LinkNode, Parent, PhrasingContent, Root, RootContent, Text } from 'mdast';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -289,6 +289,14 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
 
 
 /**
+ * rehype-highlight registers every language it knows each time it's set up, and react-markdown sets its plugins up
+ * again on every render of every message, which made opening a chat stall for hundreds of milliseconds. Its transform
+ * keeps no state, so one set up here serves them all.
+ */
+const highlight = rehypeHighlight();
+const REHYPE_PLUGINS = [() => highlight];
+
+/**
  * Renders assistant (and user) message text as Markdown: GFM tables/strikethrough/task
  * lists (remark-gfm) and syntax-highlighted code via rehype-highlight, whose
  * token colours are themed in index.css to track light/dark rather than a
@@ -298,8 +306,11 @@ function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Elemen
  * "Deck #N" a link that opens the card (`openDeckCard`), for message text.
  * `copySections` puts a Copy button on each `---` for the text under it
  * (`remarkCopySections`), for a reply's drafts.
+ *
+ * Memoised: parsing is most of what rendering a message costs, so a message whose text hasn't changed isn't parsed
+ * again when its chat re-renders around it (a reply streaming in, a status changing).
  */
-export function MarkdownBody({
+export const MarkdownBody = memo(function MarkdownBody({
   text,
   files,
   remoteImages = true,
@@ -335,7 +346,7 @@ export function MarkdownBody({
     <div className="markdown-body text-sm leading-relaxed">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={REHYPE_PLUGINS}
         urlTransform={urlTransform}
         components={components}
       >
@@ -343,4 +354,4 @@ export function MarkdownBody({
       </ReactMarkdown>
     </div>
   );
-}
+});

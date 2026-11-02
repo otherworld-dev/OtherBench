@@ -9,14 +9,18 @@ export function formatRelativeTime(at: number, now: number = Date.now()): string
   return new Date(at).toLocaleString();
 }
 
+// Made once: toLocaleTimeString and toLocaleDateString build a formatter on every call, which every message's stamp paid.
+const CLOCK = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+const DAY_MONTH = new Intl.DateTimeFormat([], { day: 'numeric', month: 'short' });
+const DAY_MONTH_YEAR = new Intl.DateTimeFormat([], { day: 'numeric', month: 'short', year: 'numeric' });
+
 /** A message's time: "14:05" today, "21 Oct 14:05" earlier this year, "21 Oct 2025 14:05" before that. */
 export function formatStamp(at: number, now: number = Date.now()): string {
   const d = new Date(at);
   const n = new Date(now);
-  const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const clock = CLOCK.format(d);
   if (d.toDateString() === n.toDateString()) return clock;
-  const sameYear = d.getFullYear() === n.getFullYear();
-  const date = d.toLocaleDateString([], { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+  const date = (d.getFullYear() === n.getFullYear() ? DAY_MONTH : DAY_MONTH_YEAR).format(d);
   return `${date} ${clock}`;
 }
 

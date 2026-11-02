@@ -77,9 +77,11 @@ export interface ConversationStripProps {
   chat: Chat;
   /** The pane's viewer toggle, at the row's right end. */
   viewer?: { open: boolean; onToggle: () => void };
+  /** Goes to a picked prompt, which may not be drawn yet (Thread draws only a long chat's end); by default it's scrolled to. */
+  onGoTo?: (messageId: string) => void;
 }
 
-export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX.Element {
+export function ConversationStrip({ chat, viewer, onGoTo }: ConversationStripProps): JSX.Element {
   const messages = useOtherBenchStore((s) => s.messages);
   const streamStatus = useOtherBenchStore((s) => s.streamStatus);
   const machines = useOtherBenchStore((s) => s.machines);
@@ -220,7 +222,7 @@ export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX
                   type="button"
                   data-testid={`outline-${user.id}`}
                   aria-label={`Go to: ${promptLabel(user)}`}
-                  onClick={() => document.getElementById(`msg-${user.id}`)?.scrollIntoView({ block: 'start' })}
+                  onClick={() => (onGoTo ? onGoTo(user.id) : document.getElementById(`msg-${user.id}`)?.scrollIntoView({ block: 'start' }))}
                   className="block w-full rounded px-1 py-0.5 text-left hover:bg-[var(--bg-sunken)]"
                 >
                   <span className="block truncate text-sm">{promptLabel(user)}</span>

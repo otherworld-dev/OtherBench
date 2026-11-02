@@ -4,7 +4,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}) }));
 vi.mock('../code/openDeckCard.js', () => ({ openDeckCard: vi.fn(async () => {}) }));
+vi.mock('rehype-highlight', async (importOriginal) => {
+  const real = await importOriginal<typeof import('rehype-highlight')>();
+  return { default: vi.fn(real.default) };
+});
+// Set up once per parse, so its calls count the parses.
+vi.mock('remark-gfm', async (importOriginal) => {
+  const real = await importOriginal<typeof import('remark-gfm')>();
+  return { default: vi.fn(real.default) };
+});
 
+import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 import { openDeckCard } from '../code/openDeckCard.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { ViewerContext } from '../viewer/ViewerContext.js';
@@ -140,5 +151,30 @@ describe('MarkdownBody deck links', () => {
     await userEvent.setup().click(screen.getByRole('link', { name: 'Deck #967' }));
     expect(openDeckCard).toHaveBeenCalledWith(967);
     expect(openInBrowser).not.toHaveBeenCalled();
+  });
+});
+
+describe('MarkdownBody code highlighting', () => {
+  it('highlights code, setting up the highlighter once for every message rather than once each', () => {
+    const before = vi.mocked(rehypeHighlight).mock.calls.length;
+    const fence = '```ts\nconst a = 1;\n```';
+    const { container, rerender } = render(<><MarkdownBody text={fence} /><MarkdownBody text={fence} /></>);
+    rerender(<><MarkdownBody text={fence} /><MarkdownBody text={`${fence}\n`} /></>);
+    expect(container.querySelectorAll('code.hljs .hljs-keyword')).toHaveLength(2);
+    expect(vi.mocked(rehypeHighlight).mock.calls.length - before).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('MarkdownBody re-rendering', () => {
+  it("doesn't parse a message again when its chat re-renders with the same text, only when the text changes", () => {
+    const parses = (): number => vi.mocked(remarkGfm).mock.calls.length;
+    const { rerender } = render(<MarkdownBody text="One **bold** line" deckLinks />);
+    const once = parses();
+    rerender(<MarkdownBody text="One **bold** line" deckLinks />);
+    rerender(<MarkdownBody text="One **bold** line" deckLinks />);
+    expect(parses()).toBe(once);
+    rerender(<MarkdownBody text="One **bold** line, and more" deckLinks />);
+    expect(parses()).toBe(once + 1);
+    expect(screen.getByText(/and more/)).toBeInTheDocument();
   });
 });
