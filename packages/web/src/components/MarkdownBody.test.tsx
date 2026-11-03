@@ -18,6 +18,7 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import { openDeckCard } from '../code/openDeckCard.js';
 import { openInBrowser } from '../desktop/bridge.js';
+import { useFeatures } from '../state/features.js';
 import { ViewerContext } from '../viewer/ViewerContext.js';
 import { MarkdownBody } from './MarkdownBody.js';
 
@@ -126,6 +127,17 @@ describe('MarkdownBody deck links', () => {
     render(<MarkdownBody text={'Fixed in Deck #967, see also deck card #12.'} deckLinks />);
     expect(screen.getByRole('link', { name: 'Deck #967' })).toHaveAttribute('href', 'deck:967');
     expect(screen.getByRole('link', { name: 'deck card #12' })).toHaveAttribute('href', 'deck:12');
+  });
+
+  it('leaves Deck #N as plain text while Nextcloud is turned off', () => {
+    useFeatures.setState({ nextcloud: false });
+    try {
+      render(<MarkdownBody text={'Fixed in Deck #967.'} deckLinks />);
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.getByText('Fixed in Deck #967.')).toBeInTheDocument();
+    } finally {
+      useFeatures.setState({ nextcloud: true });
+    }
   });
 
   it('leaves Deck #N inside code alone', () => {

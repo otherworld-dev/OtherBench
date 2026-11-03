@@ -206,6 +206,21 @@ describe('Nextcloud settings', () => {
     expect((await json(res)).code).toBe('nextcloud-not-configured');
   });
 
+  it('with Nextcloud turned off the routes are a 409 nextcloud-off and never make a client; its settings still read and save', async () => {
+    await setUp();
+    container.store.settings.update({ nextcloudEnabled: false });
+    for (const path of ['/api/nextcloud/boards', '/api/nextcloud/collectives', '/api/nextcloud/detect-links?path=x']) {
+      const res = await send('GET', path);
+      expect(res.status, path).toBe(409);
+      expect((await json(res)).code).toBe('nextcloud-off');
+    }
+    // The test is always a 200, its failure said in the body.
+    expect(await json(await send('POST', '/api/nextcloud/test'))).toMatchObject({ ok: false, message: 'Nextcloud is turned off on this machine. Turn it on in Settings → Features.' });
+    expect(configs).toEqual([]);
+    expect((await send('GET', '/api/nextcloud')).status).toBe(200);
+    expect((await send('PUT', '/api/nextcloud', { baseUrl: 'https://nc.example', user: 'adam' })).status).toBe(200);
+  });
+
   it('hands the client the stored URL, user and password', async () => {
     await setUp();
     await send('GET', '/api/nextcloud/boards');

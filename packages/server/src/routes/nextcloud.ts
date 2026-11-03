@@ -8,6 +8,7 @@ import type { Container } from '../container.js';
 import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { normaliseBaseUrl, NextcloudError, type NextcloudClient, type RawBoard } from '../nextcloud/client.js';
+import { nextcloudOnOrThrow } from '../features.js';
 import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings, storedNextcloudSettings } from '../nextcloud/config.js';
 import { archiveCard, changeLabels, completeCard, deleteCard, findCard, moveCard, reopenCard, updateCard } from '../nextcloud/deck.js';
 import { collectivePagePaths } from '../nextcloud/wiki.js';
@@ -179,6 +180,8 @@ export function nextcloudRoutes(container: Container): Hono {
 
   /** `GET /detect-links?path=<abs>`: the folder's CLAUDE.md "Project links", with the board resolved to an id when it can be. */
   app.get('/detect-links', async (c) => {
+    // Its links are all Nextcloud's, so it answers like every other route while Nextcloud is off.
+    nextcloudOnOrThrow(container.store);
     const folder = await folderFromQuery(c.req.query('path'));
     const text = await readClaudeMd(folder);
     const links = text === null ? { deckBoard: null, collective: null, pagePath: null, bookmarkTag: null } : parseProjectLinks(text);

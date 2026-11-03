@@ -54,7 +54,9 @@ export type AppEvent =
   /** An app's terminals were opened, renamed, ended or closed (spec 2026-10-21-code-terminal-design): re-read its list. */
   | { type: 'terminals-changed'; appId: string }
   /** The Overview's GitHub and Deck check started or finished, or something was ticked off: re-read it (spec 2026-10-26-overview-design). */
-  | { type: 'overview-changed' };
+  | { type: 'overview-changed' }
+  /** GitHub or Nextcloud was turned on or off (Settings, Features): re-read the settings, as each window holds its own. */
+  | { type: 'settings-changed' };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {

@@ -8,6 +8,7 @@ import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { buildCodeSidebar } from '../panes/sidebar/model.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
+import { useFeatures } from '../state/features.js';
 import { useNow } from '../lib/useNow.js';
 import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -23,7 +24,7 @@ const EMPTY = 'text-sm text-[var(--text-faint)]';
  * chats opens on its home, with its issues and a "New chat" button, like
  * `ProjectHome`). What the app is, a box that starts a chat with its first
  * message sent, its chats, and its open issues, each of which can start a
- * chat too. Editing stays in the app form.
+ * chat too (not while GitHub is turned off). Editing stays in the app form.
  */
 export function AppHome({ appId }: { appId: string }): JSX.Element {
   const app = useOtherBenchStore((s) => s.apps.find((a) => a.id === appId) ?? null);
@@ -52,6 +53,7 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
   const setOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
+  const github = useFeatures((s) => s.github);
   const linked = app.linkedProjectId === null ? null : (projectDisplayNameById(projects, app.linkedProjectId) ?? (projectsLoaded ? 'Missing project' : 'Loading…'));
   // One column, top down: what the app is, a box to start from, its chats, then its issues at full width.
   return (
@@ -65,10 +67,14 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
               <span data-testid="app-home-folder" className="break-all font-mono text-[var(--text)]">
                 {app.workspaceRoot ?? <span className="font-sans text-[var(--text-muted)]">This app&apos;s folder isn&apos;t on this machine</span>}
               </span>
-              <span aria-hidden="true">·</span>
-              <span data-testid="app-home-repo" className="break-all">
-                {app.githubRepo ?? NO_GITHUB_REPO}
-              </span>
+              {github && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span data-testid="app-home-repo" className="break-all">
+                    {app.githubRepo ?? NO_GITHUB_REPO}
+                  </span>
+                </>
+              )}
               <span aria-hidden="true">·</span>
               <span data-testid="app-home-project" className="[overflow-wrap:anywhere]">
                 {linked === null ? 'No chat project' : `Chat project: ${linked}`}
@@ -90,11 +96,13 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
           submitLabel="Start"
         />
         <AppChats app={app} />
-        <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
-          <h3 className={HEADING}>Issues</h3>
-          {/* Its own view, apart from the Code panel's Issues beside it; keyed, so another app's home starts from its own. */}
-          <IssuesTab key={app.id} app={app} owner={`${appTabId(app.id)}#home`} />
-        </section>
+        {github && (
+          <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
+            <h3 className={HEADING}>Issues</h3>
+            {/* Its own view, apart from the Code panel's Issues beside it; keyed, so another app's home starts from its own. */}
+            <IssuesTab key={app.id} app={app} owner={`${appTabId(app.id)}#home`} />
+          </section>
+        )}
       </div>
     </div>
   );

@@ -253,6 +253,29 @@ describe('OverviewService checks', () => {
     expect(svc.view().checkedAt).toBe(NOW);
   });
 
+  it('reaches neither GitHub nor Nextcloud while they are turned off, and shows neither', async () => {
+    store.settings.update({ githubEnabled: false, nextcloudEnabled: false });
+    const svc = service();
+    await svc.refresh();
+    expect(gh.calls).toEqual([]);
+    expect(nc?.calls).toEqual([]);
+    expect(tileOf(svc, 'a1')).toMatchObject({ notifications: null, deck: null });
+    expect(svc.view().tiles.find((t) => t.key === 'github')).toBeUndefined();
+  });
+
+  it('turning GitHub off after a check drops the inbox and the login, and tells paired machines', async () => {
+    const svc = service();
+    await svc.refresh();
+    expect(loginChanges).toBe(1);
+    store.settings.update({ githubEnabled: false });
+    // The view drops it straight away, before the next check.
+    expect(tileOf(svc, 'a1').notifications).toBeNull();
+    await svc.refresh();
+    expect(svc.githubLogin()).toBeNull();
+    expect(loginChanges).toBe(2);
+    expect(tileOf(svc, 'a1').deck).not.toBeNull();
+  });
+
   it('view() never runs gh or Nextcloud', () => {
     const svc = service();
     const v = svc.view();

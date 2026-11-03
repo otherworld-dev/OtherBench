@@ -88,6 +88,10 @@ export interface OverviewInput {
   notifications: { list: GithubNotification[]; more: boolean; error: string | null } | null;
   /** By app id. */
   decks: Record<string, { view: DeckBoardView } | { error: string }>;
+  /** False = turned off on this machine (Settings, Features): no GitHub sections, no GitHub tile, no login. */
+  github: boolean;
+  /** False = turned off on this machine: no Deck sections. */
+  nextcloud: boolean;
   checkedAt: number | null; checking: boolean;
   loginMismatches: Overview['loginMismatches']; unreachableMachines: string[];
   now: Date;
@@ -117,7 +121,7 @@ export function buildOverview(input: OverviewInput): Overview {
   };
 
   // Each notification goes to the first app whose repo it is, else to the GitHub tile.
-  const inbox = input.notifications;
+  const inbox = input.github ? input.notifications : null;
   const inboxError = inbox?.error ?? null;
   const inboxMore = inbox?.more ?? false;
   const byApp = new Map<string, GithubNotification[]>();
@@ -130,10 +134,10 @@ export function buildOverview(input: OverviewInput): Overview {
   type Inbox = { notifications: GithubNotification[] | null; error: string | null; more: boolean };
   const noInbox: Inbox = { notifications: null, error: null, more: false };
   const inboxFor = (app: App): Inbox =>
-    app.githubRepo === null ? noInbox : { notifications: byApp.get(app.id) ?? [], error: inboxError, more: inboxMore };
+    !input.github || app.githubRepo === null ? noInbox : { notifications: byApp.get(app.id) ?? [], error: inboxError, more: inboxMore };
 
   const deckFor = (app: App): { deck: OverviewDeck | null; error: string | null } => {
-    if (app.deckBoardId === null) return { deck: null, error: null };
+    if (!input.nextcloud || app.deckBoardId === null) return { deck: null, error: null };
     const result = input.decks[app.id];
     if (!result) return { deck: emptyDeck(), error: null };
     if ('error' in result) return { deck: emptyDeck(), error: result.error };
@@ -169,8 +173,8 @@ export function buildOverview(input: OverviewInput): Overview {
 
   return {
     checkedAt: input.checkedAt, checking: input.checking,
-    githubLogin: input.me,
-    loginMismatches: input.loginMismatches, unreachableMachines: input.unreachableMachines,
+    githubLogin: input.github ? input.me : null,
+    loginMismatches: input.github ? input.loginMismatches : [], unreachableMachines: input.unreachableMachines,
     total: sorted.reduce((n, t) => n + t.count, 0),
     tiles: sorted,
   };

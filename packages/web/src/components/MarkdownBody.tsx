@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import { openDeckCard } from '../code/openDeckCard.js';
 import { openInBrowser } from '../desktop/bridge.js';
+import { useFeatures } from '../state/features.js';
 import { isRelativePath, joinPath, looksLikePath } from '../viewer/paths.js';
 import { ViewerImage } from '../viewer/ViewerImage.js';
 import { useViewer } from '../viewer/ViewerContext.js';
@@ -303,7 +304,8 @@ const REHYPE_PLUGINS = [() => highlight];
  * fixed hljs stylesheet. Every code block gets a hover-revealed copy button.
  * `remoteImages={false}` shows each image as its alt text instead, for
  * untrusted text such as a Nextcloud card or page. `deckLinks` makes each
- * "Deck #N" a link that opens the card (`openDeckCard`), for message text.
+ * "Deck #N" a link that opens the card (`openDeckCard`), for message text,
+ * while Nextcloud is on.
  * `copySections` puts a Copy button on each `---` for the text under it
  * (`remarkCopySections`), for a reply's drafts.
  *
@@ -314,7 +316,7 @@ export const MarkdownBody = memo(function MarkdownBody({
   text,
   files,
   remoteImages = true,
-  deckLinks = false,
+  deckLinks: deckLinksAsked = false,
   copySections = false,
 }: {
   text: string;
@@ -323,6 +325,8 @@ export const MarkdownBody = memo(function MarkdownBody({
   deckLinks?: boolean;
   copySections?: boolean;
 }): JSX.Element {
+  // Plain text while Nextcloud is turned off: there is no card to open.
+  const deckLinks = useFeatures((s) => s.nextcloud) && deckLinksAsked;
   // The same list each render while the flags hold.
   const remarkPlugins = useMemo(
     () => [remarkGfm, ...(deckLinks ? [remarkDeckLinks] : []), ...(copySections ? [remarkCopySections] : [])],

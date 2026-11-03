@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { Menu } from '../components/Menu.js';
 import { Inspector } from '../panes/Inspector.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore, type CodePanelTab } from '../state/store.js';
 import { DeckTab } from './DeckTab.js';
 import { FilesTab } from './FilesTab.js';
@@ -22,6 +23,9 @@ const BASE_TABS: { id: CodePanelTab; label: string }[] = [
 ];
 /** Only where this server has terminals (spec 2026-10-21-code-terminal-design): a local server with a PTY. Terminal sits before Chat. */
 const WITH_TERMINAL: { id: CodePanelTab; label: string }[] = [...BASE_TABS.slice(0, -1), { id: 'terminal', label: 'Terminal' }, ...BASE_TABS.slice(-1)];
+/** The tabs that use GitHub or Nextcloud, left out while it is turned off (Settings, Features). */
+const GITHUB_TABS: ReadonlySet<CodePanelTab> = new Set(['issues']);
+const NEXTCLOUD_TABS: ReadonlySet<CodePanelTab> = new Set(['deck', 'wiki', 'links']);
 /** Width kept for the "»" button, and the gap between tabs, when working out how many tabs fit. */
 const OVERFLOW_BUTTON_PX = 32;
 const TAB_GAP_PX = 2;
@@ -46,9 +50,11 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
   const savedTab = useOtherBenchStore((s) => s.codePanelTab);
   const setTab = useOtherBenchStore((s) => s.setCodePanelTab);
   const terminals = useTerminalStatus()?.available === true;
-  const TABS = terminals ? WITH_TERMINAL : BASE_TABS;
-  // A saved Terminal tab on a server without terminals (or before that's known) shows Issues.
-  const tab: CodePanelTab = savedTab === 'terminal' && !terminals ? 'issues' : savedTab;
+  const github = useFeatures((s) => s.github);
+  const nextcloud = useFeatures((s) => s.nextcloud);
+  const TABS = (terminals ? WITH_TERMINAL : BASE_TABS).filter((t) => (github || !GITHUB_TABS.has(t.id)) && (nextcloud || !NEXTCLOUD_TABS.has(t.id)));
+  // A saved Terminal tab on a server without terminals (or before that's known) shows the first tab; one turned off shows Files.
+  const tab: CodePanelTab = TABS.some((t) => t.id === savedTab) ? savedTab : savedTab === 'terminal' ? (TABS[0]?.id ?? 'files') : 'files';
   const tabRefs = useRef(new Map<CodePanelTab, HTMLButtonElement>());
   const baseId = useId();
   const stripRef = useRef<HTMLDivElement>(null);
@@ -100,7 +106,7 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
         aria-expanded={false}
         className="flex h-full w-9 flex-col items-center justify-center gap-2 border-l border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text)]"
       >
-        <span className="[writing-mode:vertical-rl] text-xs tracking-wide">{TABS.find((t) => t.id === tab)?.label ?? 'Issues'}</span>
+        <span className="[writing-mode:vertical-rl] text-xs tracking-wide">{TABS.find((t) => t.id === tab)?.label ?? 'Files'}</span>
       </button>
     );
   }

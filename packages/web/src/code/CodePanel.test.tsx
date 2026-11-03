@@ -16,6 +16,7 @@ vi.mock('./LinksTab.js', () => ({ LinksTab: ({ app }: { app: App }) => <div data
 vi.mock('./FilesTab.js', () => ({ FilesTab: ({ app, chatId }: { app: App; chatId: string | null }) => <div data-testid="files-stub">{`${app.id}:${chatId ?? 'none'}`}</div> }));
 
 import { appTabId } from '../state/appTab.js';
+import { useFeatures } from '../state/features.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CodePanel } from './CodePanel.js';
@@ -33,6 +34,7 @@ function focus(id: string | null): void {
 beforeEach(() => {
   terminalStatus.value = null;
   window.localStorage.clear();
+  useFeatures.setState({ github: true, nextcloud: true });
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ mode: 'code', apps: [app('a1'), app('a2')], appsLoaded: true, chats: [chat('c1', 'a2')] });
 });
@@ -66,6 +68,25 @@ describe('CodePanel', () => {
     focus('c1');
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+  });
+
+  it('leaves out Issues while GitHub is off, and a saved Issues tab shows Files', () => {
+    useFeatures.setState({ github: false });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+    expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('issues-stub')).toBeNull();
+  });
+
+  it('leaves out Deck, Wiki and Links while Nextcloud is off, and a saved Deck tab shows Files', () => {
+    useFeatures.setState({ nextcloud: false });
+    useOtherBenchStore.setState({ codePanelTab: 'deck' });
+    focus('c1');
+    render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Files', 'Chat']);
+    expect(screen.getByTestId('files-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('deck-stub')).toBeNull();
   });
 
   it("the strip clips its measuring row, and a long app name can't crowd the tabs", () => {

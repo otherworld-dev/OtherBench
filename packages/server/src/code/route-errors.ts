@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import type { GhErrorCode, GitErrorCode } from '@otherbench/core/types/code.js';
+import type { FeatureOffCode, GhErrorCode, GitErrorCode } from '@otherbench/core/types/code.js';
 import type { NextcloudErrorCode } from '@otherbench/core/types/nextcloud.js';
 import { NextcloudError } from '../nextcloud/client.js';
 import { GhError } from './github.js';
@@ -20,7 +20,7 @@ import { ExecutableMissingError } from './process.js';
  * reading still finds the message and no other route's response changes.
  */
 export type CodeRouteErrorCode =
-  | GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode | NextcloudErrorCode;
+  | GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode | NextcloudErrorCode | FeatureOffCode;
 
 export class CodeRouteError extends HTTPException {
   constructor(

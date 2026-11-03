@@ -63,7 +63,8 @@ const deckError = (err: unknown): string => `couldn't check Deck: ${firstLine(er
  *
  * A failure is kept as a one-line error the tile shows: a board's on its app
  * only, the inbox's on every GitHub section, which keeps showing the last list
- * it read. While no app has a repo, a check runs no gh at all.
+ * it read. While no app has a repo, a check runs no gh at all, and while
+ * GitHub or Nextcloud is turned off (Settings, Features) it never reaches it.
  */
 export class OverviewService {
   private readonly store: Store;
@@ -117,6 +118,7 @@ export class OverviewService {
     const me = this.login;
     const notifications =
       this.inbox === null && this.inboxError === null ? null : { list: this.inbox?.list ?? [], more: this.inbox?.more ?? false, error: this.inboxError };
+    const { githubEnabled, nextcloudEnabled } = this.store.settings.get();
     return buildOverview({
       apps,
       chats,
@@ -127,6 +129,8 @@ export class OverviewService {
       me,
       notifications,
       decks: this.decks,
+      github: githubEnabled,
+      nextcloud: nextcloudEnabled,
       checkedAt: this.checkedAt,
       checking: this.inFlight !== null,
       // A machine that can't be reached matters only if a chat it runs could be waiting on the user.
@@ -207,11 +211,17 @@ export class OverviewService {
 
   private async check(): Promise<void> {
     const apps = this.store.apps.list();
+    const { githubEnabled, nextcloudEnabled } = this.store.settings.get();
 
-    // No gh at all while no app has a repo: nothing would use the login or the inbox.
-    let inbox = this.inbox;
+    // No gh at all while GitHub is off or no app has a repo: nothing would use the login or the inbox.
+    let inbox = githubEnabled ? this.inbox : null;
     let inboxError: string | null = null;
-    if (apps.some((a) => a.githubRepo !== null)) {
+    if (!githubEnabled && this.login !== null) {
+      // Paired machines stop comparing their login with this one's.
+      this.login = null;
+      this.deps.onLoginChanged?.();
+    }
+    if (githubEnabled && apps.some((a) => a.githubRepo !== null)) {
       let login: string | null = null;
       try {
         login = await this.deps.github().login();
@@ -234,7 +244,7 @@ export class OverviewService {
     }
 
     const decks: Record<string, DeckResult> = {};
-    const boardApps = apps.filter((a) => a.deckBoardId !== null);
+    const boardApps = nextcloudEnabled ? apps.filter((a) => a.deckBoardId !== null) : [];
     if (boardApps.length > 0) {
       let client: NextcloudClient | null = null;
       let clientError: string | null = null;

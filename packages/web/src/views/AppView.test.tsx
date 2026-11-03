@@ -20,6 +20,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { ApiError, api } from '../state/api.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { AppView, folderName } from './AppView.js';
 
@@ -57,6 +58,7 @@ function app(over: Partial<App> & { id: string }): App {
 }
 
 beforeEach(() => {
+  useFeatures.setState({ github: true, nextcloud: true });
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({
     profiles: [profile],
@@ -424,5 +426,49 @@ describe('AppView, Nextcloud fields', () => {
     expect(await screen.findByText('Set up Nextcloud in Settings to pick a board.')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Deck board' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'Folder' })).toBeEnabled();
+  });
+});
+
+describe('AppView, with GitHub or Nextcloud turned off', () => {
+  it('GitHub off: creating shows no repo field and never looks one up', async () => {
+    const user = userEvent.setup();
+    useFeatures.setState({ github: false });
+    mockedPick.mockResolvedValue('/home/me/otherbench');
+    mockedDetect.mockResolvedValue({ githubRepo: 'o/r', isRepo: true });
+    mockedCreate.mockResolvedValue(app({ id: 'a-new' }));
+    render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Choose…' }));
+    expect(screen.queryByRole('textbox', { name: 'GitHub repo' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Create app' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: null })));
+    expect(mockedDetect).not.toHaveBeenCalled();
+  });
+
+  it('GitHub off: an edit leaves the stored repo alone', async () => {
+    const user = userEvent.setup();
+    useFeatures.setState({ github: false });
+    const existing = app({ id: 'A', name: 'Alpha', workspaceRoot: '/alpha', githubRepo: 'o/alpha' });
+    useOtherBenchStore.setState({ apps: [existing] });
+    mockedPatch.mockResolvedValue({ ...existing, name: 'Alpha 2' });
+    render(<AppView page={{ mode: 'edit', appId: 'A' }} onClose={vi.fn()} />);
+    await user.clear(screen.getByRole('textbox', { name: 'Name' }));
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Alpha 2');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('A', { name: 'Alpha 2' }));
+  });
+
+  it('Nextcloud off: no board, page or tag fields, and Nextcloud is never asked', async () => {
+    const user = userEvent.setup();
+    useFeatures.setState({ nextcloud: false });
+    mockedPick.mockResolvedValue('/home/me/otherbench');
+    render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Choose…' }));
+    await waitFor(() => expect(mockedDetect).toHaveBeenCalled());
+    expect(screen.queryByRole('combobox', { name: 'Deck board' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Collectives page' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Bookmark tag' })).toBeNull();
+    expect(mockedBoards).not.toHaveBeenCalled();
+    expect(mockedCollectives).not.toHaveBeenCalled();
+    expect(mockedLinks).not.toHaveBeenCalled();
   });
 });

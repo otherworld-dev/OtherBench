@@ -636,6 +636,19 @@ describe('issue routes', () => {
     expect(calls.list).toEqual([]);
   });
 
+  it('with GitHub turned off every route is a 409 github-off and gh never runs', async () => {
+    newApp('a1', tmp(), { githubRepo: 'o/r' });
+    store.settings.update({ githubEnabled: false });
+    for (const [method, path] of [['GET', '/api/apps/a1/issues'], ['GET', '/api/apps/a1/issues/1'], ['GET', '/api/apps/a1/pulls/1'], ['POST', '/api/apps/a1/issues/1/close']] as const) {
+      const res = await send(method, path);
+      expect(res.status, path).toBe(409);
+      expect(await json(res)).toMatchObject({ code: 'github-off', error: 'GitHub is turned off on this machine. Turn it on in Settings → Features.' });
+    }
+    expect(calls.list).toEqual([]);
+    expect(calls.view).toEqual([]);
+    expect(calls.close).toEqual([]);
+  });
+
   it("works whether or not the app's folder is on this machine", async () => {
     store.apps.create({ id: 'a1', name: 'A', workspace: { kind: 'machine', nodeId: 'node-laptop', root: '/elsewhere' }, githubRepo: 'o/r' });
     expect((await send('GET', '/api/apps/a1/issues')).status).toBe(200);

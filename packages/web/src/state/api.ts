@@ -2,7 +2,7 @@ import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersi
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
-import type { GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary, PullRequestDetail } from '@otherbench/core/types/code.js';
+import type { FeatureOffCode, GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary, PullRequestDetail } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
@@ -42,7 +42,7 @@ export interface AuthStatus {
  * "Error states the panels must handle"; server `code/route-errors.ts`). The
  * panels pick their one-line copy by it.
  */
-export type CodeErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | NextcloudErrorCode;
+export type CodeErrorCode = GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | NextcloudErrorCode | FeatureOffCode;
 
 export class ApiError extends Error {
   readonly status: number;

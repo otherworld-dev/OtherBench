@@ -5,6 +5,7 @@ import { windowForMode } from '../desktop/windows.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
 import { api } from './api.js';
 import { emitAppEvent } from './appEventListeners.js';
+import { refreshFeatures } from './features.js';
 import { refreshMachines } from './machines.js';
 import { SseClient } from './sse.js';
 import { modeOfChat } from './mode.js';
@@ -98,12 +99,15 @@ export function useAppEvents(): void {
       onHello: (hello) => {
         applyAppHello(hello);
         emitAppEvent({ type: 'overview-changed' });
+        // Missed a switch while disconnected, or this is start-up.
+        refreshFeatures();
       },
       onEvent: (event) => {
         applyAppEvent(event);
         emitAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
         if (event.type === 'apps-changed') refreshApps();
+        if (event.type === 'settings-changed') refreshFeatures();
         if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[otherbench-web] failed to show a notification:', err));
       },

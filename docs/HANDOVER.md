@@ -694,6 +694,15 @@ panel under `packages/web/src/views/settings/`:
   for stdio and HTTP servers, env vars and headers (write-only, same pattern
   as connection API keys), and live health via the same 4-second poll the
   Inspector uses (`usePolled`, `packages/web/src/lib/usePolled.ts`).
+- **Features** (`FeaturesPanel.tsx`) — turns GitHub and Nextcloud on or off
+  on this machine (`githubEnabled`/`nextcloudEnabled` in `app_setting`, never
+  synced). Off hides every surface that uses it (Issues, the Overview inbox,
+  the Deck/Wiki/Links tabs, "Deck #N" links, the app form's fields, the
+  Nextcloud settings tab) and the server stops reaching it: `githubOf` and
+  `nextcloudOrThrow` refuse with 409 `github-off`/`nextcloud-off`
+  (`server/src/features.ts`) and the Overview's check skips it. Apps keep
+  their repo, board and wiki for when it's turned back on. A change emits
+  `settings-changed` so every window re-reads them (`web/src/state/features.ts`).
 
 **Ollama discovery seeds capabilities from Ollama's own API**, not just an
 OpenAI-compatible shape: `AiSdkChatEngine` hits Ollama's native `GET
@@ -849,9 +858,10 @@ as regression tests.
   per project are kept), both `ON DELETE CASCADE` with the project;
   `chat.memory_cursor` (last message folded in, reset when the chat changes
   project) and `chat.memory_excluded`; and `app_setting`, a key/value table
-  (JSON values) that is OtherBench's first app-wide settings store. Its only key
-  is `memoryProfileId` (`GET/PATCH /api/settings`; cleared when that profile
-  is archived or deleted).
+  (JSON values) that is OtherBench's first app-wide settings store. Its keys
+  are `memoryProfileId` (`GET/PATCH /api/settings`; cleared when that profile
+  is archived or deleted) and the Features switches `githubEnabled` and
+  `nextcloudEnabled`.
 - **Format.** Five fixed level-2 headings (`## Pinned`, `## Goals`,
   `## Decisions`, `## Current focus`, `## Open questions`), 4,000 characters
   at most. Every rule lives in `packages/core/src/domain/memory.ts`, which the
