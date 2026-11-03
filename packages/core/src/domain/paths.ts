@@ -1,4 +1,4 @@
-import { realpathSync, lstatSync } from 'node:fs';
+import { realpathSync, lstatSync, statSync } from 'node:fs';
 import { isAbsolute, resolve, relative, dirname, basename, join, sep } from 'node:path';
 import type { ResolvedFolder } from '../types/workspace.js';
 
@@ -174,7 +174,10 @@ export function containPathIn(workspaceRoot: string | null, folders: readonly Re
     let depth: number;
     try {
       path = containPath(check.root, check.path);
-      depth = realpathNearest(check.root).length;
+      const root = realpathNearest(check.root);
+      depth = root.length;
+      // A "folder" that is one file contains that file alone.
+      if (path !== root && statSync(root, { throwIfNoEntry: false })?.isFile() === true) continue;
     } catch {
       // Not in this folder (or its root no longer resolves): never contained.
       continue;

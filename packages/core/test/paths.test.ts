@@ -180,6 +180,12 @@ describe('containPathIn (extra folders)', () => {
     expect(() => containPathIn(ws, folders(), '../elsewhere/secret.txt')).toThrow(PathEscapeError);
   });
 
+  it('lets a "folder" that is one file contain that file alone', () => {
+    const file = [{ root: join(refs, 'paper.md'), access: 'readwrite' as const }];
+    expect(containPathIn(ws, file, join(refs, 'paper.md'))).toEqual({ path: join(refs, 'paper.md'), root: join(refs, 'paper.md'), writable: true });
+    expect(() => containPathIn(ws, file, join(refs, 'paper.md', 'x.md'))).toThrow(PathEscapeError);
+  });
+
   it('refuses a link inside an extra folder that points outside every folder', () => {
     const link = join(notes, 'escape');
     try { symlinkSync(elsewhere, link, 'junction'); } catch { return; } // needs privilege on Windows

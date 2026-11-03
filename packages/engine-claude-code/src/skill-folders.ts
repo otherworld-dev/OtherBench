@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { containPath } from '@otherbench/core/domain/paths.js';
@@ -37,6 +37,27 @@ export function claudeProjectFolders(env: NodeJS.ProcessEnv, workspaceRoot: stri
     { root: project, access: 'read' },
     { root: join(project, 'memory'), access: 'readwrite' },
   ];
+}
+
+/**
+ * The user's global instructions, `CLAUDE.md` in the Claude config folder, as
+ * a writable "folder" that is just that file (containPath counts the file
+ * itself as inside it), so Claude Code can read and edit it and nothing else
+ * there. A write still always asks, as it would to a project's CLAUDE.md
+ * (core isProtectedAgentPath). Only a plain file that is there: a missing one
+ * would let a write make a folder of that name and files in it, and a link
+ * would reach wherever it points. Left out inside the workspace too.
+ */
+export function claudeGlobalFiles(env: NodeJS.ProcessEnv, workspaceRoot: string, home: string = homedir()): ResolvedFolder[] {
+  const file = join(claudeConfigDir(env, home), 'CLAUDE.md');
+  let plain = false;
+  try {
+    plain = lstatSync(file).isFile();
+  } catch {
+    // Not there.
+  }
+  if (!plain || inside(workspaceRoot, file)) return [];
+  return [{ root: file, access: 'readwrite' }];
 }
 
 /** Claude Code's longest project folder name before it cuts it and adds a hash. */

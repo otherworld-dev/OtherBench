@@ -188,7 +188,7 @@ export function createGate(deps: {
   backgroundOwner?: (toolUseId: string, wait: boolean) => Promise<{ callId: string; label: string } | null>;
   /**
    * Folders for Claude Code's file tools alone (the user's skills, read-only,
-   * and Claude Code's project folder, its memory writable:
+   * Claude Code's project folder, its memory writable, and the global CLAUDE.md:
    * engine-claude-code/src/skill-folders.ts): not in `ctx`, so no relayed tool
    * (the sandboxed shell above all) is given them.
    */

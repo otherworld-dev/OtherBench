@@ -26,7 +26,7 @@ import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError }
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
-import { claudeProjectFolders, claudeSkillFolders } from './skill-folders.js';
+import { claudeGlobalFiles, claudeProjectFolders, claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, NOTE_PICKED, PromptQueue, type NotePickedMessage, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
@@ -1038,9 +1038,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /**
    * The user's own skills and plugins, read-only, and Claude Code's own project
-   * folder for the workspace, its memory writable, for the gate alone
-   * (skill-folders.ts): a skill may read its own files and Claude Code may keep
-   * its notes with its file tools. Not part of the reply's tool context, so the
+   * folder for the workspace, its memory writable, and the global CLAUDE.md, for
+   * the gate alone (skill-folders.ts): a skill may read its own files and Claude
+   * Code may keep its notes and edit the global instructions with its file tools. Not part of the reply's tool context, so the
    * sandboxed shell and relayed tools never get them.
    */
   private claudeFolders(workspaceRoot: string | null, account: ClaudeAccountRef | undefined): ResolvedFolder[] {
@@ -1048,7 +1048,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const base = this.deps.baseEnv ?? process.env;
     // Another account's skills and projects are in its own config folder; main reads the inherited one as before.
     const env = account?.configDir ? { ...base, CLAUDE_CONFIG_DIR: account.configDir } : base;
-    return [...claudeSkillFolders(env, workspaceRoot), ...claudeProjectFolders(env, workspaceRoot)];
+    return [...claudeSkillFolders(env, workspaceRoot), ...claudeProjectFolders(env, workspaceRoot), ...claudeGlobalFiles(env, workspaceRoot)];
   }
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */

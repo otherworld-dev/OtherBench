@@ -1504,6 +1504,12 @@ refused.
   in `memory/` count as data, not config (`isProtectedAgentPath`), so they
   follow Auto and grants like any write instead of always asking. Another
   project's folder is still outside.
+- They also get the global `CLAUDE.md` in that config folder, writable, as a
+  folder entry that is just the file (`containPathIn` lets a file root
+  contain itself alone). Only when it is a plain file already, not a link or
+  a missing one. A write to it always asks (a card, or in Auto the
+  classifier), as a project's `CLAUDE.md` does; the rest of the config
+  folder stays outside.
 - Skill and slash-command inline shell (`` !`cmd` ``) is disabled for OtherBench
   turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
   the Skill tool itself gets no card.
