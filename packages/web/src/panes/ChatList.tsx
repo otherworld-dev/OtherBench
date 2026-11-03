@@ -253,6 +253,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const queue = useNeedsYouQueue(chats, activity, now);
   const needsYou = useMemo(() => (searching ? [] : queue.filter((c) => modeOfChat(c) === mode)), [searching, queue, mode]);
   const needsYouIds = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
+  // Its row in the group gets the tick too, so a chat can be ticked off where it is, searching or not.
+  const queuedIds = useMemo(() => new Set(queue.map((c) => c.id)), [queue]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
   const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, trimmedQuery, chipMatches), [chats, apps, appFolders, matches, trimmedQuery, chipMatches]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
@@ -1281,7 +1283,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         projectPinMarker={section?.projectPinned === true}
         projectName={listed ? homeName(chat) : section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
         needsYou={listed}
-        onTick={listed && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
+        onTick={queuedIds.has(chat.id) && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
         now={now}
         onOpenMenu={(position, source) => {
           setMenuInList(listed);

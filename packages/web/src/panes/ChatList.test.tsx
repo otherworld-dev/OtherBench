@@ -495,6 +495,28 @@ describe('ChatList status', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['done']);
   });
 
+  it('ticks a chat off from its row in the group as well', async () => {
+    const chat = finished('done');
+    vi.mocked(api.chats.patch).mockResolvedValue({ ...chat, dealtWithAt: Date.now() });
+    useOtherBenchStore.setState({ chats: [chat, makeChat({ id: 'quiet' })] });
+    render(<ChatList />);
+    expect(within(screen.getByTestId('chat-row-quiet')).queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
+    await userEvent.setup().click(within(screen.getByTestId('chat-row-done')).getByRole('button', { name: 'Nothing to do here' }));
+    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: expect.any(Number) });
+    await waitFor(() => expect(screen.queryByTestId('group-needs-you')).toBeNull());
+    expect(within(screen.getByTestId('chat-row-done')).queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
+  });
+
+  it('gives no tick to a group row while a card waits', () => {
+    useOtherBenchStore.setState({
+      chats: [finished('asking')],
+      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'ask_user', kind: 'question' } },
+    });
+    render(<ChatList />);
+    expect(screen.getByTestId('chat-status-asking')).toHaveTextContent('Answer');
+    expect(within(screen.getByTestId('chat-row-asking')).queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
+  });
+
   it("leaves Code mode's chats out of the list in Chat mode", () => {
     useOtherBenchStore.setState({ chats: [finished('coded', { appId: 'A' }), finished('talked')], apps: [makeApp({ id: 'A', name: 'Bench' })] });
     render(<ChatList />);
