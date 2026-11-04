@@ -122,6 +122,52 @@ describe('McpServerManager', () => {
     expect(manager.health().find((h) => h.id === 'srv-2')!.status).toBe('ok');
   });
 
+  it('onChange hears each status change, a server turned off, every sync, and a cancelled sign-in, until unsubscribed', async () => {
+    const store = new InMemoryStore();
+    store.mcpServers.create(makeRow());
+    const manager = makeManager(store);
+    const heard: (string | null)[] = [];
+    const off = manager.onChange((id) => heard.push(id));
+
+    await manager.sync();
+    await waitFor(() => manager.health()[0]?.status === 'ok');
+    // 'connecting', then 'ok', and the sync itself.
+    expect(heard.filter((id) => id === 'srv-1').length).toBeGreaterThanOrEqual(2);
+    expect(heard).toContain(null);
+
+    heard.length = 0;
+    store.mcpServers.update('srv-1', { enabled: false });
+    await manager.sync();
+    expect(heard).toContain('srv-1');
+
+    heard.length = 0;
+    manager.cancelSignIn('srv-1');
+    expect(heard).toEqual(['srv-1']);
+
+    off();
+    await manager.sync();
+    expect(heard).toEqual(['srv-1']);
+  });
+
+  it('a health check that finds a different tool list is announced, and the new list is kept on the row', async () => {
+    const store = new InMemoryStore();
+    store.mcpServers.create(makeRow());
+    const manager = new McpServerManager(store, new FakeSecretStore(), { initialBackoffMs: 50, maxBackoffMs: 100, healthCheckIntervalMs: 50 });
+    managers.push(manager);
+    await manager.sync();
+    await waitFor(() => manager.health()[0]?.status === 'ok');
+    const client = manager.listFor(['srv-1'])[0]!.client;
+    const heard: (string | null)[] = [];
+    manager.onChange((id) => heard.push(id));
+
+    // As if the server had offered no tools until now: the next check lists two.
+    client.tools = [];
+    store.mcpServers.update('srv-1', { toolsCache: [] });
+    await waitFor(() => heard.includes('srv-1'));
+    expect(manager.health()[0]).toMatchObject({ status: 'ok', toolCount: 2 });
+    expect(store.mcpServers.get('srv-1')!.toolsCache).toHaveLength(2);
+  });
+
   it('a misconfigured row (stdio with no command) is marked error and never crashes sync()', async () => {
     const store = new InMemoryStore();
     store.mcpServers.create(makeRow({ command: null }));

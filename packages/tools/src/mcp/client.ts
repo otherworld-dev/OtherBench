@@ -171,7 +171,7 @@ export class McpClient {
     return redactMessage(message, [...configured, ...held]);
   }
 
-  /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'). Returns an unsubscribe function. */
+  /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'), and to a health check finding a different tool list. Returns an unsubscribe function. */
   onStatusChange(cb: (status: McpStatus, error: string | null) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -302,7 +302,11 @@ export class McpClient {
     try {
       const listed = await this.client.listTools();
       if (seq !== this.connectSeq || this.closed) return;
-      this.tools = mapTools(listed.tools);
+      const tools = mapTools(listed.tools);
+      const changed = JSON.stringify(tools) !== JSON.stringify(this.tools);
+      this.tools = tools;
+      // Same status, new tool list: told like a status change, so the cached list and the Inspector's count follow it.
+      if (changed) this.notify();
       this.scheduleHealthCheck(seq);
     } catch (err) {
       if (seq !== this.connectSeq || this.closed) return;
@@ -356,9 +360,14 @@ export class McpClient {
   private setStatus(status: McpStatus, error: string | null = null): void {
     this.status = status;
     this.lastError = error;
+    this.notify();
+  }
+
+  private notify(): void {
+    const { status, lastError } = this;
     for (const cb of this.listeners) {
       try {
-        cb(status, error);
+        cb(status, lastError);
       } catch (err) {
         console.error(`[McpClient:${this.id}] a status listener threw while handling '${status}':`, err);
       }
