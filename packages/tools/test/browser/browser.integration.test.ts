@@ -64,6 +64,12 @@ const cookieBoxHtml = `<!doctype html><title>Cookies</title><h1>Laptop specs</h1
 <button onclick="document.getElementById('box').remove();document.querySelector('h1').textContent='Box refused'">Reject all</button>
 </div>`;
 
+/** A spec sheet far longer than one snapshot part, with its last row and a button right at the end. */
+const longHtml = `<!doctype html><title>Spec sheet</title><h1>Spec sheet</h1>
+${Array.from({ length: 1500 }, (_, i) => `<p>Spec row ${i}: a long enough line of detail to fill the page.</p>`).join('\n')}
+<p>Battery: 99 Wh</p>
+<button onclick="document.querySelector('h1').textContent = 'Bought'">Buy</button>`;
+
 const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
 
 /** Every note any result carried, in order: a note lands on whichever result comes next, so tests look here. */
@@ -146,6 +152,10 @@ beforeAll(async () => {
     if (req.url === '/signin') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return void res.end('<!doctype html><title>Sign in</title><label>User <input></label><label>Pass <input type="password"></label>');
+    }
+    if (req.url === '/long') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return void res.end(longHtml);
     }
     if (req.url === '/cookies') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -279,6 +289,21 @@ describe('the browser against a loopback fixture site', () => {
     await call({ command: 'snapshot' });
     expect(await tool.execute(greet, ctx)).toMatchObject({ error: true, code: 'stale_ref' });
     expect((await call({ command: 'snapshot' }))['snapshot']).toContain('Fixture heading');
+  }, 60_000);
+
+  it('reads a long page to its end in parts, and acts on a ref from the last part', async (t) => {
+    if (skipReason) t.skip();
+    const opened = await call({ command: 'open', url: `http://127.0.0.1:${port}/long` });
+    const parts = opened['parts'] as number;
+    expect(opened['part']).toBe(1);
+    expect(parts).toBeGreaterThan(1);
+    expect(String(opened['snapshot'])).toContain('use snapshot with part 2');
+    expect(String(opened['snapshot'])).not.toContain('Battery: 99 Wh');
+    const last = await call({ command: 'snapshot', part: parts });
+    expect(last).toMatchObject({ part: parts, parts });
+    expect(String(last['snapshot'])).toContain('Battery: 99 Wh');
+    const bought = await call({ command: 'click', ref: refFor(last['snapshot'], 'button', 'Buy') });
+    expect(String(bought['snapshot'])).toContain('Bought');
   }, 60_000);
 
   it('sends no WebRTC UDP around the proxy, whichever browser launched', async (t) => {

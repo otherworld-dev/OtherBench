@@ -65,6 +65,9 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
     expect(summary({ command: 'scroll', direction: 'up' })).toBe('Use example.com: scroll up');
     expect(summary({ command: 'back' })).toBe('Use example.com: go back');
     expect(summary({ command: 'snapshot' })).toBe('Use example.com: read the page');
+    expect(summary({ command: 'snapshot', part: 1 })).toBe('Use example.com: read the page');
+    expect(summary({ command: 'snapshot', part: 3 })).toBe('Use example.com: read part 3 of the page');
+    expect(summary({ command: 'snapshot', part: '3; rm -rf' })).toBe('Use example.com: read the page');
   });
 
   it('stores a chat answer as a grant for that one site, which no other site and no other source matches', () => {
