@@ -786,7 +786,9 @@ function loadSentNotes(): Record<string, ReplyNote> {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const notes: Record<string, ReplyNote> = {};
     for (const [id, n] of Object.entries(parsed as Record<string, Partial<ReplyNote> | null>)) {
-      if (n && n.id === id && typeof n.chatId === 'string' && typeof n.text === 'string' && Array.isArray(n.attachments)) notes[id] = n as ReplyNote;
+      // Another tab's, copied with its storage when this one was duplicated from it (clientId.ts): not this tab's to bring back.
+      if (n?.clientId !== CLIENT_ID) continue;
+      if (n.id === id && typeof n.chatId === 'string' && typeof n.text === 'string' && Array.isArray(n.attachments)) notes[id] = n as ReplyNote;
     }
     return notes;
   } catch {
