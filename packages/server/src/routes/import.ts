@@ -55,7 +55,7 @@ export function importRoutes(container: Container): Hono {
     const folder = optionalNullableString(body.folder, 'folder') ?? '';
     const profileId = optionalNullableString(body.profileId, 'profileId') ?? null;
     try {
-      return c.json(await service().preview(folder, profileId));
+      return c.json(await service().preview(folder, profileId, c.req.raw.signal));
     } catch (err) {
       asHttp(err);
     }
@@ -69,7 +69,7 @@ export function importRoutes(container: Container): Hono {
     const cowork = optionalBoolean(body.cowork, 'cowork', false);
     const spaces = spacesOf(body.spaces);
     try {
-      return c.json(await service().start({ folder, profileId, memory, cowork, spaces }), 202);
+      return c.json(await service().start({ folder, profileId, memory, cowork, spaces }, c.req.raw.signal), 202);
     } catch (err) {
       asHttp(err);
     }

@@ -1421,7 +1421,10 @@ read may add up to 2 GiB and 50,000 at most. ZIPs are read in memory by a small 
 (`packages/server/src/import/zip.ts`) that refuses ZIP64, encryption and
 anything but stored or deflated entries, never inflates past an entry's
 stated size and checks every CRC. Entry names are only compared, never used
-as paths, so a hostile archive can't write anywhere. What the import writes
+as paths, so a hostile archive can't write anywhere. The reading runs in a
+worker thread (`claude-reader-worker.js`, beside `cli.js` in the desktop
+app's bundled server, as `render-worker.js` is), which is stopped when the
+read ends or the request goes away. What the import writes
 goes under `<db>.imported/claude/` through `containPath`, with names made
 safe by `safeFileName`. The export's content is treated as untrusted:
 claude.ai's memory notes are fenced as `<claude-notes>` in the condensing
@@ -2308,10 +2311,16 @@ this on startup.
   workspace.** Extra folders only apply to a chat with a workspace folder
   (spec 2026-10-07-extra-folders), and imported projects have none, so the
   report says so for each docs folder.
-- **Reading an export blocks the server for a moment.** `JSON.parse` of the
-  conversations (about 54 MB for 486 conversations) and inflating the ZIPs
-  run on the main thread, about a third of a second here; a much larger
-  export would hold up other requests for longer. A worker would fix it.
+- **Reading an export costs more time and memory than it did, and planning
+  it still runs on the main thread.** The ZIPs are inflated and the JSON
+  parsed in a worker (`import/claude-reader-worker.ts`), which sends the
+  conversations back in batches of about a megabyte, so the longest pause
+  for other requests on a 53 MB synthetic export went from 0.2 to 0.3 of a
+  second to about 10 ms. Copying the result back makes the read itself
+  about 0.15 s slower, and the parsed export is held twice, in the worker
+  and the main thread, until the worker is stopped. `planClaudeImport` and
+  the preview's checks against the database still run on the main thread
+  after the read.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
   no list of signed-in devices (only *Sign out everywhere*), sessions don't
   survive a restart, certificate files aren't reloaded without a restart,

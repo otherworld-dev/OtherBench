@@ -2,7 +2,8 @@
 // dist-bundle/server/cli.js the way the desktop app does (`--port 0
 // --announce`, token in OTHERBENCH_TOKEN) against a scratch database, then
 // checks health, that terminals are available, a mock-provider turn, search, a .docx, an .xlsx and a .pptx
-// made by the bundled writers, and that the packages left out of the bundle load.
+// made by the bundled writers, a claude.ai export read by the bundled reader, and that the packages left
+// out of the bundle load.
 // Exits non-zero on any failure.
 //
 // `npm run bundle:smoke -w @otherbench/server`, after `npm run bundle`. Pass a
@@ -11,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -23,7 +24,8 @@ const dir = mkdtempSync(join(tmpdir(), 'otherbench-bundle-smoke-'));
 const token = randomBytes(32).toString('hex');
 
 const child = spawn(process.execPath, [bundle, 'serve', '--port', '0', '--announce', '--db', join(dir, 'otherbench.db')], {
-  env: { ...process.env, OTHERBENCH_TOKEN: token },
+  // No Cowork folder: the import check reads only the export it writes.
+  env: { ...process.env, OTHERBENCH_TOKEN: token, OTHERBENCH_COWORK_ROOT: '' },
   stdio: ['pipe', 'pipe', 'inherit'],
 });
 
@@ -119,6 +121,19 @@ await officeFile('document', 'word/document.xml');
 await officeFile('spreadsheet', 'xl/workbook.xml');
 await officeFile('presentation', 'ppt/presentation.xml');
 console.log('[smoke] the bundled writers made a .docx, an .xlsx and a .pptx');
+
+// A claude.ai export is read in a worker (src/import/claude-reader.ts), which must also sit beside cli.js.
+if (!existsSync(join(dirname(bundle), 'claude-reader-worker.js'))) fail('claude-reader-worker.js is missing beside cli.js');
+const exportDir = join(dir, 'claude-export');
+mkdirSync(exportDir);
+writeFileSync(join(exportDir, 'conversations.json'), JSON.stringify([{ uuid: '9b0c1a52-0d8e-4c0e-9d6f-2f1e8f2b7a10', name: 'Smoke', chat_messages: [{ uuid: 'm1', sender: 'human', text: 'hello', content: [{ type: 'text', text: 'hello' }] }] }]));
+const preview = await api('POST', '/import/claude/preview', { folder: exportDir });
+if (preview.chats?.total !== 1) fail(`the import preview read ${JSON.stringify(preview.chats)} from a one-chat export`);
+writeFileSync(join(exportDir, 'conversations.json'), '{ broken');
+const refused = await fetch(`${base}/import/claude/preview`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: exportDir }) });
+const refusal = await refused.text();
+if (refused.status !== 400 || !refusal.includes("isn't valid JSON")) fail(`a broken export answered ${refused.status} ${refusal}`);
+console.log('[smoke] the bundled export reader read an export and refused a broken one');
 
 // The packages left out of the bundle, loaded from beside it.
 for (const pkg of ['unpdf', '@anthropic-ai/claude-agent-sdk']) {

@@ -1,7 +1,11 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { ClaudeExportError, type ClaudeExportFiles } from '@otherbench/core/domain/claude-import.js';
 import { containPath, PathEscapeError } from '@otherbench/core/domain/paths.js';
+import type { ReadJob, ReadReply } from './claude-reader-worker.js';
 import { listZipEntries, readZipEntry, ZipError } from './zip.js';
 
 /**
@@ -19,6 +23,10 @@ import { listZipEntries, readZipEntry, ZipError } from './zip.js';
  * in the folder (not in a ZIP) lists ones saved from claude.ai next to it,
  * each named by its claude.ai file id; only the list is read here, and the
  * import reads each file when it stores it (`filesDir`).
+ *
+ * The reading runs in a worker thread (`claude-reader-worker.ts`): inflating
+ * the ZIPs and parsing tens of megabytes of JSON would otherwise hold up
+ * every other request while it ran.
  */
 
 /** The largest single file read, extracted or in a ZIP. */
@@ -192,11 +200,12 @@ async function listFiles(root: string): Promise<string[]> {
 }
 
 /**
- * Reads the export in `folder`. Throws `ClaudeExportError` with a message for
- * the user when it can't, or when the folder holds no export and `optional`
- * isn't set (the folder may hold only Cowork sessions).
+ * Reads the export in `folder` in this thread: what the worker runs
+ * (readClaudeExport). Throws `ClaudeExportError` with a message for the user
+ * when it can't, or when the folder holds no export and `optional` isn't set
+ * (the folder may hold only Cowork sessions).
  */
-export async function readClaudeExport(folder: string, { optional = false }: { optional?: boolean } = {}): Promise<ClaudeExportRead> {
+export async function readClaudeExportInProcess(folder: string, { optional = false }: { optional?: boolean } = {}): Promise<ClaudeExportRead> {
   if (!isAbsolute(folder)) throw new ClaudeExportError('Give the full path of the folder the export is in.');
   let info;
   try {
@@ -250,5 +259,91 @@ async function readZip(path: string, rel: string, collector: Collector): Promise
   } catch (err) {
     if (err instanceof ZipError) throw new ClaudeExportError(`${rel}: ${err.message}`);
     throw err;
+  }
+}
+
+/** The lists in `files` the worker sends back in batches; everything else comes in its last message. */
+export const EXPORT_LISTS = ['conversations', 'projects', 'memories', 'artifacts', 'conversationList'] as const;
+export type ExportList = (typeof EXPORT_LISTS)[number];
+
+/**
+ * Where the worker's compiled file may be, for a module at `moduleUrl`, as for
+ * the Office worker (office/render.ts): beside the module, in `dist/import/`
+ * and in the bundle (where this module is part of `cli.js` and the bundle
+ * script writes `claude-reader-worker.js` next to it). Run from the TypeScript
+ * sources (vitest), the compiled one in `packages/server/dist/import/` is
+ * tried too, so server tests need `npx tsc -b` first.
+ */
+export function readerWorkerCandidates(moduleUrl: string): URL[] {
+  const candidates = [new URL('./claude-reader-worker.js', moduleUrl)];
+  if (/\/src\/import\/claude-reader\.ts$/.test(new URL(moduleUrl).pathname)) candidates.push(new URL('../../dist/import/claude-reader-worker.js', moduleUrl));
+  return candidates;
+}
+
+function readerWorkerFile(): URL {
+  const found = readerWorkerCandidates(import.meta.url).find((url) => existsSync(fileURLToPath(url)));
+  if (!found) throw new Error("OtherBench's server wasn't built: the export reader (claude-reader-worker.js) is missing.");
+  return found;
+}
+
+let running = 0;
+
+/** How many export readers are running now (for tests: none is left behind). */
+export function claudeReaderWorkersRunning(): number {
+  return running;
+}
+
+/** What to tell the user when the worker stopped without a reply. */
+function readerFailure(err: unknown): Error {
+  if ((err as { code?: unknown } | null)?.code === 'ERR_WORKER_OUT_OF_MEMORY') {
+    return new ClaudeExportError('The export is too big to import: reading it needs more memory than OtherBench has.');
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Reads the export in `folder` (readClaudeExportInProcess) in a worker
+ * thread, so the server goes on answering other requests meanwhile. The
+ * worker sends the lists back a batch at a time, each one acknowledged only
+ * after this thread has had a turn, and its errors are rethrown as they were
+ * thrown, a `ClaudeExportError` as one. The worker is stopped when the read
+ * ends, however it ends, or when `signal` aborts (the request went away),
+ * which rejects with the signal's reason.
+ */
+export async function readClaudeExport(folder: string, { optional = false, signal }: { optional?: boolean; signal?: AbortSignal } = {}): Promise<ClaudeExportRead> {
+  signal?.throwIfAborted();
+  const job: ReadJob = { folder, optional };
+  const worker = new Worker(readerWorkerFile(), { workerData: job });
+  running++;
+  const exited = new Promise<void>((resolve) => worker.once('exit', () => resolve()));
+  const lists: Record<ExportList, unknown[]> = { conversations: [], projects: [], memories: [], artifacts: [], conversationList: [] };
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<ClaudeExportRead>((resolve, reject) => {
+      onAbort = () => reject(signal!.reason);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      worker.on('message', (reply: ReadReply) => {
+        if (reply.type === 'items') {
+          const into = lists[reply.list];
+          for (const item of reply.items) into.push(item);
+          // Acknowledged after this turn, so other requests are answered between batches.
+          setImmediate(() => worker.postMessage('taken'));
+        } else if (reply.type === 'done') {
+          // Structured clone gives every object a prototype; a version's HTML is keyed by id with none (Collector.add).
+          const artifacts = (lists.artifacts as ClaudeExportFiles['artifacts']).map((a) => ({ meta: a.meta, html: Object.assign(Object.create(null) as Record<string, string>, a.html) }));
+          resolve({ ...reply.read, files: { ...reply.read.files, ...lists, artifacts } });
+        } else {
+          reject(reply.exportError ? new ClaudeExportError(reply.message) : new Error(reply.message));
+        }
+      });
+      worker.once('error', (err) => reject(readerFailure(err)));
+      worker.once('exit', (code) => reject(new Error(`OtherBench's export reader stopped (exit code ${code}) before the export was read.`)));
+    });
+  } finally {
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+    // A no-op if it has finished; either way it has exited before this settles.
+    await worker.terminate().catch(() => undefined);
+    await exited;
+    running--;
   }
 }

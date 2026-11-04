@@ -1,8 +1,9 @@
 // Builds the server the desktop app ships (v2 plan, Task 40): one ESM file,
 // `dist-bundle/server/cli.js`, from the compiled `dist/cli.js` and every
 // workspace package and dependency it imports, the Office file worker
-// `render-worker.js` built the same way beside it, plus a `node_modules` beside
-// it for the few packages that read their own files at run time and so
+// `render-worker.js` and the claude.ai export reader `claude-reader-worker.js`
+// built the same way beside it, plus a `node_modules` beside it for the few
+// packages that read their own files at run time and so
 // can't be bundled. The installer carries this folder and a Node runtime
 // (desktop/scripts/stage.mjs); the app starts `node server/cli.js serve`.
 //
@@ -58,6 +59,8 @@ await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'cli.js')], outfi
 // `./render-worker.js` beside the module that starts it: in the bundle that
 // module is cli.js, so the worker goes next to it.
 await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'office', 'render-worker.js')], outfile: join(out, 'render-worker.js') });
+// A claude.ai export is read in a worker thread too (src/import/claude-reader.ts), from `./claude-reader-worker.js` beside cli.js.
+await build({ ...shared, entryPoints: [join(serverDir, 'dist', 'import', 'claude-reader-worker.js')], outfile: join(out, 'claude-reader-worker.js') });
 await writeFile(join(out, 'package.json'), JSON.stringify({ name: 'otherbench-server', private: true, type: 'module' }, null, 2) + '\n');
 
 const copies = [...EXTERNAL, NATIVE_CLAUDE, NATIVE_PTY];
