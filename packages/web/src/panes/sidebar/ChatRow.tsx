@@ -71,6 +71,11 @@ export interface ChatRowProps {
    * place there isn't the user's to choose. Its test ids differ, so `chat-row-<id>` always means the row in the group.
    */
   needsYou?: boolean;
+  /**
+   * The row under Pinned, a second row for a chat that stays in its group too (Deck d961). Its test ids differ
+   * (`pinned-row-<id>`) for the same reason as `needsYou`'s.
+   */
+  pinnedCopy?: boolean;
   /** Shows the hover tick: there is nothing to do here. Absent while a card waits, which only answering clears. */
   onTick?: () => void;
   /** The current time: shows the chat's age ("3h") from its last activity at the end of the row. */
@@ -86,8 +91,9 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, needsYou = false, onTick, now } = props;
-  const rowId = needsYou ? `needs-you-row-${chat.id}` : `chat-row-${chat.id}`;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, needsYou = false, pinnedCopy = false, onTick, now } = props;
+  const idPrefix = needsYou ? 'needs-you' : pinnedCopy ? 'pinned' : 'chat';
+  const rowId = `${idPrefix}-row-${chat.id}`;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={rowId} className="px-1 py-0.5">
@@ -193,7 +199,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
-      {status ? <StatusWord status={status} testId={needsYou ? `needs-you-status-${chat.id}` : `chat-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
+      {status ? <StatusWord status={status} testId={`${idPrefix}-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
         <span
           data-testid="row-age"
           title={`Last active ${new Date(chat.updatedAt).toLocaleString()}`}

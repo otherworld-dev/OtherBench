@@ -17,9 +17,9 @@ async function createChat(request: APIRequestContext, title: string): Promise<st
 }
 
 /**
- * Pinning from a sidebar row's hover button puts the chat under Pinned, and
- * the open chat's pane header can unpin it again (spec
- * 2026-10-11-sidebar-layout-design §3).
+ * Pinning from a sidebar row's hover button puts the chat under Pinned and
+ * keeps its row where it was (Deck d961); the open chat's pane header can
+ * unpin it again (spec 2026-10-11-sidebar-layout-design §3).
  */
 test('pins a chat from its row and unpins it from the pane header', async ({ page, request }) => {
   const title = `Pin me ${randomUUID().slice(0, 8)}`;
@@ -31,12 +31,13 @@ test('pins a chat from its row and unpins it from the pane header', async ({ pag
     const row = nav.getByTestId(`chat-row-${id}`);
     await row.hover();
     await row.getByRole('button', { name: 'Pin chat' }).click();
-    await expect(nav.getByTestId('group-pinned').getByTestId(`chat-row-${id}`)).toBeVisible();
+    await expect(nav.getByTestId('group-pinned').getByTestId(`pinned-row-${id}`)).toBeVisible();
+    await expect(row).toBeVisible();
 
-    await nav.getByRole('button', { name: title }).click();
+    await row.getByRole('button', { name: title }).click();
     await page.getByRole('region', { name: 'Conversation' }).getByRole('button', { name: 'Unpin chat' }).click();
-    await expect(nav.getByTestId('group-pinned').getByTestId(`chat-row-${id}`)).toHaveCount(0);
-    await expect(nav.getByTestId(`chat-row-${id}`)).toBeVisible();
+    await expect(nav.getByTestId(`pinned-row-${id}`)).toHaveCount(0);
+    await expect(row).toBeVisible();
   } finally {
     await request.delete(`${BASE_URL}/api/chats/${id}`);
   }
@@ -87,7 +88,8 @@ test('dragging a chat onto the drop target in the search box pins it', async ({ 
     await zone.hover();
     await page.mouse.up();
 
-    await expect(nav.getByTestId('group-pinned').getByTestId(`chat-row-${id}`)).toBeVisible();
+    await expect(nav.getByTestId('group-pinned').getByTestId(`pinned-row-${id}`)).toBeVisible();
+    await expect(nav.getByTestId(`chat-row-${id}`)).toBeVisible();
     await expect(nav.getByRole('searchbox', { name: 'Search chats' })).toBeVisible();
   } finally {
     await request.delete(`${BASE_URL}/api/chats/${id}`);

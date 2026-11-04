@@ -240,18 +240,25 @@ describe('buildSidebar', () => {
     expect(model.groups.at(-1)!.project).toBeNull();
   });
 
-  it('leaves archived chats out of the groups and shows pinned chats only under Pinned, while still counting them in their project', () => {
+  it('leaves archived chats out of the groups, and shows a pinned chat under Pinned and in its project too, counted there once', () => {
     const model = buildSidebar(
-      [chat('pinned', { projectId: 'a', pinned: true }), chat('plain', { projectId: 'a' }), chat('archived', { projectId: 'a', archivedAt: 5 })],
+      [chat('pinned', { projectId: 'a', pinned: true, sortOrder: 2 }), chat('plain', { projectId: 'a', sortOrder: 1 }), chat('archived', { projectId: 'a', archivedAt: 5 })],
       [project('a', 'Alpha')],
       null
     );
     expect(ids(model.pinned)).toEqual(['pinned']);
-    expect(ids(model.groups[0]!.chats)).toEqual(['plain']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['pinned', 'plain']);
     expect(model.groups[0]!.total).toBe(2);
   });
 
-  it("lists a project's pinned chats first, apart from the rest; a globally pinned chat stays under Pinned; No project ignores the flag", () => {
+  it('keeps a pinned chat with no project in No project as well as under Pinned', () => {
+    const model = buildSidebar([chat('loose-pin', { pinned: true, sortOrder: 1 }), chat('loose', { sortOrder: 2 })], [], null);
+    expect(ids(model.pinned)).toEqual(['loose-pin']);
+    expect(ids(model.groups.at(-1)!.chats)).toEqual(['loose', 'loose-pin']);
+    expect(model.groups.at(-1)!.total).toBe(2);
+  });
+
+  it("lists a project's pinned chats first, apart from the rest; a globally pinned chat shows under Pinned as well; No project ignores the flag", () => {
     const model = buildSidebar(
       [
         chat('plain', { projectId: 'a', sortOrder: 9 }),
@@ -264,7 +271,7 @@ describe('buildSidebar', () => {
       null
     );
     const alpha = model.groups[0]!;
-    expect(ids(alpha.pinnedChats)).toEqual(['kept-high', 'kept-low']);
+    expect(ids(alpha.pinnedChats)).toEqual(['kept-high', 'kept-low', 'both']);
     expect(ids(alpha.chats)).toEqual(['plain']);
     expect(alpha.total).toBe(4);
     expect(ids(model.pinned)).toEqual(['both']);
@@ -310,7 +317,7 @@ describe('buildSidebar', () => {
       [],
       null
     );
-    expect(ids(model.groups[0]!.chats)).toEqual(['high', 'mid', 'low']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['high', 'mid', 'p2', 'low', 'p1']);
     expect(ids(model.pinned)).toEqual(['p2', 'p1']);
   });
 
@@ -327,7 +334,14 @@ describe('buildSidebar', () => {
     );
     expect(ids(model.pinned)).toEqual(['b2']);
     expect(model.groups.map((g) => g.key)).toEqual(['b']);
-    expect(ids(model.groups[0]!.chats)).toEqual(['b1']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['b1', 'b2']);
+  });
+
+  it('while searching, keeps the group of a match that is pinned, with the match in it', () => {
+    const model = buildSidebar([chat('a1', { projectId: 'a', pinned: true }), chat('a2', { projectId: 'a' })], [project('a', 'Alpha')], new Set(['a1']));
+    expect(ids(model.pinned)).toEqual(['a1']);
+    expect(model.groups.map((g) => g.key)).toEqual(['a']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['a1']);
   });
 });
 

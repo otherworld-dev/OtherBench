@@ -16,9 +16,12 @@ export interface SidebarGroup {
    * sidebar order; only search matches while searching. Always empty for No project, where the flag means nothing.
    */
   pinnedChats: Chat[];
-  /** The group's other unpinned chats in sidebar order (`sortOrder`, highest first); only search matches while searching. */
+  /**
+   * The group's other chats in sidebar order (`sortOrder`, highest first), globally pinned ones included (they show
+   * under Pinned as well, d961); only search matches while searching.
+   */
   chats: Chat[];
-  /** Every unarchived chat in the group and its sub-projects, pinned ones included (they display under Pinned). */
+  /** Every unarchived chat in the group and its sub-projects, each counted once (a pinned chat's row under Pinned is a copy). */
   total: number;
   /**
    * Its sub-projects' groups, shown inside it after its pinned chats (spec 2026-10-15-sub-projects-design §4), in
@@ -132,8 +135,9 @@ export function titleMatches(title: string, query: string): boolean {
 /**
  * The sidebar's layout (spec 2026-10-03-projects-design §3): Pinned, each
  * project in `compareProjects` order (its own pinned chats first), then No project. Archived chats never
- * appear in those; they are returned separately in `archived`. Pinned chats
- * appear only under Pinned (but count towards their project). A chat whose
+ * appear in those; they are returned separately in `archived`. A pinned chat
+ * appears under Pinned and in its own group too, where it stays until
+ * unpinned, counted once (Deck d961). A chat whose
  * project isn't loaded falls under No project. While searching (`matches`
  * set), every list is filtered to those chat ids and groups left with no
  * match are dropped. `sortOf` says how each group orders its chats
@@ -167,7 +171,7 @@ export function buildSidebar(
   const group = (key: string, project: Project | null): SidebarGroup => {
     const sort = sortOf(key);
     const members = live.filter((c) => keyOf(c) === key);
-    const listed = members.filter((c) => !c.pinned && shown(c)).sort(sort === 'recent' ? byRecent : byOrder);
+    const listed = members.filter(shown).sort(sort === 'recent' ? byRecent : byOrder);
     // A chat whose project was deleted keeps the flag (the foreign key clears projectId only); in No project it means nothing.
     const pinnedHere = (c: Chat): boolean => project !== null && c.projectPinned;
     const children = project === null || parentOf(project) !== null ? [] : ordered.filter((p) => parentOf(p) === project.id).map((p) => group(p.id, p));
