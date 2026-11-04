@@ -81,3 +81,59 @@ test('Ctrl+F in a chat finds a message that is not drawn, and leaves the browser
   await expect(box).toHaveCount(0);
   expect(await highlighted()).toEqual([]);
 });
+
+test('Ctrl+F finds text inside folded pastes, drawn or not, and draws only the messages round one far back', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const suffix = randomUUID().slice(0, 8);
+  const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: `Mock ${suffix}`, kind: 'mock' } });
+  const { id: connectionId } = (await conn.json()) as { id: string };
+  const profile = (await (await request.post(`${BASE_URL}/api/profiles`, { data: { name: `Paste ${suffix}`, connectionId, modelId: 'mock-standard' } })).json()) as { id: string };
+  const chat = (await (await request.post(`${BASE_URL}/api/chats`, { data: { profileId: profile.id, title: `Paste ${suffix}` } })).json()) as { id: string };
+
+  // A paste over 40 lines is drawn folded, its last line ("the hidden marmoset") past the fold.
+  const paste = (n: number): string => `${Array.from({ length: 60 }, (_, i) => `pasted log ${n} line ${i}`).join('\n')}\nthe ${n === 0 ? 'hidden' : 'later'} marmoset`;
+  // 45 turns, 90 messages: the first paste is 48 before the 40 drawn, far enough that only the messages round it are drawn.
+  const early = await sendTurn(request, chat.id, null, profile.id, paste(0));
+  let parent = early.assistantMessageIds[0]!;
+  for (let i = 1; i < 44; i++) parent = (await sendTurn(request, chat.id, parent, profile.id, `turn ${i}`)).assistantMessageIds[0]!;
+  const late = await sendTurn(request, chat.id, parent, profile.id, paste(1));
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${chat.id}`).locator('[data-row-main]').click();
+  const thread = page.getByTestId('thread-scroll');
+  const lateMessage = page.locator(`[id="msg-${late.userMessageId}"]`);
+  const earlyMessage = page.locator(`[id="msg-${early.userMessageId}"]`);
+  await expect(lateMessage).toBeVisible();
+  await expect(earlyMessage).toHaveCount(0);
+  // The later paste is drawn, but folded: its marmoset isn't on the page.
+  await expect(lateMessage).not.toContainText('marmoset');
+
+  await lateMessage.getByText('pasted log 1 line 0').click();
+  await page.keyboard.press('Control+f');
+  const box = page.getByRole('textbox', { name: 'Find in this chat' });
+  await box.fill('marmoset');
+  const status = page.getByRole('status', { name: 'Matches' });
+  const highlighted = () => page.evaluate(() => Array.from(CSS.highlights.get('chat-find') ?? [], (r) => r.toString()));
+
+  // From the view, the drawn paste's match comes first: it opens, and the match is shown.
+  await expect(status).toHaveText('2 of 2');
+  await expect(lateMessage).toContainText('the later marmoset');
+  await expect(lateMessage.getByRole('button', { name: 'Show less' })).toBeVisible();
+  expect(await highlighted()).toEqual(['marmoset']);
+
+  // On (wrapping round) to the paste far back: drawn, opened, scrolled to, highlighted.
+  await box.press('Enter');
+  await expect(status).toHaveText('1 of 2');
+  await expect(earlyMessage).toContainText('the hidden marmoset');
+  await expect(earlyMessage.getByText('the hidden marmoset')).toBeInViewport();
+  expect(await highlighted()).toEqual(['marmoset']);
+  // Not everything from it to the end: the latest messages aren't drawn until asked for.
+  await expect(lateMessage).toHaveCount(0);
+  expect(await thread.locator('[id^="msg-"]').count()).toBeLessThanOrEqual(40);
+  await expect(page.getByRole('button', { name: /Show later messages/ })).toBeVisible();
+
+  await box.press('Escape');
+  await page.getByRole('button', { name: 'Jump to latest' }).click();
+  await expect(lateMessage).toBeInViewport();
+  await expect(page.getByRole('button', { name: /Show later messages/ })).toHaveCount(0);
+});

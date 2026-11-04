@@ -278,14 +278,25 @@ of work landed after that plan closed out:
   whole chat (`GET /chats/:id/messages`), so there is no server route: a
   user message's text as typed and a reply's text parts as rendered, without
   their Markdown, never tool calls, tool results, reasoning or cards
-  (`lib/chatFind.ts`). It starts at the first match from the top of the view
-  and wraps, as a browser's does. Going to a match draws back to it as the
+  (`lib/chatFind.ts`), plus the reply on show in a compare turn still
+  waiting at the end of the chat for one to be kept (only the tab on show,
+  even in Split). It starts at the first match from the top of the view
+  and wraps, as a browser's does. Going to a match draws to it the way the
   outline does, opens a folded user message if the match is past the fold,
   scrolls to it and highlights it with a CSS Custom Highlight over a Range
   (`lib/findInDom.ts`, `::highlight(chat-find)` in index.css), so no
-  message's elements change. Not searched: the replies of a compare turn
-  still waiting at the end of the chat for one to be kept, other branches,
-  and a helper's text inside its card. A reply's Markdown is stripped line
+  message's elements change. Neither find nor the outline draws everything
+  from a far-back message to the end (that froze a 600-message chat as
+  opening it did): a message within 40 of what's drawn grows the drawn run
+  to it, one further away is drawn with the 40 from it only, cut loose from
+  the end (`lib/threadWindow.ts`). Then a "Show later messages" button and
+  scrolling near the bottom draw on, the thread doesn't follow new text, and
+  Jump to latest draws the end of the chat afresh. A compare strip or
+  waiting notes at the end still show below the cut. Not searched: other
+  branches, the other tabs of a compare turn (and a reopened compare strip
+  on a tab other than the kept one), and a helper's text inside its card.
+  Searching is client-side on every key; on 600 messages with three
+  170k-character pastes it takes a few ms. A reply's Markdown is stripped line
   by line rather than parsed (`markdownText`): micromark took about 2ms a
   reply, the better part of a second on the first key in a long chat. Where
   the page shows a reply's text differently from the stripped text, the
