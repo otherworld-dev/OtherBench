@@ -8,8 +8,8 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -b",
     "typecheck:tests": "tsc -b && node scripts/typecheck-tests.mjs",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "node scripts/vitest.mjs run",
+    "test:watch": "node scripts/vitest.mjs",
     "dev": "npm run dev -w @otherbench/server",
     "serve": "node packages/server/dist/cli.js serve"
   },
