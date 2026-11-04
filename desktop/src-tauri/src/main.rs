@@ -187,9 +187,10 @@ async fn update_status(updates: tauri::State<'_, Arc<update::Updates>>) -> Resul
     Ok(updates.status())
 }
 
+/// `retry`: Adam pressed Check now, so a build held back after failing is tried again now as well.
 #[tauri::command]
-async fn update_check_now(updates: tauri::State<'_, Arc<update::Updates>>) -> Result<(), String> {
-    updates.check_now();
+async fn update_check_now(updates: tauri::State<'_, Arc<update::Updates>>, retry: Option<bool>) -> Result<(), String> {
+    updates.check_now(retry.unwrap_or(false));
     Ok(())
 }
 

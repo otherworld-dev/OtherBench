@@ -53,6 +53,8 @@ describe('useUpdateHint', () => {
     renderHook(() => useUpdateHint());
     act(() => useOtherBenchStore.getState().setMachines(overview({ versionMismatch: mismatch() })));
     expect(checked).toHaveBeenCalledTimes(1);
+    // An automatic check: a build held back after failing stays held back.
+    expect(checked).toHaveBeenCalledWith();
     act(() => useOtherBenchStore.getState().setMachines(overview({ versionMismatch: mismatch() })));
     expect(checked).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(600_000);

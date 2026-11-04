@@ -117,11 +117,118 @@ pub fn decide(gate: &Gate) -> Decision {
 
 /// Stops the server (releasing the database lock the installer's files
 /// depend on), then installs. `install` exits the process when it works; if it
-/// fails, the app restarts on the build it has, so it is never left running
-/// with no server.
-pub fn install_ready(stop_server: impl FnOnce(), install: impl FnOnce() -> Result<(), String>, restart: impl FnOnce()) -> Result<(), String> {
+/// fails, the failure is recorded (`record`, which must persist it: the
+/// restart forgets everything else) and the app restarts on the build it has,
+/// so it is never left running with no server.
+pub fn install_ready(stop_server: impl FnOnce(), install: impl FnOnce() -> Result<(), String>, record: impl FnOnce(&str), restart: impl FnOnce()) -> Result<(), String> {
     stop_server();
-    install().inspect_err(|_| restart())
+    install().inspect_err(|e| {
+        record(e);
+        restart();
+    })
+}
+
+/// The longest wait before trying a build that keeps failing again.
+pub const RETRY_CAP_MS: u64 = 48 * 60 * 60 * 1000;
+
+/// How long to wait before trying a build again after it has failed `count`
+/// times in a row: the normal check interval after the first failure (so one
+/// failure, say a dropped connection, changes nothing), doubling up to two days.
+pub fn retry_delay_ms(count: u32) -> u64 {
+    let base = CHECK_EVERY.as_millis() as u64;
+    let doublings = count.saturating_sub(1).min(16);
+    base.saturating_mul(1u64 << doublings).min(RETRY_CAP_MS)
+}
+
+/// One build's download or install failures, in a row.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub version: String,
+    pub count: u32,
+    /// When it last failed (ms since the epoch).
+    pub at: u64,
+    /// The last failure, in words for Settings.
+    pub error: String,
+}
+
+/// What the updater remembers across restarts about getting onto a build
+/// (`<app data>/update-attempts.json`). An install that fails restarts the
+/// app, and a persistent one (a bad installer, antivirus blocking it) would
+/// otherwise be downloaded and tried again within minutes of every restart.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct Attempts {
+    pub failed: Option<Failure>,
+    /// The version the installer was started for. The build that starts next
+    /// says whether it took: the installer can fail after this process has gone.
+    pub installing: Option<String>,
+}
+
+impl Attempts {
+    /// What a saved file says, or nothing remembered when it can't be read.
+    pub fn parse(text: &str) -> Self {
+        serde_json::from_str(text).unwrap_or_default()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// `version` failed again (counted on from its last failure), or a new version failed for the first time.
+    pub fn failed(&mut self, version: &str, error: &str, now_ms: u64) {
+        let count = match &self.failed {
+            Some(f) if f.version == version => f.count.saturating_add(1),
+            _ => 1,
+        };
+        self.failed = Some(Failure { version: version.into(), count, at: now_ms, error: error.into() });
+        self.installing = None;
+    }
+
+    /// When `version` may be tried again, if its failures still hold it back.
+    pub fn held_back(&self, version: &str, now_ms: u64) -> Option<u64> {
+        let f = self.failed.as_ref().filter(|f| f.version == version)?;
+        let at = f.at.saturating_add(retry_delay_ms(f.count));
+        (now_ms < at).then_some(at)
+    }
+
+    /// After a check: failures of a build the check no longer chose are
+    /// forgotten (a new version starts counting afresh). A check that failed
+    /// says nothing new.
+    pub fn settle(&mut self, choice: &Choice) {
+        let keep = match choice {
+            Choice::Error(_) => true,
+            Choice::Install { version, .. } => self.failed.as_ref().is_some_and(|f| &f.version == version),
+            _ => false,
+        };
+        if !keep {
+            self.failed = None;
+        }
+    }
+
+    /// At start, on build `current`: an install that was started either took
+    /// (this is that build or newer: its failures are over) or didn't, which
+    /// counts as a failure. Returns whether anything changed, to be saved.
+    pub fn started(&mut self, current: &str, now_ms: u64) -> bool {
+        let before = self.clone();
+        let reached = |v: &str| matches!((Version::parse(current), Version::parse(v)), (Ok(c), Ok(v)) if c >= v);
+        if let Some(v) = self.installing.take() {
+            if !reached(&v) {
+                self.failed(&v, &format!("Installing {v} didn't finish: this is still {current}"), now_ms);
+            }
+        }
+        if self.failed.as_ref().is_some_and(|f| reached(&f.version)) {
+            self.failed = None;
+        }
+        *self != before
+    }
+}
+
+/// When to check next: the normal interval, or sooner if a held-back build's
+/// wait ends first (and a second after it, so the check doesn't land a hair early).
+pub fn next_check_in(retry_at_ms: Option<u64>, now_ms: u64) -> Duration {
+    match retry_at_ms {
+        Some(at) if at > now_ms => CHECK_EVERY.min(Duration::from_millis(at - now_ms) + Duration::from_secs(1)),
+        _ => CHECK_EVERY,
+    }
 }
 
 /// Which windows hold unsent text. Each window reports only its own, so one
@@ -261,13 +368,18 @@ pub struct UpdateStatus {
     pub current: String,
     pub installed: bool,
     pub beta: bool,
-    /// dev-build | idle | checking | up-to-date | ahead | no-releases | downloading | ready | ask | installing | error
+    /// dev-build | idle | checking | up-to-date | ahead | no-releases | downloading | ready | ask | installing | failed | error
+    /// (`failed`: `available` couldn't be downloaded or installed, `failures` times in a row, and `error` says why;
+    /// `error`: the check itself failed.)
     pub state: String,
     pub available: Option<String>,
     pub newest_full: Option<String>,
     pub last_checked_at: Option<u64>,
     pub waiting_for: Vec<String>,
     pub error: Option<String>,
+    /// While `failed`: when `available` is tried again (ms since the epoch); `None` when that's at the next check.
+    pub retry_at: Option<u64>,
+    pub failures: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -287,7 +399,10 @@ struct Inner {
     unsent: Unsent,
     ready: Option<Ready>,
     check_requested: bool,
+    /// The check asked for tries a held-back build now (Check now in Settings, not an automatic hint).
+    retry_requested: bool,
     install_requested: bool,
+    attempts: Attempts,
     /// Gate ticks in a row the server was there but didn't answer.
     no_answers: u32,
     /// The wall-clock time of the last gate tick, to notice a sleep.
@@ -323,6 +438,30 @@ fn relaunch_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("update-relaunch.json"))
 }
 
+fn attempts_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("update-attempts.json"))
+}
+
+fn save_attempts(app: &AppHandle, attempts: &Attempts) {
+    let Some(path) = attempts_path(app) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, attempts.to_json()) {
+        eprintln!("[otherbench-desktop] couldn't save the update attempts: {e}");
+    }
+}
+
+/// Puts a failed build in the status: what failed, how often, and when it's tried again.
+fn show_failure(s: &mut UpdateStatus, failure: &Failure, retry_at: Option<u64>) {
+    s.state = "failed".into();
+    s.available = Some(failure.version.clone());
+    s.error = Some(failure.error.clone());
+    s.failures = failure.count;
+    s.retry_at = retry_at;
+    s.waiting_for.clear();
+}
+
 /// Reads and removes the note an update install left; `Some(main window was showing)` if it's fresh.
 pub fn take_relaunch_note(app: &AppHandle) -> Option<bool> {
     let path = relaunch_path(app)?;
@@ -335,8 +474,9 @@ impl Updates {
     /// `installed`: the app runs from its installer (the bundled server is there). Dev runs never update.
     pub fn new(app: &AppHandle, installed: bool, server_addr: ServerAddr, stop_server: StopServer) -> Arc<Self> {
         let prefs: Prefs = prefs_path(app).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let status = UpdateStatus {
-            current: app.package_info().version.to_string(),
+        let current = app.package_info().version.to_string();
+        let mut status = UpdateStatus {
+            current: current.clone(),
             installed,
             beta: prefs.beta,
             state: if installed { "idle" } else { "dev-build" }.into(),
@@ -345,7 +485,22 @@ impl Updates {
             last_checked_at: None,
             waiting_for: Vec::new(),
             error: None,
+            retry_at: None,
+            failures: 0,
         };
+        // A dev run shares the installed app's data folder: it leaves the installed app's record alone.
+        let mut attempts = Attempts::default();
+        if installed {
+            attempts = attempts_path(app).and_then(|p| std::fs::read_to_string(p).ok()).map(|s| Attempts::parse(&s)).unwrap_or_default();
+            let now = now_ms();
+            if attempts.started(&current, now) {
+                save_attempts(app, &attempts);
+            }
+            // Said from the start, not only after the first check: a failed install restarted the app.
+            if let Some(f) = &attempts.failed {
+                show_failure(&mut status, f, attempts.held_back(&f.version, now));
+            }
+        }
         Arc::new(Self {
             app: app.clone(),
             inner: Mutex::new(Inner {
@@ -354,7 +509,9 @@ impl Updates {
                 unsent: Unsent::default(),
                 ready: None,
                 check_requested: false,
+                retry_requested: false,
                 install_requested: false,
+                attempts,
                 no_answers: 0,
                 last_tick_ms: None,
             }),
@@ -377,8 +534,14 @@ impl Updates {
         std::thread::spawn(move || me.run());
     }
 
-    pub fn check_now(&self) {
-        locked(&self.inner).check_requested = true;
+    /// Checks now instead of at the next 4-hourly check. `retry`: Adam asked
+    /// (Check now in Settings), so a build held back by its failures is tried
+    /// again now too; an automatic hint leaves it waiting.
+    pub fn check_now(&self, retry: bool) {
+        let mut inner = locked(&self.inner);
+        inner.check_requested = true;
+        inner.retry_requested |= retry;
+        drop(inner);
         self.wake.notify_all();
     }
 
@@ -389,7 +552,7 @@ impl Updates {
         }
         std::fs::write(&path, serde_json::to_string(&Prefs { beta }).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         self.change(|s| s.beta = beta);
-        self.check_now();
+        self.check_now(false);
         Ok(())
     }
 
@@ -439,7 +602,8 @@ impl Updates {
             };
             if check {
                 tauri::async_runtime::block_on(self.check());
-                next_check = Instant::now() + CHECK_EVERY;
+                let retry_at = locked(&self.inner).status.retry_at;
+                next_check = Instant::now() + next_check_in(retry_at, now_ms());
             }
             if install || self.gate_says_install() {
                 self.install();
@@ -465,9 +629,10 @@ impl Updates {
     }
 
     async fn check(&self) {
-        let (current, beta) = {
-            let inner = locked(&self.inner);
-            (inner.status.current.clone(), inner.status.beta)
+        let (current, beta, retry) = {
+            let mut inner = locked(&self.inner);
+            let retry = std::mem::take(&mut inner.retry_requested);
+            (inner.status.current.clone(), inner.status.beta, retry)
         };
         self.change(|s| s.state = "checking".into());
         let mut results = Vec::new();
@@ -487,16 +652,34 @@ impl Updates {
             if inner.ready.as_ref().is_some_and(|r| !keep_ready(&r.update.version, &choice)) {
                 inner.ready = None;
             }
+            let before = inner.attempts.clone();
+            inner.attempts.settle(&choice);
+            if inner.attempts != before {
+                save_attempts(&self.app, &inner.attempts);
+            }
         }
         self.change(|s| {
             s.last_checked_at = Some(now_ms());
             s.newest_full = newest_full;
             s.error = None;
+            s.retry_at = None;
+            s.failures = 0;
         });
         match choice {
             Choice::Install { feed, version } => {
                 let already = locked(&self.inner).ready.as_ref().is_some_and(|r| r.update.version == version);
                 if already {
+                    return;
+                }
+                // A build that keeps failing waits longer each time, so a bad installer, or one antivirus
+                // blocks, isn't fetched and tried over and over.
+                let held = {
+                    let inner = locked(&self.inner);
+                    let at = if retry { None } else { inner.attempts.held_back(&version, now_ms()) };
+                    at.zip(inner.attempts.failed.clone())
+                };
+                if let Some((at, failure)) = held {
+                    self.change(|s| show_failure(s, &failure, Some(at)));
                     return;
                 }
                 let Some(update) = updates.get_mut(feed).and_then(Option::take) else { return };
@@ -510,10 +693,7 @@ impl Updates {
                         locked(&self.inner).ready = Some(Ready { update, bytes, since: Instant::now() });
                         self.change(|s| s.state = "ready".into());
                     }
-                    Err(e) => self.change(|s| {
-                        s.state = "error".into();
-                        s.error = Some(format!("Downloading {version} failed: {e}"));
-                    }),
+                    Err(e) => self.record_failure(&version, &format!("Downloading {version} failed: {e}")),
                 }
             }
             Choice::UpToDate => self.settled("up-to-date"),
@@ -523,6 +703,21 @@ impl Updates {
                 s.state = "error".into();
                 s.error = Some(e);
             }),
+        }
+    }
+
+    /// `version` failed to download or install: counted, saved (an install
+    /// failure is followed by a restart), and shown with when it's tried again.
+    fn record_failure(&self, version: &str, error: &str) {
+        let (failure, retry_at) = {
+            let mut inner = locked(&self.inner);
+            let now = now_ms();
+            inner.attempts.failed(version, error, now);
+            save_attempts(&self.app, &inner.attempts);
+            (inner.attempts.failed.clone(), inner.attempts.held_back(version, now))
+        };
+        if let Some(failure) = failure {
+            self.change(|s| show_failure(s, &failure, retry_at));
         }
     }
 
@@ -610,15 +805,21 @@ impl Updates {
             }
             let _ = std::fs::write(&path, serde_json::to_string(&RelaunchNote { at: now_ms(), main_visible }).unwrap_or_default());
         }
-        let app = self.app.clone();
-        let result = install_ready(|| (self.stop_server)(), || ready.update.install(&ready.bytes).map_err(|e| e.to_string()), move || app.restart());
-        if let Err(e) = result {
-            // Not reached when the restart works; kept for the status if it doesn't.
-            self.change(|s| {
-                s.state = "error".into();
-                s.error = Some(format!("Installing failed: {e}"));
-            });
+        // Noted first: if the installer fails after this process has gone, the build that starts next counts it.
+        let version = ready.update.version.clone();
+        {
+            let mut inner = locked(&self.inner);
+            inner.attempts.installing = Some(version.clone());
+            save_attempts(&self.app, &inner.attempts);
         }
+        let app = self.app.clone();
+        // A failure is recorded and shown before the restart (and stays shown if the restart doesn't happen).
+        let _ = install_ready(
+            || (self.stop_server)(),
+            || ready.update.install(&ready.bytes).map_err(|e| e.to_string()),
+            |e| self.record_failure(&version, &format!("Installing {version} failed: {e}")),
+            move || app.restart(),
+        );
     }
 }
 
@@ -716,10 +917,11 @@ mod tests {
                 log.borrow_mut().push("install");
                 Err("no".into())
             },
+            |_| log.borrow_mut().push("record"),
             || log.borrow_mut().push("restart"),
         );
         assert!(r.is_err());
-        assert_eq!(*log.borrow(), vec!["stop", "install", "restart"]);
+        assert_eq!(*log.borrow(), vec!["stop", "install", "record", "restart"]);
     }
 
     #[test]
@@ -808,8 +1010,137 @@ mod tests {
     #[test]
     fn a_good_install_does_not_restart() {
         let log = std::cell::RefCell::new(vec![]);
-        let r = install_ready(|| log.borrow_mut().push("stop"), || Ok(()), || log.borrow_mut().push("restart"));
+        let r = install_ready(|| log.borrow_mut().push("stop"), || Ok(()), |_| log.borrow_mut().push("record"), || log.borrow_mut().push("restart"));
         assert!(r.is_ok());
         assert_eq!(*log.borrow(), vec!["stop"]);
+    }
+
+    const HOUR: u64 = 60 * 60 * 1000;
+
+    #[test]
+    fn the_wait_after_a_failure_doubles_up_to_two_days() {
+        assert_eq!(retry_delay_ms(1), 4 * HOUR);
+        assert_eq!(retry_delay_ms(2), 8 * HOUR);
+        assert_eq!(retry_delay_ms(3), 16 * HOUR);
+        assert_eq!(retry_delay_ms(4), 32 * HOUR);
+        assert_eq!(retry_delay_ms(5), 48 * HOUR);
+        assert_eq!(retry_delay_ms(u32::MAX), 48 * HOUR);
+        // The first wait is the normal check interval: one failure changes nothing.
+        assert_eq!(retry_delay_ms(1), CHECK_EVERY.as_millis() as u64);
+    }
+
+    #[test]
+    fn a_failed_version_is_held_back_and_each_failure_waits_longer() {
+        let t0 = 1_000_000_000;
+        let mut a = Attempts::default();
+        assert_eq!(a.held_back("0.2.1", t0), None);
+        a.failed("0.2.1", "Downloading 0.2.1 failed: reset", t0);
+        assert_eq!(a.failed.as_ref().map(|f| f.count), Some(1));
+        assert_eq!(a.held_back("0.2.1", t0 + 1), Some(t0 + 4 * HOUR));
+        assert_eq!(a.held_back("0.2.1", t0 + 4 * HOUR), None);
+        let t1 = t0 + 4 * HOUR;
+        a.failed("0.2.1", "Installing failed: blocked", t1);
+        assert_eq!(a.failed.as_ref().map(|f| (f.count, f.error.as_str())), Some((2, "Installing failed: blocked")));
+        assert_eq!(a.held_back("0.2.1", t1 + 4 * HOUR), Some(t1 + 8 * HOUR));
+    }
+
+    #[test]
+    fn a_new_version_is_not_held_back_by_an_older_ones_failures() {
+        let t0 = 1_000_000_000;
+        let mut a = Attempts::default();
+        a.failed("0.2.1", "e", t0);
+        a.failed("0.2.1", "e", t0);
+        assert_eq!(a.held_back("0.2.2", t0 + 1), None);
+        a.failed("0.2.2", "e", t0 + 1);
+        assert_eq!(a.failed.as_ref().map(|f| (f.version.as_str(), f.count)), Some(("0.2.2", 1)));
+    }
+
+    #[test]
+    fn a_failure_is_forgotten_once_the_choice_no_longer_wants_that_build() {
+        let failed = || {
+            let mut a = Attempts::default();
+            a.failed("0.2.1", "e", 1);
+            a
+        };
+        let kept = |choice: Choice| {
+            let mut a = failed();
+            a.settle(&choice);
+            a.failed.is_some()
+        };
+        assert!(kept(Choice::Install { feed: 0, version: "0.2.1".into() }));
+        // A feed that couldn't be read says nothing new.
+        assert!(kept(Choice::Error("dns".into())));
+        assert!(!kept(Choice::Install { feed: 0, version: "0.2.2".into() }));
+        assert!(!kept(Choice::UpToDate));
+        assert!(!kept(Choice::Ahead { newest: "0.1.0".into() }));
+        assert!(!kept(Choice::NoReleases));
+    }
+
+    #[test]
+    fn the_build_that_starts_after_an_install_says_whether_it_took() {
+        let now = 2_000_000_000;
+        let mut tried = Attempts::default();
+        tried.failed("0.2.1", "Downloading 0.2.1 failed: reset", 1);
+        tried.installing = Some("0.2.1".into());
+
+        // The new build started: it worked, and the failures go with it.
+        let mut a = tried.clone();
+        assert!(a.started("0.2.1", now));
+        assert_eq!(a, Attempts::default());
+
+        // Still the old build (the installer was blocked, or gave up): that's a failure, counted.
+        let mut a = tried.clone();
+        assert!(a.started("0.2.0", now));
+        assert_eq!(a.installing, None);
+        let f = a.failed.clone().unwrap();
+        assert_eq!((f.version.as_str(), f.count, f.at), ("0.2.1", 2, now));
+        assert!(f.error.contains("still 0.2.0"), "{}", f.error);
+
+        // Nothing was being installed: nothing changes.
+        let mut a = Attempts::default();
+        a.failed("0.2.1", "e", 1);
+        let before = a.clone();
+        assert!(!a.started("0.2.0", now));
+        assert_eq!(a, before);
+    }
+
+    #[test]
+    fn a_failure_for_a_build_this_one_has_reached_is_dropped() {
+        let mut a = Attempts::default();
+        a.failed("0.2.1", "e", 1);
+        assert!(a.started("0.2.2", 5));
+        assert_eq!(a.failed, None);
+    }
+
+    #[test]
+    fn failures_survive_a_restart_and_a_broken_file_is_ignored() {
+        let mut a = Attempts::default();
+        a.failed("0.2.1", "Installing failed: blocked", 123);
+        a.installing = Some("0.2.1".into());
+        assert_eq!(Attempts::parse(&a.to_json()), a);
+        assert_eq!(Attempts::parse("not json"), Attempts::default());
+        assert_eq!(Attempts::parse(""), Attempts::default());
+    }
+
+    #[test]
+    fn a_failed_install_is_recorded_before_the_app_restarts() {
+        let log = std::cell::RefCell::new(vec![]);
+        let r = install_ready(
+            || log.borrow_mut().push("stop".to_string()),
+            || Err("blocked".into()),
+            |e| log.borrow_mut().push(format!("record {e}")),
+            || log.borrow_mut().push("restart".to_string()),
+        );
+        assert_eq!(r, Err("blocked".to_string()));
+        assert_eq!(*log.borrow(), vec!["stop", "record blocked", "restart"]);
+    }
+
+    #[test]
+    fn a_held_back_build_is_checked_again_when_its_wait_ends_not_a_check_later() {
+        let now = 1_000_000_000;
+        assert_eq!(next_check_in(None, now), CHECK_EVERY);
+        assert_eq!(next_check_in(Some(now + HOUR), now), Duration::from_millis(HOUR) + Duration::from_secs(1));
+        assert_eq!(next_check_in(Some(now + 40 * HOUR), now), CHECK_EVERY);
+        assert_eq!(next_check_in(Some(now - 1), now), CHECK_EVERY);
     }
 }
