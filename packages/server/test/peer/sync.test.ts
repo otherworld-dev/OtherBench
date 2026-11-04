@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
-import { createBlobStore, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
+import { createBlobStore, type BlobStore, type StoredBlob } from '@otherbench/store-sqlite/blob-store.js';
 import { openDatabase } from '@otherbench/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
 import { SqliteStore } from '@otherbench/store-sqlite/store.js';
@@ -214,7 +214,7 @@ describe('syncing two machines over the peer listener', () => {
     const laptop = syncNode('Laptop');
     seed(pc);
     // Blobs the PC would serve (each is sent in a message there); one of them is also on the laptop already.
-    const blobs = [];
+    const blobs: StoredBlob[] = [];
     for (let i = 0; i < 7; i++) {
       const blob = await pc.blobs.put(Buffer.from(`file number ${i}, which the PC really has`));
       pc.store.attachments.create({ id: `pc-${i}`, chatId: 'chat', messageId: 'u1', filename: `f${i}.png`, mime: 'image/png', size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });

@@ -6,7 +6,7 @@ import type { ToolApprovalEvent, ToolProvider } from '@otherbench/core/ports/too
 import type { Connection, ModelInfo, ResolvedProfile } from '@otherbench/core/types/config.js';
 import { applySubagentEvent, type SubagentEvent } from '@otherbench/core/domain/parts.js';
 import type { Part } from '@otherbench/core/types/messages.js';
-import { StreamRegistry } from '../../src/stream/registry.js';
+import { StreamRegistry, type ChatStreamEvent } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures -- same "manual" engine technique as packages/core/test/turn.test.ts:
@@ -174,8 +174,8 @@ describe('StreamRegistry', () => {
     registry.registerTurn('chat-1', result.assistantMessageIds);
     const messageId = result.assistantMessageIds[0] as string;
 
-    const receivedA: TurnEvent[] = [];
-    const receivedB: TurnEvent[] = [];
+    const receivedA: ChatStreamEvent[] = [];
+    const receivedB: ChatStreamEvent[] = [];
     registry.subscribe('chat-1', (e) => receivedA.push(e));
     registry.subscribe('chat-1', (e) => receivedB.push(e));
 
@@ -211,7 +211,7 @@ describe('StreamRegistry', () => {
     // A late subscriber attaches here -- exactly as the SSE route does:
     // read the snapshot, THEN subscribe, synchronously back to back.
     const replay = registry.snapshot('chat-1').flatMap((b) => b.events);
-    const live: TurnEvent[] = [];
+    const live: ChatStreamEvent[] = [];
     registry.subscribe('chat-1', (e) => live.push(e));
 
     push(messageId, { type: 'text-delta', text: 'third' });
@@ -242,7 +242,7 @@ describe('StreamRegistry', () => {
     registry.registerTurn('chat-1', result.assistantMessageIds);
     const [cancelledId, otherId] = result.assistantMessageIds as [string, string];
 
-    const received: TurnEvent[] = [];
+    const received: ChatStreamEvent[] = [];
     const unsubscribe = registry.subscribe('chat-1', (e) => received.push(e));
 
     runner.cancel(cancelledId);
@@ -280,7 +280,7 @@ describe('StreamRegistry', () => {
     registry.subscribe('chat-1', () => {
       throw new Error('subscriber boom');
     });
-    const received: TurnEvent[] = [];
+    const received: ChatStreamEvent[] = [];
     registry.subscribe('chat-1', (e) => received.push(e));
 
     push(messageId, { type: 'text-delta', text: 'Hello' });
@@ -581,7 +581,7 @@ describe('StreamRegistry', () => {
 
     // Live events after the reset (from a retry) land on the fresh buffer,
     // with none of the failed attempt's history mixed in.
-    const received: TurnEvent[] = [];
+    const received: ChatStreamEvent[] = [];
     registry.subscribe('chat-1', (e) => received.push(e));
     void runner.retry('chat-1', messageId, makeResolvedProfile());
     push(messageId, { type: 'text-delta', text: 'Retried text' });

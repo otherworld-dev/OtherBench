@@ -221,9 +221,9 @@ describe('the global limits', () => {
     expect(attemptTimers()).toBe(n);
   }
 
-  function settled(p: Promise<Response>): { res: Response | null } {
+  function settled(p: Response | Promise<Response>): { res: Response | null } {
     const box: { res: Response | null } = { res: null };
-    void p.then((res) => {
+    void Promise.resolve(p).then((res) => {
       box.res = res;
     });
     return box;
@@ -231,7 +231,7 @@ describe('the global limits', () => {
 
   function abortableLogin(signal: AbortSignal, address: string, password = PASSWORD): Promise<Response> {
     const req = new Request('http://localhost/api/auth/login', { method: 'POST', headers: json, body: JSON.stringify({ password, remember: false }), signal });
-    return app.request(req, undefined, from(address));
+    return Promise.resolve(app.request(req, undefined, from(address)));
   }
 
   const rawDeviceCookie = (res: Response): string => {

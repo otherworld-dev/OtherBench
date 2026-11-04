@@ -116,7 +116,7 @@ function world(): World {
 }
 
 afterEach(async () => {
-  for (const w of worlds.splice(0)) await w.browser.shutdown();
+  for (const w of worlds.splice(0)) await w.browser.closeAll();
 });
 
 function context(over: Partial<ToolContext> = {}): ToolContext {

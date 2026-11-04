@@ -41,7 +41,7 @@ describe('claude_code turns through the routing engine', () => {
       ];
     });
     const runner = new TurnRunner(store, new RoutingChatEngine(aisdk, cc), { pathExists });
-    const chat = store.chats.create({ id: 'chat-1', title: 't', profileId: null, headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null });
+    const chat = store.chats.create({ id: 'chat-1', title: 't', profileId: 'p1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null });
 
     const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [profile] });
     const firstId = first.assistantMessageIds[0]!;

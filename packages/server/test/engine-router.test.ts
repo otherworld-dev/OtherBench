@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeChatEngine } from '@otherbench/core/testing/fakes.js';
-import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import { MAIN_ACCOUNT, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import { endpointModelLister, RoutingChatEngine } from '../src/engine-router.js';
@@ -20,7 +20,7 @@ describe('RoutingChatEngine', () => {
   it('lists commands from the Claude Code engine only, and none for other connections', async () => {
     const row = { name: 'deploy', description: 'd', argumentHint: '', aliases: [] };
     const asked: string[] = [];
-    const cc = new FakeChatEngine([]);
+    const cc: ChatEngine = new FakeChatEngine([]);
     cc.listCommands = async (i) => { asked.push(i.chatId); return [row]; };
     const router = new RoutingChatEngine(new FakeChatEngine([]), cc);
     const profile = (kind: Connection['kind']) => ({ connection: conn(kind) }) as never;

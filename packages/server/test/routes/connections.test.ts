@@ -376,7 +376,7 @@ describe('DELETE /api/connections/:id', () => {
   it("closes the engine's processes for the chats that went with it", async () => {
     const created = await json(await app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Gone', kind: 'openai', apiKey: 'sk-gone' }) }));
     const id = created['id'] as string;
-    container.store.profiles.create({ id: 'p-gone', name: 'P', description: null, colour: null, connectionId: id, modelId: 'gpt-4o', systemPrompt: null, params: {}, toolPolicy: { fs: 'none', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' }, isDefault: false, archivedAt: null });
+    container.store.profiles.create({ id: 'p-gone', name: 'P', description: null, colour: null, connectionId: id, modelId: 'gpt-4o', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' }, isDefault: false, archivedAt: null });
     container.store.chats.create({ id: 'chat-gone', title: 'T', profileId: 'p-gone', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const closeChats = vi.fn();
     container.engine.closeChats = closeChats;
