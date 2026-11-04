@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { checkOfficeContent, formulaForFile, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@otherbench/core/domain/office-spec.js';
 import type { PresentationSpec } from '@otherbench/core/domain/office-spec.js';
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
@@ -198,28 +198,36 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
+  // The time limits run on a fake clock that moves only when the test moves it, so this checks the order of events and
+  // never how fast a worker starts: under a full parallel test run, a real 1.5 s limit on the queued render was missed.
   it(`runs at most ${OFFICE_RENDER_CONCURRENCY} workers at once, starts each time limit when its worker starts, and loses no queued call when one ahead fails`, async () => {
-    let peak = 0;
-    const sampler = setInterval(() => (peak = Math.max(peak, officeRenderWorkersRunning())), 5);
-    const nestedLists = `${'- '.repeat(20_000)}x`;
-    const start = Date.now();
-    const settled = await Promise.allSettled([
-      // These two take both slots and fail on their time limit after 1.5 s.
-      renderOfficeFile('document', nestedLists, 'Slow 1', { timeoutMs: 1500 }),
-      renderOfficeFile('document', nestedLists, 'Slow 2', { timeoutMs: 1500 }),
-      // Queued for 1.5 s: its own 1.5 s only counts once its worker starts.
-      renderOfficeFile('document', '# Queued', 'Queued', { timeoutMs: 1500 }).then((bytes) => ({ bytes, ms: Date.now() - start })),
-      renderOfficeFile('spreadsheet', '{"sheets":[]}', 'Sheet'),
-    ]);
-    clearInterval(sampler);
-    expect(peak).toBe(OFFICE_RENDER_CONCURRENCY);
-    expect(settled.map((s) => s.status)).toEqual(['rejected', 'rejected', 'fulfilled', 'rejected']);
-    for (const s of settled) if (s.status === 'rejected') expect(s.reason).toBeInstanceOf(OfficeRenderError);
-    const queued = (settled[2] as PromiseFulfilledResult<{ bytes: Buffer; ms: number }>).value;
-    expect(extractOfficeText(queued.bytes)).toContain('# Queued');
-    expect(queued.ms).toBeGreaterThanOrEqual(1500);
-    expect((settled[3] as PromiseRejectedResult).reason.message).toBe('sheets: must be a list of 1-50 sheets');
-    expect(officeRenderWorkersRunning()).toBe(0);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let peak = 0;
+      const sampler = setInterval(() => (peak = Math.max(peak, officeRenderWorkersRunning())), 5);
+      const nestedLists = `${'- '.repeat(20_000)}x`;
+      const all = Promise.allSettled([
+        // These two take both slots and never finish by themselves: they fail when the clock passes their limit.
+        renderOfficeFile('document', nestedLists, 'Slow 1', { timeoutMs: 1500 }),
+        renderOfficeFile('document', nestedLists, 'Slow 2', { timeoutMs: 1500 }),
+        // Queued behind them, with the same limit: had it been counted from the call, moving the clock 1.5 s would end this one too.
+        renderOfficeFile('document', '# Queued', 'Queued', { timeoutMs: 1500 }),
+        renderOfficeFile('spreadsheet', '{"sheets":[]}', 'Sheet'),
+      ]);
+      await vi.waitFor(() => expect(officeRenderWorkersRunning()).toBe(OFFICE_RENDER_CONCURRENCY), { timeout: 10_000 });
+      vi.advanceTimersByTime(1500);
+      const settled = await all;
+      clearInterval(sampler);
+      expect(peak).toBe(OFFICE_RENDER_CONCURRENCY);
+      expect(settled.map((s) => s.status)).toEqual(['rejected', 'rejected', 'fulfilled', 'rejected']);
+      for (const s of settled) if (s.status === 'rejected') expect(s.reason).toBeInstanceOf(OfficeRenderError);
+      expect((settled[0] as PromiseRejectedResult).reason.message).toMatch(/too large or too complex to make in time/);
+      expect(extractOfficeText((settled[2] as PromiseFulfilledResult<Buffer>).value)).toContain('# Queued');
+      expect((settled[3] as PromiseRejectedResult).reason.message).toBe('sheets: must be a list of 1-50 sheets');
+      expect(officeRenderWorkersRunning()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 30_000);
 
   it('gives an error the renderer posts back as an OfficeRenderError', async () => {
