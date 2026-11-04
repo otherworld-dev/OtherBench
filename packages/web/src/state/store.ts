@@ -42,6 +42,7 @@ import {
 } from './panes.js';
 import { announceAccountEvent, reloadOnAccountEvent } from './claudeAccounts.js';
 import { parseProjectTab } from './projectTab.js';
+import { prunePool } from './messagePool.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 import type { PeersOverview } from './api.js';
 import type { Overview } from '@otherbench/core/types/overview.js';
@@ -325,8 +326,15 @@ export interface OtherBenchState {
   takeComposerFocus(chatId: string): boolean;
 
   // --- messages + the SSE reconciliation seam --------------------------------
-  /** Every message the client has learned about, across whatever chat(s) have been loaded or streamed into, keyed by id. */
+  /**
+   * The messages this window has loaded or streamed into, across chats, keyed by id. A chat switch or pane change
+   * forgets the chats nobody is looking at past the few viewed last (`pruneMessages`).
+   */
   messages: Record<string, CanonMessage>;
+  /** Chats shown in this window, most recent first, as far back as the pool keeps them (messagePool.ts). Not persisted. */
+  viewedChats: string[];
+  /** Forgets the messages (and what hangs off them) of chats not in use past the `KEPT_RECENT_CHATS` viewed last. */
+  pruneMessages(): void;
   /** Per-message accrual that isn't part of `CanonMessage` (currently: usage, from `finish` events). */
   extras: Record<string, MessageExtras>;
   /**
@@ -1237,6 +1245,11 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   },
 
   messages: {},
+  viewedChats: [],
+  pruneMessages: () => {
+    const update = prunePool(get());
+    if (update !== null) set(update);
+  },
   extras: {},
   pendingEvents: {},
   streamStatus: 'idle',
@@ -1493,4 +1506,8 @@ useOtherBenchStore.subscribe((state, previous) => {
   if (state.wikiViews !== previous.wikiViews) saveViews(WIKI_VIEWS_STORAGE_KEY, state.wikiViews);
   if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
   if (state.sentNotes !== previous.sentNotes) saveSentNotes(state.sentNotes);
+  // A chat switch or pane change (never a stream chunk): the message pool forgets chats nobody is looking at. Last,
+  // since it sets the store again.
+  const panesChanged = state.paneState.panes !== previous.paneState.panes || state.otherPaneState.panes !== previous.otherPaneState.panes;
+  if (state.activeChatId !== previous.activeChatId || panesChanged) state.pruneMessages();
 });

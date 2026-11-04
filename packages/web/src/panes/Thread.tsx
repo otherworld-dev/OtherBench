@@ -73,9 +73,10 @@ function drawnMessage(scroller: HTMLElement | null, messageId: string): HTMLElem
  * switcher, and switching moves the head to that branch's tip (`extendToTip`)
  * so the whole conversation below it changes with it.
  *
- * `messages` in the store is a flat, cross-chat pool (every message loaded
- * or streamed into this session, never scoped or evicted per chat -- see
- * store.ts). `siblingsOf`/`childrenOf`/`extendForward` all group purely by
+ * `messages` in the store is a flat, cross-chat pool (the messages of every
+ * chat in use and of the few viewed last; the rest are forgotten on a chat
+ * switch and loaded again when they next show -- see messagePool.ts).
+ * `siblingsOf`/`childrenOf`/`extendForward` all group purely by
  * `parentId`, and every chat's first message has `parentId: null` -- so
  * feeding any of them the WHOLE pool would treat unrelated chats' root
  * messages as compare variants of each other. Scoping to this chat's own

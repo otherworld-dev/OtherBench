@@ -4,6 +4,7 @@ import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherbench/core/types/background.js';
 import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
 import { api } from './api.js';
+import { followChat } from './messagePool.js';
 import { SseClient } from './sse.js';
 import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } from './store.js';
 
@@ -62,6 +63,9 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     if (!chatId) return;
 
     let cancelled = false;
+    // Its messages stay in the pool while this follows it, wherever the thread is (a pane, quick chat).
+    // Every open loads them afresh, so a chat the pool has forgotten shows again (messagePool.ts).
+    const release = followChat(chatId);
     const loadMessages = useOtherBenchStore.getState().loadMessages;
     const applyHello = useOtherBenchStore.getState().applyHello;
     const applyTurnEvent = useOtherBenchStore.getState().applyTurnEvent;
@@ -97,6 +101,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
 
     return () => {
       cancelled = true;
+      release();
       client.close();
       report('idle');
     };

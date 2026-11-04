@@ -2208,14 +2208,23 @@ this on startup.
 
 ## Known gaps
 
-- **The web store's message map is never pruned per chat.** `Thread.tsx`'s
-  own comment: *"`messages` in the store is a flat, cross-chat pool — every
-  message loaded or streamed into this session, never scoped or evicted per
-  chat."* Correct behaviour is achieved by scoping at the point of use
-  (`chatMessages`, filtered by `chatId`, before any tree computation) rather
-  than by the underlying store ever forgetting anything — so it's a
-  memory-growth concern over a long session with many chats visited, not a
-  correctness bug.
+- **The web store's message pool is pruned by chat, but only on a switch.**
+  `messages` is still one pool across chats, scoped at the point of use
+  (`chatMessages` in `Thread.tsx`). On a chat switch or pane change
+  (`packages/web/src/state/messagePool.ts`) the store forgets the messages of
+  chats not in use, past the `KEPT_RECENT_CHATS` (8) viewed last, along with
+  their extras, recorded usage, background tasks and queued notes. In use
+  means shown in a pane of either mode (pinned or not, a viewer tab's chat
+  included), followed by a thread (`useChatSync`, so quick chat counts),
+  replying, with a card open, or with notes queued. Replying and open cards
+  are read from the app-wide events (`appRunningTurns`,
+  `appPendingApprovals`), not from the pool: a closed chat's messages stop
+  updating, so a reply left mid-stream would otherwise look like it runs for
+  ever. A forgotten chat loads again when it next shows, since `useChatSync`
+  fetches on every open. Not pruned: events buffered for messages not yet
+  known (`pendingEvents`, replayed by `loadMessages`), `chatReloads` counters,
+  and `VariantTabs`' small per-message caches. Each undocked window prunes
+  its own store.
 - **`list_dir` holds no verifiable handle.** Covered above under TOCTOU —
   repeating it here because it's the sharpest instance of "narrowed, not
   closed": Node has no fd-based `readdir`, so this one is structural, not a
