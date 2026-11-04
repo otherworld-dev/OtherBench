@@ -13,7 +13,7 @@ import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { setChatPinned } from '../state/chatActions.js';
-import { chatStatus, groupStatusSummary, isOnCard, useChatActivity, useNeedsYouQueue, type ChatStatus } from '../state/chatStatus.js';
+import { chatStatus, groupStatusSummary, isOnCard, needsYouChats, useChatActivity, type ChatStatus } from '../state/chatStatus.js';
 import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
@@ -249,8 +249,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }, [searching, chats, trimmedQuery, searchChatIds, chipMatches]);
   // While searching every chat stays in its group, so a result is found where it lives.
-  // Queued across both modes, so a chat keeps its place while the other mode is showing.
-  const queue = useNeedsYouQueue(chats, activity, now);
+  // In the order each chat came to need the user, as the server recorded it, so a reload keeps it (`needsYouChats`).
+  const queue = useMemo(() => needsYouChats(chats, activity, now), [chats, activity, now]);
   const needsYou = useMemo(() => (searching ? [] : queue.filter((c) => modeOfChat(c) === mode)), [searching, queue, mode]);
   const needsYouIds = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
   // Its row in the group gets the tick too, so a chat can be ticked off where it is, searching or not.

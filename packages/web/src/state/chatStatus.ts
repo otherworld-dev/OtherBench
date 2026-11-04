@@ -1,6 +1,6 @@
-import { useMemo, useRef } from 'react';
-import { CHAT_NEED_WINDOW_MS, chatNeedsYou } from '@otherbench/core/domain/overview.js';
-import { chatsInBackgroundElsewhere, chatsWaitingElsewhere, chatsWorkingElsewhere } from './peerActivity.js';
+import { useMemo } from 'react';
+import { CHAT_NEED_WINDOW_MS, chatNeedsYou, needsYouSince } from '@otherbench/core/domain/overview.js';
+import { chatsInBackgroundElsewhere, chatsWaitingElsewhere, chatsWorkingElsewhere, waitingSinceElsewhere } from './peerActivity.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
@@ -21,6 +21,8 @@ export interface ChatActivity {
   waiting: ReadonlyMap<string, CardStatus>;
   working: ReadonlySet<string>;
   background: ReadonlySet<string>;
+  /** Since when each chat in `waiting` has waited on its first card, where known: the Needs you order. */
+  since?: ReadonlyMap<string, number>;
 }
 
 /** The chats on screen: every pane's, or only the focused pane's with a pane maximised or in a narrow window. */
@@ -53,36 +55,22 @@ export function isOnCard(status: ChatStatus | null): boolean {
   return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn';
 }
 
-/** The chats needing the user, oldest reply first: the order `queued` starts from. */
+/**
+ * The Needs you list: the chats needing the user, as a queue, so working down it reaches every chat. Oldest first by
+ * when each came to need them (`needsYouSince`): when its reply stopped or its card started waiting, so one that stops
+ * joins the bottom rather than jumping ahead of those still waiting, and one that leaves (answered, working) joins it
+ * again at the bottom. Those times are recorded by the server (the message's `finishedAt`, the card's `at`), so the
+ * order is worked out afresh each time and is the same after a reload, a restart, or in another window. A card on a
+ * paired machine that doesn't say when it started goes by its chat's last message.
+ */
 export function needsYouChats(chats: readonly Chat[], activity: ChatActivity, now: number): Chat[] {
-  const at = (c: Chat): number => c.head?.createdAt ?? c.updatedAt;
+  const at = (c: Chat): number => needsYouSince(c.head ?? null, activity.since?.get(c.id) ?? null) ?? c.updatedAt;
   return chats
     .map((chat) => ({ chat, status: chatStatus(chat, activity, now) }))
     .filter(({ chat, status }) => chat.archivedAt === null && isNeedsYou(status))
-    .sort((a, b) => at(a.chat) - at(b.chat))
+    .map(({ chat }) => ({ chat, at: at(chat) }))
+    .sort((a, b) => a.at - b.at || (a.chat.id < b.chat.id ? -1 : a.chat.id > b.chat.id ? 1 : 0))
     .map(({ chat }) => chat);
-}
-
-/** `chats` as a queue behind `previous` (ids, in queue order): those already in it keep their places, newcomers go last. */
-export function queued(previous: readonly string[], chats: readonly Chat[]): Chat[] {
-  const byId = new Map(chats.map((c) => [c.id, c]));
-  const waiting = new Set(previous);
-  return [...previous.flatMap((id) => byId.get(id) ?? []), ...chats.filter((c) => !waiting.has(c.id))];
-}
-
-/**
- * The Needs you list as a queue, so working down it reaches every chat: one that stops joins the bottom rather than
- * jumping ahead of those still waiting, and one that leaves (it was answered and is working) joins it again. Kept here,
- * not worked out from a time, because a message records when its reply started and a card records no time at all. A
- * reload starts again from `needsYouChats`' order.
- */
-export function useNeedsYouQueue(chats: readonly Chat[], activity: ChatActivity, now: number): Chat[] {
-  const queue = useRef<readonly string[]>([]);
-  return useMemo(() => {
-    const list = queued(queue.current, needsYouChats(chats, activity, now));
-    queue.current = list.map((c) => c.id);
-    return list;
-  }, [chats, activity, now]);
 }
 
 /** What a group's chats are doing, for a collapsed heading: "2 replying · 1 in background". Empty with none. */
@@ -110,7 +98,12 @@ export function useChatActivity(): ChatActivity {
   }, [pending, machines]);
   const working = useMemo(() => new Set([...Object.values(running), ...chatsWorkingElsewhere(machines)]), [running, machines]);
   const background = useMemo(() => new Set([...Object.keys(backgroundChats), ...chatsInBackgroundElsewhere(machines)]), [backgroundChats, machines]);
-  return useMemo(() => ({ waiting, working, background }), [waiting, working, background]);
+  const since = useMemo(() => {
+    const first = new Map(waitingSinceElsewhere(machines));
+    for (const p of Object.values(pending)) if (p.at !== undefined) first.set(p.chatId, Math.min(first.get(p.chatId) ?? p.at, p.at));
+    return first;
+  }, [pending, machines]);
+  return useMemo(() => ({ waiting, working, background, since }), [waiting, working, background, since]);
 }
 
 const CARD_STATUS: Record<NonNullable<PendingApprovalSummary['kind']> | 'tool', CardStatus> = {

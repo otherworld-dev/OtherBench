@@ -465,6 +465,8 @@ export interface PeerView extends PublicPeer {
   backgroundChats?: string[];
   /** Its own chats waiting on a card there now, while it's reachable; absent means none (or an older machine). */
   waitingChats?: string[];
+  /** Since when (ms) each of `waitingChats` has waited, for the Needs you order; absent from an older machine. */
+  waitingSince?: Record<string, number>;
 }
 
 export interface PeersOverview {

@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { renderHook } from '@testing-library/react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { CHAT_NEED_WINDOW_MS } from '@otherbench/core/domain/overview.js';
-import { chatStatus, groupStatusSummary, isNeedsYou, needsYouChats, queued, shownChatIds, type ChatActivity } from './chatStatus.js';
+import { chatStatus, groupStatusSummary, isNeedsYou, needsYouChats, shownChatIds, useChatActivity, type ChatActivity } from './chatStatus.js';
+import type { PeersOverview } from './api.js';
+import { useOtherBenchStore } from './store.js';
 import { DEFAULT_PANE_STATE, type PaneState } from './panes.js';
 
 const state = (over: Partial<PaneState> = {}): PaneState => ({ ...DEFAULT_PANE_STATE, ...over });
@@ -77,10 +80,30 @@ describe('isNeedsYou', () => {
 describe('needsYouChats', () => {
   const chat = (id: string, createdAt: number, over: Partial<Chat> = {}): Chat =>
     ({ id, archivedAt: null, dealtWithAt: null, head: { chatId: id, role: 'assistant', status: 'complete', createdAt }, updatedAt: 1, ...over }) as Chat;
+  const stopped = (id: string, createdAt: number, finishedAt: number): Chat =>
+    chat(id, createdAt, { head: { chatId: id, role: 'assistant', status: 'complete', createdAt, finishedAt } });
 
   it('is oldest first, with a card no different from a reply', () => {
     const chats = [chat('old', NOW - 300), chat('new', NOW - 100), chat('card', NOW - 200), chat('failed', NOW - 250, { head: { chatId: 'failed', role: 'assistant', status: 'error', createdAt: NOW - 250 } })];
     expect(needsYouChats(chats, activity({ waiting: new Map([['card', 'approve']]) }), NOW).map((c) => c.id)).toEqual(['old', 'failed', 'card', 'new']);
+  });
+
+  it('orders a reply by when it stopped, so a long one that started first but finished last goes last', () => {
+    const chats = [stopped('long', NOW - 3_600_000, NOW - 10), stopped('quick', NOW - 500, NOW - 400), chat('older', NOW - 450)];
+    expect(needsYouChats(chats, activity(), NOW).map((c) => c.id)).toEqual(['older', 'quick', 'long']);
+  });
+
+  it('orders a card by when it started waiting, not by the reply it holds up', () => {
+    const chats = [chat('card', NOW - 3_600_000, { head: { chatId: 'card', role: 'assistant', status: 'streaming', createdAt: NOW - 3_600_000 } }), stopped('done', NOW - 900, NOW - 500)];
+    const waiting = activity({ waiting: new Map([['card', 'approve']]), since: new Map([['card', NOW - 100]]) });
+    expect(needsYouChats(chats, waiting, NOW).map((c) => c.id)).toEqual(['done', 'card']);
+  });
+
+  it('gives the same order every time it is worked out: nothing is kept between calls, so a reload changes nothing', () => {
+    const chats = [stopped('b', NOW - 900, NOW - 100), stopped('a', NOW - 800, NOW - 200), chat('c', NOW - 150)];
+    const first = needsYouChats(chats, activity(), NOW).map((c) => c.id);
+    expect(first).toEqual(['a', 'c', 'b']);
+    expect(needsYouChats([...chats].reverse(), activity(), NOW).map((c) => c.id)).toEqual(first);
   });
 
   it('leaves out a chat still working, in the background or archived, unless a card is waiting on them', () => {
@@ -90,22 +113,24 @@ describe('needsYouChats', () => {
   });
 });
 
-describe('queued', () => {
-  const chat = (id: string, createdAt = 1): Chat => ({ id, head: { chatId: id, role: 'assistant', status: 'complete', createdAt } }) as Chat;
-  const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
+describe('useChatActivity', () => {
+  beforeEach(() => useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true));
 
-  it('keeps the chats already queued in their order, whatever order they come in', () => {
-    expect(ids(queued(['b', 'a'], [chat('a'), chat('b')]))).toEqual(['b', 'a']);
-  });
-
-  it('puts a newcomer last, even when its reply started before the others', () => {
-    expect(ids(queued(['a', 'b'], [chat('long', 1), chat('a', 5), chat('b', 9)]))).toEqual(['a', 'b', 'long']);
-  });
-
-  it('forgets a chat that left, so it comes back last', () => {
-    const without = ids(queued(['a', 'b', 'c'], [chat('b'), chat('c')]));
-    expect(without).toEqual(['b', 'c']);
-    expect(ids(queued(without, [chat('a'), chat('b'), chat('c')]))).toEqual(['b', 'c', 'a']);
+  it("knows since when each chat's cards have waited: its first card here, or what the paired machine running it says", () => {
+    useOtherBenchStore.setState({
+      appPendingApprovals: {
+        r1: { chatId: 'here', messageId: 'm1', requestId: 'r1', toolName: 'write_file', at: 300 },
+        r2: { chatId: 'here', messageId: 'm1', requestId: 'r2', toolName: 'write_file', at: 200 },
+        r3: { chatId: 'untimed', messageId: 'm2', requestId: 'r3', toolName: 'write_file' },
+      },
+      machines: {
+        self: { id: 'node-laptop', name: 'Laptop' },
+        peers: [{ nodeId: 'node-pc', name: 'PC', status: 'reachable', waitingChats: ['there'], waitingSince: { there: 400 } }],
+      } as unknown as PeersOverview,
+    });
+    const { result } = renderHook(() => useChatActivity());
+    expect(Object.fromEntries(result.current.since ?? [])).toEqual({ here: 200, there: 400 });
+    expect(result.current.waiting.get('there')).toBe('waiting');
   });
 });
 

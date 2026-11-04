@@ -171,8 +171,16 @@ of work landed after that plan closed out:
   on the user sit in a Needs you list at the top, for the mode showing only, by
   the Overview's `chatNeedsYou` rule: opening one leaves it there, and replying
   or ticking it off clears it. The list is a queue: a chat that stops joins the
-  bottom, cards included (`useNeedsYouQueue`; a reload falls back to oldest
-  reply first). The chat stays in its group too, so it has two rows. Background
+  bottom, cards included. It's sorted by when each chat came to need the user
+  (`needsYouSince`), which the server records, so a reload, a restart or
+  another window gives the same order: a reply by when it stopped
+  (`message.finished_at`, migration 036, set by `updateStatus` as it leaves
+  streaming; it syncs with the message row, so a paired machine sorts the
+  same), a card by when it was requested (`at`, stamped by `AppEventBus` and
+  sent in the hello; a peer says it in its activity as `waitingSince`).
+  Messages from before 036 have no finish time and go by when they started; a
+  card on an older peer goes by its chat's last message. The chat stays in its
+  group too, so it has two rows. Background
   tasks keep a chat out of the list unless its reply asks the user something
   (`asksUser`, a `?` in its last two paragraphs): a server left running never
   finishes, and that reply has stopped on them. Search matches titles and

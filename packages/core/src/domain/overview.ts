@@ -77,6 +77,19 @@ export function chatNeedsYou(
   return chat.dealtWithAt == null || chat.dealtWithAt < head.createdAt;
 }
 
+/**
+ * When a chat came to need the user, for the order of the sidebar's Needs you list (a queue: oldest first, so
+ * working down it reaches every chat): when its card started waiting (`cardAt`), else when its reply stopped. A
+ * reply from before that was recorded, or one made already finished, has only when it started. Every input is
+ * stored or held by the server, so the order is the same after a reload or a restart, and in every window. Null
+ * with neither a card nor a message.
+ */
+export function needsYouSince(head: ChatHead | null, cardAt: number | null): number | null {
+  if (cardAt !== null) return cardAt;
+  if (!head) return null;
+  return head.finishedAt ?? head.createdAt;
+}
+
 export interface OverviewInput {
   apps: App[]; chats: Chat[]; projects: { id: string; name: string }[];
   heads: ChatHead[]; waitingChatIds: ReadonlySet<string>; backgroundChatIds: ReadonlySet<string>;
