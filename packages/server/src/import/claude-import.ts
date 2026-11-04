@@ -60,7 +60,8 @@ export interface ClaudeImportDeps {
   events?: AppEventBus;
   /** Where docs and claude.ai's memory files go; made when first needed. */
   importRoot: string;
-  read?: (folder: string, options?: { optional?: boolean }) => Promise<ClaudeExportRead>;
+  /** Reads the export; `signal` aborts when the request that asked for it has gone away. */
+  read?: (folder: string, options?: { optional?: boolean; signal?: AbortSignal }) => Promise<ClaudeExportRead>;
   /** Where pasted Cowork images are stored, as uploads are. Without it they become notes. */
   blobStore?: BlobStore;
   /** Where Claude Desktop keeps Cowork sessions on this machine; null or unset when there's nowhere to look. */
@@ -185,7 +186,7 @@ export class ClaudeImportService {
   private job: Promise<void> = Promise.resolve();
   private disposed = false;
   private readonly running = new Set<() => void>();
-  private readonly read: (folder: string, options?: { optional?: boolean }) => Promise<ClaudeExportRead>;
+  private readonly read: (folder: string, options?: { optional?: boolean; signal?: AbortSignal }) => Promise<ClaudeExportRead>;
   private readonly readCowork: (root: string) => Promise<CoworkSessionFiles[]>;
   private readonly scheduler: Scheduler;
   private readonly now: () => number;
@@ -212,9 +213,10 @@ export class ClaudeImportService {
    * What importing `folder` would do: a claude.ai export, a copy of a Cowork
    * folder, both, or ('') just this machine's Cowork sessions. `profileId`,
    * when given, is the import's profile, which memory falls back to.
+   * `signal` stops reading the export when the request goes away.
    */
-  async preview(folder: string, profileId: string | null = null): Promise<ImportPreview> {
-    const { read, cowork } = await this.gather(folder, true);
+  async preview(folder: string, profileId: string | null = null, signal?: AbortSignal): Promise<ImportPreview> {
+    const { read, cowork } = await this.gather(folder, true, signal);
     const plan = planClaudeImport(read.files, { id: profileId ?? 'preview', connectionId: 'preview' });
     const { store } = this.deps;
     const projects = store.projects.list();
@@ -277,13 +279,13 @@ export class ClaudeImportService {
    * that holds nothing to import, and `ImportInputError` when there's no
    * folder and nothing on this machine.
    */
-  private async gather(folder: string, withCowork: boolean): Promise<{ read: ClaudeExportRead; cowork: CoworkSource[] }> {
+  private async gather(folder: string, withCowork: boolean, signal?: AbortSignal): Promise<{ read: ClaudeExportRead; cowork: CoworkSource[] }> {
     const named = folder.trim();
     if (!withCowork) {
       if (!named) throw new ImportInputError('Choose the folder the claude.ai export is in.');
-      return { read: await this.read(named), cowork: [] };
+      return { read: await this.read(named, { signal }), cowork: [] };
     }
-    const read = named ? await this.read(named, { optional: true }) : NO_EXPORT;
+    const read = named ? await this.read(named, { optional: true, signal }) : NO_EXPORT;
     const cowork: CoworkSource[] = [];
     if (this.deps.coworkRoot) cowork.push({ path: this.deps.coworkRoot, sessions: await this.readCowork(this.deps.coworkRoot) });
     if (named) {
@@ -348,9 +350,10 @@ export class ClaudeImportService {
    * Reads the export (and, when asked, the Cowork sessions) and starts the
    * import in the background, returning its first status. Throws
    * `ImportBusyError`, `ImportInputError`, or the reader's
-   * `ClaudeExportError` before anything is written.
+   * `ClaudeExportError` before anything is written. `signal` stops reading
+   * the export, and so the start, when the request goes away.
    */
-  async start(input: ImportStart): Promise<ImportStatus> {
+  async start(input: ImportStart, signal?: AbortSignal): Promise<ImportStatus> {
     if (this.busy) throw new ImportBusyError();
     this.busy = true;
     let plan: ImportPlan;
@@ -363,7 +366,7 @@ export class ClaudeImportService {
       for (const projectId of Object.values(spaces)) {
         if (projectId !== null && !this.deps.store.projects.get(projectId)) throw new ImportInputError(`Project "${projectId}" not found.`);
       }
-      const gathered = await this.gather(input.folder, input.cowork === true);
+      const gathered = await this.gather(input.folder, input.cowork === true, signal);
       plan = planClaudeImport(gathered.read.files, { id: profile.id, connectionId: profile.connectionId });
       filesDir = gathered.read.filesDir ?? null;
       if (input.cowork) cowork = this.planCowork(gathered.cowork, profile).chats;

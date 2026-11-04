@@ -3,8 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ClaudeExportError } from '@otherbench/core/domain/claude-import.js';
-import { classifyExportPath, readClaudeExport } from '../../src/import/claude-reader.js';
+import { classifyExportPath, claudeReaderWorkersRunning, readClaudeExport, readClaudeExportInProcess, readerWorkerCandidates } from '../../src/import/claude-reader.js';
 import { makeZip } from './make-zip.js';
+
+/** `count` conversations of 20 messages, about 32 KB each: 50 make about 1.6 MB of JSON. */
+function bigConversations(count: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, i) => ({
+      uuid: `c${i}`,
+      name: `Chat ${i}`,
+      chat_messages: Array.from({ length: 20 }, (_, j) => ({ uuid: `c${i}-m${j}`, sender: j % 2 ? 'assistant' : 'human', text: `${i}.${j} `.repeat(200), content: [{ type: 'text', text: 'word '.repeat(80) }], attachments: [] })),
+    }))
+  );
+}
 
 let dir: string;
 
@@ -158,5 +169,86 @@ describe('readClaudeExport', () => {
     await rm(join(dir, 'conversations.json'));
     await put('conversations-000.zip', Buffer.from('this is not a zip file, it is just some text'));
     await expect(readClaudeExport(dir)).rejects.toThrow(/conversations-000.zip: /);
+  });
+
+  it('refuses a ZIP entry over the size the import reads, with the same message as in this thread', async () => {
+    const zip = makeZip([{ name: 'conversations.json', content: conversations }]);
+    // The central directory's uncompressed size (one entry, so it starts after the local header, name and data).
+    const central = zip.length - 22 - 46 - 'conversations.json'.length;
+    zip.writeUInt32LE(600 * 1024 * 1024, central + 24);
+    await put('conversations-000.zip', zip);
+    const inProcess = await readClaudeExportInProcess(dir).catch((err: unknown) => err);
+    expect(inProcess).toBeInstanceOf(ClaudeExportError);
+    expect((inProcess as Error).message).toMatch(/conversations-000.zip: "conversations.json" is 629,145,600 bytes, over the 536,870,912 the import reads/);
+    await expect(readClaudeExport(dir)).rejects.toThrow(ClaudeExportError);
+    await expect(readClaudeExport(dir)).rejects.toThrow((inProcess as Error).message);
+  });
+});
+
+describe('readClaudeExport in a worker', () => {
+  it('finds the worker beside its module, or in dist when run from the sources', () => {
+    expect(readerWorkerCandidates('file:///repo/packages/server/src/import/claude-reader.ts').map((u) => u.href)).toEqual([
+      'file:///repo/packages/server/src/import/claude-reader-worker.js',
+      'file:///repo/packages/server/dist/import/claude-reader-worker.js',
+    ]);
+    expect(readerWorkerCandidates('file:///repo/packages/server/dist/import/claude-reader.js').map((u) => u.href)).toEqual(['file:///repo/packages/server/dist/import/claude-reader-worker.js']);
+    // The bundle: this module is part of cli.js, and the worker is written next to it.
+    expect(readerWorkerCandidates('file:///app/server/cli.js').map((u) => u.href)).toEqual(['file:///app/server/claude-reader-worker.js']);
+  });
+
+  it('reads what this thread reads, the lists sent back in several batches, and leaves no worker running', async () => {
+    await put('conversations-000.zip', makeZip([{ name: 'conversations.json', content: bigConversations(120) }]));
+    await put('projects/projects/p1.json', '{"uuid":"p1","docs":[{"content":"x"}]}');
+    await put('memories/memories/acc.json', '{"account_uuid":"acc"}');
+    await put('frames/artifacts/a1/artifact.json', '{"id":"a1"}');
+    await put('frames/artifacts/a1/versions/constructor.html', '<p>one</p>');
+    await put('chat_conversations.json', '[{"uuid":"c1"}]');
+    await put('saved/files/index.json', '{"f1":{"name":"a.pdf"}}');
+    const inWorker = await readClaudeExport(dir);
+    expect(inWorker).toStrictEqual(await readClaudeExportInProcess(dir));
+    expect(inWorker.files.conversations).toHaveLength(120);
+    expect(Object.getPrototypeOf(inWorker.files.artifacts[0]!.html)).toBeNull();
+    expect(claudeReaderWorkersRunning()).toBe(0);
+  });
+
+  it('stops the worker when the request goes away', async () => {
+    await put('conversations.json', bigConversations(50));
+    const gone = new AbortController();
+    const reading = readClaudeExport(dir, { signal: gone.signal });
+    gone.abort();
+    await expect(reading).rejects.toMatchObject({ name: 'AbortError' });
+    expect(claudeReaderWorkersRunning()).toBe(0);
+    await expect(readClaudeExport(dir, { signal: gone.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(claudeReaderWorkersRunning()).toBe(0);
+  });
+
+  it('keeps this thread free while a large export is parsed', async () => {
+    const json = bigConversations(600);
+    await put('conversations.json', json);
+    // How long this thread would be held parsing it: the longest pause the timer should see is well short of it.
+    JSON.parse(json);
+    const started = performance.now();
+    JSON.parse(json);
+    const parseMs = performance.now() - started;
+
+    let ticks = 0;
+    let longest = 0;
+    let last = performance.now();
+    const timer = setInterval(() => {
+      const now = performance.now();
+      longest = Math.max(longest, now - last);
+      last = now;
+      ticks++;
+    }, 1);
+    try {
+      const read = await readClaudeExport(dir);
+      // One more turn, so a pause at the very end is measured too.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(read.files.conversations).toHaveLength(600);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(5);
+    expect(longest).toBeLessThan(parseMs);
   });
 });
