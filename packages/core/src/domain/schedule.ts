@@ -13,9 +13,45 @@ export const SCHEDULE_PROMPT_MAX = 20_000;
 export const MAX_SCHEDULES = 100;
 export const SCHEDULE_RUNS_KEPT = 50;
 export const MAX_CONCURRENT_SCHEDULED_RUNS = 2;
-export const SCHEDULE_RUN_TIMEOUT_MS = 30 * 60_000;
 export const SCHEDULE_LATE_AFTER_MS = 5 * 60_000;
 export const SCHEDULE_CHECK_MAX_MS = 30_000;
+
+/**
+ * A run's time limit (`Schedule.timeLimitMinutes`) when none is chosen, and
+ * every schedule's from before the limit could be set (migration 039): the
+ * fixed limit all runs had until then. Long enough for a report or a triage
+ * run, Claude Code's included; short enough that a run stuck in auto mode
+ * doesn't spend all night, and one of the two run slots with it.
+ */
+export const DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES = 30;
+/** The longest limit short of none at all: a day. */
+export const MAX_SCHEDULE_TIME_LIMIT_MINUTES = 24 * 60;
+/** The editor's choices, in minutes; it also offers "No limit" (null). */
+export const SCHEDULE_TIME_LIMIT_CHOICES: readonly number[] = [10, 30, 60, 120, 240, 480];
+
+/** The limit in minutes, null for none, or a message saying what's wrong. */
+export function parseTimeLimit(value: unknown): number | null | string {
+  if (value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_SCHEDULE_TIME_LIMIT_MINUTES) {
+    return `"timeLimitMinutes" must be a whole number of minutes from 1 to ${MAX_SCHEDULE_TIME_LIMIT_MINUTES}, or null for no limit.`;
+  }
+  return value;
+}
+
+/** "45 minutes", "1 hour", "1 hour 30 minutes", "8 hours". */
+export function timeLimitText(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const h = hours === 1 ? '1 hour' : `${hours} hours`;
+  const m = rest === 1 ? '1 minute' : `${rest} minutes`;
+  if (hours === 0) return m;
+  return rest === 0 ? h : `${h} ${m}`;
+}
+
+/** What a run stopped at its limit records as its detail, and its chat shows. */
+export function timedOutText(minutes: number): string {
+  return `Stopped at the schedule's time limit of ${timeLimitText(minutes)}.`;
+}
 
 /**
  * `time` is `HH:MM`, 00:00-23:59. `weekdays` are 0-6 with 0 = Sunday (as
@@ -393,12 +429,14 @@ export interface ScheduledPromptInput {
   previousAt: number | null;
   /** The run uses Claude Code's auto mode (`Schedule.autoMode` on a Claude Code profile). */
   autoMode?: boolean;
+  /** The schedule's time limit in minutes (`Schedule.timeLimitMinutes`); null or left out for none. */
+  timeLimitMinutes?: number | null;
 }
 
 /**
  * What a scheduled run sends: one bracketed paragraph naming the schedule, the
- * date and time, the previous completed run's date and that approvals will be
- * refused; a blank line; then the prompt. Stored in the chat as the user
+ * date and time, the previous completed run's date, that approvals will be
+ * refused and the run's time limit; a blank line; then the prompt. Stored in the chat as the user
  * message, so the model and a later reader see the same thing.
  */
 export function scheduledPromptText(input: ScheduledPromptInput): string {
@@ -412,6 +450,8 @@ export function scheduledPromptText(input: ScheduledPromptInput): string {
       ? 'Nobody is watching this run: auto mode decides tool calls, and any that would still need approval will be refused.'
       : 'Nobody is watching this run, so tool calls that need approval will be refused.'
   );
+  const limit = input.timeLimitMinutes ?? null;
+  if (limit !== null) sentences.push(`It is stopped if it is still going after ${timeLimitText(limit)}.`);
   return `[${sentences.join(' ')}]\n\n${input.prompt}`;
 }
 

@@ -992,6 +992,13 @@ export interface Schedule {
    * refused. Off by default: nobody watches what the classifier allows.
    */
   autoMode: boolean;
+  /**
+   * How long a run may go, in minutes, before it is stopped as Stop stops it
+   * and recorded as timed out; null for no limit. Counts from the reply's
+   * start, a wait on a card included. 30 by default
+   * (`DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES`).
+   */
+  timeLimitMinutes: number | null;
   createdAt: number;
   updatedAt: number;
   /**
@@ -1001,11 +1008,16 @@ export interface Schedule {
   invalid?: string;
 }
 
-/** What `ScheduleRepo.create` takes: timestamps default to now, `autoMode` to false. */
-export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' | 'autoMode'> & { createdAt?: number; updatedAt?: number; autoMode?: boolean };
+/** What `ScheduleRepo.create` takes: timestamps default to now, `autoMode` to false, `timeLimitMinutes` to 30. */
+export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' | 'autoMode' | 'timeLimitMinutes'> & {
+  createdAt?: number;
+  updatedAt?: number;
+  autoMode?: boolean;
+  timeLimitMinutes?: number | null;
+};
 
 /** What `ScheduleRepo.update` may change. The target is fixed once made. */
-export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
 
 /** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
 export interface ScheduleRun {

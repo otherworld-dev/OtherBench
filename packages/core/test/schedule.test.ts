@@ -7,8 +7,11 @@ import {
   nextRunAt,
   nextRuns,
   parseRule,
+  parseTimeLimit,
   runChatTitle,
   scheduledPromptText,
+  timedOutText,
+  timeLimitText,
   unattendedWarnings,
   wallToInstant,
   type ScheduleRule,
@@ -194,6 +197,17 @@ describe('parseRule', () => {
   });
 });
 
+describe('parseTimeLimit', () => {
+  it('takes whole minutes from 1 to a day, or null for no limit', () => {
+    expect(parseTimeLimit(null)).toBeNull();
+    expect(parseTimeLimit(1)).toBe(1);
+    expect(parseTimeLimit(1440)).toBe(1440);
+    for (const bad of [0, -1, 1441, 2.5, '30', undefined, true, Number.NaN]) {
+      expect(parseTimeLimit(bad), String(bad)).toBe('"timeLimitMinutes" must be a whole number of minutes from 1 to 1440, or null for no limit.');
+    }
+  });
+});
+
 describe('isValidTimeZone', () => {
   it('knows IANA zones and refuses made-up ones', () => {
     expect(isValidTimeZone(LONDON)).toBe(true);
@@ -253,6 +267,28 @@ describe('texts', () => {
     expect(scheduledPromptText({ ...base, trigger: 'scheduled', at: slot, dueAt: slot, previousAt: null, autoMode: true })).toBe(
       '[Scheduled run "Weekly report": Monday 12 October 2026, 09:00 (Europe/London). This is the first run. Nobody is watching this run: auto mode decides tool calls, and any that would still need approval will be refused.]\n\nhello'
     );
+  });
+
+  it('gives the time limit last, and nothing for no limit', () => {
+    const first = '[Scheduled run "Weekly report": Monday 12 October 2026, 09:00 (Europe/London). This is the first run. Nobody is watching this run, so tool calls that need approval will be refused.';
+    expect(scheduledPromptText({ ...base, trigger: 'scheduled', at: slot, dueAt: slot, previousAt: null, timeLimitMinutes: 90 })).toBe(
+      `${first} It is stopped if it is still going after 1 hour 30 minutes.]
+
+hello`
+    );
+    expect(scheduledPromptText({ ...base, trigger: 'scheduled', at: slot, dueAt: slot, previousAt: null, timeLimitMinutes: null })).toBe(`${first}]
+
+hello`);
+  });
+
+  it('says a time limit in hours and minutes', () => {
+    expect(timeLimitText(1)).toBe('1 minute');
+    expect(timeLimitText(30)).toBe('30 minutes');
+    expect(timeLimitText(60)).toBe('1 hour');
+    expect(timeLimitText(61)).toBe('1 hour 1 minute');
+    expect(timeLimitText(150)).toBe('2 hours 30 minutes');
+    expect(timeLimitText(1440)).toBe('24 hours');
+    expect(timedOutText(240)).toBe("Stopped at the schedule's time limit of 4 hours.");
   });
 
   it('titles a run chat with the name and the short date, uncut', () => {
