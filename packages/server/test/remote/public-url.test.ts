@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { InsecurePublicUrlError } from '../../src/remote/errors.js';
 import { createRemoteAccess } from '../../src/remote/index.js';
 import { parsePublicUrl } from '../../src/remote/public-url.js';
@@ -32,6 +33,7 @@ describe('createRemoteAccess', () => {
       trustProxies: ['::ffff:127.0.0.1'],
       loginPath: join(dir, 'login.json'),
       tls: { mode: 'proxy' },
+      sessionRepo: new InMemoryStore().remoteSessions,
     });
     try {
       expect(remote.publicOrigins).toEqual(['https://otherbench.lan:4747', 'https://192.168.1.5:4747']);

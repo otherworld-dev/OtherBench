@@ -395,7 +395,7 @@ export async function runServe(
 
   let signIn: SignIn | null = null;
   try {
-    if (check) signIn = startSignIn(signInOptions, check, container.store.nodes.self().name);
+    if (check) signIn = startSignIn(signInOptions, check, container.store.nodes.self().name, container.store.remoteSessions);
   } catch (err) {
     container.close();
     throw err;
