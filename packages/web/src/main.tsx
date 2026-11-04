@@ -7,7 +7,7 @@ import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
 import { keepOtherBenchTitle } from './lib/otherBenchTitle.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
-import { codePanelWidth } from './state/panelWidth.js';
+import { codePanelWidth } from './state/codePanelWidth.js';
 import { initTextSize } from './state/textSize.js';
 import './index.css';
 

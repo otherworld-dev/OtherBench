@@ -4,24 +4,20 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type { TerminalInfo } from '@otherbench/core/types/terminal.js';
-import { openInBrowser } from '../../desktop/bridge.js';
 import { api } from '../../state/api.js';
 import { openTerminalFeed } from './feed.js';
+import { onColorSchemeChange, openTerminalLink, terminalTheme } from './screen.js';
 
 /** The most one input POST carries (the server's limit is 64 KiB); a bigger paste goes in pieces, in order. */
 const INPUT_CHUNK = 60_000;
-
-/** A colour token from the app's theme, or `fallback`. */
-function token(css: CSSStyleDeclaration, name: string, fallback: string): string {
-  return css.getPropertyValue(name).trim() || fallback;
-}
 
 /**
  * One terminal's screen (spec 2026-10-21-code-terminal-design): xterm.js over
  * the terminal's output (feed.ts), which is followed only while this is mounted. The only
  * module that imports xterm, so tests replace it. Keys go to the shell except
  * the app's own shortcuts (Ctrl+Tab, Ctrl+1-9, Ctrl+`), paste (Ctrl+V, Ctrl+Shift+V)
- * and Ctrl+C with a selection, which copies, as in VS Code.
+ * and Ctrl+C with a selection, which copies, as in VS Code. Links, typed or OSC 8,
+ * open in the browser only if they're http(s), and the colours follow a light/dark switch.
  */
 export function TerminalView({ appId, terminal, focusToken }: { appId: string; terminal: TerminalInfo; focusToken: number }): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
@@ -30,23 +26,22 @@ export function TerminalView({ appId, terminal, focusToken }: { appId: string; t
   useEffect(() => {
     const el = host.current;
     if (!el) return;
-    const css = getComputedStyle(document.documentElement);
     const term = new Terminal({
       fontFamily: '"JetBrains Mono", Consolas, "Courier New", monospace',
       fontSize: 13,
       cursorBlink: true,
       scrollback: 5000,
-      theme: {
-        background: token(css, '--bg', '#101114'),
-        foreground: token(css, '--text', '#e6e6e6'),
-        cursor: token(css, '--text', '#e6e6e6'),
-        selectionBackground: 'rgba(120, 160, 255, 0.35)',
-      },
+      theme: terminalTheme(),
+      // OSC 8 hyperlinks: without this xterm opens them itself, which in the desktop app is a webview window.
+      linkHandler: { activate: (_event, uri) => openTerminalLink(uri), allowNonHttpProtocols: false },
     });
     termRef.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon((_event, uri) => void openInBrowser(uri)));
+    term.loadAddon(new WebLinksAddon((_event, uri) => openTerminalLink(uri)));
+    const stopTheme = onColorSchemeChange(() => {
+      term.options.theme = terminalTheme();
+    });
 
     const copySelection = (): void => {
       void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined);
@@ -118,6 +113,7 @@ export function TerminalView({ appId, terminal, focusToken }: { appId: string; t
     term.focus();
 
     return () => {
+      stopTheme();
       feed.close();
       observer?.disconnect();
       clearTimeout(resizeTimer);
