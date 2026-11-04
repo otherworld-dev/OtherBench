@@ -41,6 +41,7 @@ import type {
   McpServer,
   McpServerRepo,
   MemoryAuthor,
+  MessageOutline,
   MessageRepo,
   ModelRepo,
   NewChat,
@@ -1367,6 +1368,13 @@ class InMemoryMessageRepo implements MessageRepo {
       .filter((m) => m.chatId === chatId)
       .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))[0];
     return newest?.id ?? null;
+  }
+
+  outline(chatId: string): MessageOutline[] {
+    return [...this.byId.values()]
+      .filter((m) => m.chatId === chatId)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((m) => ({ id: m.id, parentId: m.parentId, role: m.role }));
   }
 
   searchText(query: string, limit: number, offset = 0): { messageId: string; chatId: string; snippet: string }[] {

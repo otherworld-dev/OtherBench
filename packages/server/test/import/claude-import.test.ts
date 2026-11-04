@@ -139,7 +139,7 @@ describe('ClaudeImportService: chats', () => {
   it('imports every conversation with its messages, branches, times and memory cursors', async () => {
     const status = await runImport(makeService());
     expect(status).toMatchObject({ state: 'done', done: 2, total: 2, error: null });
-    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, updated: 0, newer: 0, filed: 0, messages: 5, files: 0, failed: [] });
+    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, updated: 0, newer: 0, refreshes: [], filed: 0, messages: 5, files: 0, failed: [] });
     expect(status.report!.emptyChats).toBe(1);
 
     const chat = store.chats.get('c1')!;
@@ -154,37 +154,100 @@ describe('ClaudeImportService: chats', () => {
 
   it('skips chats already imported on a second run', async () => {
     await runImport(makeService());
+    const before = store.chats.get('c2');
+    expect((await makeService().preview(root)).chats).toMatchObject({ existing: 2, updates: 0, newer: 0, refreshes: [] });
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 0, filed: 0, messages: 0, files: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 0, refreshes: [], filed: 0, messages: 0, files: 0, failed: [] });
     expect(store.chats.list()).toHaveLength(2);
+    expect(store.chats.get('c2')).toEqual(before);
   });
 
-  it('adds the messages a chat gained on claude.ai since it was imported, when it was not carried on here', async () => {
-    await runImport(makeService());
+  /** c2 as claude.ai has it now: two more turns after a3. */
+  function shedGainedTwo(): void {
     (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [
       message('u2', 'human', CLAUDE_ROOT_PARENT, 4),
       message('a3', 'assistant', 'u2', 5),
       message('u4', 'human', 'a3', 6),
       message('a4', 'assistant', 'u4', 7),
     ];
-    expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, updates: 1, newer: 0 });
+  }
+
+  /** Carries c2 on here, from claude.ai's last reply, and opens it there. */
+  function carryOnShed(): void {
+    store.messages.create({ id: 'mine', chatId: 'c2', parentId: 'a3', role: 'user', parts: [{ type: 'text', text: 'carried on here' }], status: 'complete', error: null, producedBy: null, createdAt: Date.parse(at(20)) });
+    store.messages.create({ id: 'mine-reply', chatId: 'c2', parentId: 'mine', role: 'assistant', parts: [{ type: 'text', text: 'and answered here' }], status: 'complete', error: null, producedBy: { profileId: 'claude', profileName: 'Claude Opus', connectionId: 'conn', modelId: 'claude-opus' }, createdAt: Date.parse(at(21)) });
+    store.chats.update('c2', { headMessageId: 'mine-reply', memoryCursor: 'mine', globalMemoryCursor: 'mine' });
+  }
+
+  it('adds the messages a chat gained on claude.ai since it was imported, when it was not carried on here', async () => {
+    await runImport(makeService());
+    shedGainedTwo();
+    const preview = (await makeService().preview(root)).chats;
+    expect(preview).toMatchObject({ total: 2, existing: 2, updates: 1, newer: 0 });
+    expect(preview.refreshes).toEqual([{ id: 'c2', title: 'Shed', messages: 2, mode: 'append', skipped: 0 }]);
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, filed: 0, messages: 2, files: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, refreshes: [{ id: 'c2', title: 'Shed', messages: 2, mode: 'append', skipped: 0 }], filed: 0, messages: 2, files: 0, failed: [] });
+    expect(store.messages.get('u4')).toMatchObject({ chatId: 'c2', parentId: 'a3', role: 'user' });
     expect(store.messages.get('a4')).toMatchObject({ parentId: 'u4', role: 'assistant' });
     // The memory sweeps start after the imported messages, as they do for a chat imported new.
     expect(store.chats.get('c2')).toMatchObject({ headMessageId: 'a4', memoryCursor: 'a4', globalMemoryCursor: 'a4' });
   });
 
-  it('leaves a chat carried on here as it is, counting the newer messages it was not given', async () => {
+  it("adds claude.ai's new messages to a chat carried on here as a branch beside the user's, leaving the chat where it was", async () => {
     await runImport(makeService());
-    store.messages.create({ id: 'mine', chatId: 'c2', parentId: 'a3', role: 'user', parts: [{ type: 'text', text: 'carried on here' }], status: 'complete', error: null, producedBy: null });
-    store.chats.update('c2', { headMessageId: 'mine' });
-    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
-    expect((await makeService().preview(root)).chats).toMatchObject({ existing: 2, updates: 0, newer: 1 });
+    carryOnShed();
+    shedGainedTwo();
+    const preview = (await makeService().preview(root)).chats;
+    expect(preview).toMatchObject({ existing: 2, updates: 1, newer: 0 });
+    expect(preview.refreshes).toEqual([{ id: 'c2', title: 'Shed', messages: 2, mode: 'branch', skipped: 0 }]);
+
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 0, newer: 1, filed: 0, messages: 0, files: 0, failed: [] });
+
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, updated: 1, newer: 0, refreshes: [{ id: 'c2', title: 'Shed', messages: 2, mode: 'branch', skipped: 0 }], filed: 0, messages: 2, files: 0, failed: [] });
+    // claude.ai's turn and the user's own hang off a3 side by side: a branch to switch to, nothing interleaved.
+    expect(store.messages.children('a3').map((m) => m.id)).toEqual(['u4', 'mine']);
+    expect(store.messages.children('u4').map((m) => m.id)).toEqual(['a4']);
+    expect(store.messages.children('mine').map((m) => m.id)).toEqual(['mine-reply']);
+    expect(store.messages.pathToRoot('a4').map((m) => m.id)).toEqual(['u2', 'a3', 'u4', 'a4']);
+    // The chat still opens on the user's branch, and its own messages still wait for the memory sweeps.
+    expect(store.chats.get('c2')).toMatchObject({ headMessageId: 'mine-reply', memoryCursor: 'mine', globalMemoryCursor: 'mine' });
+
+    // A third run has nothing more to add, and leaves both branches as they are.
+    const before = store.chats.get('c2');
+    expect((await makeService().preview(root)).chats).toMatchObject({ updates: 0, newer: 0, refreshes: [] });
+    const third = await runImport(makeService());
+    expect(third.report!.chats).toMatchObject({ existing: 2, updated: 0, newer: 0, refreshes: [], messages: 0 });
+    expect(store.chats.get('c2')).toEqual(before);
+    expect(store.messages.outline('c2')).toHaveLength(6);
+  });
+
+  it("marks claude.ai's reply regenerated when it lands beside one made here, so the pair isn't a compare turn", async () => {
+    // claude.ai had the prompt but no reply yet at the first import; the user got one here, and claude.ai one later.
+    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4)];
+    await runImport(makeService());
+    store.messages.create({ id: 'mine-reply', chatId: 'c2', parentId: 'u2', role: 'assistant', parts: [{ type: 'text', text: 'answered here' }], status: 'complete', error: null, producedBy: { profileId: 'claude', profileName: 'Claude Opus', connectionId: 'conn', modelId: 'claude-opus' } });
+    store.chats.update('c2', { headMessageId: 'mine-reply' });
+    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5)];
+
+    await runImport(makeService());
+
+    expect(store.messages.get('a3')!.producedBy).toMatchObject({ modelId: 'claude.ai', regenerated: true });
+    expect(store.chats.get('c2')!.headMessageId).toBe('mine-reply');
+  });
+
+  it("leaves out claude.ai's new messages it can't place beside the chat's own, and says so", async () => {
+    await runImport(makeService());
+    // Here a3 got a second reply of the user's making, not a prompt; claude.ai's next turn is a prompt from a3.
+    store.messages.create({ id: 'odd', chatId: 'c2', parentId: 'a3', role: 'assistant', parts: [{ type: 'text', text: 'a reply to a reply' }], status: 'complete', error: null, producedBy: null });
+    store.chats.update('c2', { headMessageId: 'odd' });
+    shedGainedTwo();
+    const preview = (await makeService().preview(root)).chats;
+    expect(preview).toMatchObject({ updates: 0, newer: 1 });
+    expect(preview.refreshes).toEqual([{ id: 'c2', title: 'Shed', messages: 0, mode: 'branch', skipped: 2 }]);
+    const again = await runImport(makeService());
+    expect(again.report!.chats).toMatchObject({ existing: 2, updated: 0, newer: 1, messages: 0, refreshes: [{ id: 'c2', messages: 0, mode: 'branch', skipped: 2 }] });
     expect(store.messages.get('u4')).toBeNull();
-    expect(store.chats.get('c2')!.headMessageId).toBe('mine');
+    expect(store.chats.get('c2')!.headMessageId).toBe('odd');
   });
 
   it('rolls back a chat that fails part-way, says so, and carries on with the rest', async () => {
@@ -308,6 +371,36 @@ describe('ClaudeImportService: files saved from claude.ai', () => {
 
     const changed = (db.prepare("SELECT row_id FROM change_log WHERE seq > ? AND tbl = 'message' AND op = 'upsert'").all(before) as { row_id: string }[]).map((r) => r.row_id);
     expect(changed).toContain('u1');
+  });
+
+  it("stores the files on a re-import's new messages, as a first import does, in a branch or appended", async () => {
+    // The first import: c1 is only the reply-less prompt, without files.
+    exportFiles.conversations = [conversation('c1', 'Garden plans', [message('u1', 'human', CLAUDE_ROOT_PARENT, 1, 'see these'), message('a1', 'assistant', 'u1', 2)])];
+    await runImport(filesService());
+    store.messages.create({ id: 'mine', chatId: 'c1', parentId: 'a1', role: 'user', parts: [{ type: 'text', text: 'carried on here' }], status: 'complete', error: null, producedBy: null });
+    store.chats.update('c1', { headMessageId: 'mine' });
+    // On claude.ai the user carried on too, with two files.
+    exportFiles.conversations = [
+      conversation('c1', 'Garden plans', [
+        message('u1', 'human', CLAUDE_ROOT_PARENT, 1, 'see these'),
+        message('a1', 'assistant', 'u1', 2),
+        { ...message('u5', 'human', 'a1', 3, 'and these'), files: [{ file_uuid: SHOT, file_name: 'shot.png' }, { file_uuid: NOTES, file_name: 'notes.txt' }] },
+      ]),
+    ];
+
+    const again = await runImport(filesService());
+
+    expect(again.report!.chats).toMatchObject({ existing: 1, updated: 1, messages: 1, files: 2, refreshes: [{ id: 'c1', messages: 1, mode: 'branch', skipped: 0 }] });
+    expect(store.messages.get('u5')!.parts).toEqual([
+      { type: 'text', text: 'and these' },
+      { type: 'image', attachmentId: `u5:file:${SHOT}`, mime: 'image/webp' },
+      { type: 'file', attachmentId: `u5:file:${NOTES}`, mime: 'text/plain', filename: 'notes.txt' },
+    ]);
+    expect(store.attachments.get(`u5:file:${SHOT}`)).toMatchObject({ chatId: 'c1', messageId: 'u5', size: webp.length });
+    expect(store.attachments.get(`u5:file:${NOTES}`)).toMatchObject({ messageId: 'u5', extractedText: 'notes for the shed' });
+    expect(store.chats.get('c1')!.headMessageId).toBe('mine');
+    // Nothing more on a third run.
+    expect((await runImport(filesService())).report!.chats).toMatchObject({ updated: 0, files: 0, messages: 0, refreshes: [] });
   });
 
   it('keeps the notes when there is nowhere to store files', async () => {
@@ -605,6 +698,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
       sessions: 2,
       existing: 0,
       updates: 0,
+      refreshes: [],
       messages: 4,
       images: 1,
       spaces: [{ id: 'space-1', sessions: 1, titles: ['Finance Dept'] }],
@@ -614,7 +708,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
 
   it("imports them when asked, filing each space's sessions where the user chose and storing pasted images as attachments", async () => {
     const status = await runCowork(coworkService());
-    expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, updated: 0, filed: 1, messages: 4, images: 1, failed: [] });
+    expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, updated: 0, refreshes: [], filed: 1, messages: 4, images: 1, failed: [] });
     expect(store.chats.get('local_s1')).toMatchObject({ title: 'Finance Dept', projectId: 'otherbench-phd', headMessageId: 'local_s1-a' });
     expect(store.chats.get('local_s2')!.projectId).toBeNull();
     const [attachment] = store.attachments.list('local_s1');
@@ -650,7 +744,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
 
     const again = await runCowork(coworkService());
 
-    expect(again.report!.cowork).toEqual({ imported: 0, existing: 2, updated: 1, filed: 0, messages: 0, images: 1, failed: [] });
+    expect(again.report!.cowork).toEqual({ imported: 0, existing: 2, updated: 1, refreshes: [], filed: 0, messages: 0, images: 1, failed: [] });
     expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'image', attachmentId: 'local_s1-u:image:1', mime: 'image/png' });
     const [attachment] = store.attachments.list('local_s1');
     expect(attachment).toMatchObject({ id: 'local_s1-u:image:1', messageId: 'local_s1-u', size: png.length });
