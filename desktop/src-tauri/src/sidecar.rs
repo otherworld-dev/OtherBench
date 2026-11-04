@@ -12,7 +12,7 @@
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 
-use crate::rpc;
+use crate::{job, rpc};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc};
@@ -50,6 +50,8 @@ pub struct LaunchSpec {
 
 pub struct Server {
     child: Child,
+    /// Ends what the server started if it dies hard (job.rs).
+    job: job::Guard,
     /// Our end of the server's stdin: answers and events go through it, and closing it is the shutdown signal.
     writer: rpc::Writer,
     pub port: u16,
@@ -117,6 +119,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
         )
     })?;
 
+    let job = job::Guard::attach(&child);
     let stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
 
@@ -166,17 +169,19 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
         Ok(Ok(port)) => port,
         Ok(Err(e)) => {
             let _ = writeln!(log, "[otherbench-desktop] {e}");
-            return Err(fail(child, &log_path, e));
+            return Err(fail(child, job, &log_path, e));
         }
-        Err(_) => return Err(fail(child, &log_path, "the server did not announce a port within 15s".into())),
+        Err(_) => return Err(fail(child, job, &log_path, "the server did not announce a port within 15s".into())),
     };
 
-    Ok(Server { writer, child, port, token })
+    Ok(Server { writer, child, job, port, token })
 }
 
-fn fail(mut child: Child, log_path: &Path, reason: String) -> String {
+fn fail(mut child: Child, job: job::Guard, log_path: &Path, reason: String) -> String {
+    job.stopping();
     let _ = child.kill();
     let _ = child.wait();
+    job.exited_forcibly();
     let log_tail = tail(log_path, 4000);
     if log_tail.trim().is_empty() {
         reason
@@ -187,18 +192,21 @@ fn fail(mut child: Child, log_path: &Path, reason: String) -> String {
 
 impl Server {
     /// Closes the server's stdin, waits briefly for it to exit, then kills it.
+    /// What it started goes too only if it had to be killed (job.rs).
     pub fn stop(mut self) {
+        self.job.stopping();
         self.writer.close();
         let deadline = Instant::now() + SHUTDOWN_GRACE;
         while Instant::now() < deadline {
             match self.child.try_wait() {
-                Ok(Some(_)) => return,
+                Ok(Some(_)) => return self.job.exited_cleanly(),
                 Ok(None) => thread::sleep(Duration::from_millis(50)),
                 Err(_) => break,
             }
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        self.job.exited_forcibly();
     }
 }
 

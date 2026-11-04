@@ -6,6 +6,7 @@ mod docks;
 mod download;
 mod folder;
 mod hotkey;
+mod job;
 mod legacy;
 mod links;
 mod notify;
