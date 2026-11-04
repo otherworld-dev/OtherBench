@@ -43,7 +43,6 @@ import {
   placeProjectPatches,
   projectSiblings,
   titleMatches,
-  type CodeSidebarFolder,
   type CodeSidebarGroup,
   type SidebarGroup,
 } from './sidebar/model.js';
@@ -1175,38 +1174,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * An app folder in Code mode (plan 2026-10-25-app-folders): a group heading whose list holds its apps' groups, nested
-   * as sub-projects nest in Chat mode. The heading sums every chat in its apps, so a folded folder still says what's running.
-   */
-  function renderFolder(entry: CodeSidebarFolder): JSX.Element {
-    return (
-      <ProjectGroup
-        key={entry.key}
-        groupKey={entry.key}
-        name={entry.folder.name}
-        count={entry.total}
-        countNoun="app"
-        empty={entry.total === 0}
-        emptyText="No apps yet"
-        collapsed={!searching && collapsedGroups.has(entry.key)}
-        statusSummary={groupStatusSummary(entry.groups.flatMap((g) => g.chats).map(statusOf))}
-        dropActive={draggingAppId !== null && folderDrop?.folderId === entry.folder.id}
-        onToggle={() => setGroupCollapsed(entry.key, !collapsedGroups.has(entry.key))}
-        // A folder holds apps, not chats: a chat goes on an app's heading.
-        onDragTarget={() => {}}
-        onDropChat={() => {}}
-        {...folderGroupProps(entry.folder)}
-      >
-        {entry.groups.map((group) => (
-          <li key={`sub-${group.key}`} data-testid={`subgroup-${group.key}`}>
-            {renderAppGroup(group)}
-          </li>
-        ))}
-      </ProjectGroup>
-    );
-  }
-
-  /**
    * The folder-only props of a Code mode group heading. It takes a dragged folder (placed above or below it) and a
    * dragged app (filed last in it). Both drags carry `PROJECT_DRAG_MIME`, so which one is under way tells them apart.
    */
@@ -1480,17 +1447,15 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           )}
 
           {searching &&
-            (codeMode ? codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) &&
+            (codeMode ? codeSidebar.groups.length === 0 : sidebar.pinned.length === 0 && sidebar.groups.length === 0) &&
             archived.length === 0 &&
             otherMode.length === 0 && (
             <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
           )}
 
-          {codeMode && !searching && apps.length === 0 && codeSidebar.folders.length === 0 && codeSidebar.groups.length === 0 && (
+          {codeMode && !searching && apps.length === 0 && codeSidebar.groups.length === 0 && (
             <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No apps yet. An app is a repo folder; its chats show here, under it.</p>
           )}
-
-          {codeMode && codeSidebar.folders.map(renderFolder)}
 
           {/* While a filed app is dragged: the way out of its folder, after the last folder (where the top level
               starts). Only then, and below the folders, so what moves is the list under it, not the rows under the pointer. */}

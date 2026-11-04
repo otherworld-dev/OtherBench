@@ -159,9 +159,9 @@ function AppChats({ app }: { app: App }): JSX.Element {
   const now = useNow(60_000);
   // The Code sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
-    const model = buildCodeSidebar(chats, apps, appFolders, null);
-    const groups = [...model.groups, ...model.folders.flatMap((f) => f.groups)];
-    return groups.find((g) => g.app?.id === app.id)?.chats ?? [];
+    // The app may be closed, so mark it live to get its group either way.
+    const model = buildCodeSidebar(chats, apps, appFolders, null, '', null, new Map([[app.id, 'running' as const]]));
+    return model.groups.find((g) => g.app?.id === app.id)?.chats ?? [];
   }, [chats, apps, appFolders, app.id]);
 
   return (

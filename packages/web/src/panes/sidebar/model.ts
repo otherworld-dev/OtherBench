@@ -2,6 +2,7 @@ import { compareAppFolders, compareApps } from '@otherbench/core/domain/apps.js'
 import { compareProjects, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
+import { isLive, type ChatStatus, type LiveReason } from '../../state/chatStatus.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
 
 export interface SidebarGroup {
@@ -206,25 +207,28 @@ export interface CodeSidebarGroup {
   chats: Chat[];
   /** Every unarchived chat in the group, matched or not. */
   total: number;
+  /** Why a closed app is shown anyway (a live chat); null for an open app, Unknown app, and search results. */
+  shownBecause: LiveReason | null;
 }
 
 /** The collapse-state key of an app folder's heading (per-machine collapsed-groups store). */
 export const folderKey = (id: string): string => `folder:${id}`;
 
-/** One app folder in Code mode's sidebar, with its apps' groups. */
-export interface CodeSidebarFolder {
-  folder: AppFolder;
-  /** `folderKey(folder.id)`: also the heading's collapse-state key. */
-  key: string;
-  /** Its apps in `compareApps` order; while searching, only those with a match unless the folder's name matched. */
-  groups: CodeSidebarGroup[];
-  /** The folder's app count, matched or not. */
-  total: number;
+/**
+ * The apps with a live chat (see `isLive`), each with why: a chat stopped on a card beats one that is running.
+ * Archived chats and chats outside an app don't count.
+ */
+export function liveApps(chats: readonly Chat[], statusOf: (c: Chat) => ChatStatus | null): Map<string, LiveReason> {
+  const out = new Map<string, LiveReason>();
+  for (const c of chats) {
+    if (c.appId === null || c.archivedAt !== null) continue;
+    const reason = isLive(statusOf(c));
+    if (reason === 'card' || (reason === 'running' && !out.has(c.appId))) out.set(c.appId, reason);
+  }
+  return out;
 }
 
 export interface CodeSidebarModel {
-  /** Folders in `compareAppFolders` order; while searching, only those with a match (or whose name matches). */
-  folders: CodeSidebarFolder[];
   /**
    * The top-level apps (no folder, or a folder that isn't loaded) in `compareApps` order (while searching, only
    * those with a match), then Unknown app when it has chats.
@@ -248,43 +252,32 @@ export interface CodeSidebarModel {
  * an app with no chats still shows, so it can be opened and given one. While
  * searching, matching chats outside an app come back in `otherMode`.
  *
- * Apps sit in folders (plan 2026-10-25-app-folders): `folders` holds each loaded folder with its apps' groups, and
- * `groups` the top-level ones. While searching, a folder whose name matches `query` shows all its apps, each with
- * all its chats, narrowed by the status and machine chips (`chipMatches`: the chats they allow, null with none on); any other folder shows only the app groups with a match and is dropped when it has none. Without a
- * search every folder shows, empty ones too.
+ *
+ * Only open apps show (plan 2026-11-04-open-apps), plus a closed app with a live chat (`live`, see `liveApps`),
+ * marked in `shownBecause`. They come in `codeSidebarAppOrder` (folder order, then each folder's apps, then the
+ * unfiled ones), but the folders themselves are only on the All apps page. While searching, every app is a
+ * candidate, open or not, flat: one with a matching chat shows, with `shownBecause` null.
  */
-export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, query = '', chipMatches: ReadonlySet<string> | null = null): CodeSidebarModel {
+export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, _query = '', _chipMatches: ReadonlySet<string> | null = null, live: ReadonlyMap<string, LiveReason> = new Map()): CodeSidebarModel {
   const appChats = chats.filter((c) => c.appId !== null);
-  const live = appChats.filter((c) => c.archivedAt === null);
+  const unarchived = appChats.filter((c) => c.archivedAt === null);
   const known = new Set(apps.map((a) => a.id));
   const keyOf = (c: Chat): string => (c.appId !== null && known.has(c.appId) ? c.appId : UNKNOWN_APP_KEY);
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
   const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
 
-  const chipShown = (c: Chat): boolean => chipMatches === null || chipMatches.has(c.id);
-
-  const group = (key: string, app: App | null, visible = shown): CodeSidebarGroup => {
-    const members = live.filter((c) => keyOf(c) === key);
-    return { app, key, chats: members.filter(visible).sort(pinnedFirst), total: members.length };
+  const group = (key: string, app: App | null): CodeSidebarGroup => {
+    const members = unarchived.filter((c) => keyOf(c) === key);
+    const closedLive = matches === null && app !== null && !app.open ? (live.get(app.id) ?? null) : null;
+    return { app, key, chats: members.filter(shown).sort(pinnedFirst), total: members.length, shownBecause: closedLive };
   };
-  const knownFolders = new Set(folders.map((f) => f.id));
-  const sortedApps = [...apps].sort(compareApps);
-  const groups = sortedApps.filter((a) => a.folderId === null || !knownFolders.has(a.folderId)).map((a) => group(a.id, a));
+  const groups = codeSidebarAppOrder(apps, folders)
+    .filter((a) => matches !== null || a.open || live.has(a.id))
+    .map((a) => group(a.id, a));
   const unknown = group(UNKNOWN_APP_KEY, null);
   if (unknown.total > 0) groups.push(unknown);
 
-  const folderModels = [...folders].sort(compareAppFolders).flatMap((folder): CodeSidebarFolder[] => {
-    const members = sortedApps.filter((a) => a.folderId === folder.id);
-    // A matching folder name keeps every app and chat in view, and the folder itself even when it's empty.
-    const nameHit = matches !== null && titleMatches(folder.name, query);
-    // The name waives the text query only: the status and machine chips (`chipMatches`) still narrow its chats.
-    const folderGroups = members.map((a) => group(a.id, a, nameHit ? chipShown : shown)).filter((g) => matches === null || nameHit || g.chats.length > 0);
-    if (matches !== null && !nameHit && folderGroups.length === 0) return [];
-    return [{ folder, key: folderKey(folder.id), groups: folderGroups, total: members.length }];
-  });
-
   return {
-    folders: folderModels,
     // Unknown app shows only with chats; while searching, any group only with a match.
     groups: groups.filter((g) => (matches === null ? g.app !== null || g.total > 0 : g.chats.length > 0)),
     archived: appChats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),

@@ -2205,7 +2205,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: headingTransfer(key) }), 'clientY', { value: half === 'top' ? 105 : 115 }));
     }
 
-    it('shows folders first as headings with their apps nested inside, counting apps, then the top-level apps', () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('shows folders first as headings with their apps nested inside, counting apps, then the top-level apps', () => {
       setupFolders();
       expect(headingOrder()).toEqual(['folder:F1', 'A', 'B', 'folder:F2', 'W', 'G']);
       expect(within(screen.getByTestId('group-heading-folder:F1')).getByText('Games')).toBeInTheDocument();
@@ -2217,7 +2218,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(rowIds('group-A')).toEqual(['ca']);
     });
 
-    it('folds a folder from its heading, hiding its apps, and remembers it after a re-render', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('folds a folder from its heading, hiding its apps, and remembers it after a re-render', async () => {
       const user = setupFolders();
       await user.click(nameButton('folder:F1'));
       expect(screen.queryByTestId('group-A')).toBeNull();
@@ -2233,7 +2235,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.getByTestId('group-W')).toBeInTheDocument();
     });
 
-    it("a folded folder's heading shows the status of its apps' chats", () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("a folded folder's heading shows the status of its apps' chats", () => {
       setGroupCollapsed('folder:F1', true);
       setupFolders({ appRunningTurns: { m1: 'ca' } });
       expect(screen.queryByTestId('chat-row-ca')).toBeNull();
@@ -2241,20 +2244,23 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByTestId('group-status-folder:F2')).toBeNull();
     });
 
-    it('an empty folder shows "No apps yet" with a count of 0', () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('an empty folder shows "No apps yet" with a count of 0', () => {
       setupFolders({ appFolders: [games, work, makeFolder({ id: 'F3', name: 'Empty', sortOrder: 2 })] });
       expect(within(screen.getByTestId('group-folder:F3')).getByText('No apps yet')).toBeInTheDocument();
       expect(screen.getByTestId('group-count-folder:F3')).toHaveTextContent('0');
       expect(screen.getByTestId('group-count-folder:F3')).toHaveAttribute('title', '0 apps');
     });
 
-    it('with folders but no apps, shows the folders rather than the no-apps note', () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('with folders but no apps, shows the folders rather than the no-apps note', () => {
       setupFolders({ apps: [], chats: [] });
       expect(screen.getByTestId('group-folder:F1')).toBeInTheDocument();
       expect(screen.queryByText(/An app is a repo folder/)).toBeNull();
     });
 
-    it('a search that matches only inside a folder shows the folder and no "No chats match"', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('a search that matches only inside a folder shows the folder and no "No chats match"', async () => {
       mockedSearch.mockResolvedValue([]);
       const user = setupFolders();
       await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
@@ -2263,7 +2269,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByText('No chats match your search.')).toBeNull();
     });
 
-    it('the footer has one primary button, + New app, and New folder is an icon button like the New project button in Chat mode', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('the footer has one primary button, + New app, and New folder is an icon button like the New project button in Chat mode', async () => {
       const created = makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 });
       mockedFolderCreate.mockResolvedValue(created);
       const user = setupFolders();
@@ -2283,7 +2290,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       await waitFor(() => expect(within(screen.getByTestId('group-heading-folder:F9')).getByText('PhD')).toBeInTheDocument());
     });
 
-    it('a double-click on New folder makes one folder', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('a double-click on New folder makes one folder', async () => {
       let release: (f: AppFolder) => void = () => {};
       mockedFolderCreate.mockReset();
       mockedFolderCreate.mockReturnValue(new Promise<AppFolder>((resolve) => (release = resolve)));
@@ -2294,7 +2302,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedFolderCreate).toHaveBeenCalledTimes(1);
     });
 
-    it('New folder while searching clears the search so the new folder and its rename show', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('New folder while searching clears the search so the new folder and its rename show', async () => {
       mockedSearch.mockResolvedValue([]);
       mockedFolderCreate.mockReset();
       mockedFolderCreate.mockResolvedValue(makeFolder({ id: 'F9', name: 'New folder', sortOrder: 2 }));
@@ -2317,7 +2326,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       await waitFor(() => expect(nameButton('A')).toHaveFocus());
     });
 
-    it('a 404 on deleting a folder counts as already gone: the folder leaves and its apps show at the top level', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('a 404 on deleting a folder counts as already gone: the folder leaves and its apps show at the top level', async () => {
       mockedFolderDelete.mockRejectedValue(new ApiError(404, 'Folder "F1" not found.'));
       const user = setupFolders();
       await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
@@ -2327,7 +2337,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(headingOrder()).toEqual(['folder:F2', 'W', 'G', 'A', 'B']);
     });
 
-    it("a folder's menu offers Rename, Move up, Move down and Delete…; Rename saves the name", async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("a folder's menu offers Rename, Move up, Move down and Delete…; Rename saves the name", async () => {
       const user = setupFolders();
       await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
       const menu = screen.getByRole('menu', { name: 'Folder actions' });
@@ -2341,7 +2352,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       await waitFor(() => expect(within(screen.getByTestId('group-heading-folder:F1')).getByText('Play')).toBeInTheDocument());
     });
 
-    it("a folder's Move down and Move up reorder the folders, saving the order", async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("a folder's Move down and Move up reorder the folders, saving the order", async () => {
       const user = setupFolders();
       await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
       await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
@@ -2361,7 +2373,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       ]);
     });
 
-    it("dragging a folder's heading onto another's top half puts it above; a failure says so and reloads", async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("dragging a folder's heading onto another's top half puts it above; a failure says so and reloads", async () => {
       setupFolders();
       const target = dragHeadingOver('folder:F2', 'folder:F1');
       expect(target).toHaveAttribute('data-drop-position', 'before');
@@ -2379,7 +2392,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       await waitFor(() => expect(headingOrder()[0]).toBe('folder:F1'));
     });
 
-    it('a folder heading is no target for a folder dropped on itself, and an app heading takes no folder', () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('a folder heading is no target for a folder dropped on itself, and an app heading takes no folder', () => {
       setupFolders();
       const self = dragHeadingOver('folder:F1', 'folder:F1');
       expect(self).not.toHaveAttribute('data-drop-position');
@@ -2392,7 +2406,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedAppPatch).not.toHaveBeenCalled();
     });
 
-    it('Delete… confirms with what happens, then its apps show at the top level and the open app stays open', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('Delete… confirms with what happens, then its apps show at the top level and the open app stays open', async () => {
       mockedFolderDelete.mockResolvedValue(undefined);
       const user = setupFolders({ activeChatId: 'app:A' });
       await user.click(within(screen.getByTestId('group-heading-folder:F1')).getByRole('button', { name: 'Folder actions' }));
@@ -2409,7 +2424,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedAppDelete).not.toHaveBeenCalled();
     });
 
-    it('Move to folder… lists No folder first, files the app last in the folder, and opens a folded one', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('Move to folder… lists No folder first, files the app last in the folder, and opens a folded one', async () => {
       setGroupCollapsed('folder:F1', true);
       const user = setupFolders();
       await user.click(within(screen.getByTestId('group-heading-G')).getByRole('button', { name: 'App actions' }));
@@ -2436,7 +2452,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(nameButton('folder:F1')).toHaveAttribute('aria-expanded', 'true');
     });
 
-    it("Move to folder… that fails says so and shows the server's apps", async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("Move to folder… that fails says so and shows the server's apps", async () => {
       mockedAppPatch.mockReset();
       mockedAppPatch.mockRejectedValue(new Error('offline'));
       vi.mocked(api.apps.list).mockResolvedValue(filed);
@@ -2449,7 +2466,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.getByTestId('group-folder:F2')).not.toContainElement(screen.getByTestId('group-G'));
     });
 
-    it('dragging an app onto a folder heading files it there, last, and opens the folder', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('dragging an app onto a folder heading files it there, last, and opens the folder', async () => {
       setGroupCollapsed('folder:F2', true);
       setupFolders();
       const target = dragHeadingOver('G', 'folder:F2');
@@ -2462,7 +2480,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(target).not.toHaveAttribute('data-drop-active');
     });
 
-    it("dragging an app onto an app heading in another folder files it there, at that place", async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip("dragging an app onto an app heading in another folder files it there, at that place", async () => {
       setupFolders();
       const target = dragHeadingOver('B', 'W', 'top');
       expect(target).toHaveAttribute('data-drop-position', 'before');
@@ -2474,14 +2493,16 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       ]);
     });
 
-    it('dragging a filed app onto a top-level app heading takes it out of its folder, below that app', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('dragging a filed app onto a top-level app heading takes it out of its folder, below that app', async () => {
       setupFolders();
       dropOn(dragHeadingOver('A', 'G', 'bottom'), 'A', 'bottom');
       await waitFor(() => expect(headingOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'G', 'A']));
       expect(mockedAppPatch.mock.calls).toEqual([['A', { folderId: null, sortOrder: 1 }]]);
     });
 
-    it('dragging a filed app shows a top-level drop zone after the last folder; dropping there puts it first among the top-level apps', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('dragging a filed app shows a top-level drop zone after the last folder; dropping there puts it first among the top-level apps', async () => {
       setupFolders();
       expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
       // A top-level app's drag has no zone: it is at the top level already.
@@ -2507,7 +2528,8 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByTestId('app-top-level-drop-zone')).toBeNull();
     });
 
-    it('Move up is disabled on the first app of a folder, even with a top-level app sorting above it', async () => {
+    // Folders move to the All apps page (plan 2026-11-04-open-apps Task 6).
+    it.skip('Move up is disabled on the first app of a folder, even with a top-level app sorting above it', async () => {
       const user = setupFolders();
       await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
       expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
