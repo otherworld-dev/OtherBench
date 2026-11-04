@@ -1,6 +1,7 @@
-import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
+import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 const streams = vi.hoisted(() => [] as { url: string; closed: boolean }[]);
 
@@ -25,6 +26,9 @@ vi.mock('./api.js', () => ({
   },
 }));
 
+import { api } from './api.js';
+import { KEPT_RECENT_CHATS } from './messagePool.js';
+import { DEFAULT_PANE_STATE } from './panes.js';
 import { useOtherBenchStore } from './store.js';
 import { useChatSync } from './useChatSync.js';
 
@@ -40,6 +44,8 @@ describe('useChatSync', () => {
     useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     streams.length = 0;
   });
+  // Unmounting lets go of each chat the hook followed, which the message pool keeps while followed.
+  afterEach(cleanup);
 
   it("reopens the chat's stream when the machine it runs on changes", () => {
     useOtherBenchStore.setState({ chats: [chat('c1')] });
@@ -56,5 +62,31 @@ describe('useChatSync', () => {
     // Anything else about the chat changing leaves the stream alone.
     act(() => useOtherBenchStore.getState().upsertChat(chat('c1', { runsOn: 'node-laptop', title: 'Renamed' })));
     expect(streams).toHaveLength(2);
+  });
+
+  it('loads a chat the message pool forgot again when it shows again', async () => {
+    const message = (chatId: string): CanonMessage => ({
+      id: `${chatId}-m`, chatId, parentId: null, role: 'user', parts: [{ type: 'text', text: chatId }], status: 'complete', error: null, producedBy: null, createdAt: 1,
+    });
+    const fetchMessages = vi.mocked(api.chats.messages);
+    fetchMessages.mockImplementation(async (chatId: string) => ({ messages: [message(chatId)], headMessageId: `${chatId}-m`, usage: {} }));
+    useOtherBenchStore.setState({ paneState: DEFAULT_PANE_STATE, activeChatId: null });
+    const loaded = (chatId: string): boolean => `${chatId}-m` in useOtherBenchStore.getState().messages;
+    // One pane, its thread following whichever chat is active.
+    const { rerender } = renderHook(({ chatId }: { chatId: string | null }) => useChatSync(chatId), { initialProps: { chatId: null as string | null } });
+    const show = async (chatId: string): Promise<void> => {
+      act(() => useOtherBenchStore.getState().setActiveChatId(chatId));
+      rerender({ chatId });
+      await waitFor(() => expect(loaded(chatId)).toBe(true));
+    };
+
+    // The switch away from a chat happens while its thread still follows it, so it counts as in use for one more.
+    for (let i = 0; i <= KEPT_RECENT_CHATS + 2; i++) await show(`c${i}`);
+    expect(loaded('c0')).toBe(false);
+    expect(loaded('c1')).toBe(true);
+
+    fetchMessages.mockClear();
+    await show('c0');
+    expect(fetchMessages).toHaveBeenCalledWith('c0');
   });
 });
