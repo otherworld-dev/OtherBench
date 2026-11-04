@@ -446,6 +446,16 @@ export function runStoreContract(
         expect(list).toContainEqual({ appId: 'a1', number: 8, through: '2026-10-02T00:00:00Z' });
       });
 
+      it('set never lowers through: an earlier one leaves the later in place and returns it', () => {
+        store.issueTicks.set('a1', 7, '2026-10-05T00:00:00Z');
+        expect(store.issueTicks.set('a1', 7, '2026-10-01T00:00:00Z')).toMatchObject({ appId: 'a1', number: 7, through: '2026-10-05T00:00:00Z' });
+        // The same moment written another way is not later either.
+        expect(store.issueTicks.set('a1', 7, '2026-10-05T00:00:00.000Z').through).toBe('2026-10-05T00:00:00Z');
+        expect(store.issueTicks.list()).toMatchObject([{ appId: 'a1', number: 7, through: '2026-10-05T00:00:00Z' }]);
+        store.issueTicks.set('a1', 7, '2026-10-06T00:00:00Z');
+        expect(store.issueTicks.list()).toMatchObject([{ through: '2026-10-06T00:00:00Z' }]);
+      });
+
       it("deleteForApp removes only that app's ticks, and deleting an app removes its ticks", () => {
         store.apps.create({ id: 'a1', name: 'One' });
         store.apps.create({ id: 'a2', name: 'Two' });

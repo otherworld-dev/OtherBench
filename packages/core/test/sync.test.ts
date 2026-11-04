@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { encodeHlc } from '../src/domain/hlc.js';
-import { CHAT_FIELDS, mergeChatFields, mergeRow, type ChatSide } from '../src/domain/sync.js';
+import { CHAT_FIELDS, laterThrough, mergeChatFields, mergeRow, type ChatSide } from '../src/domain/sync.js';
 
 const h = (ms: number, node = 'a', counter = 0): string => encodeHlc(ms, counter, node);
 
@@ -16,6 +16,20 @@ describe('mergeRow', () => {
     ['but not one set before its removal', null, h(4), h(5), true, 'skip'],
   ] as const)('%s', (_name, local, incoming, tombstone, recreatable, expected) => {
     expect(mergeRow(local, incoming, tombstone, recreatable)).toBe(expected);
+  });
+});
+
+describe('laterThrough', () => {
+  it.each([
+    ['a later time wins', '2026-10-01T00:00:00Z', '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z'],
+    ['an earlier one never does', '2026-10-05T00:00:00Z', '2026-10-01T00:00:00Z', '2026-10-05T00:00:00Z'],
+    ['times compare as dates, not text', '2026-10-01T00:00:00.500Z', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00.500Z'],
+    ['an offset is read as one', '2026-10-01T02:00:00+03:00', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'],
+    ['the same moment keeps the first', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00Z'],
+    ['an unreadable one never wins', '2026-10-01T00:00:00Z', 'not a date', '2026-10-01T00:00:00Z'],
+    ['nor does an unreadable first', 'not a date', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'],
+  ] as const)('%s', (_name, a, b, expected) => {
+    expect(laterThrough(a, b)).toBe(expected);
   });
 });
 

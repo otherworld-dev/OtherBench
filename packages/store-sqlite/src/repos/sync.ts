@@ -4,7 +4,7 @@ import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
 import { APP_FOLDER_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
 import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
-import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
+import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, laterThrough, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@otherbench/core/ports/store.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
 import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, isToolVideoMime, MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
@@ -456,7 +456,10 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'app_folder' && !appFolderRowOk(row)) return false;
     // `folder_id` is not a foreign key (migration 032) and is never checked against the folders here: rows arrive in no fixed order.
     if (u.tbl === 'app' && row['folder_id'] != null && typeof row['folder_id'] !== 'string') return false;
-    if (u.tbl === 'issue_tick' && !issueTickRowOk(row)) return false;
+    if (u.tbl === 'issue_tick') {
+      if (!issueTickRowOk(row)) return false;
+      if (local) return this.mergeIssueTick(row, local, u.hlc);
+    }
     // A workflow is sent to a generation backend: only what an import would have accepted.
     if (u.tbl === 'media_workflow' && !mediaWorkflowRowOk(row)) return false;
     // Artifact rows reach the model's prompt and the viewer: only what OtherBench itself could have made.
@@ -476,6 +479,21 @@ export class SqliteSyncRepo implements SyncRepo {
     const insertOnly: Record<string, unknown> = u.tbl === 'attachment' ? { storage_path: '' } : {};
     this.upsert(u.tbl, row, { hlc: u.hlc }, insertOnly);
     if (tomb !== null) this.db.prepare('DELETE FROM tombstone WHERE tbl = ? AND row_id = ?').run(u.tbl, u.id);
+    return true;
+  }
+
+  /**
+   * A tick already here merges by `through`, not by stamp: the later time stays whichever row is newer, so neither a
+   * later write on a peer nor the order rows arrive in can lower it and bring back activity already ticked off. The
+   * newer stamp is kept too, so two machines that swap rows end on the same row. `updated_at` goes with the through.
+   */
+  private mergeIssueTick(row: SyncRow, local: SyncRow, incomingHlc: string): boolean {
+    const localThrough = local['through'] as string;
+    const through = laterThrough(localThrough, row['through'] as string);
+    const hlc = maxHlc(local['hlc'] as string, incomingHlc);
+    if (through === localThrough && hlc === local['hlc']) return false;
+    const updatedAt = through === localThrough ? local['updated_at'] : row['updated_at'];
+    this.upsert('issue_tick', { ...row, through, updated_at: updatedAt }, { hlc });
     return true;
   }
 

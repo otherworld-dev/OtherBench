@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { IssueTick, IssueTickRepo } from '@otherbench/core/ports/store.js';
+import { laterThrough } from '@otherbench/core/domain/sync.js';
 import { clockOf, type SyncClock } from './clock.js';
 
 function toTick(row: Record<string, unknown>): IssueTick {
@@ -23,14 +24,18 @@ export class SqliteIssueTickRepo implements IssueTickRepo {
     return rows.map(toTick);
   }
 
+  /** Never lowers `through` (core's `laterThrough`); a tick that isn't later is left as it is, so nothing is sent to sync. */
   set(appId: string, number: number, through: string): IssueTick {
+    const id = `${appId}#${number}`;
+    const row = this.db.prepare('SELECT * FROM issue_tick WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (row && laterThrough(row.through as string, through) === row.through) return toTick(row);
     const updatedAt = Date.now();
     this.db
       .prepare(
         `INSERT INTO issue_tick (id, app_id, number, through, updated_at, hlc) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET through = excluded.through, updated_at = excluded.updated_at, hlc = excluded.hlc`
       )
-      .run(`${appId}#${number}`, appId, number, through, updatedAt, this.clock.stamp());
+      .run(id, appId, number, through, updatedAt, this.clock.stamp());
     return { appId, number, through, updatedAt };
   }
 

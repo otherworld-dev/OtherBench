@@ -91,6 +91,7 @@ import { compareApps, compareAppFolders } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
+import { laterThrough } from '../domain/sync.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
 import { normaliseWindowsPath, toSandboxPath } from '../domain/sandbox-paths.js';
@@ -838,8 +839,11 @@ class InMemoryIssueTickRepo implements IssueTickRepo {
     return [...this.ticks.values()].map((t) => ({ ...t }));
   }
   set(appId: string, number: number, through: string): IssueTick {
+    const key = `${appId}#${number}`;
+    const current = this.ticks.get(key);
+    if (current && laterThrough(current.through, through) === current.through) return { ...current };
     const tick = { appId, number, through, updatedAt: Date.now() };
-    this.ticks.set(`${appId}#${number}`, tick);
+    this.ticks.set(key, tick);
     return { ...tick };
   }
   deleteForApp(appId: string): void {

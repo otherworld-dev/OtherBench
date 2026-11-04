@@ -369,7 +369,7 @@ export interface IssueTick {
 
 export interface IssueTickRepo {
   list(): IssueTick[];
-  /** Upserts the tick for the issue; a later `through` replaces an earlier one. */
+  /** Upserts the tick for the issue; a later `through` replaces an earlier one, and an earlier one changes nothing. Returns the tick as stored. */
   set(appId: string, number: number, through: string): IssueTick;
   /** Deletes every tick of the app; each delete syncs as a tombstone. */
   deleteForApp(appId: string): void;
