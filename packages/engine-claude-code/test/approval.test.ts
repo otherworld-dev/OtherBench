@@ -143,7 +143,7 @@ describe('createGate with a relayed MCP tool', () => {
 });
 
 describe('createGate approval tickets (onApproved)', () => {
-  const described: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a }), execute: async () => undefined };
+  const described: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a as Record<string, unknown>, risk: 'mutate' }), execute: async () => undefined };
   const plain: ToolSpec = { ...described, name: 'mcp__s__t', source: 'mcp' };
   delete (plain as { describeCall?: unknown }).describeCall;
 
@@ -172,7 +172,7 @@ describe('createGate approval tickets (onApproved)', () => {
 });
 
 describe('createGate with the browser, the sandboxed shell and the ask path on one gate', () => {
-  const browser: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a }), execute: async () => undefined };
+  const browser: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a as Record<string, unknown>, risk: 'mutate' }), execute: async () => undefined };
   const shell: ToolSpec = { name: 'run_command', description: 's', parameters: { type: 'object' }, risk: 'execute', source: 'sandbox', execute: async () => undefined };
   const QUESTIONS = { questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] };
   const described = { command: 'open', url: 'https://example.com/', host: 'example.com' };
@@ -259,7 +259,7 @@ describe("a refusal whose words may not be OtherBench's own", () => {
 
 describe('createGate', () => {
   it('sends a classified agent ToolSpec with normalised args to requestApproval', async () => {
-    const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));
+    const requestApproval = vi.fn(async (_t: ToolSpec, _a: Record<string, unknown>) => ({ allowed: true as const, grantedBy: 'ask:once' }));
     const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx() });
     expect(await gate('Edit', { file_path: join(ws, 'src', 'a.ts') })).toEqual({ allow: true });
     const [spec, args] = requestApproval.mock.calls[0]!;
@@ -296,7 +296,7 @@ describe('containment hardening', () => {
   };
   const denied = async (tool: string, input: Record<string, unknown>) => {
     const { decision, requestApproval } = await run(tool, input);
-    expect(decision.allow).toBe(false);
+    expect(decision).toMatchObject({ allow: false });
     expect(requestApproval).not.toHaveBeenCalled();
   };
 
@@ -599,7 +599,7 @@ describe('extra folders (spec 2026-10-07-extra-folders)', () => {
   });
 
   it('the gate blocks a write into a read-only folder without asking, and asks about one in a read & write folder', async () => {
-    const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));
+    const requestApproval = vi.fn(async (_t: ToolSpec, _a: Record<string, unknown>) => ({ allowed: true as const, grantedBy: 'ask:once' }));
     const gate = createGate({ approvals: { requestApproval }, policy, ctx: { ...ctx(), folders: folders() } });
     expect(await gate('Write', { file_path: join(refs, 'paper.md'), content: 'x' })).toEqual({ allow: false, reason: expect.stringContaining('read-only folder') });
     expect(requestApproval).not.toHaveBeenCalled();
