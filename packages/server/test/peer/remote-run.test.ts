@@ -336,9 +336,11 @@ describe('running a chat on the machine it runs on', () => {
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
     expect(laptop.container.peers!.waitingChats(pc.id)).toEqual([]);
 
-    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r1', toolName: 'shell' });
-    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r2', toolName: 'shell' });
+    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r1', toolName: 'shell', at: 300 });
+    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r2', toolName: 'shell', at: 400 });
     await expect.poll(() => laptop.container.peers!.waitingChats(pc.id)).toEqual([chatId]);
+    // Since its first card: when it came to need the user.
+    await expect.poll(() => laptop.container.peers!.waitingSince(pc.id)).toEqual({ [chatId]: 300 });
 
     pc.container.events!.emit({ type: 'approval-resolved', chatId, requestId: 'r1' });
     pc.container.events!.emit({ type: 'approval-resolved', chatId, requestId: 'r2' });

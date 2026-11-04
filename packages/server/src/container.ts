@@ -622,7 +622,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   peers.attachActivity(
     () => ownChats(events.runningTurns().map((t) => t.chatId)),
     () => ownChats(events.backgroundChats().map((c) => c.chatId)),
-    () => ownChats(events.pendingApprovals().map((p) => p.chatId))
+    () => ownChats(events.pendingApprovals().map((p) => p.chatId)),
+    () => {
+      // Since its first card still waiting: when the chat came to need the user (the Needs you order).
+      const pending = events.pendingApprovals();
+      const own = new Set(ownChats(pending.map((p) => p.chatId)));
+      const since: Record<string, number> = {};
+      for (const p of pending) if (own.has(p.chatId) && p.at !== undefined) since[p.chatId] = Math.min(since[p.chatId] ?? p.at, p.at);
+      return since;
+    }
   );
   events.subscribe((e) => {
     if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' || e.type === 'approval-resolved') peers.announceActivity();

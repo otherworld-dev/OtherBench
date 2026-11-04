@@ -11,10 +11,10 @@ import type { AppEvent, BackgroundChatSummary, ComputerSessionSummary, PendingAp
  * which know the chat and the new reply ids.
  *
  * It also keeps the pending approvals it has seen requested and not yet
- * resolved, and the replies started and not yet finished, so a subscriber
- * that connects later starts from the right state (the `hello` event). A
- * turn ending drops whatever it still had pending: approvals end with their
- * turn.
+ * resolved, each with when it was requested, and the replies started and
+ * not yet finished, so a subscriber that connects later starts from the
+ * right state (the `hello` event). A turn ending drops whatever it still had
+ * pending: approvals end with their turn.
  *
  * And it keeps the chats that are controlling this computer (computer use),
  * with the one-line summary of their last action, from the
@@ -34,9 +34,13 @@ export class AppEventBus {
   /** Chats with background tasks running, by how many. */
   private readonly background = new Map<string, number>();
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   emit(e: AppEvent): void {
     if (e.type === 'approval-requested') {
-      this.pending.set(e.requestId, { chatId: e.chatId, messageId: e.messageId, requestId: e.requestId, toolName: e.toolName, ...(e.kind ? { kind: e.kind } : {}) });
+      // When the card started waiting: the Needs you list's order (`needsYouSince`), told to every window and in the hello.
+      if (e.at === undefined) e = { ...e, at: this.now() };
+      this.pending.set(e.requestId, { chatId: e.chatId, messageId: e.messageId, requestId: e.requestId, toolName: e.toolName, ...(e.kind ? { kind: e.kind } : {}), at: e.at });
     } else if (e.type === 'approval-resolved') {
       this.pending.delete(e.requestId);
     } else if (e.type === 'turn-started') {

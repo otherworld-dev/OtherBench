@@ -40,6 +40,30 @@ describe('activity: waiting chats and gh login', () => {
     expect(laptop.service.githubLogin('node-PC')).toBeNull();
   });
 
+  it('tells a peer when each of those chats started waiting, so its Needs you list orders them as this one does', async () => {
+    const { pc, laptop } = await connected();
+    let waiting: Record<string, number> = { c1: 100, c2: 200 };
+    pc.service.attachActivity(() => [], () => [], () => Object.keys(waiting), () => waiting);
+
+    pc.service.announceActivity();
+    await expect.poll(() => laptop.service.waitingSince('node-PC')).toEqual({ c1: 100, c2: 200 });
+
+    waiting = {};
+    pc.service.announceActivity();
+    await expect.poll(() => laptop.service.waitingSince('node-PC')).toEqual({});
+  });
+
+  it("drops a time that isn't a number, or is for a chat it doesn't say is waiting; an older peer says none", async () => {
+    const { pc, laptop } = await connected();
+    pc.service.announce('activity', { waitingChatIds: ['w', 'x', 'y'], waitingSince: { w: 5, x: 'soon', y: null, z: 9 } });
+    await expect.poll(() => laptop.service.waitingSince('node-PC')).toEqual({ w: 5 });
+    pc.service.announce('activity', { waitingChatIds: ['w'] });
+    await expect.poll(() => laptop.service.waitingSince('node-PC')).toEqual({});
+    pc.service.announce('activity', { waitingChatIds: ['w'], waitingSince: [5] });
+    await expect.poll(() => laptop.service.waitingChats('node-PC')).toEqual(['w']);
+    expect(laptop.service.waitingSince('node-PC')).toEqual({});
+  });
+
   it('reads an older peer, which says neither, as none waiting and no login; non-strings are dropped', async () => {
     const { pc, laptop } = await connected();
     pc.service.announce('activity', { chatIds: ['a'], waitingChatIds: ['w', 3, null], githubLogin: 'x' });

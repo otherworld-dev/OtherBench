@@ -111,6 +111,17 @@ function chatIdsOf(ids: unknown): string[] {
   return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').slice(0, MAX_ACTIVE_CHATS) : [];
 }
 
+/** A peer's `waitingSince`: a finite time for each of `waiting`, the chats it says wait on a card; anything else dropped. */
+function waitingSinceOf(said: unknown, waiting: readonly string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (typeof said !== 'object' || said === null || Array.isArray(said)) return out;
+  for (const id of waiting) {
+    const at = (said as Record<string, unknown>)[id];
+    if (typeof at === 'number' && Number.isFinite(at)) out[id] = at;
+  }
+  return out;
+}
+
 /**
  * Machines this one is paired with, and the peer listener they reach it on
  * (v2 plan, Tasks 46-47). Owns pairing in both directions, revocation, and
@@ -135,6 +146,7 @@ export class PeerService {
   private runningHere: () => string[] = () => [];
   private backgroundHere: () => string[] = () => [];
   private waitingHere: () => string[] = () => [];
+  private waitingSinceHere: () => Record<string, number> = () => ({});
   /** This machine's `gh` login, as told to its peers; the overview service supplies it. */
   private githubLoginHere: () => string | null = () => null;
   /** Each peer's chats with a reply running there, as it last said. */
@@ -143,6 +155,8 @@ export class PeerService {
   private readonly backgroundByPeer = new Map<string, string[]>();
   /** The chats each paired machine last said wait on an approval card or a question there. */
   private readonly waitingByPeer = new Map<string, string[]>();
+  /** Since when each of those chats has waited, as each paired machine last said. */
+  private readonly waitingSinceByPeer = new Map<string, Record<string, number>>();
   /** Each paired machine's `gh` login, as it last said. */
   private readonly loginByPeer = new Map<string, string | null>();
 
@@ -165,11 +179,13 @@ export class PeerService {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
         if (event === 'activity') {
-          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; githubLogin?: unknown } | null;
+          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; waitingSince?: unknown; githubLogin?: unknown } | null;
           this.activityByPeer.set(nodeId, chatIdsOf(said?.chatIds));
           // An older machine doesn't say: none in the background, as far as we know.
           this.backgroundByPeer.set(nodeId, chatIdsOf(said?.backgroundChatIds));
-          this.waitingByPeer.set(nodeId, chatIdsOf(said?.waitingChatIds));
+          const waiting = chatIdsOf(said?.waitingChatIds);
+          this.waitingByPeer.set(nodeId, waiting);
+          this.waitingSinceByPeer.set(nodeId, waitingSinceOf(said?.waitingSince, waiting));
           this.loginByPeer.set(nodeId, typeof said?.githubLogin === 'string' ? said.githubLogin : null);
           options.events?.emit({ type: 'peer-activity', nodeId });
         }
@@ -189,10 +205,16 @@ export class PeerService {
    * Where this machine's activity comes from: the ids of its own chats with a reply running,
    * and of those with background tasks running.
    */
-  attachActivity(runningHere: () => string[], backgroundHere: () => string[] = () => [], waitingHere: () => string[] = () => []): void {
+  attachActivity(
+    runningHere: () => string[],
+    backgroundHere: () => string[] = () => [],
+    waitingHere: () => string[] = () => [],
+    waitingSinceHere: () => Record<string, number> = () => ({})
+  ): void {
     this.runningHere = runningHere;
     this.backgroundHere = backgroundHere;
     this.waitingHere = waitingHere;
+    this.waitingSinceHere = waitingSinceHere;
   }
 
   /** Where this machine's `gh` login comes from (the overview service); until set, none is told. */
@@ -206,8 +228,11 @@ export class PeerService {
   }
 
   /** What this machine tells its peers about its running replies (#790's "also active" hint) and background tasks. */
-  activity(): { chatIds: string[]; backgroundChatIds: string[]; waitingChatIds: string[]; githubLogin: string | null } {
-    return { chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere(), waitingChatIds: this.waitingHere(), githubLogin: this.githubLoginHere() };
+  activity(): { chatIds: string[]; backgroundChatIds: string[]; waitingChatIds: string[]; waitingSince: Record<string, number>; githubLogin: string | null } {
+    return {
+      chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere(), waitingChatIds: this.waitingHere(),
+      waitingSince: this.waitingSinceHere(), githubLogin: this.githubLoginHere(),
+    };
   }
 
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
@@ -223,6 +248,14 @@ export class PeerService {
   /** The chats on `nodeId` waiting on an approval card or a question, as it last said; none while it isn't reachable. */
   waitingChats(nodeId: string): string[] {
     return this.status(nodeId).status === 'reachable' ? (this.waitingByPeer.get(nodeId) ?? []) : [];
+  }
+
+  /**
+   * Since when (ms, its clock) each chat in `waitingChats` has waited on a card there, as it last said: the sidebar's
+   * Needs you order. Empty from an older machine, which doesn't say, and while it isn't reachable.
+   */
+  waitingSince(nodeId: string): Record<string, number> {
+    return this.status(nodeId).status === 'reachable' ? (this.waitingSinceByPeer.get(nodeId) ?? {}) : {};
   }
 
   /** The `gh` login `nodeId` last said it has; null if none, unknown, or while it isn't reachable. */
