@@ -775,12 +775,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         </div>
 
         {/*
-          One line while it fits: the profile name gives way first, then the plan meter (by the box's width).
-          Past that, Send and the meter drop to a line of their own rather than out of the box, and in a
-          very narrow box the controls wrap too.
+          One line while it fits: the plan meter gives way first (by the box's width), then Send and the meter
+          drop to a line of their own. Left alone on theirs, the controls cut the profile name short, and past
+          that wrap rather than run out of the box: how wide they need to be depends on which ones show.
         */}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-1.5">
-          <div className="flex flex-1 items-center gap-1.5 @max-xs:flex-wrap">
+          <div className="flex flex-auto flex-wrap items-center gap-x-1.5 gap-y-1">
           <button
             type="button"
             aria-label="Attach files"
@@ -791,7 +791,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             <span aria-hidden="true">📎</span>
           </button>
 
-          <div className="relative min-w-14 shrink">
+          {/* Laid out at its least and grown back to the full name, so the name is cut before anything wraps. */}
+          <div className="relative min-w-14 max-w-max shrink grow basis-14">
             <button
               type="button"
               onClick={() => setPickerOpen((o) => !o)}

@@ -168,20 +168,19 @@ describe('Composer', () => {
   });
 
   // Whether Send really stays in the box at every width is measured in a browser: e2e/composer-toolbar.spec.ts.
-  it('keeps its controls on one line until the box is very narrow, lets Send drop to a line of its own rather than out of the box, the profile name truncates (full name in its tooltip), Compare is a +', () => {
+  it('lets Send drop to a line of its own rather than out of the box, then cuts the profile name short (full name in its tooltip) and wraps the controls, Compare is a +', () => {
     render(<Composer chat={makeChat()} />);
     const attach = screen.getByRole('button', { name: 'Attach files' });
     const controls = attach.parentElement!;
-    // No min-w-0: the controls' own width is what makes Send drop to its own line, rather than slide under them.
-    expect(controls).toHaveClass('flex-1', '@max-xs:flex-wrap');
+    // No min-w-0, and sized by their content: the controls' own width is what makes Send drop to its own line, rather than slide under them.
+    expect(controls).toHaveClass('flex-auto', 'flex-wrap');
     expect(controls).not.toHaveClass('min-w-0');
-    expect(controls).not.toHaveClass('flex-wrap');
     expect(controls.parentElement).toHaveClass('flex-wrap');
     expect(attach.closest('[data-composer-box]')).toHaveClass('@container');
     const profile = screen.getByRole('button', { name: 'Default · mock-standard' });
     expect(profile).toHaveClass('line-clamp-1', 'break-all');
-    // It gives way first, but never down to nothing.
-    expect(profile.parentElement).toHaveClass('shrink', 'min-w-14');
+    // Laid out at its least and grown back to the full name, so it gives way before the controls wrap, but never down to nothing.
+    expect(profile.parentElement).toHaveClass('basis-14', 'grow', 'max-w-max', 'min-w-14');
     expect(profile).toHaveAttribute('title', 'Default · mock-standard');
     const compare = screen.getByRole('button', { name: 'Compare' });
     expect(compare).toHaveTextContent(/^\+$/);

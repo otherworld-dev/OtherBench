@@ -23,7 +23,7 @@ export function AccountSelect({ value, disabled, onChange }: { value: string | n
       disabled={disabled}
       title="Claude account: which login this chat runs on, from the next message. A move starts a new Claude Code session seeded with this chat's history. The default runs on Main and overflows to another account when Main is at its limit."
       onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
-      className={`chip max-w-32 shrink-0 field-sizing-content bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] ${value ? 'chip-on' : ''}`}
+      className={`chip max-w-40 shrink-0 field-sizing-content bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] ${value ? 'chip-on' : ''}`}
     >
       <option value="">default account</option>
       {value && !accounts.some((a) => a.slug === value) && <option value={value}>{value} (missing)</option>}

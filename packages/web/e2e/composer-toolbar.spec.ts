@@ -4,8 +4,9 @@ import { BASE_URL } from '../playwright.config.js';
 /**
  * The composer's toolbar never pushes Send out of its box, at any width a
  * pane can be. A Claude Code chat has the most on the row (Plan, Auto,
- * Effort, the plan usage meter), so it's the one measured. The plan usage
- * call is stubbed: the meter only needs numbers to show.
+ * Effort, the account picker, the plan usage meter), so it's the one measured.
+ * The plan usage and account calls are stubbed: the meter only needs numbers
+ * to show, the picker a second account.
  */
 test('Send stays inside the composer box at every width, with the most a toolbar can hold', async ({ page, request }) => {
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Claude Code', kind: 'claude_code' } });
@@ -22,9 +23,12 @@ test('Send stays inside the composer box at every width, with the most a toolbar
       json: { usage: { fetchedAt: Date.now(), windows: [{ id: 'five_hour', label: '5-hour', percent: 1, resetsAt: null }, { id: 'seven_day', label: 'Weekly', percent: 13, resetsAt: null }] } },
     })
   );
+  const account = (slug: string, name: string, main: boolean) => ({ slug, name, colour: null, configDir: null, main, limitedUntil: null, signedIn: true, email: `${slug}@example.invalid`, subscriptionType: 'max', signingIn: false });
+  await page.route('**/api/claude/accounts', (route) => route.fulfill({ json: { accounts: [account('main', 'Main', true), account('spare', 'Spare', false)] } }));
   await page.goto('/');
   await page.getByTestId(`chat-row-${chatId}`).getByRole('button').first().click();
   await expect(page.getByTestId('plan-usage')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Claude account' })).toBeVisible();
 
   const overflowing = await page.evaluate(() => {
     const box = document.querySelector<HTMLElement>('[data-composer-box]')!;
