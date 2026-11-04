@@ -1,4 +1,5 @@
 import { dirname, join } from 'node:path';
+import type { RemoteSessionRepo } from '@otherbench/core/ports/store.js';
 import type { Context } from 'hono';
 import { clientAddress, normalizeIp } from './client-address.js';
 import { DeviceKeys } from './devices.js';
@@ -26,6 +27,8 @@ export interface RemoteAccessOptions {
   /** `<dir of secrets.json>/login.json`. */
   loginPath: string;
   tls: RemoteTls;
+  /** Where sessions are kept: the database's `remote_session` table, so a restart keeps them. */
+  sessionRepo: RemoteSessionRepo;
   now?: () => number;
   log?: (line: string) => void;
   /** scrypt parameters for a password change; tests lower them. */
@@ -46,7 +49,7 @@ export interface RemoteAccess {
   devices: DeviceKeys;
   log: (line: string) => void;
   clientAddress(c: Context): string | null;
-  /** Stops the session sweep. */
+  /** Stops the session sweep. Sessions stay in the database. */
   close(): void;
 }
 
@@ -58,7 +61,7 @@ export function createRemoteAccess(o: RemoteAccessOptions): RemoteAccess {
   const now = o.now ?? Date.now;
   const log = o.log ?? ((line: string) => console.error(line));
   const passwords = new PasswordFile(o.loginPath, now, o.scrypt);
-  const sessions = new SessionStore({ now });
+  const sessions = new SessionStore(o.sessionRepo, { now });
   sessions.startSweeping(() => passwords.epoch());
   // The limiter keeps its own monotonic clock unless a test hands it one.
   const limiter = new LoginLimiter({ ...(o.now ? { now: o.now } : {}), log });

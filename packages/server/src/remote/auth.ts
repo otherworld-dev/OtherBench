@@ -30,6 +30,19 @@ export interface AuthStatusBody {
   remote?: { publicUrls: string[]; tls: Omit<RemoteTls, 'caDer'>; trustProxies: string[] };
 }
 
+/** One row of Settings → Remote access's signed-in devices (`GET /api/auth/sessions`). */
+export interface SignedInDevice {
+  id: string;
+  deviceLabel: string;
+  address: string | null;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  remember: boolean;
+  /** The session this request came with. */
+  current: boolean;
+}
+
 /** `Authorization` against `Bearer <token>`, in constant time over SHA-256 digests (same outcome as `===`). */
 export function tokenMatches(header: string | undefined, token: string): boolean {
   if (header === undefined) return false;
@@ -297,9 +310,24 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
   });
 
   if (!remote) {
-    app.post('/*', (c) => c.json({ error: 'Sign-in is off on this server.' }, 404));
+    const off = (c: Context): Response => c.json({ error: 'Sign-in is off on this server.' }, 404);
+    app.post('/*', off);
+    app.get('/sessions', off);
+    app.delete('/sessions/:id', off);
     return app;
   }
+
+  /**
+   * Who may see and end sessions: the bearer token (the desktop app), or a
+   * signed-in browser, judged like the gate (a header present is judged
+   * alone). Null when neither; else the caller's own session, if any.
+   */
+  const manager = (c: Context): { found: { id: string; session: Session } | null } | null => {
+    const header = c.req.header('Authorization');
+    if (header !== undefined) return token !== null && tokenMatches(header, token) ? { found: null } : null;
+    const found = sessionFromCookie(c, remote);
+    return found ? { found } : null;
+  };
 
   const limit = bodyLimit({ maxSize: 4 * 1024, onError: (c) => c.json({ error: 'Request too large.' }, 413) });
   const userAgentOf = (c: Context): string | null => c.req.header('User-Agent')?.slice(0, 200) ?? null;
@@ -338,6 +366,44 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     clearSessionCookie(c);
     clearDeviceCookie(c);
     remote.log(`[otherbench-server] every device signed out by ${remote.clientAddress(c) ?? 'unknown'}`);
+    return c.body(null, 204);
+  });
+
+  // The signed-in devices, newest first. Never the token or its hash: a row is named by its own random id.
+  app.get('/sessions', (c) => {
+    const who = manager(c);
+    if (!who) return c.json({ error: SIGN_IN }, 401);
+    const own = who.found?.session.id;
+    const sessions: SignedInDevice[] = remote.sessions
+      .list(remote.passwords.epoch())
+      .reverse()
+      .map((s) => ({
+        id: s.id,
+        deviceLabel: s.deviceLabel,
+        address: s.address,
+        createdAt: s.createdAt,
+        lastSeenAt: s.lastSeenAt,
+        expiresAt: s.expiresAt,
+        remember: s.remember,
+        current: s.id === own,
+      }));
+    return c.json({ sessions });
+  });
+
+  // Signs one device out. Under `/api`, so the cross-site write check covers it like the other writes here.
+  // Its open event streams close at once (endWithSession); a request it already has running finishes.
+  app.delete('/sessions/:id', (c) => {
+    const who = manager(c);
+    if (!who) return c.json({ error: SIGN_IN }, 401);
+    const id = c.req.param('id');
+    const own = who.found?.session.id === id;
+    if (!remote.sessions.endById(id)) return c.json({ error: 'That device is already signed out.' }, 404);
+    // Ending this browser's own session is a Sign out.
+    if (own) {
+      clearSessionCookie(c);
+      clearDeviceCookie(c);
+    }
+    remote.log(`[otherbench-server] a device was signed out by ${remote.clientAddress(c) ?? 'unknown'}`);
     return c.body(null, 204);
   });
 

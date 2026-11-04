@@ -3,6 +3,7 @@ import type { AuthStatus } from '../../state/api.js';
 import { useAuthStore } from '../../state/auth.js';
 import { serverUrl } from '../../state/transport.js';
 import { ChangePassword } from './ChangePassword.js';
+import { SignedInDevices } from './SignedInDevices.js';
 
 const date = (ms: number): string => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -48,7 +49,7 @@ function HttpsDetails({ remote }: { remote: Remote }): JSX.Element {
 /**
  * Settings → Remote access (spec 2026-10-12-remote-access §5): only offered
  * in sign-in mode. How this device is signed in, the addresses OtherBench answers
- * on, how HTTPS works, and Sign out everywhere.
+ * on, how HTTPS works, the signed-in devices and Sign out everywhere.
  */
 export function RemoteAccessPanel(): JSX.Element {
   const info = useAuthStore((s) => s.info);
@@ -99,6 +100,10 @@ export function RemoteAccessPanel(): JSX.Element {
           <ChangePassword />
         </section>
       )}
+      <section className="space-y-2">
+        <h3 className="label-caps">Signed-in devices</h3>
+        <SignedInDevices />
+      </section>
       <section className="space-y-2">
         <h3 className="label-caps">Sign out everywhere</h3>
         <p className="text-[var(--text-muted)]">Ends every session, this one included. Each device has to sign in again.</p>

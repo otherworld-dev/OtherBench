@@ -1,5 +1,5 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate, type KeyObject } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import {
@@ -184,7 +184,8 @@ export interface FileTls {
 /**
  * `--tls-cert` and `--tls-key` (spec §4): checks the key against the first
  * certificate in the file and that it covers every public host; warns when
- * it expires within 30 days. Read once at start; a renewed file needs a restart.
+ * it expires within 30 days. Read at start; `TlsFileWatcher` picks up a
+ * renewed pair while the server runs.
  */
 export function loadTlsFiles(certPath: string, keyPath: string, hosts: string[], now: () => number = Date.now): FileTls {
   const read = (path: string, what: string): string => {
@@ -217,4 +218,79 @@ export function loadTlsFiles(certPath: string, keyPath: string, hosts: string[],
   }
   const notAfter = cert.validToDate.getTime();
   return { keyPem, certPem, notAfter, warning: expiryWarning(notAfter, now(), `The certificate in ${certPath}`) };
+}
+
+/** How often `--tls-cert` and `--tls-key` are looked at for a renewed pair. */
+export const TLS_RELOAD_MS = 60_000;
+
+export interface TlsFileWatcherOptions {
+  certPath: string;
+  keyPath: string;
+  /** The public hostnames the certificate must cover, as at start. */
+  hosts: string[];
+  /** Puts the new pair into service (the HTTPS server's `setSecureContext`). */
+  apply: (files: FileTls) => void;
+  log: (line: string) => void;
+  now?: () => number;
+}
+
+/**
+ * Picks up a renewed `--tls-cert`/`--tls-key` pair without a restart. Looks
+ * at both files' size and modification time; when either has changed, loads
+ * the pair with `loadTlsFiles`'s checks and hands it to `apply`. A pair that
+ * doesn't load (half written, the wrong key, a host it doesn't cover) is
+ * logged once and the certificate already in service is kept; it is tried
+ * again when a file changes again. New connections get the new certificate;
+ * open ones keep theirs.
+ */
+export class TlsFileWatcher {
+  private seen: string;
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private readonly o: TlsFileWatcherOptions) {
+    this.seen = this.signature();
+  }
+
+  /** Whether a new pair was put into service. */
+  check(): boolean {
+    const now = this.signature();
+    if (now === this.seen) return false;
+    this.seen = now;
+    let files: FileTls;
+    try {
+      files = loadTlsFiles(this.o.certPath, this.o.keyPath, this.o.hosts, this.o.now);
+      this.o.apply(files);
+    } catch (err) {
+      const why = (err instanceof Error ? err.message : String(err)).replace(/^Refusing to start: /, '');
+      this.o.log(`[otherbench-server] Couldn't load the changed certificate files, so the old certificate is still in use: ${why}`);
+      return false;
+    }
+    this.o.log(`[otherbench-server] Loaded the renewed certificate in ${this.o.certPath}, valid until ${day(files.notAfter)}.`);
+    if (files.warning) this.o.log(files.warning);
+    return true;
+  }
+
+  /** Checks every `intervalMs`; the timer doesn't keep the process alive. */
+  start(intervalMs = TLS_RELOAD_MS): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.check(), intervalMs);
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  private signature(): string {
+    const one = (path: string): string => {
+      try {
+        const s = statSync(path);
+        return `${s.size}:${s.mtimeMs}`;
+      } catch {
+        return 'missing';
+      }
+    };
+    return `${one(this.o.certPath)}|${one(this.o.keyPath)}`;
+  }
 }

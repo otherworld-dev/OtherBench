@@ -37,6 +37,20 @@ export interface AuthStatus {
   };
 }
 
+/** One signed-in browser in Settings → Remote access (server: `SignedInDevice` in remote/auth.ts). */
+export interface SignedInDevice {
+  id: string;
+  /** "Chrome on Android" and the like, read off its user agent. */
+  deviceLabel: string;
+  address: string | null;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  remember: boolean;
+  /** This browser's own session. */
+  current: boolean;
+}
+
 /**
  * The `code` a Code tab route's failure names (spec 2026-10-20-code-tab-design,
  * "Error states the panels must handle"; server `code/route-errors.ts`). The
@@ -569,6 +583,10 @@ export const api = {
     login: (password: string, remember: boolean) => post<{ expiresAt: number }>('/auth/login', { password, remember }),
     logout: () => post<void>('/auth/logout'),
     logoutAll: () => post<void>('/auth/logout-all'),
+    /** Signed-in devices, newest first. */
+    sessions: () => request<{ sessions: SignedInDevice[] }>('/auth/sessions'),
+    /** Signs one device out; 404 when it already was. */
+    endSession: (id: string) => del(`/auth/sessions/${encodeURIComponent(id)}`),
     changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
   },
 
