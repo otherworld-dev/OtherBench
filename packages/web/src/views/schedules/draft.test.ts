@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
-import { createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, targetHasFolder, type ScheduleDraft } from './draft.js';
+import { createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, previewRuns, targetHasFolder, type ScheduleDraft } from './draft.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return { id: 'c1', title: 'Trip plans', profileId: 'p-chat', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -20,7 +20,8 @@ const valid = (over: Partial<ScheduleDraft> = {}): ScheduleDraft => ({ ...emptyD
 describe('drafts', () => {
   it('starts a new schedule daily at 09:00 on its prefilled target', () => {
     expect(emptyDraft({ kind: 'project', projectId: 'pr1' }, 'p1')).toEqual({
-      name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false,
+      name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', everyHours: '3', hourlyWeekdays: [0, 1, 2, 3, 4, 5, 6], cron: '0 9 * * 1-5',
+      targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false,
     });
     expect(emptyDraft(null, '')).toMatchObject({ targetKind: 'chat', chatId: '', projectId: '' });
   });
@@ -61,6 +62,69 @@ describe('drafts', () => {
     expect(patchBody(initial, initial)).toEqual({});
     expect(patchBody(initial, { ...initial, name: 'Daily', time: '08:00' })).toEqual({ name: 'Daily', rule: { cadence: 'weekly', time: '08:00', weekdays: [1, 3] } });
     expect(patchBody(initial, { ...initial, autoMode: true })).toEqual({ autoMode: true });
+  });
+});
+
+describe('every-N-hours and cron drafts', () => {
+  it('fills a draft from each, keeping the other kinds at their defaults', () => {
+    expect(draftFromSchedule(schedule({ rule: { cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [1, 5] } }))).toMatchObject({
+      cadence: 'hourly', time: '08:00', everyHours: '4', hourlyWeekdays: [1, 5], weekdays: [1, 2, 3, 4, 5], cron: '0 9 * * 1-5',
+    });
+    expect(draftFromSchedule(schedule({ rule: { cadence: 'hourly', time: '08:00', everyHours: 4 } })).hourlyWeekdays).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(draftFromSchedule(schedule({ rule: { cadence: 'cron', cron: '*/15 9-17 * * 1-5' } }))).toMatchObject({ cadence: 'cron', cron: '*/15 9-17 * * 1-5', time: '09:00' });
+  });
+
+  it('builds their rules: every day leaves the days out, and a cron rule is tidied', () => {
+    expect(createBody(valid({ cadence: 'hourly', everyHours: '3' })).rule).toEqual({ cadence: 'hourly', time: '09:00', everyHours: 3 });
+    expect(createBody(valid({ cadence: 'hourly', everyHours: '6', hourlyWeekdays: [5, 1] })).rule).toEqual({ cadence: 'hourly', time: '09:00', everyHours: 6, weekdays: [1, 5] });
+    expect(createBody(valid({ cadence: 'cron', cron: '  30  7 * * mon ' })).rule).toEqual({ cadence: 'cron', cron: '30 7 * * mon' });
+  });
+
+  it('names what to fix, in plain words, with no field names', () => {
+    expect(draftProblem(valid({ cadence: 'hourly', everyHours: '' }))).toBe('Run every 1 to 23 hours, in whole hours.');
+    expect(draftProblem(valid({ cadence: 'hourly', everyHours: '24' }))).toBe('Run every 1 to 23 hours, in whole hours.');
+    expect(draftProblem(valid({ cadence: 'hourly', hourlyWeekdays: [] }))).toBe('Pick at least one day.');
+    expect(draftProblem(valid({ cadence: 'hourly', time: '' }))).toBe('Set the time it runs.');
+    expect(draftProblem(valid({ cadence: 'cron', cron: '0 9 * *' }))).toBe('A cron rule has five fields (minute, hour, day of month, month, day of week); this has 4.');
+    expect(draftProblem(valid({ cadence: 'cron', cron: '0 25 * * *' }))).toBe('The hour field\'s "25" is out of range: 0 to 23.');
+    // A cron rule has no time of its own: an empty time field doesn't matter.
+    expect(draftProblem(valid({ cadence: 'cron', time: '' }))).toBeNull();
+    expect(draftProblem(valid({ cadence: 'hourly' }))).toBeNull();
+  });
+
+  it('patches a cron rule only when it changes, not when its spacing does', () => {
+    const initial = draftFromSchedule(schedule({ rule: { cadence: 'cron', cron: '0 9 * * 1-5' } }));
+    expect(patchBody(initial, { ...initial, cron: ' 0 9  * * 1-5 ', time: '07:00' })).toEqual({});
+    expect(patchBody(initial, { ...initial, cron: '0 10 * * 1-5' })).toEqual({ rule: { cadence: 'cron', cron: '0 10 * * 1-5' } });
+    expect(patchBody(initial, { ...initial, cadence: 'hourly' })).toEqual({ rule: { cadence: 'hourly', time: '09:00', everyHours: 3 } });
+  });
+});
+
+describe('previewRuns', () => {
+  const MONDAY_NOON = Date.parse('2026-10-12T11:00:00Z'); // 12:00 in London
+
+  it('lists the next three runs in the zone', () => {
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 * * 1-5' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Tuesday 13 October 2026, 09:00',
+      'Wednesday 14 October 2026, 09:00',
+      'Thursday 15 October 2026, 09:00',
+    ]);
+    expect(previewRuns(valid({ cadence: 'hourly', time: '08:00', everyHours: '5' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Monday 12 October 2026, 13:00',
+      'Monday 12 October 2026, 18:00',
+      'Monday 12 October 2026, 23:00',
+    ]);
+    expect(previewRuns(valid({ cadence: 'hourly', time: '08:00', everyHours: '6' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Monday 12 October 2026, 14:00',
+      'Monday 12 October 2026, 20:00',
+      'Tuesday 13 October 2026, 08:00',
+    ]);
+    expect(previewRuns(valid(), 'Europe/London', MONDAY_NOON)).toEqual(['Tuesday 13 October 2026, 09:00', 'Wednesday 14 October 2026, 09:00', 'Thursday 15 October 2026, 09:00']);
+  });
+
+  it('says what is wrong instead, so a typo shows as it is typed', () => {
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 * * 1-' }), 'Europe/London', MONDAY_NOON)).toBe('The day of week field\'s "1-" isn\'t a value, a range or "*".');
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 0 31 2 *' }), 'Europe/London', MONDAY_NOON)).toBe('It never runs: none of those months has any of those days.');
   });
 });
 

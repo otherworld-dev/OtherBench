@@ -5,6 +5,7 @@ import type { ScheduleView } from '@otherbench/core/ports/store.js';
 import { api } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import {
+  CADENCE_OPTIONS,
   WEEKDAYS_MONDAY_FIRST,
   browserTimeZone,
   createBody,
@@ -13,6 +14,7 @@ import {
   draftProblem,
   emptyDraft,
   patchBody,
+  previewRuns,
   targetHasFolder,
   type ScheduleDraft,
 } from './draft.js';
@@ -63,6 +65,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   // Auto mode is Claude Code's: offered only for its profiles. A tick left over from another profile is kept, and ignored by the run.
   const offersAuto = connection?.kind === 'claude_code';
   const warnings = profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, targetHasFolder(draft, chats, projects), draft.autoMode) : [];
+  const preview = previewRuns(draft, timezone, Date.now());
   const profileChoices = profiles.filter((p) => p.archivedAt === null || p.id === draft.profileId);
   const chatChoices = chats.filter((c) => c.archivedAt === null).sort((a, b) => b.createdAt - a.createdAt);
   const targetText =
@@ -189,36 +192,69 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
               Repeats
             </label>
             <select id={`${id}-cadence`} value={draft.cadence} onChange={(e) => set('cadence', e.target.value as ScheduleDraft['cadence'])} className={FIELD}>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
+              {CADENCE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </div>
-          <div>
-            <label htmlFor={`${id}-time`} className="block font-medium">
-              Time
-            </label>
-            <div className="flex items-center gap-1">
-              <input id={`${id}-time`} type="time" value={draft.time} onChange={(e) => set('time', e.target.value)} className={FIELD} />
-              <span className="text-[var(--text-muted)]">({timezone})</span>
+          {draft.cadence === 'hourly' && (
+            <div>
+              <label htmlFor={`${id}-every`} className="block font-medium">
+                Every (hours)
+              </label>
+              <input id={`${id}-every`} type="number" min={1} max={23} value={draft.everyHours} onChange={(e) => set('everyHours', e.target.value)} className={`${FIELD} w-20`} />
             </div>
-          </div>
+          )}
+          {draft.cadence !== 'cron' && (
+            <div>
+              <label htmlFor={`${id}-time`} className="block font-medium">
+                {draft.cadence === 'hourly' ? 'From' : 'Time'}
+              </label>
+              <div className="flex items-center gap-1">
+                <input id={`${id}-time`} type="time" value={draft.time} onChange={(e) => set('time', e.target.value)} className={FIELD} />
+                <span className="text-[var(--text-muted)]">({timezone})</span>
+              </div>
+            </div>
+          )}
         </div>
 
-        {draft.cadence === 'weekly' && (
+        {draft.cadence === 'hourly' && <p className="text-xs text-[var(--text-muted)]">Runs at that time, then every few hours until midnight, starting again from that time each day.</p>}
+
+        {(draft.cadence === 'weekly' || draft.cadence === 'hourly') && (
           <fieldset className="flex flex-wrap gap-3">
             <legend className="sr-only">Days</legend>
-            {WEEKDAYS_MONDAY_FIRST.map(({ day, label }) => (
-              <label key={day} className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={draft.weekdays.includes(day)}
-                  onChange={(e) => set('weekdays', e.target.checked ? [...draft.weekdays, day] : draft.weekdays.filter((d) => d !== day))}
-                />
-                {label}
-              </label>
-            ))}
+            {WEEKDAYS_MONDAY_FIRST.map(({ day, label }) => {
+              const key = draft.cadence === 'weekly' ? 'weekdays' : 'hourlyWeekdays';
+              const days = draft[key];
+              return (
+                <label key={day} className="flex items-center gap-1">
+                  <input type="checkbox" checked={days.includes(day)} onChange={(e) => set(key, e.target.checked ? [...days, day] : days.filter((d) => d !== day))} />
+                  {label}
+                </label>
+              );
+            })}
           </fieldset>
+        )}
+
+        {draft.cadence === 'cron' && (
+          <div>
+            <label htmlFor={`${id}-cron`} className="block font-medium">
+              Cron rule
+            </label>
+            <input
+              id={`${id}-cron`}
+              value={draft.cron}
+              spellCheck={false}
+              onChange={(e) => set('cron', e.target.value)}
+              aria-describedby={`${id}-cron-help`}
+              className={`${FIELD} font-mono`}
+            />
+            <p id={`${id}-cron-help`} className="text-xs text-[var(--text-muted)]">
+              Minute, hour, day of month, month and day of week, in {timezone}. For example 0 9 * * 1-5 is 09:00 on weekdays.
+            </p>
+          </div>
         )}
 
         {draft.cadence === 'monthly' && (
@@ -230,6 +266,21 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
             <p className="text-xs text-[var(--text-muted)]">In shorter months, runs on the last day.</p>
           </div>
         )}
+
+        <div data-testid="schedule-preview" aria-live="polite">
+          {typeof preview === 'string' ? (
+            <p className="text-[var(--warn)]">{preview}</p>
+          ) : (
+            <>
+              <p className="font-medium">Next runs</p>
+              <ul className="text-[var(--text-muted)]">
+                {preview.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
 
         {targetFixed ? (
           <p data-testid="schedule-target">{targetText}</p>

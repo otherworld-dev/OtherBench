@@ -1,4 +1,5 @@
-import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, parseRule, type ScheduleRule, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { parseCron } from '@otherbench/core/domain/cron.js';
+import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, formatInZone, nextRuns, parseRule, type ScheduleRule, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { CreateScheduleBody, PatchScheduleBody } from '../../state/api.js';
@@ -21,6 +22,12 @@ export interface ScheduleDraft {
   weekdays: number[];
   /** As typed. */
   monthDay: string;
+  /** Every how many hours, as typed. */
+  everyHours: string;
+  /** The days an every-N-hours schedule runs on, 0 = Sunday; all seven means every day. Kept apart from the weekly days, whose default differs. */
+  hourlyWeekdays: number[];
+  /** The cron rule, as typed. */
+  cron: string;
   targetKind: 'chat' | 'project';
   chatId: string;
   projectId: string;
@@ -39,7 +46,18 @@ export const WEEKDAYS_MONDAY_FIRST: { day: number; label: string }[] = [
   { day: 0, label: 'Sun' },
 ];
 
+/** The Repeats choices, in the order the editor lists them. */
+export const CADENCE_OPTIONS: { value: ScheduleRule['cadence']; label: string }[] = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'hourly', label: 'Every few hours' },
+  { value: 'cron', label: 'Cron rule' },
+];
+
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
+const DEFAULT_CRON = '0 9 * * 1-5';
 
 export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): ScheduleDraft {
   return {
@@ -50,6 +68,9 @@ export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): S
     time: '09:00',
     weekdays: [1, 2, 3, 4, 5],
     monthDay: '1',
+    everyHours: '3',
+    hourlyWeekdays: [...EVERY_DAY],
+    cron: DEFAULT_CRON,
     targetKind: prefill?.kind ?? 'chat',
     chatId: prefill?.kind === 'chat' ? prefill.chatId : '',
     projectId: prefill?.kind === 'project' ? prefill.projectId : '',
@@ -64,9 +85,12 @@ export function draftFromSchedule(s: Schedule): ScheduleDraft {
     prompt: s.prompt,
     profileId: s.profileId,
     cadence: rule.cadence,
-    time: rule.time,
+    time: rule.cadence === 'cron' ? '09:00' : rule.time,
     weekdays: rule.cadence === 'weekly' ? [...rule.weekdays] : [1, 2, 3, 4, 5],
     monthDay: rule.cadence === 'monthly' ? String(rule.monthDay) : '1',
+    everyHours: rule.cadence === 'hourly' ? String(rule.everyHours) : '3',
+    hourlyWeekdays: rule.cadence === 'hourly' && rule.weekdays ? [...rule.weekdays] : [...EVERY_DAY],
+    cron: rule.cadence === 'cron' ? rule.cron : DEFAULT_CRON,
     targetKind: s.target.kind,
     chatId: s.target.kind === 'chat' ? s.target.chatId : '',
     projectId: s.target.kind === 'project' ? s.target.projectId : '',
@@ -82,8 +106,51 @@ export function draftRule(d: ScheduleDraft): ScheduleRule | string {
     case 'weekly':
       return parseRule({ cadence: 'weekly', time: d.time, weekdays: d.weekdays });
     case 'monthly':
-      return parseRule({ cadence: 'monthly', time: d.time, monthDay: d.monthDay.trim() === '' ? Number.NaN : Number(d.monthDay) });
+      return parseRule({ cadence: 'monthly', time: d.time, monthDay: wholeNumber(d.monthDay) });
+    case 'hourly':
+      return parseRule({
+        cadence: 'hourly',
+        time: d.time,
+        everyHours: wholeNumber(d.everyHours),
+        // Every day is stored as no days at all.
+        ...(EVERY_DAY.every((day) => d.hourlyWeekdays.includes(day)) ? {} : { weekdays: d.hourlyWeekdays }),
+      });
+    case 'cron':
+      return parseRule({ cadence: 'cron', cron: d.cron });
   }
+}
+
+function wholeNumber(text: string): number {
+  return text.trim() === '' ? Number.NaN : Number(text);
+}
+
+/** What's wrong with the draft's repeat settings, in the editor's words, or null. */
+function ruleProblem(d: ScheduleDraft): string | null {
+  if (d.cadence === 'cron') {
+    const spec = parseCron(d.cron);
+    return typeof spec === 'string' ? spec : null;
+  }
+  if (!TIME_PATTERN.test(d.time)) return 'Set the time it runs.';
+  if (d.cadence === 'weekly' && d.weekdays.length === 0) return 'Pick at least one day.';
+  if (d.cadence === 'hourly' && d.hourlyWeekdays.length === 0) return 'Pick at least one day.';
+  const rule = draftRule(d);
+  if (typeof rule !== 'string') return null;
+  if (d.cadence === 'monthly') return 'The day of the month must be a whole number from 1 to 31.';
+  if (d.cadence === 'hourly') return 'Run every 1 to 23 hours, in whole hours.';
+  return rule;
+}
+
+/**
+ * The next `count` runs as the editor shows them ("Monday 12 October 2026,
+ * 09:00"), in the schedule's zone, or what's wrong with the repeat settings.
+ * A typo in a cron rule shows up here as it is typed.
+ */
+export function previewRuns(d: ScheduleDraft, timezone: string, now: number, count = 3): string[] | string {
+  const problem = ruleProblem(d);
+  if (problem) return problem;
+  const rule = draftRule(d);
+  if (typeof rule === 'string') return rule;
+  return nextRuns(rule, timezone, now, count).map((t) => formatInZone(t, timezone, 'long'));
 }
 
 /** The first thing to fix before saving, or null. The server is the hard gate; this is the early, friendlier check. */
@@ -96,11 +163,7 @@ export function draftProblem(d: ScheduleDraft): string | null {
   if (d.profileId === '') return 'Choose a profile.';
   if (d.targetKind === 'chat' && d.chatId === '') return 'Choose the chat to add to.';
   if (d.targetKind === 'project' && d.projectId === '') return 'Choose the project to make chats in.';
-  if (!TIME_PATTERN.test(d.time)) return 'Set the time it runs.';
-  if (d.cadence === 'weekly' && d.weekdays.length === 0) return 'Pick at least one day.';
-  const rule = draftRule(d);
-  if (typeof rule === 'string') return d.cadence === 'monthly' ? 'The day of the month must be a whole number from 1 to 31.' : rule;
-  return null;
+  return ruleProblem(d);
 }
 
 function ruleOrThrow(d: ScheduleDraft): ScheduleRule {
