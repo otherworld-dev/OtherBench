@@ -473,6 +473,10 @@ export interface GlobalMemoryRepo {
 export interface AppSettings {
   /** The profile both memory summarisers run on; null = the project's default profile (project notes), then the app default. */
   memoryProfileId: string | null;
+  /** False turns GitHub off on this machine: no Issues, no inbox, and the server never runs `gh` (Settings, Features). */
+  githubEnabled: boolean;
+  /** False turns Nextcloud off on this machine: no Deck, Wiki or Links, and the server never calls Nextcloud. */
+  nextcloudEnabled: boolean;
 }
 
 export interface SettingsRepo {

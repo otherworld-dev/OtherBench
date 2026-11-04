@@ -17,6 +17,7 @@ import type {
 import type { Connection, ModelInfo, Profile, ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part } from '../types/messages.js';
 import type { PricingSnapshot } from '../types/usage.js';
+import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 
@@ -1030,18 +1031,18 @@ export function runStoreContract(
 
     describe('settings', () => {
       it('starts with no memory model, stores one, ignores an empty patch, and clears it with null', () => {
-        expect(store.settings.get()).toEqual({ memoryProfileId: null });
-        expect(store.settings.update({ memoryProfileId: 'profile-a' })).toEqual({ memoryProfileId: 'profile-a' });
-        expect(store.settings.get()).toEqual({ memoryProfileId: 'profile-a' });
-        expect(store.settings.update({})).toEqual({ memoryProfileId: 'profile-a' });
+        expect(store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
+        expect(store.settings.update({ memoryProfileId: 'profile-a' })).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-a' });
+        expect(store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-a' });
+        expect(store.settings.update({})).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-a' });
         store.settings.update({ memoryProfileId: null });
-        expect(store.settings.get()).toEqual({ memoryProfileId: null });
+        expect(store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
       });
       it('keeps machine-local values beside the settings, out of get(), and refuses a settings key', () => {
         expect(store.settings.getValue('sandbox')).toBeNull();
         store.settings.setValue('sandbox', { state: 'ready', packages: ['ffmpeg'] });
         expect(store.settings.getValue('sandbox')).toEqual({ state: 'ready', packages: ['ffmpeg'] });
-        expect(store.settings.get()).toEqual({ memoryProfileId: null });
+        expect(store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
         store.settings.setValue('sandbox', null);
         expect(store.settings.getValue('sandbox')).toBeNull();
         expect(() => store.settings.setValue('memoryProfileId', 'x')).toThrow(/settings key/);

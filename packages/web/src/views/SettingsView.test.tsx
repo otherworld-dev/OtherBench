@@ -11,14 +11,18 @@ vi.mock('./settings/McpServersPanel.js', () => ({ McpServersPanel: () => <div>mc
 vi.mock('./settings/SandboxPanel.js', () => ({ SandboxPanel: () => <div>sandbox panel</div> }));
 vi.mock('./settings/DesktopPanel.js', () => ({ DesktopPanel: () => <div>desktop panel</div> }));
 vi.mock('./settings/RemoteAccessPanel.js', () => ({ RemoteAccessPanel: () => <div>remote panel</div> }));
+vi.mock('./settings/FeaturesPanel.js', () => ({ FeaturesPanel: () => <div>features panel</div> }));
+vi.mock('./settings/NextcloudPanel.js', () => ({ NextcloudPanel: () => <div>nextcloud panel</div> }));
 
 import { useAuthStore } from '../state/auth.js';
+import { useFeatures } from '../state/features.js';
 import { SettingsView } from './SettingsView.js';
 
 afterEach(() => {
   cleanup();
   desktop = false;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
+  useFeatures.setState({ github: true, nextcloud: true });
 });
 
 describe('SettingsView', () => {
@@ -32,13 +36,22 @@ describe('SettingsView', () => {
     expect(screen.getByText('memory panel')).toBeInTheDocument();
   });
 
-  it('has a Sandbox tab after MCP Servers that shows the sandbox panel', () => {
+  it('has Features, Nextcloud and Sandbox tabs after MCP Servers, Sandbox showing the sandbox panel', () => {
     render(<SettingsView onClose={vi.fn()} />);
     const names = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(names.indexOf('Nextcloud')).toBe(names.indexOf('MCP Servers') + 1);
+    expect(names.indexOf('Features')).toBe(names.indexOf('MCP Servers') + 1);
+    expect(names.indexOf('Nextcloud')).toBe(names.indexOf('Features') + 1);
     expect(names.indexOf('Sandbox')).toBe(names.indexOf('Nextcloud') + 1);
     fireEvent.click(screen.getByRole('tab', { name: 'Sandbox' }));
     expect(screen.getByText('sandbox panel')).toBeInTheDocument();
+  });
+
+  it('shows the Features panel, and no Nextcloud tab while Nextcloud is turned off', () => {
+    useFeatures.setState({ nextcloud: false });
+    render(<SettingsView onClose={vi.fn()} />);
+    expect(screen.queryByRole('tab', { name: 'Nextcloud' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Features' }));
+    expect(screen.getByText('features panel')).toBeInTheDocument();
   });
 
   it('has a Remote access tab only in sign-in mode', () => {

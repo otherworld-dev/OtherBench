@@ -21,6 +21,8 @@ import { ApiError, api, type GlobalMemoryView } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { MEMORY_MODEL_HINT, MemoryPanel } from './MemoryPanel.js';
 
+const FEATURES_ON = { githubEnabled: true, nextcloudEnabled: true };
+
 const mockedGet = vi.mocked(api.settings.get);
 const mockedPatch = vi.mocked(api.settings.patch);
 const global = vi.mocked(api.memory.global);
@@ -53,8 +55,8 @@ function view(over: Partial<GlobalMemory> = {}, lastError: MemoryFailure | null 
 beforeEach(() => {
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ profiles: [profile('p-cheap', 'Local Llama'), profile('p-big', 'Opus'), profile('p-old', 'Old', 5)], chats: [{ id: 'c1', title: 'Setup chat' } as Chat] });
-  mockedGet.mockReset().mockResolvedValue({ memoryProfileId: null });
-  mockedPatch.mockReset().mockImplementation(async (body) => ({ memoryProfileId: body.memoryProfileId ?? null }));
+  mockedGet.mockReset().mockResolvedValue({ ...FEATURES_ON, memoryProfileId: null });
+  mockedPatch.mockReset().mockImplementation(async (body) => ({ ...FEATURES_ON, memoryProfileId: body.memoryProfileId ?? null }));
   for (const fn of Object.values(global)) fn.mockReset();
   global.get.mockResolvedValue(view());
 });
@@ -155,7 +157,7 @@ describe('MemoryPanel: Memory model', () => {
   });
 
   it('shows the saved choice and saves a new one', async () => {
-    mockedGet.mockResolvedValue({ memoryProfileId: 'p-big' });
+    mockedGet.mockResolvedValue({ ...FEATURES_ON, memoryProfileId: 'p-big' });
     render(<MemoryPanel />);
     await waitFor(() => expect(select().value).toBe('p-big'));
 
@@ -167,7 +169,7 @@ describe('MemoryPanel: Memory model', () => {
   });
 
   it('choosing Default saves null', async () => {
-    mockedGet.mockResolvedValue({ memoryProfileId: 'p-big' });
+    mockedGet.mockResolvedValue({ ...FEATURES_ON, memoryProfileId: 'p-big' });
     render(<MemoryPanel />);
     await waitFor(() => expect(select().value).toBe('p-big'));
     await userEvent.setup().selectOptions(select(), '');
@@ -175,7 +177,7 @@ describe('MemoryPanel: Memory model', () => {
   });
 
   it("shows the server's message when saving fails, and a stored profile that is no longer live reads as Default", async () => {
-    mockedGet.mockResolvedValue({ memoryProfileId: 'p-old' });
+    mockedGet.mockResolvedValue({ ...FEATURES_ON, memoryProfileId: 'p-old' });
     mockedPatch.mockRejectedValue(new ApiError(400, '"memoryProfileId": profile "Opus" is archived.'));
     render(<MemoryPanel />);
     await waitFor(() => expect(select()).toBeEnabled());

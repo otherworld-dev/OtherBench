@@ -75,6 +75,8 @@ describe('isProtectedAgentPath', () => {
     // Claude Code's own exemptions: its helpers' worktrees, and agent memory notes.
     '.claude/worktrees/agent-ac386f1830c42d696/crates/schema-gen/tests/read_xsd.rs', '.claude/worktrees/x/src/main.ts', '.Claude/Worktrees/x/a.txt',
     '.claude/agent-memory/reviewer/notes.md', '.claude/agent-memory/MEMORY.md',
+    // Claude Code's auto memory in its own project folder, as the gate is handed it (absolute).
+    'C:\\Users\\a\\.claude\\projects\\E--Git-App\\memory\\MEMORY.md', '/home/a/.claude/projects/-home-a-app/memory/user_role.md',
   ])('treats %s as data', (p) => {
     expect(isProtectedAgentPath(p)).toBe(false);
   });
@@ -95,6 +97,10 @@ describe('isProtectedAgentPath', () => {
     '.claude/worktrees', '.claude/worktrees/x/.claude/settings.json', '.claude/worktrees/x/.claude/hooks/h.sh', '.claude/worktrees/x/CLAUDE.md',
     '.claude/worktrees/x/.mcp.json', '.claude/worktrees/../settings.json', '.claude/WORKTR~1/x/a.ts',
     '.claude/agent-memory', '.claude/agent-memory/reviewer/hook.sh', '.claude/agent-memory/settings.json',
+    // A project folder's transcripts are resumed; only its memory notes are data.
+    '.claude/projects', '.claude/projects/E--Git-App', '.claude/projects/E--Git-App/abc.jsonl', '.claude/projects/E--Git-App/memory',
+    '.claude/projects/E--Git-App/memory/x.txt', '.claude/projects/E--Git-App/memory/sub/x.md', '.claude/projects/E--Git-App/memory/CLAUDE.md',
+    '.claude/projects/E--Git-App/memory/../abc.jsonl', '.claude/projects/x.md', '.claude/projects/E--Git-App/x/memory.md',
   ])('still protects %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(true);
   });

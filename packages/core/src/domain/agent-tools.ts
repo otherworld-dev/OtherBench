@@ -77,7 +77,9 @@ export function isProtectedAgentPath(relPath: string): boolean {
  * The folders under `.claude` that Claude Code never reads as configuration:
  * the claude-setup standard's `.claude/private/` (plans, specs) and
  * `.claude/scratch/` (throwaway scripts and probes), anything inside either;
- * plain `.md` notes directly in `.claude/memory/` (auto memory); and, as
+ * plain `.md` notes directly in `.claude/memory/` (auto memory), and in a
+ * project's `memory/` under the Claude config folder's `projects/` (Claude
+ * Code's own auto memory, `.claude/projects/<name>/memory/`); and, as
  * Claude Code itself exempts them from its protected paths,
  * `.claude/worktrees/` (the git worktrees its helpers work in) and `.md`
  * notes in `.claude/agent-memory/`. A write there follows the usual rules
@@ -95,6 +97,7 @@ function isClaudeDataPath(segments: readonly string[], at: number): boolean {
   const rest = segments.length - (at + 2);
   if (folder === 'private' || folder === 'scratch' || folder === 'worktrees') return rest >= 1;
   if (folder === 'agent-memory') return rest >= 1 && (segments[segments.length - 1] ?? '').endsWith('.md');
+  if (folder === 'projects') return rest === 3 && segments[at + 3] === 'memory' && (segments[at + 4] ?? '').endsWith('.md');
   return folder === 'memory' && rest === 1 && (segments[at + 2] ?? '').endsWith('.md');
 }
 

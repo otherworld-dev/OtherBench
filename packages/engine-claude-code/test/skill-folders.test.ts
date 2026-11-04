@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { claudeSkillFolders } from '../src/skill-folders.js';
+import { claudeGlobalFiles, claudeProjectFolders, claudeProjectName, claudeSkillFolders } from '../src/skill-folders.js';
 import { normaliseAgentArgs } from '../src/approval.js';
+import { isProtectedAgentPath } from '@otherbench/core/domain/agent-tools.js';
 
 let home: string;
 let ws: string;
@@ -43,5 +44,79 @@ describe('claudeSkillFolders', () => {
     expect(normaliseAgentArgs('Read', { file_path: standard }, ws, folders)).toHaveProperty('args');
     expect(normaliseAgentArgs('Read', { file_path: join(home, '.claude', '.credentials.json') }, ws, folders)).toHaveProperty('outside');
     expect(normaliseAgentArgs('Write', { file_path: standard, content: 'x' }, ws, folders)).toHaveProperty('readOnly');
+  });
+});
+
+describe('claudeProjectName', () => {
+  it("makes every character but a letter or digit '-', as Claude Code does", () => {
+    expect(claudeProjectName(ws)).toBe(realpathSync(ws).replace(/[^a-zA-Z0-9]/g, '-'));
+  });
+  it.runIf(process.platform === 'win32')('names a Windows folder as Claude Code does', () => {
+    expect(claudeProjectName('E:\\Git\\Nextcloud Git2Deck\\not-there')).toBe('E--Git-Nextcloud-Git2Deck-not-there');
+  });
+  it('cuts a name past 200 characters and adds a hash of the whole path', () => {
+    const deep = join(ws, 'a'.repeat(120), 'b'.repeat(120));
+    const name = claudeProjectName(deep);
+    expect(name).toMatch(/^.{200}-[0-9a-z]+$/);
+    expect(name.slice(0, 200)).toBe(resolve(deep).replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200));
+    expect(claudeProjectName(join(ws, 'a'.repeat(120), 'c'.repeat(120)))).not.toBe(name);
+  });
+});
+
+describe('claudeProjectFolders', () => {
+  const project = (): string => join(home, '.claude', 'projects', claudeProjectName(ws));
+  it("gives the workspace's project folder read-only and its memory writable, made yet or not", () => {
+    expect(claudeProjectFolders({}, ws, home)).toEqual([
+      { root: project(), access: 'read' },
+      { root: join(project(), 'memory'), access: 'readwrite' },
+    ]);
+  });
+  it('follows CLAUDE_CONFIG_DIR', () => {
+    const config = join(home, 'cfg');
+    expect(claudeProjectFolders({ CLAUDE_CONFIG_DIR: config }, ws, home)[0]?.root).toBe(join(config, 'projects', claudeProjectName(ws)));
+  });
+  it('is left out when it is inside the workspace', () => {
+    expect(claudeProjectFolders({}, home, home)).toEqual([]);
+  });
+  it('lets Claude Code read its transcripts and write its memory, but never write a transcript', () => {
+    mkdirSync(join(project(), 'memory'), { recursive: true });
+    const folders = claudeProjectFolders({}, ws, home);
+    const note = join(project(), 'memory', 'MEMORY.md');
+    const transcript = join(project(), 'abc.jsonl');
+    expect(normaliseAgentArgs('Write', { file_path: note, content: 'x' }, ws, folders)).toHaveProperty('args');
+    expect(normaliseAgentArgs('Read', { file_path: transcript }, ws, folders)).toHaveProperty('args');
+    expect(normaliseAgentArgs('Write', { file_path: transcript, content: 'x' }, ws, folders)).toHaveProperty('readOnly');
+    expect(normaliseAgentArgs('Write', { file_path: join(home, '.claude', 'projects', 'other', 'memory', 'x.md'), content: 'x' }, ws, folders)).toHaveProperty('outside');
+  });
+});
+
+describe('claudeGlobalFiles', () => {
+  const global = (): string => join(home, '.claude', 'CLAUDE.md');
+  it('gives the global CLAUDE.md, writable, when it is a plain file', () => {
+    writeFileSync(global(), '# notes');
+    expect(claudeGlobalFiles({}, ws, home)).toEqual([{ root: global(), access: 'readwrite' }]);
+  });
+  it('follows CLAUDE_CONFIG_DIR', () => {
+    const config = join(home, 'cfg');
+    mkdirSync(config, { recursive: true });
+    writeFileSync(join(config, 'CLAUDE.md'), '# notes');
+    expect(claudeGlobalFiles({ CLAUDE_CONFIG_DIR: config }, ws, home)).toEqual([{ root: join(config, 'CLAUDE.md'), access: 'readwrite' }]);
+  });
+  it('is left out when it is missing, a folder, or inside the workspace', () => {
+    expect(claudeGlobalFiles({}, ws, home)).toEqual([]);
+    mkdirSync(global());
+    expect(claudeGlobalFiles({}, ws, home)).toEqual([]);
+    rmSync(global(), { recursive: true });
+    writeFileSync(global(), '# notes');
+    expect(claudeGlobalFiles({}, home, home)).toEqual([]);
+  });
+  it('lets Claude Code edit that file alone, and the edit always asks', () => {
+    writeFileSync(global(), '# notes');
+    const folders = claudeGlobalFiles({}, ws, home);
+    const edit = normaliseAgentArgs('Edit', { file_path: global(), old_string: 'notes', new_string: 'more' }, ws, folders);
+    expect(edit).toHaveProperty('args');
+    expect(isProtectedAgentPath((edit as { args: { path: string } }).args.path)).toBe(true);
+    expect(normaliseAgentArgs('Write', { file_path: join(home, '.claude', 'settings.json'), content: '{}' }, ws, folders)).toHaveProperty('outside');
+    expect(normaliseAgentArgs('Write', { file_path: join(global(), 'x.md'), content: 'x' }, ws, folders)).toHaveProperty('outside');
   });
 });

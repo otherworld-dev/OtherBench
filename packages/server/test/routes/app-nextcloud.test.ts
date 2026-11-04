@@ -93,6 +93,14 @@ describe('app deck routes', () => {
     expect(await json(res)).toMatchObject({ code: 'no-deck-board', error: "No Deck board set for this app. Add one in the app's settings." });
   });
 
+  it('with Nextcloud turned off, GET /deck is a 409 nextcloud-off', async () => {
+    makeApp({ deckBoardId: 5 });
+    container.store.settings.update({ nextcloudEnabled: false });
+    const res = await send('GET', '/api/apps/a1/deck');
+    expect(res.status).toBe(409);
+    expect(await json(res)).toMatchObject({ code: 'nextcloud-off', error: 'Nextcloud is turned off on this machine. Turn it on in Settings → Features.' });
+  });
+
   it('GET /deck returns the board view', async () => {
     makeApp({ deckBoardId: 5 });
     const res = await send('GET', '/api/apps/a1/deck');

@@ -120,7 +120,7 @@ function note(id: string, repo: string, unread: boolean, day: number): GithubNot
 }
 function input(over: Partial<OverviewInput>): OverviewInput {
   return {
-    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), backgroundChatIds: new Set(), me: 'me', notifications: null, decks: {},
+    apps: [], chats: [], projects: [], heads: [], waitingChatIds: new Set(), backgroundChatIds: new Set(), me: 'me', notifications: null, decks: {}, github: true, nextcloud: true,
     checkedAt: null, checking: false, loginMismatches: [], unreachableMachines: [], now, ...over,
   };
 }
@@ -201,6 +201,18 @@ describe('buildOverview', () => {
     const o = buildOverview(input({ apps: [app('a', { deckBoardId: 1 }), app('b', { deckBoardId: 2 })], decks: { b: { error: 'x' } } }));
     expect(o.tiles.find((x) => x.key === 'a')?.deck).toEqual({ due: [], doing: 0, todo: 0, backlog: 0 });
     expect(o.tiles.find((x) => x.key === 'b')).toMatchObject({ deckError: 'x' });
+  });
+  it('turned off, GitHub leaves no section, tile, login or mismatch, and Nextcloud no Deck section', () => {
+    const o = buildOverview(input({
+      apps: [app('a', { githubRepo: 'o/a', deckBoardId: 1 })],
+      notifications: { list: [note('1', 'o/a', true, 0), note('9', 'o/elsewhere', true, 0)], more: true, error: 'boom' },
+      decks: { a: { view: view([{ id: 1, title: 'To Do', cards: [card(1, 1, day(-1))] }]) } },
+      loginMismatches: [{ machine: 'laptop', login: 'other' }],
+      github: false, nextcloud: false,
+    }));
+    expect(o.tiles.find((x) => x.key === 'a')).toMatchObject({ notifications: null, notificationsError: null, deck: null, deckError: null, count: 0 });
+    expect(o.tiles.find((x) => x.key === 'github')).toBeUndefined();
+    expect(o).toMatchObject({ githubLogin: null, loginMismatches: [], total: 0 });
   });
   it('counts due cards', () => {
     const o = buildOverview(input({

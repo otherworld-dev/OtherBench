@@ -1,6 +1,7 @@
 import type { NextcloudSettingsView } from '@otherbench/core/types/nextcloud.js';
 import type { Container } from '../container.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
+import { nextcloudOnOrThrow } from '../features.js';
 import { httpNextcloudClient, type NextcloudClient } from './client.js';
 
 /**
@@ -31,8 +32,9 @@ export async function nextcloudSettings(container: Container): Promise<Nextcloud
   return { baseUrl: stored?.baseUrl ?? null, user: stored?.user ?? null, passwordSet: Boolean(password) };
 }
 
-/** The client, or CodeRouteError(409, 'nextcloud-not-configured', "Nextcloud isn't set up on this machine. Add it in Settings → Nextcloud."). */
+/** The client, or CodeRouteError(409, 'nextcloud-off') while Nextcloud is turned off, or CodeRouteError(409, 'nextcloud-not-configured', "Nextcloud isn't set up on this machine. Add it in Settings → Nextcloud."). */
 export async function nextcloudOrThrow(container: Container): Promise<NextcloudClient> {
+  nextcloudOnOrThrow(container.store);
   const stored = storedNextcloudSettings(container);
   const password = await container.secrets.get(NEXTCLOUD_SECRET_REF);
   if (!stored || !password) {

@@ -18,6 +18,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
+import { useFeatures } from '../state/features.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { AppHome } from './AppHome.js';
@@ -33,6 +34,7 @@ const chat = (id: string, over: Partial<Chat> = {}): Chat => ({
 
 beforeEach(() => {
   window.localStorage.clear();
+  useFeatures.setState({ github: true, nextcloud: true });
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({
     mode: 'code',
@@ -60,6 +62,15 @@ describe('AppHome', () => {
     expect(screen.getByTestId('app-home-folder')).toHaveTextContent('E:/Git/OtherBench');
     expect(screen.getByTestId('app-home-repo')).toHaveTextContent('otherworld-dev/OtherBench');
     expect(screen.getByTestId('app-home-project')).toHaveTextContent('Planning');
+  });
+
+  it('shows no repo and no issues while GitHub is turned off', () => {
+    useFeatures.setState({ github: false });
+    useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
+    render(<AppHome appId="a1" />);
+    expect(screen.queryByTestId('app-home-repo')).toBeNull();
+    expect(screen.queryByTestId('app-home-issues')).toBeNull();
+    expect(api.apps.issues.list).not.toHaveBeenCalled();
   });
 
   it("New chat creates a chat in the app and opens it", async () => {

@@ -30,6 +30,9 @@ export type GitErrorCode = 'git-missing' | 'not-a-repo' | 'bad-path' | 'bad-bran
 /** Failure kinds of the GitHub issues service (spec 2026-10-20-code-tab-design, "Error states"); the `GhError` class stays in the server. */
 export type GhErrorCode = 'gh-missing' | 'gh-signed-out' | 'repo-not-found' | 'gh-failed';
 
+/** GitHub or Nextcloud is turned off on this machine (Settings, Features), so the route refused before reaching it. */
+export type FeatureOffCode = 'github-off' | 'nextcloud-off';
+
 export interface IssueSummary {
   number: number;
   title: string;

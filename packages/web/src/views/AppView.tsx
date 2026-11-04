@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api, type CreateAppBody, type PatchAppBody } from '../state/api.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore, type AppPageState } from '../state/store.js';
 
 const FIELD = 'w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm';
@@ -106,6 +107,9 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
   const serverPlatform = useServerPlatform();
+  // Fields for a feature turned off are hidden, never looked up, and keep what the app has (Settings, Features).
+  const github = useFeatures((s) => s.github);
+  const nextcloud = useFeatures((s) => s.nextcloud);
   const [initial] = useState<AppDraft>(() => draftFromApp(app));
   const [draft, setDraft] = useState<AppDraft>(initial);
   const [saving, setSaving] = useState(false);
@@ -151,7 +155,7 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const chosenCollective = draft.wikiCollective.trim();
   useEffect(() => {
     setCollectivePages(null);
-    if (chosenCollective === '') return;
+    if (chosenCollective === '' || !nextcloud) return;
     let live = true;
     api.nextcloud.collectivePages(chosenCollective).then(
       (paths) => live && setCollectivePages({ collective: chosenCollective, paths }),
@@ -161,9 +165,10 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     return () => {
       live = false;
     };
-  }, [chosenCollective]);
+  }, [chosenCollective, nextcloud]);
 
   useEffect(() => {
+    if (!nextcloud) return;
     let live = true;
     api.nextcloud.boards().then(
       (b) => live && setBoards(b),
@@ -193,7 +198,7 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     return () => {
       live = false;
     };
-  }, []);
+  }, [nextcloud]);
 
   function set<K extends keyof AppDraft>(key: K, value: AppDraft[K]): void {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -249,7 +254,8 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     detectedFor.current = path;
     if (!typed.current.name && path !== '') set('name', folderName(path).slice(0, APP_NAME_MAX));
     if (path === '' || validateWorkspaceRoot(path, serverPlatform) !== null) return;
-    if (creating) void fillLinks(path, false);
+    if (creating && nextcloud) void fillLinks(path, false);
+    if (!github) return;
     const seq = ++detectSeq.current;
     const lookup = (async (): Promise<string | undefined> => {
       try {
@@ -305,11 +311,11 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     if (name === '') return 'Give the app a name.';
     if (name.length > APP_NAME_MAX) return `The name can be at most ${APP_NAME_MAX} characters.`;
     const repo = d.githubRepo.trim();
-    if (repo !== '' && !isGithubRepo(repo)) return 'The GitHub repo is "owner/name", such as otherworld-dev/OtherBench.';
+    if (github && repo !== '' && !isGithubRepo(repo)) return 'The GitHub repo is "owner/name", such as otherworld-dev/OtherBench.';
     const collective = d.wikiCollective.trim();
     const page = d.wikiPagePath.trim();
-    if (collective !== '' && page === '') return 'Give the Collectives page a path, or clear the collective.';
-    if (collective === '' && page !== '') return 'Choose the collective for the Collectives page, or clear the path.';
+    if (nextcloud && collective !== '' && page === '') return 'Give the Collectives page a path, or clear the collective.';
+    if (nextcloud && collective === '' && page !== '') return 'Choose the collective for the Collectives page, or clear the path.';
     return null;
   }
 
@@ -460,148 +466,154 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
             />
           </div>
 
-          <div>
-            <label htmlFor="app-github" className={LABEL}>
-              GitHub repo
-            </label>
-            <input
-              id="app-github"
-              value={draft.githubRepo}
-              onChange={(e) => {
-                typed.current.githubRepo = true;
-                set('githubRepo', e.target.value);
-              }}
-              placeholder="owner/name"
-              className={`${FIELD} font-mono text-xs`}
-            />
-            <p data-testid="app-github-hint" className={HINT}>
-              {draft.githubRepo.trim() === '' ? 'No GitHub repo set for this app' : 'Its issues show in the Issues tab.'}
-            </p>
-          </div>
-
-          <div>
-            <label htmlFor="app-deck-board" className={LABEL}>
-              Deck board
-            </label>
-            <select
-              id="app-deck-board"
-              value={draft.deckBoardId}
-              disabled={boardsFailed}
-              onChange={(e) => {
-                typed.current.deckBoardId = true;
-                setBoardNotFound(null);
-                set('deckBoardId', e.target.value);
-              }}
-              className={FIELD}
-            >
-              <option value="">None</option>
-              {draft.deckBoardId !== '' && !boards?.some((b) => String(b.id) === draft.deckBoardId) && (
-                <option value={draft.deckBoardId}>Board {draft.deckBoardId}</option>
-              )}
-              {boards?.map((b) => (
-                <option key={b.id} value={String(b.id)}>
-                  {b.title}
-                </option>
-              ))}
-            </select>
-            {boardsFailed && <p className={HINT}>Set up Nextcloud in Settings to pick a board.</p>}
-            {/* Without Nextcloud no board could be looked up, so a name that didn't resolve isn't "not found". */}
-            {boardNotFound !== null && !boardsFailed && (
-              <p data-testid="app-board-not-found" className="mt-1 text-xs text-[var(--warn)]">
-                CLAUDE.md names the board "{boardNotFound}", which wasn't found.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="app-wiki-collective" className={LABEL}>
-              Collectives page
-            </label>
-            <div className="flex gap-2">
-              <select
-                id="app-wiki-collective"
-                value={draft.wikiCollective}
-                onChange={(e) => {
-                  typed.current.wikiCollective = true;
-                  setCollectiveNotFound(null);
-                  set('wikiCollective', e.target.value);
-                }}
-                className={`${FIELD} w-auto shrink-0`}
-              >
-                <option value="">None</option>
-                {draft.wikiCollective !== '' && !(collectives ?? []).includes(draft.wikiCollective) && <option value={draft.wikiCollective}>{draft.wikiCollective}</option>}
-                {(collectives ?? []).map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+          {github && (
+            <div>
+              <label htmlFor="app-github" className={LABEL}>
+                GitHub repo
+              </label>
               <input
-                aria-label="Collectives page path"
-                value={draft.wikiPagePath}
+                id="app-github"
+                value={draft.githubRepo}
                 onChange={(e) => {
-                  typed.current.wikiPagePath = true;
-                  set('wikiPagePath', e.target.value);
+                  typed.current.githubRepo = true;
+                  set('githubRepo', e.target.value);
                 }}
-                placeholder="Products/MyApp"
-                className={FIELD}
+                placeholder="owner/name"
+                className={`${FIELD} font-mono text-xs`}
               />
+              <p data-testid="app-github-hint" className={HINT}>
+                {draft.githubRepo.trim() === '' ? 'No GitHub repo set for this app' : 'Its issues show in the Issues tab.'}
+              </p>
             </div>
-            {collectivePages && collectivePages.collective === chosenCollective && collectivePages.paths.length > 0 && (
-              <select
-                aria-label={`Pick a page in ${chosenCollective}`}
-                value={collectivePages.paths.includes(draft.wikiPagePath.trim()) ? draft.wikiPagePath.trim() : ''}
-                onChange={(e) => {
-                  if (e.target.value === '') return;
-                  typed.current.wikiPagePath = true;
-                  set('wikiPagePath', e.target.value);
-                }}
-                className={`${FIELD} mt-1`}
-              >
-                <option value="">Pick a page in {chosenCollective}…</option>
-                {collectivePages.paths.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            )}
-            {collectiveNotFound !== null && (
-              <p data-testid="app-collective-not-found" className="mt-1 text-xs text-[var(--warn)]">
-                CLAUDE.md names the collective "{collectiveNotFound}", which wasn't found.
-              </p>
-            )}
-          </div>
+          )}
 
-          <div>
-            <label htmlFor="app-bookmark-tag" className={LABEL}>
-              Bookmark tag
-            </label>
-            <input
-              id="app-bookmark-tag"
-              value={draft.bookmarkTag}
-              onChange={(e) => {
-                typed.current.bookmarkTag = true;
-                set('bookmarkTag', e.target.value);
-              }}
-              className={FIELD}
-            />
-            {!creating && (
-              <button
-                type="button"
-                onClick={() => void fillLinks(draft.folder.trim(), true)}
-                disabled={draft.folder.trim() === '' || validateWorkspaceRoot(draft.folder.trim(), serverPlatform) !== null}
-                className="btn mt-2 px-2 py-1"
-              >
-                Fill from CLAUDE.md
-              </button>
-            )}
-            {linksFailed && (
-              <p role="alert" className="mt-1 text-xs text-[var(--warn)]">
-                Couldn't read CLAUDE.md from this folder.
-              </p>
-            )}
-          </div>
+          {nextcloud && (
+            <>
+              <div>
+                <label htmlFor="app-deck-board" className={LABEL}>
+                  Deck board
+                </label>
+                <select
+                  id="app-deck-board"
+                  value={draft.deckBoardId}
+                  disabled={boardsFailed}
+                  onChange={(e) => {
+                    typed.current.deckBoardId = true;
+                    setBoardNotFound(null);
+                    set('deckBoardId', e.target.value);
+                  }}
+                  className={FIELD}
+                >
+                  <option value="">None</option>
+                  {draft.deckBoardId !== '' && !boards?.some((b) => String(b.id) === draft.deckBoardId) && (
+                    <option value={draft.deckBoardId}>Board {draft.deckBoardId}</option>
+                  )}
+                  {boards?.map((b) => (
+                    <option key={b.id} value={String(b.id)}>
+                      {b.title}
+                    </option>
+                  ))}
+                </select>
+                {boardsFailed && <p className={HINT}>Set up Nextcloud in Settings to pick a board.</p>}
+                {/* Without Nextcloud no board could be looked up, so a name that didn't resolve isn't "not found". */}
+                {boardNotFound !== null && !boardsFailed && (
+                  <p data-testid="app-board-not-found" className="mt-1 text-xs text-[var(--warn)]">
+                    CLAUDE.md names the board "{boardNotFound}", which wasn't found.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="app-wiki-collective" className={LABEL}>
+                  Collectives page
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    id="app-wiki-collective"
+                    value={draft.wikiCollective}
+                    onChange={(e) => {
+                      typed.current.wikiCollective = true;
+                      setCollectiveNotFound(null);
+                      set('wikiCollective', e.target.value);
+                    }}
+                    className={`${FIELD} w-auto shrink-0`}
+                  >
+                    <option value="">None</option>
+                    {draft.wikiCollective !== '' && !(collectives ?? []).includes(draft.wikiCollective) && <option value={draft.wikiCollective}>{draft.wikiCollective}</option>}
+                    {(collectives ?? []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    aria-label="Collectives page path"
+                    value={draft.wikiPagePath}
+                    onChange={(e) => {
+                      typed.current.wikiPagePath = true;
+                      set('wikiPagePath', e.target.value);
+                    }}
+                    placeholder="Products/MyApp"
+                    className={FIELD}
+                  />
+                </div>
+                {collectivePages && collectivePages.collective === chosenCollective && collectivePages.paths.length > 0 && (
+                  <select
+                    aria-label={`Pick a page in ${chosenCollective}`}
+                    value={collectivePages.paths.includes(draft.wikiPagePath.trim()) ? draft.wikiPagePath.trim() : ''}
+                    onChange={(e) => {
+                      if (e.target.value === '') return;
+                      typed.current.wikiPagePath = true;
+                      set('wikiPagePath', e.target.value);
+                    }}
+                    className={`${FIELD} mt-1`}
+                  >
+                    <option value="">Pick a page in {chosenCollective}…</option>
+                    {collectivePages.paths.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {collectiveNotFound !== null && (
+                  <p data-testid="app-collective-not-found" className="mt-1 text-xs text-[var(--warn)]">
+                    CLAUDE.md names the collective "{collectiveNotFound}", which wasn't found.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="app-bookmark-tag" className={LABEL}>
+                  Bookmark tag
+                </label>
+                <input
+                  id="app-bookmark-tag"
+                  value={draft.bookmarkTag}
+                  onChange={(e) => {
+                    typed.current.bookmarkTag = true;
+                    set('bookmarkTag', e.target.value);
+                  }}
+                  className={FIELD}
+                />
+                {!creating && (
+                  <button
+                    type="button"
+                    onClick={() => void fillLinks(draft.folder.trim(), true)}
+                    disabled={draft.folder.trim() === '' || validateWorkspaceRoot(draft.folder.trim(), serverPlatform) !== null}
+                    className="btn mt-2 px-2 py-1"
+                  >
+                    Fill from CLAUDE.md
+                  </button>
+                )}
+                {linksFailed && (
+                  <p role="alert" className="mt-1 text-xs text-[var(--warn)]">
+                    Couldn't read CLAUDE.md from this folder.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
 
           <div>
             <label htmlFor="app-linked-project" className={LABEL}>

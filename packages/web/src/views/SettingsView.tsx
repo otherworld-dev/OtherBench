@@ -1,10 +1,12 @@
 import { useState, type JSX } from 'react';
 import { isDesktop } from '../desktop/bridge.js';
 import { useAuthStore } from '../state/auth.js';
+import { useFeatures } from '../state/features.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
 import { ClaudeAccountsPanel } from './settings/ClaudeAccountsPanel.js';
 import { AppearancePanel } from './settings/AppearancePanel.js';
 import { DesktopPanel } from './settings/DesktopPanel.js';
+import { FeaturesPanel } from './settings/FeaturesPanel.js';
 import { LocationsPanel } from './settings/LocationsPanel.js';
 import { MachinesPanel } from './settings/MachinesPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
@@ -16,7 +18,7 @@ import { ImportPanel } from './settings/ImportPanel.js';
 import { SandboxPanel } from './settings/SandboxPanel.js';
 import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'claudeAccounts' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
+type Tab = 'connections' | 'claudeAccounts' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'features' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -27,6 +29,7 @@ const TAB_LABEL: Record<Tab, string> = {
   locations: 'Locations',
   machines: 'Machines',
   mcpServers: 'MCP Servers',
+  features: 'Features',
   nextcloud: 'Nextcloud',
   sandbox: 'Sandbox',
   import: 'Import',
@@ -52,8 +55,9 @@ export interface SettingsViewProps {
 export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('connections');
   const signInMode = useAuthStore((s) => s.mode === 'login');
-  // The Desktop tab only exists inside the desktop app; Remote access only in sign-in mode.
-  const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter((t) => (t !== 'desktop' || isDesktop()) && (t !== 'remote' || signInMode));
+  const nextcloud = useFeatures((s) => s.nextcloud);
+  // The Desktop tab only exists inside the desktop app; Remote access only in sign-in mode; Nextcloud only while it's on.
+  const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter((t) => (t !== 'desktop' || isDesktop()) && (t !== 'remote' || signInMode) && (t !== 'nextcloud' || nextcloud));
 
   return (
     <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
@@ -90,7 +94,8 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'locations' && <LocationsPanel />}
         {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
-        {tab === 'nextcloud' && <NextcloudPanel />}
+        {tab === 'features' && <FeaturesPanel />}
+        {tab === 'nextcloud' && nextcloud && <NextcloudPanel />}
         {tab === 'sandbox' && <SandboxPanel />}
         {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}

@@ -12,6 +12,7 @@ import { git, GitError } from '../code/git.js';
 import { ghRunner, githubService, type GithubService } from '../code/github.js';
 import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
+import { githubOnOrThrow } from '../features.js';
 import { ambiguousOnWindows, viewFailure } from '../view/roots.js';
 import { optionalNullableString } from '../validation.js';
 import { appView, appViews, parseWorkspaceBody, workspaceResolver } from '../workspace-view.js';
@@ -252,8 +253,9 @@ async function bodyOf<T>(c: { req: { json(): Promise<unknown> } }): Promise<T> {
 }
 
 let realGithub: GithubService | null = null;
-/** The container's github service, else the machine's own gh (created once). The Overview's checks use it too. */
+/** The container's github service, else the machine's own gh (created once). The Overview's checks use it too. A 409 `github-off` while GitHub is turned off. */
 export function githubOf(container: Container): GithubService {
+  githubOnOrThrow(container.store);
   if (container.github) return container.github;
   realGithub ??= githubService(ghRunner());
   return realGithub;

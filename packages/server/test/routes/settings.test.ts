@@ -2,12 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_APP_SETTINGS } from '@otherbench/core/domain/settings.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 let container: Container;
@@ -45,6 +47,7 @@ beforeEach(async () => {
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
     blobStore: createBlobStore(join(dataDir, 'attachments')),
+    events: new AppEventBus(),
     close: () => {},
   };
   store.connections.create({ id: 'conn-1', name: 'Conn', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
@@ -71,17 +74,38 @@ describe('/api/settings', () => {
   it('GET returns the defaults: no memory model', async () => {
     const res = await send('GET', '/api/settings');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null });
+    expect(await res.json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
   });
 
   it('PATCH sets the memory model and null clears it', async () => {
     const set = await send('PATCH', '/api/settings', { memoryProfileId: 'profile-cheap' });
     expect(set.status).toBe(200);
-    expect(await set.json()).toEqual({ memoryProfileId: 'profile-cheap' });
-    expect(await (await send('GET', '/api/settings')).json()).toEqual({ memoryProfileId: 'profile-cheap' });
+    expect(await set.json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-cheap' });
+    expect(await (await send('GET', '/api/settings')).json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-cheap' });
 
-    expect(await (await send('PATCH', '/api/settings', { memoryProfileId: null })).json()).toEqual({ memoryProfileId: null });
-    expect(await (await send('PATCH', '/api/settings', {})).json()).toEqual({ memoryProfileId: null });
+    expect(await (await send('PATCH', '/api/settings', { memoryProfileId: null })).json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
+    expect(await (await send('PATCH', '/api/settings', {})).json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
+  });
+
+  it('GitHub and Nextcloud start on; PATCH turns them off and says so once, to every window', async () => {
+    const seen: string[] = [];
+    container.events!.subscribe((e) => seen.push(e.type));
+    const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false });
+    expect(seen).toEqual(['settings-changed']);
+    await send('PATCH', '/api/settings', { githubEnabled: false });
+    expect(seen).toEqual(['settings-changed']);
+    await send('PATCH', '/api/settings', { githubEnabled: true });
+    expect(container.store.settings.get()).toMatchObject({ githubEnabled: true, nextcloudEnabled: false });
+  });
+
+  it('PATCH refuses a feature switch that is not true or false, writing nothing', async () => {
+    for (const body of [{ githubEnabled: 'no' }, { nextcloudEnabled: null }, { githubEnabled: false, nextcloudEnabled: 0 }]) {
+      const res = await send('PATCH', '/api/settings', body);
+      expect(res.status).toBe(400);
+    }
+    expect(container.store.settings.get()).toEqual(DEFAULT_APP_SETTINGS);
   });
 
   it('PATCH rejects an unknown, archived, empty or non-string profile id and keeps the stored one', async () => {
@@ -97,7 +121,7 @@ describe('/api/settings', () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: message });
     }
-    expect(container.store.settings.get()).toEqual({ memoryProfileId: 'profile-big' });
+    expect(container.store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'profile-big' });
   });
 
   it('archiving or deleting the memory model profile clears the setting; other profiles leave it alone', async () => {

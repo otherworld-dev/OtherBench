@@ -23,6 +23,8 @@ const COPY: Partial<Record<CodeErrorCode, string>> = {
   'no-deck-board': 'No Deck board set for this app',
   'no-wiki-page': 'No Collectives page set for this app',
   'no-bookmark-tag': 'No bookmark tag set for this app',
+  'github-off': 'GitHub is turned off. Turn it on in Settings → Features',
+  'nextcloud-off': 'Nextcloud is turned off. Turn it on in Settings → Features',
 };
 
 export const NO_GITHUB_REPO = COPY['no-github-repo']!;

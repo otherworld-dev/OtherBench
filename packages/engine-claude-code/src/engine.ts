@@ -26,7 +26,7 @@ import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError }
 import { SdkEventMapper } from './events.js';
 import { HelperRegistry } from './helpers.js';
 import { BackgroundTasks } from './background.js';
-import { claudeSkillFolders } from './skill-folders.js';
+import { claudeGlobalFiles, claudeProjectFolders, claudeSkillFolders } from './skill-folders.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, NOTE_PICKED, PromptQueue, type NotePickedMessage, type OtherBenchServerSwitches, type TurnBinding, SELF_TURN_PREFIX } from './live.js';
 import { chatCommands } from './commands.js';
@@ -776,7 +776,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         approvals: this.deps.approvals,
         policy: profile.toolPolicy,
         ctx: gateCtx,
-        readFolders: this.skillFolders(req.workspaceRoot, account),
+        claudeFolders: this.claudeFolders(req.workspaceRoot, account),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
         // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
@@ -1037,15 +1037,18 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
-   * The user's own skills and plugins, read-only, for the gate alone (skill-folders.ts):
-   * a skill may read its own files with Claude Code's file tools. Not part of the
-   * reply's tool context, so the sandboxed shell and relayed tools never get them.
+   * The user's own skills and plugins, read-only, and Claude Code's own project
+   * folder for the workspace, its memory writable, and the global CLAUDE.md, for
+   * the gate alone (skill-folders.ts): a skill may read its own files and Claude
+   * Code may keep its notes and edit the global instructions with its file tools. Not part of the reply's tool context, so the
+   * sandboxed shell and relayed tools never get them.
    */
-  private skillFolders(workspaceRoot: string | null, account: ClaudeAccountRef | undefined): ResolvedFolder[] {
+  private claudeFolders(workspaceRoot: string | null, account: ClaudeAccountRef | undefined): ResolvedFolder[] {
     if (!workspaceRoot) return [];
     const base = this.deps.baseEnv ?? process.env;
-    // Another account's skills are in its own config folder; main reads the inherited one as before.
-    return claudeSkillFolders(account?.configDir ? { ...base, CLAUDE_CONFIG_DIR: account.configDir } : base, workspaceRoot);
+    // Another account's skills and projects are in its own config folder; main reads the inherited one as before.
+    const env = account?.configDir ? { ...base, CLAUDE_CONFIG_DIR: account.configDir } : base;
+    return [...claudeSkillFolders(env, workspaceRoot), ...claudeProjectFolders(env, workspaceRoot), ...claudeGlobalFiles(env, workspaceRoot)];
   }
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
@@ -1173,7 +1176,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A reply may have begun while this waited: its gate decides.
       if (live?.binding) return live.binding.gate(toolName, toolInput, signal, opts);
       if (!helper) return { allow: false, reason: 'No OtherBench reply is waiting on this tool call.' };
-      return createGate({ approvals: this.deps.approvals, readFolders: this.skillFolders(helper.ctx.workspaceRoot, account), ...helper })(toolName, toolInput, signal, opts);
+      return createGate({ approvals: this.deps.approvals, claudeFolders: this.claudeFolders(helper.ctx.workspaceRoot, account), ...helper })(toolName, toolInput, signal, opts);
     };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) => {
       if (live?.binding) return live.binding.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
