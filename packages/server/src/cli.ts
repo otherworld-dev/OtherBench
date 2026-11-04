@@ -26,7 +26,7 @@ import {
 import { PasswordCommandError, runPasswordCommand } from './remote/password-command.js';
 import { parsePublicUrl } from './remote/public-url.js';
 import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
-import { expiryWarning } from './remote/tls.js';
+import { expiryWarning, TlsFileWatcher } from './remote/tls.js';
 import { isServerOnlyEnvVar } from '@otherbench/core/domain/child-env.js';
 
 /** Arbitrary default port for `otherbench serve`; overridable with `--port`. */
@@ -434,22 +434,42 @@ export async function runServe(
     throw err;
   }
 
-  // A long-running server says so in the log when its certificate is near its end; nothing renews mid-run.
-  const notAfter = signIn?.notAfter ?? null;
+  // A long-running server says so in the log when its certificate is near its end. `--tls auto` never renews
+  // mid-run; a renewed `--tls-cert`/`--tls-key` pair is put into service by the watcher below.
+  let notAfter = signIn?.notAfter ?? null;
   const expiryTimer =
     notAfter !== null
       ? setInterval(() => {
-          const warning = expiryWarning(notAfter, Date.now());
+          const warning = notAfter !== null ? expiryWarning(notAfter, Date.now()) : null;
           if (warning) console.error(warning);
         }, 86_400_000)
       : null;
   expiryTimer?.unref?.();
+
+  const tlsWatcher =
+    check?.files && remote && options.tlsCert !== null && options.tlsKey !== null
+      ? new TlsFileWatcher({
+          certPath: options.tlsCert,
+          keyPath: options.tlsKey,
+          hosts: remote.publicHostnames,
+          log: (line) => console.error(line),
+          apply: (files) => {
+            const swap = (server as { setSecureContext?: (o: { key: string; cert: string; minVersion: 'TLSv1.2' }) => void }).setSecureContext;
+            if (!swap) throw new Error("this server can't change its certificate while running.");
+            swap.call(server, { key: files.keyPem, cert: files.certPem, minVersion: 'TLSv1.2' });
+            notAfter = files.notAfter;
+            remote.tls.notAfter = files.notAfter;
+          },
+        })
+      : null;
+  tlsWatcher?.start();
 
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     if (expiryTimer) clearInterval(expiryTimer);
+    tlsWatcher?.stop();
     remote?.close();
     server.close();
     container.close();

@@ -1,10 +1,13 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpsServer } from 'node:https';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from 'node:tls';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TlsFilesError } from '../../src/remote/errors.js';
-import { AUTO_CERT_DAYS, expiryWarning, loadOrCreateAutoTls, loadTlsFiles } from '../../src/remote/tls.js';
+import { AUTO_CERT_DAYS, expiryWarning, loadOrCreateAutoTls, loadTlsFiles, TlsFileWatcher, type FileTls } from '../../src/remote/tls.js';
 
 const DAY = 86_400_000;
 let dir: string;
@@ -120,6 +123,95 @@ describe('loadTlsFiles', () => {
     const { cert, key } = files(['otherbench.test']);
 
     expect(loadTlsFiles(cert, key, ['otherbench.test'], () => Date.now() + (AUTO_CERT_DAYS - 10) * DAY).warning).toMatch(/expires on/);
+  });
+});
+
+describe('TlsFileWatcher', () => {
+  /** A fresh certificate and key for `names`, written over `cert.pem` and `key.pem`. */
+  function renew(names: string[], tag: string): { cert: string; key: string; certPem: string } {
+    const tls = loadOrCreateAutoTls({ dir: join(dir, tag), names, nodeName: 'box' });
+    writeFileSync(join(dir, 'cert.pem'), tls.certPem);
+    writeFileSync(join(dir, 'key.pem'), tls.keyPem);
+    return { cert: join(dir, 'cert.pem'), key: join(dir, 'key.pem'), certPem: tls.certPem };
+  }
+
+  /** Moves both files' modification time on, as a renewal would. */
+  function touch(seconds: number): void {
+    const t = new Date(Date.now() + seconds * 1000);
+    for (const f of ['cert.pem', 'key.pem']) utimesSync(join(dir, f), t, t);
+  }
+
+  it('puts a renewed pair into service, keeps the old one while a pair is broken, and logs each change once', () => {
+    const { cert, key } = renew(['otherbench.test'], 'a');
+    const applied: FileTls[] = [];
+    const lines: string[] = [];
+    const watcher = new TlsFileWatcher({ certPath: cert, keyPath: key, hosts: ['otherbench.test'], apply: (f) => applied.push(f), log: (l) => lines.push(l) });
+
+    expect(watcher.check()).toBe(false);
+    expect(applied).toHaveLength(0);
+
+    const b = renew(['otherbench.test'], 'b');
+    touch(10);
+    expect(watcher.check()).toBe(true);
+    expect(applied.map((f) => f.certPem)).toEqual([b.certPem]);
+    expect(lines.at(-1)).toMatch(/^\[otherbench-server\] Loaded the renewed certificate in .*cert\.pem, valid until \d{4}-\d{2}-\d{2}\.$/);
+
+    // Half way through a renewal: the new certificate, the old key.
+    const keyBefore = readFileSync(key, 'utf8');
+    renew(['otherbench.test'], 'c');
+    writeFileSync(key, keyBefore);
+    touch(20);
+    expect(watcher.check()).toBe(false);
+    expect(watcher.check()).toBe(false);
+    expect(applied).toHaveLength(1);
+    expect(lines.filter((l) => l.includes("Couldn't load"))).toHaveLength(1);
+    expect(lines.at(-1)).toMatch(/still in use: .*is not the key for the certificate/);
+    expect(lines.at(-1)).not.toMatch(/Refusing to start/);
+
+    // A certificate that no longer covers a public host is refused too.
+    renew(['other.example'], 'd');
+    touch(30);
+    expect(watcher.check()).toBe(false);
+    expect(lines.at(-1)).toMatch(/doesn't cover otherbench\.test/);
+
+    const e = renew(['otherbench.test'], 'e');
+    touch(40);
+    expect(watcher.check()).toBe(true);
+    expect(applied.map((f) => f.certPem)).toEqual([b.certPem, e.certPem]);
+  });
+
+  it("swaps a running HTTPS server's certificate for new connections", async () => {
+    const first = renew(['localhost'], 'a');
+    const server = createHttpsServer({ key: readFileSync(first.key, 'utf8'), cert: first.certPem }, (_req, res) => res.end('ok'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const served = (): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const socket = connect({ host: '127.0.0.1', port, servername: 'localhost', rejectUnauthorized: false }, () => {
+          const raw = socket.getPeerX509Certificate()?.fingerprint256 ?? '';
+          socket.end();
+          resolve(raw);
+        });
+        socket.on('error', reject);
+      });
+    try {
+      const watcher = new TlsFileWatcher({
+        certPath: first.cert,
+        keyPath: first.key,
+        hosts: ['localhost'],
+        apply: (f) => server.setSecureContext({ key: f.keyPem, cert: f.certPem }),
+        log: () => {},
+      });
+      expect(await served()).toBe(new X509Certificate(first.certPem).fingerprint256);
+
+      const second = renew(['localhost'], 'b');
+      touch(10);
+      expect(watcher.check()).toBe(true);
+      expect(await served()).toBe(new X509Certificate(second.certPem).fingerprint256);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 
