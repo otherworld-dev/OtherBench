@@ -133,6 +133,10 @@ describe('POST /api/schedules', () => {
       [{ rule: { cadence: 'cron', cron: '61 9 * * *' } }, /^"rule.cron": The minute field's "61" is out of range: 0 to 59.$/],
       [{ enabled: 'yes' }, /"enabled"/],
       [{ autoMode: 'yes' }, /"autoMode"/],
+      [{ timeLimitMinutes: 0 }, /"timeLimitMinutes"/],
+      [{ timeLimitMinutes: 1441 }, /"timeLimitMinutes"/],
+      [{ timeLimitMinutes: 2.5 }, /"timeLimitMinutes"/],
+      [{ timeLimitMinutes: '30' }, /"timeLimitMinutes"/],
     ];
     for (const [over, message] of cases) {
       const res = await send('POST', '', body(over));
@@ -221,6 +225,25 @@ describe('PATCH and DELETE /api/schedules/:id', () => {
     const off = (await (await send('PATCH', `/${made.id}`, { autoMode: false })).json()) as ScheduleView;
     expect(off).toMatchObject({ autoMode: false, warnings: refused });
     expect((await send('PATCH', `/${made.id}`, { autoMode: 1 })).status).toBe(400);
+  });
+
+  it('the time limit is 30 minutes unless given, null for no limit, and can be changed or taken off by an edit', async () => {
+    setup();
+    const made = await create();
+    expect(made.timeLimitMinutes).toBe(30);
+    expect((await create({ timeLimitMinutes: null })).timeLimitMinutes).toBeNull();
+    expect((await create({ timeLimitMinutes: 1440 })).timeLimitMinutes).toBe(1440);
+
+    const longer = (await (await send('PATCH', `/${made.id}`, { timeLimitMinutes: 120 })).json()) as ScheduleView;
+    expect(longer).toMatchObject({ timeLimitMinutes: 120, nextRunAt: made.nextRunAt });
+    const kept = (await (await send('PATCH', `/${made.id}`, { name: 'Daily' })).json()) as ScheduleView;
+    expect(kept.timeLimitMinutes).toBe(120);
+    const none = (await (await send('PATCH', `/${made.id}`, { timeLimitMinutes: null })).json()) as ScheduleView;
+    expect(none.timeLimitMinutes).toBeNull();
+    const bad = await send('PATCH', `/${made.id}`, { timeLimitMinutes: -5 });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe('"timeLimitMinutes" must be a whole number of minutes from 1 to 1440, or null for no limit.');
+    expect(container.store.schedules.get(made.id)!.timeLimitMinutes).toBeNull();
   });
 
   it('DELETE removes it', async () => {

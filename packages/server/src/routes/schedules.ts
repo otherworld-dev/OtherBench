@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import {
+  DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
   MAX_SCHEDULES,
   SCHEDULE_NAME_MAX,
   SCHEDULE_PROMPT_MAX,
@@ -9,6 +10,7 @@ import {
   isValidTimeZone,
   nextRunAt,
   parseRule,
+  parseTimeLimit,
   unattendedWarnings,
   type ScheduleRule,
   type ScheduleTarget,
@@ -26,6 +28,7 @@ interface ScheduleBody {
   rule?: unknown;
   enabled?: unknown;
   autoMode?: unknown;
+  timeLimitMinutes?: unknown;
 }
 
 /** The server machine's IANA zone, which schedules made now are stored in; UTC when the runtime can't say. */
@@ -45,6 +48,13 @@ function parsePrompt(value: unknown): string {
     throw new HTTPException(400, { message: `"prompt" must be 1 to ${SCHEDULE_PROMPT_MAX.toLocaleString('en-US')} characters.` });
   }
   return value;
+}
+
+/** Minutes, or null for no limit; left out on create it is 30. */
+function parseTimeLimitBody(value: unknown): number | null {
+  const limit = parseTimeLimit(value);
+  if (typeof limit === 'string') throw new HTTPException(400, { message: limit });
+  return limit;
 }
 
 function parseProfile(container: Container, value: unknown): string {
@@ -135,6 +145,7 @@ export function schedulesRoutes(container: Container): Hono {
     const rule = parseRuleBody(body.rule);
     const enabled = parseFlag('enabled', body.enabled, true);
     const autoMode = parseFlag('autoMode', body.autoMode, false);
+    const timeLimitMinutes = body.timeLimitMinutes === undefined ? DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES : parseTimeLimitBody(body.timeLimitMinutes);
     if (container.store.schedules.list().length >= MAX_SCHEDULES) {
       throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most OtherBench keeps. Delete one first.` });
     }
@@ -151,6 +162,7 @@ export function schedulesRoutes(container: Container): Hono {
       enabled,
       nextRunAt: enabled ? nextRunAt(rule, timezone, now) : null,
       autoMode,
+      timeLimitMinutes,
       createdAt: now,
       updatedAt: now,
     });
@@ -169,6 +181,8 @@ export function schedulesRoutes(container: Container): Hono {
     if (body.profileId !== undefined) patch.profileId = parseProfile(container, body.profileId);
     if (body.rule !== undefined) patch.rule = parseRuleBody(body.rule);
     if (body.autoMode !== undefined) patch.autoMode = parseFlag('autoMode', body.autoMode, current.autoMode);
+    // A run going now keeps the limit it started with.
+    if (body.timeLimitMinutes !== undefined) patch.timeLimitMinutes = parseTimeLimitBody(body.timeLimitMinutes);
     const enabled = parseFlag('enabled', body.enabled, current.enabled);
     patch.enabled = enabled;
     if (!enabled) {

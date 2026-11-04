@@ -204,7 +204,7 @@ describe('ScheduleService: when runs start', () => {
     expect(req.unattended).toBe(true);
     expect(req.autoMode).toBe(false);
     expect(lastUserText(req)).toBe(
-      '[Scheduled run "Weekly report": Monday 12 October 2026, 09:00 (Europe/London). This is the first run. Nobody is watching this run, so tool calls that need approval will be refused.]\n\nhello'
+      '[Scheduled run "Weekly report": Monday 12 October 2026, 09:00 (Europe/London). This is the first run. Nobody is watching this run, so tool calls that need approval will be refused. It is stopped if it is still going after 30 minutes.]\n\nhello'
     );
     const run = store.schedules.runs('s1')[0]!;
     expect(run).toMatchObject({ trigger: 'scheduled', status: 'running', dueAt: NINE, startedAt: NINE, chatId: 'chat-1', messageId: req.messageId });
@@ -273,9 +273,7 @@ describe('ScheduleService: when runs start', () => {
   });
 
   it('records a slot as not started when the previous run is still going, and moves on', async () => {
-    service.dispose();
-    service = build({ limits: { timeoutMs: 3 * 24 * HOUR } });
-    addSchedule('s1');
+    addSchedule('s1', { timeLimitMinutes: null });
     service.start();
     clock.advance(HOUR);
     await settle();
@@ -448,16 +446,17 @@ describe('ScheduleService: targets, endings and Run now', () => {
     expect(lastUserText(engine.requests[0]!)).toMatch(/^\[Run by hand from schedule "Weekly report": Monday 12 October 2026, 08:00 \(Europe\/London\)\./);
   });
 
-  it('stops a run after 30 minutes and records it as timed out', async () => {
+  it('stops a run at the default 30-minute limit and records it as timed out', async () => {
     addSchedule('s1');
     service.start();
     clock.advance(HOUR);
     await settle();
     await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(lastUserText(engine.requests[0]!)).toContain('It is stopped if it is still going after 30 minutes.]');
 
     clock.advance(30 * 60_000);
     await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('timed_out'));
-    expect(store.schedules.runs('s1')[0]!.detail).toBe('Stopped after 30 minutes.');
+    expect(store.schedules.runs('s1')[0]!.detail).toBe("Stopped at the schedule's time limit of 30 minutes.");
     expect(store.messages.get(engine.requests[0]!.messageId)!.status).toBe('cancelled');
   });
 
@@ -578,6 +577,130 @@ describe('ScheduleService: targets, endings and Run now', () => {
     await vi.waitFor(() => expect(store.messages.get(messageId)!.status).toBe('complete'));
     await settle();
     expect(scheduleEvents().map((e) => e.type)).toEqual(['schedule-run-started']);
+  });
+});
+
+describe("ScheduleService: a schedule's time limit", () => {
+  const MINUTE = 60_000;
+
+  /** Starts s1's 09:00 run and returns its reply's id. */
+  async function startRun(over: Partial<NewSchedule> = {}): Promise<string> {
+    addSchedule('s1', over);
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    return engine.requests[0]!.messageId;
+  }
+
+  it("stops the reply as Stop does at the schedule's own limit, not a moment before, and says so in the run, the chat and the finished event", async () => {
+    const cancel = vi.spyOn(runner, 'cancel');
+    const messageId = await startRun({ timeLimitMinutes: 10 });
+    engine.push(messageId, { type: 'text-delta', text: 'Working on it' });
+    await flush();
+    expect(lastUserText(engine.requests[0]!)).toContain('It is stopped if it is still going after 10 minutes.]');
+
+    clock.advance(10 * MINUTE - 1);
+    await settle();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(store.schedules.runs('s1')[0]!.status).toBe('running');
+
+    clock.advance(1);
+    const detail = "Stopped at the schedule's time limit of 10 minutes.";
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('timed_out'));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledWith(messageId, detail);
+    expect(engine.requests[0]!.signal.aborted).toBe(true);
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ detail, finishedAt: NINE + 10 * MINUTE });
+    const reply = store.messages.get(messageId)!;
+    expect(reply.status).toBe('cancelled');
+    expect(reply.parts.at(-1)).toEqual({ type: 'notice', text: detail });
+    expect(scheduleEvents().at(-1)).toMatchObject({ type: 'schedule-run-finished', status: 'timed_out', detail, chatId: 'chat-1', messageId });
+    expect(service.isRunning('s1')).toBe(false);
+  });
+
+  it('a run that finishes just before its limit is complete, and nothing is stopped later', async () => {
+    const cancel = vi.spyOn(runner, 'cancel');
+    const messageId = await startRun({ timeLimitMinutes: 10 });
+    clock.advance(10 * MINUTE - 1);
+    engine.push(messageId, FINISH);
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('complete'));
+
+    clock.advance(HOUR);
+    await settle();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ status: 'complete', detail: null, finishedAt: NINE + 10 * MINUTE - 1 });
+    expect(store.messages.get(messageId)!.parts.some((p) => p.type === 'notice')).toBe(false);
+  });
+
+  it('with no limit, a run goes on for as long as its reply does', async () => {
+    const cancel = vi.spyOn(runner, 'cancel');
+    const messageId = await startRun({ timeLimitMinutes: null, rule: { cadence: 'weekly', time: '09:00', weekdays: [1] } });
+    expect(lastUserText(engine.requests[0]!)).not.toContain('It is stopped if');
+    // The check timer only: no limit is armed for the run.
+    expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
+
+    clock.advance(25 * HOUR);
+    await settle();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(store.schedules.runs('s1')[0]!.status).toBe('running');
+
+    engine.push(messageId, FINISH);
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('complete'));
+  });
+
+  it('counts a wait the reply is held on (a card, a long command) and releases it', async () => {
+    let released = false;
+    const waiting: ChatEngine = {
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        engine.requests.push(req);
+        yield { type: 'text-delta', text: 'Asking first' };
+        // As a tool call parked on an approval card: only the reply's signal lets it go.
+        await new Promise<void>((resolve) => req.signal.addEventListener('abort', () => resolve(), { once: true }));
+        released = true;
+      },
+      listModels: async () => [],
+      testConnection: async () => ({ ok: true, message: 'ok', latencyMs: 0 }),
+    };
+    runner = new TurnRunner(store, waiting);
+    bus.attach(runner, store);
+    turnDeps = { ...turnDeps, turnRunner: runner, streamRegistry: new StreamRegistry(runner, store) };
+    service.dispose();
+    service = build();
+    await startRun({ timeLimitMinutes: 10 });
+
+    clock.advance(10 * MINUTE);
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('timed_out'));
+    expect(released).toBe(true);
+  });
+
+  it("the user's own Stop before the limit is recorded as stopped, with no time-limit notice", async () => {
+    const messageId = await startRun({ timeLimitMinutes: 10 });
+    clock.advance(5 * MINUTE);
+    runner.cancel(messageId);
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('cancelled'));
+    expect(store.schedules.runs('s1')[0]!.detail).toBeNull();
+    expect(store.messages.get(messageId)!.parts.some((p) => p.type === 'notice')).toBe(false);
+
+    clock.advance(10 * MINUTE);
+    await settle();
+    expect(store.schedules.runs('s1')[0]!.status).toBe('cancelled');
+  });
+
+  it('a run keeps the limit it started with when the schedule is edited during it', async () => {
+    const messageId = await startRun({ timeLimitMinutes: 10 });
+    store.schedules.update('s1', { timeLimitMinutes: null });
+    clock.advance(10 * MINUTE);
+    await vi.waitFor(() => expect(store.schedules.runs('s1')[0]!.status).toBe('timed_out'));
+    expect(store.messages.get(messageId)!.status).toBe('cancelled');
+  });
+
+  it('a run cut off by a restart is closed as an error, and no limit is left armed for it', () => {
+    addSchedule('s1', { nextRunAt: NINE + 24 * HOUR, timeLimitMinutes: 10 });
+    store.schedules.addRun({ id: 'r-old', scheduleId: 's1', trigger: 'scheduled', dueAt: T0 - 5 * MINUTE, startedAt: T0 - 5 * MINUTE, status: 'running' });
+    service.start();
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ id: 'r-old', status: 'error', detail: 'OtherBench stopped before this run finished.' });
+    expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
   });
 });
 
