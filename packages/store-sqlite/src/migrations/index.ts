@@ -36,6 +36,7 @@ import { MIGRATION_034_CLAUDE_ACCOUNTS } from './034-claude-accounts.js';
 import { MIGRATION_035_SCHEDULE_AUTO } from './035-schedule-auto.js';
 import { MIGRATION_036_MESSAGE_FINISHED_AT } from './036-message-finished-at.js';
 import { MIGRATION_037_REMOTE_SESSIONS } from './037-remote-sessions.js';
+import { MIGRATION_039_SCHEDULE_TIME_LIMIT } from './039-schedule-time-limit.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -78,6 +79,9 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_035_SCHEDULE_AUTO,
   MIGRATION_036_MESSAGE_FINISHED_AT,
   MIGRATION_037_REMOTE_SESSIONS,
+  // 038 is reserved for a branch not merged yet. It must reach dev before this one does: a database
+  // migrated to 39 would skip it for good, as only versions above user_version run.
+  MIGRATION_039_SCHEDULE_TIME_LIMIT,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
