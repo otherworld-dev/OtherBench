@@ -171,6 +171,22 @@ describe('AllAppsPage', () => {
     render(<AllAppsPage />);
     expect(screen.queryByTestId('all-apps-card-alpha')).toBeNull();
   });
+
+  it('a search shows a folded section unfolded, and the fold comes back when the search clears', async () => {
+    setup([app('alpha', { folderId: 'f1' }), app('beta')], [], [folder('f1', 'Business')]);
+    setGroupCollapsed('folder:f1', true);
+    render(<AllAppsPage />);
+    expect(screen.queryByTestId('all-apps-card-alpha')).toBeNull();
+    const u = user();
+    await u.type(screen.getByRole('searchbox'), 'alp');
+    expect(screen.getByTestId('all-apps-card-alpha')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Business/ }).getAttribute('aria-expanded')).toBe('true');
+    // The stored fold is untouched by the search.
+    expect(window.localStorage.getItem('otherbench.collapsedGroups')).toContain('folder:f1');
+    await u.clear(screen.getByRole('searchbox'));
+    expect(screen.queryByTestId('all-apps-card-alpha')).toBeNull();
+    expect(screen.getByRole('button', { name: /Business/ }).getAttribute('aria-expanded')).toBe('false');
+  });
 });
 
 describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Task 6)', () => {

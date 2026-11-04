@@ -27,6 +27,8 @@ interface SectionProps {
   /** Folders only: drag the heading to reorder folders; the heading takes another folder before or after it. */
   reorder?: ProjectReorder;
   fileDrop?: SectionFileDrop;
+  /** The page's search is on: the section shows unfolded so no match is hidden, and its stored fold comes back after. */
+  searching?: boolean;
   children: ReactNode;
 }
 
@@ -35,8 +37,10 @@ interface SectionProps {
  * uses, so it stays folded) over a grid or list of cards. Unfiled has no menu; an empty folder says so. A folder's
  * heading drags to reorder folders, and the whole section takes a card dragged from another section.
  */
-export function AllAppsSectionView({ section, layout, menu, rename, reorder, fileDrop, children }: SectionProps): JSX.Element {
-  const collapsed = useCollapsedGroups().has(section.key);
+export function AllAppsSectionView({ section, layout, menu, rename, reorder, fileDrop, searching = false, children }: SectionProps): JSX.Element {
+  // As the sidebar did: a search never leaves a match behind a fold, and the stored fold is untouched.
+  const folded = useCollapsedGroups().has(section.key);
+  const collapsed = !searching && folded;
   const name = section.folder?.name ?? 'Unfiled';
   const listId = `all-apps-${section.key}`;
   const draggable = !rename && reorder?.draggable === true;
@@ -96,7 +100,7 @@ export function AllAppsSectionView({ section, layout, menu, rename, reorder, fil
             aria-expanded={!collapsed}
             // Only while the list is there to point at.
             aria-controls={collapsed ? undefined : listId}
-            onClick={() => setGroupCollapsed(section.key, !collapsed)}
+            onClick={() => setGroupCollapsed(section.key, !folded)}
             draggable={draggable}
             onDragStart={
               draggable

@@ -90,6 +90,7 @@ export function AllAppsPage(): JSX.Element {
         key={section.key}
         section={section}
         layout={layout}
+        searching={searching}
         menu={folder ? { open: menuFolder?.id === folder.id, onOpen: (position, source) => o.openFolderMenu(folder.id, position, source) } : undefined}
         rename={
           folder && o.renamingFolderId === folder.id
