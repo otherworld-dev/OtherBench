@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -53,6 +53,28 @@ describe.skipIf(spawn === null)('a real terminal', () => {
     expect(alive(pid)).toBe(true);
     await manager.kill('live', t.id);
     await waitFor(() => !alive(pid), 5_000);
+  }, 30_000);
+
+  // As `npm run dev` does: a .cmd shim starts node, which starts the long-running node (shell > cmd > node > node).
+  // The last one is detached, so it has no console and isn't in node's own kill-on-close job: closing the ConPTY
+  // alone, or its parent dying, leaves it running. Only the tree kill ends it.
+  it.skipIf(process.platform !== 'win32')('kills a grandchild started through a .cmd shim', async () => {
+    writeFileSync(
+      join(dir, 'parent.js'),
+      `const c = require('child_process').spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });\n` +
+        `console.log('PARENT='+process.pid+'='); console.log('GRAND='+c.pid+'='); setInterval(()=>{},1000);\n`
+    );
+    writeFileSync(join(dir, 'shim.cmd'), '@echo off\r\nnode "%~dp0parent.js"\r\n');
+    const t = await manager.create('live', dir, { cols: 200, rows: 30 });
+    let out = '';
+    manager.attach('live', t.id, { onOutput: (d) => (out += d), onExit: () => {} });
+    // By full path: a cmd AutoRun entry can change the folder before it looks for the shim.
+    manager.input('live', t.id, `cmd /c "${join(dir, 'shim.cmd')}"\r`);
+    await waitFor(() => /PARENT=(\d+)=/.test(out) && /GRAND=(\d+)=/.test(out), 15_000);
+    const pids = [Number(/PARENT=(\d+)=/.exec(out)?.[1]), Number(/GRAND=(\d+)=/.exec(out)?.[1])];
+    expect(pids.every(alive)).toBe(true);
+    await manager.kill('live', t.id);
+    await waitFor(() => !pids.some(alive), 5_000);
   }, 30_000);
 });
 
