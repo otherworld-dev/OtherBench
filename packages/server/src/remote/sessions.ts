@@ -24,7 +24,7 @@ const digest = (token: string): string => createHash('sha256').update(token).dig
 const withoutHash = ({ tokenHash: _hash, ...session }: RemoteSession): Session => session;
 
 /**
- * Signed-in browsers, kept in the database (`remote_session`, migration 038)
+ * Signed-in browsers, kept in the database (`remote_session`, migration 037)
  * so a restart keeps them signed in. The table never syncs to a paired
  * machine. The cookie's token is never stored: only its SHA-256, so neither
  * the database file nor a heap dump hands out a usable cookie. A session is

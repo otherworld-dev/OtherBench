@@ -571,7 +571,7 @@ of work landed after that plan closed out:
       `web/e2e/remote-access.spec.ts` (g), whose server trusts 127.0.0.1 as
       a proxy so it can sign in from many forwarded addresses; its port is
       `OTHERBENCH_E2E_REMOTE_PORT` (default 4781).
-  - **Sessions** (`remote/sessions.ts`, migration 038, 2026-11-04). Kept in
+  - **Sessions** (`remote/sessions.ts`, migration 037, 2026-11-04). Kept in
     the database's `remote_session` table, so a restart keeps everyone
     signed in. A row holds the SHA-256 of the cookie's token (never the
     token), a random id of its own, when it was made, last seen and expires,

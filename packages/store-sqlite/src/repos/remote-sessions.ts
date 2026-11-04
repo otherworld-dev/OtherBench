@@ -15,7 +15,7 @@ function toSession(row: Record<string, unknown>): RemoteSession {
   };
 }
 
-/** Remote access's signed-in browsers (migration 038). Local: the table has no sync triggers. */
+/** Remote access's signed-in browsers (migration 037). Local: the table has no sync triggers. */
 export class SqliteRemoteSessionRepo implements RemoteSessionRepo {
   constructor(private readonly db: DatabaseSync) {}
 

@@ -6,9 +6,9 @@ import type { Migration } from './types.js';
 // and Sign out name a session by. Local to this machine: no hlc column and no
 // sync triggers (013's `syncTriggers`), so a session never reaches a paired
 // machine.
-export const MIGRATION_038_REMOTE_SESSIONS: Migration = {
-  version: 38,
-  name: '038-remote-sessions',
+export const MIGRATION_037_REMOTE_SESSIONS: Migration = {
+  version: 37,
+  name: '037-remote-sessions',
   sql: `
 CREATE TABLE remote_session (
   id TEXT PRIMARY KEY,

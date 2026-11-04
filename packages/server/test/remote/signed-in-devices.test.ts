@@ -16,7 +16,7 @@ import { forwardedApi } from '../../src/peer/forward.js';
 import type { PeerService } from '../../src/peer/service.js';
 import { FAST, from, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
 
-// Sessions kept in the database (migration 038) and Settings → Remote access's
+// Sessions kept in the database (migration 037) and Settings → Remote access's
 // signed-in devices: GET /api/auth/sessions and DELETE /api/auth/sessions/:id.
 
 const json = { 'Content-Type': 'application/json' };

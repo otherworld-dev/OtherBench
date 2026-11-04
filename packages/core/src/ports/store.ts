@@ -1084,7 +1084,7 @@ export interface ScheduleRepo {
 // --- remote sessions ---------------------------------------------------------
 
 /**
- * A browser signed in through remote access's sign-in mode (migration 038).
+ * A browser signed in through remote access's sign-in mode (migration 037).
  * Local to this machine, never synced. The cookie's token is kept only as its
  * SHA-256; `id` is a separate random id the devices list and Sign out use.
  */
@@ -1144,7 +1144,7 @@ export interface Store {
   audit: AuditRepo;
   /** Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): local, never synced. */
   schedules: ScheduleRepo;
-  /** Remote access's signed-in browsers (migration 038): local, never synced. */
+  /** Remote access's signed-in browsers (migration 037): local, never synced. */
   remoteSessions: RemoteSessionRepo;
   /**
    * Runs `fn` as one unit: SQLite commits everything it writes together, or
