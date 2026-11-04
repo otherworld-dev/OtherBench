@@ -684,6 +684,21 @@ export function runStoreContract(
         expect(store.messages.latestId('no-such-chat')).toBeNull();
       });
 
+      it("outline lists a chat's messages oldest first, by time then id, as id, parent and role", () => {
+        const chatId = seedChat(store, 'chat-a').chat.id;
+        const otherId = seedChat(store, 'chat-b').chat.id;
+        expect(store.messages.outline(chatId)).toEqual([]);
+        store.messages.create(makeMessageInput({ id: 'm1', chatId, role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'm3', chatId, parentId: 'm1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'm2', chatId, parentId: 'm1', role: 'assistant', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'x1', chatId: otherId, role: 'user', createdAt: 5 }));
+        expect(store.messages.outline(chatId)).toEqual([
+          { id: 'm1', parentId: null, role: 'user' },
+          { id: 'm2', parentId: 'm1', role: 'assistant' },
+          { id: 'm3', parentId: 'm1', role: 'assistant' },
+        ]);
+      });
+
       it('a message records the machine that wrote it, defaulting to this one', () => {
         const chatId = seedChat(store, 'chat-a').chat.id;
         const self = store.nodes.self().id;

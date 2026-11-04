@@ -15,6 +15,24 @@ export interface ImportFailure {
   error: string;
 }
 
+/**
+ * A chat already here that the source has new messages for (spec
+ * 2026-10-09-claude-import-design, re-imports): how many go in and how
+ * (`NewMessagesMode` in `domain/import-refresh.ts`). `append`: on the chat's
+ * own branch, which it then opens on; `branch`: the chat was carried on here,
+ * so they go beside the user's messages as a branch to switch to, and the
+ * chat stays where it is. `skipped`: new messages that can't be placed and
+ * are left out. In the preview these are what would happen; in the report,
+ * what did.
+ */
+export interface ChatRefresh {
+  id: string;
+  title: string;
+  messages: number;
+  mode: 'append' | 'branch';
+  skipped: number;
+}
+
 export interface ImportPreview {
   /** The folder checked; '' for none (just this machine's Cowork sessions). */
   folder: string;
@@ -24,10 +42,11 @@ export interface ImportPreview {
   sources: string[];
   /**
    * `updates`: already imported, and given the messages they gained since (or images the last import left as notes).
-   * `newer`: already imported and carried on here, with messages since that the import won't add.
+   * `newer`: already imported, with messages since that can't be placed, so the import won't add them.
+   * `refreshes`: each chat already imported that gets new messages, or has some it can't place.
    * `filed`: chats claude.ai's chat list puts in a project (when the list is in the folder).
    */
-  chats: { total: number; existing: number; updates: number; newer: number; filed: number; messages: number; branched: number };
+  chats: { total: number; existing: number; updates: number; newer: number; refreshes: ChatRefresh[]; filed: number; messages: number; branched: number };
   /** Whether claude.ai's chat list is in the folder, and where to get it (null when the export doesn't say whose it is). */
   chatList: { found: boolean; url: string | null };
   /** The Cowork sessions on this machine, or null when there are none. */
@@ -57,6 +76,8 @@ export interface CoworkPreview {
   existing: number;
   /** Already imported, and given the messages they gained since or the images the last import left as notes. */
   updates: number;
+  /** Each session already imported that gets new messages, or has some it can't place. */
+  refreshes: ChatRefresh[];
   messages: number;
   images: number;
   /** Cowork's spaces, whose names only claude.ai knows: each with a few of its sessions' titles, so the user can tell which is which. */
@@ -66,12 +87,13 @@ export interface CoworkPreview {
 export interface ImportReport {
   /**
    * `updated`: already here, and given the messages they gained since or the images the last import left as notes.
-   * `newer`: already here and carried on in OtherBench, with messages since that weren't added.
+   * `newer`: already here, with messages since that couldn't be placed and weren't added.
+   * `refreshes`: each chat already here that was given new messages, or has some that couldn't be placed.
    * `filed`: chats put in a project, new or already here. `messages`, `images` and `files` (saved from claude.ai) count what was added.
    */
-  chats: { imported: number; existing: number; updated: number; newer: number; filed: number; messages: number; files: number; failed: ImportFailure[] };
+  chats: { imported: number; existing: number; updated: number; newer: number; refreshes: ChatRefresh[]; filed: number; messages: number; files: number; failed: ImportFailure[] };
   /** Null when Cowork wasn't imported. */
-  cowork: { imported: number; existing: number; updated: number; filed: number; messages: number; images: number; failed: ImportFailure[] } | null;
+  cowork: { imported: number; existing: number; updated: number; refreshes: ChatRefresh[]; filed: number; messages: number; images: number; failed: ImportFailure[] } | null;
   emptyChats: number;
   artifacts: { imported: number; existing: number; failed: ImportFailure[] };
   projects: { created: string[]; merged: string[]; existing: string[]; failed: ImportFailure[]; skipped: number };

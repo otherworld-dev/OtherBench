@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { asksUser, QUESTION_TAIL } from '@otherbench/core/domain/overview.js';
-import type { MessageRepo } from '@otherbench/core/ports/store.js';
+import type { MessageOutline, MessageRepo } from '@otherbench/core/ports/store.js';
 import type { ChatHead } from '@otherbench/core/types/overview.js';
 import type {
   CanonMessage,
@@ -333,6 +333,11 @@ export class SqliteMessageRepo implements MessageRepo {
   latestId(chatId: string): string | null {
     const row = this.db.prepare('SELECT id FROM message WHERE chat_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(chatId) as { id: string } | undefined;
     return row?.id ?? null;
+  }
+
+  outline(chatId: string): MessageOutline[] {
+    const rows = this.db.prepare('SELECT id, parent_id, role FROM message WHERE chat_id = ? ORDER BY created_at ASC, id ASC').all(chatId) as { id: string; parent_id: string | null; role: Role }[];
+    return rows.map((r) => ({ id: r.id, parentId: r.parent_id, role: r.role }));
   }
 
   latestBySession(chatId: string, sessionId: string): CanonMessage | null {
