@@ -3,14 +3,13 @@ import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
- * App folders in the Code sidebar (spec docs/superpowers/specs/2026-10-25-app-folders-design.md):
- * make a folder, file an app into it by really dragging its heading, fold the
- * folder, and find it still folded with its count after a reload; file a second
- * app through the menu's Move to folder…; delete the folder and find both apps
- * back at the top level.
+ * App folders on the All apps page (spec docs/superpowers/specs/2026-10-25-app-folders-design.md,
+ * moved there by 2026-11-04-open-apps-design.md): make a folder, file an app into it by really
+ * dragging its card, fold the folder, and find it still folded with its count after a reload; file a
+ * second app through the card menu's Move to folder…; delete the folder and find both apps Unfiled.
  *
- * The apps are created through the API, as the native folder picker can't be
- * driven. Their folders needn't exist: nothing here reads them.
+ * The apps are created through the API, as the native folder picker can't be driven. Their folders
+ * needn't exist: nothing here reads them.
  */
 test('a folder holds dragged and menu-filed apps, stays folded across a reload, and deleting it frees its apps', async ({ page, request }) => {
   const suffix = randomUUID().slice(0, 8);
@@ -29,49 +28,50 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: 'Chats' });
   await nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' }).click();
-  await expect(nav.getByTestId(`group-${ids.one}`)).toBeVisible();
-  await expect(nav.getByTestId(`group-${ids.two}`)).toBeVisible();
+  await nav.getByTestId('all-apps-entry').click();
+  const allApps = page.getByTestId('all-apps-page');
+  const card = (id: string) => allApps.getByTestId(`all-apps-card-${id}`);
+  await expect(card(ids.one)).toBeVisible();
+  await expect(card(ids.two)).toBeVisible();
 
   // + New folder opens its name for editing.
-  await nav.getByRole('button', { name: 'New folder', exact: true }).click();
-  const nameBox = nav.getByRole('textbox');
+  await allApps.getByRole('button', { name: '+ New folder' }).click();
+  const nameBox = allApps.getByRole('textbox', { name: 'Folder name' });
   await expect(nameBox).toBeVisible();
   await nameBox.fill(folderName);
   await nameBox.press('Enter');
-  const heading = nav.locator('[data-testid^="group-heading-folder:"]').filter({ hasText: folderName });
+  const heading = allApps.locator('[data-testid^="all-apps-heading-folder:"]').filter({ hasText: folderName });
   await expect(heading).toBeVisible();
-  const folderKey = (await heading.getAttribute('data-testid'))!.replace(/^group-heading-/, '');
+  const folderKey = (await heading.getAttribute('data-testid'))!.replace(/^all-apps-heading-/, '');
   const folderId = folderKey.replace(/^folder:/, '');
-  const folderGroup = nav.getByTestId(`group-${folderKey}`);
+  const folderSection = allApps.getByTestId(`all-apps-section-${folderKey}`);
 
-  // Drag the first app's heading onto the folder's (real HTML5 drag-and-drop).
-  const appHeading = (id: string) => nav.getByTestId(`group-heading-${id}`);
-  await appHeading(ids.one).locator('[data-heading-main]').dragTo(heading);
-  await expect(folderGroup.getByTestId(`group-${ids.one}`)).toBeVisible();
-  await expect(nav.getByTestId(`group-count-${folderKey}`)).toHaveText('1');
-  await expect(nav.getByTestId(`group-${ids.two}`)).toBeVisible();
-  await expect(folderGroup.getByTestId(`group-${ids.two}`)).toHaveCount(0);
+  // Drag the first app's card onto the folder's section (real HTML5 drag-and-drop).
+  await card(ids.one).dragTo(folderSection);
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toBeVisible();
+  await expect(heading).toContainText('1');
+  await expect(card(ids.two)).toBeVisible();
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.two}`)).toHaveCount(0);
 
   // Fold it; the fold survives a reload, with the count still showing.
-  // A folder has no page to open, so its name button is the fold toggle.
-  const toggle = heading.locator('[data-heading-main]');
+  const toggle = heading.getByRole('button').first();
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(folderGroup.getByTestId(`group-${ids.one}`)).toHaveCount(0);
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toHaveCount(0);
   await page.reload();
   await expect(nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(nav.getByTestId(`group-count-${folderKey}`)).toHaveText('1');
-  await expect(folderGroup.getByTestId(`group-${ids.one}`)).toHaveCount(0);
+  await expect(heading).toContainText('1');
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toHaveCount(0);
   await toggle.click();
-  await expect(folderGroup.getByTestId(`group-${ids.one}`)).toBeVisible();
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toBeVisible();
 
   // The other path: the second app's menu, Move to folder….
-  await appHeading(ids.two).getByRole('button', { name: 'App actions' }).click();
+  await card(ids.two).getByRole('button', { name: 'App actions' }).click();
   await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
   await page.getByRole('menuitemradio', { name: folderName }).click();
-  await expect(folderGroup.getByTestId(`group-${ids.two}`)).toBeVisible();
-  await expect(nav.getByTestId(`group-count-${folderKey}`)).toHaveText('2');
+  await expect(folderSection.getByTestId(`all-apps-card-${ids.two}`)).toBeVisible();
+  await expect(heading).toContainText('2');
 
   // Deleting the folder frees its apps and deletes none of them.
   await heading.getByRole('button', { name: 'Folder actions' }).click();
@@ -79,9 +79,10 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toContainText('Its apps move out of the folder; nothing is deleted.');
   await dialog.getByRole('button', { name: 'Delete' }).click();
-  await expect(nav.getByTestId(`group-${folderKey}`)).toHaveCount(0);
+  await expect(allApps.getByTestId(`all-apps-section-${folderKey}`)).toHaveCount(0);
+  const unfiled = allApps.getByTestId('all-apps-section-folder:unfiled');
   for (const key of ['one', 'two'] as const) {
-    await expect(nav.getByTestId(`group-${ids[key]}`)).toBeVisible();
+    await expect(unfiled.getByTestId(`all-apps-card-${ids[key]}`)).toBeVisible();
   }
   const apps = (await (await request.get(`${BASE_URL}/api/apps`)).json()) as { id: string; folderId: string | null }[];
   for (const key of ['one', 'two'] as const) {
