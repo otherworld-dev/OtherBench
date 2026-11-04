@@ -6,13 +6,16 @@
 // Reads GITHUB_REF, GITHUB_RUN_NUMBER and GITHUB_SHA, and uses `gh` (GH_TOKEN).
 // Full releases (`vX.Y.Z` tags) are marked latest, which is the feed full-channel
 // machines read. Betas are pre-releases; the beta feed is the `latest.json` of
-// the fixed pre-release `beta-channel`, only ever replaced by a higher version.
+// the fixed pre-release `beta-channel`, never moved to a lower version.
+// Publishing again for a version already released (a re-run of the job)
+// reuses its release and replaces its files and the feed (github.mjs).
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shouldReplaceFeed, updaterManifest } from './manifest.mjs';
+import { ghReleases, publishRelease } from './github.mjs';
+import { updaterManifest } from './manifest.mjs';
 import { parseSemver } from './semver.mjs';
 import { releaseVersion } from './version.mjs';
 
@@ -20,7 +23,6 @@ const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const packageJson = join(desktopDir, 'package.json');
 const nsisDir = join(desktopDir, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
 const repo = process.env.GITHUB_REPOSITORY || 'otherworld-dev/OtherBench';
-const BETA_FEED_TAG = 'beta-channel';
 
 /** @param {string[]} args */
 function gh(args) {
@@ -50,19 +52,6 @@ function version() {
   console.log(next);
 }
 
-/** The feed's version now, or null when the beta feed has none yet. @param {string} dir */
-function currentBetaFeed(dir) {
-  try {
-    gh(['release', 'download', BETA_FEED_TAG, '-R', repo, '-p', 'latest.json', '-D', dir, '--clobber']);
-  } catch {
-    return null;
-  }
-  const file = join(dir, 'latest.json');
-  if (!existsSync(file)) return null;
-  const v = JSON.parse(readFileSync(file, 'utf8')).version;
-  return typeof v === 'string' && parseSemver(v) ? v : null;
-}
-
 function publish() {
   const v = readPackage().version;
   const beta = /** @type {import('./semver.mjs').Semver} */ (parseSemver(v)).pre.length > 0;
@@ -86,32 +75,14 @@ function publish() {
       }),
       null,
       2
-    )}\n`
+    )}
+`
   );
 
-  gh([
-    'release', 'create', tag, exe, sig, manifest, '-R', repo, '--target', env('GITHUB_SHA'),
-    '--title', `OtherBench ${v}`, '--notes', notes,
-    ...(beta ? ['--prerelease', '--latest=false'] : ['--latest']),
-  ]);
-  console.log(`published ${tag}`);
-  if (!beta) return;
-
-  try {
-    gh(['release', 'view', BETA_FEED_TAG, '-R', repo, '--json', 'tagName']);
-  } catch {
-    gh([
-      'release', 'create', BETA_FEED_TAG, '-R', repo, '--target', env('GITHUB_SHA'), '--prerelease', '--latest=false',
-      '--title', 'Beta channel', '--notes', 'Holds the beta updater feed (latest.json). Not a release: install a vX.Y.Z-beta.N release instead.',
-    ]);
-  }
-  const current = currentBetaFeed(mkdtempSync(join(tmpdir(), 'otherbench-feed-')));
-  if (!shouldReplaceFeed(current, v)) {
-    console.log(`beta feed stays on ${current}, which is newer than ${v}`);
-    return;
-  }
-  gh(['release', 'upload', BETA_FEED_TAG, manifest, '-R', repo, '--clobber']);
-  console.log(`beta feed now ${v}${current ? ` (was ${current})` : ''}`);
+  publishRelease(ghReleases(gh, repo), {
+    tag, version: v, beta, target: env('GITHUB_SHA'), title: `OtherBench ${v}`, notes,
+    installer: exe, signature: sig, manifest, log: (line) => console.log(line),
+  });
 }
 
 const command = process.argv[2];
