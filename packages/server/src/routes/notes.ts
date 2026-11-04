@@ -5,7 +5,7 @@ import type { NoteAttachment } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
 import { requireNonEmptyString } from '../validation.js';
-import { contextCommandOf, getChatOrThrow, parseProfileIds, workspaceRefusal } from './turns.js';
+import { contextCommandOf, getChatOrThrow, isPlainObject, parseProfileIds, workspaceRefusal } from './turns.js';
 
 interface NoteBody {
   text?: unknown;
@@ -13,10 +13,6 @@ interface NoteBody {
   parentId?: unknown;
   profileIds?: unknown;
   clientId?: unknown;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The message a note follows: a message of this chat, or null for none. */

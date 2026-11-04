@@ -47,7 +47,7 @@ export const NOTES_WAITING = 'Messages you sent are still waiting for this reply
 /** Refused when a compact's reply is regenerated: it compacted a session that has moved on since. */
 export const COMPACT_NO_REGENERATE = "A compact can't be retried in place. Send /compact again.";
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
