@@ -12,7 +12,7 @@ import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
 import { useChatCommands } from '../state/useChatCommands.js';
-import { parseContextCommand, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { isCommandText, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
@@ -31,13 +31,6 @@ function keepsFocus(el: Element | null): boolean {
   if (el.isContentEditable || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
   if (el instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file'].includes(el.type)) return true;
   return el.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null;
-}
-
-/** Whether typed text is a command: /clear or /compact (and their aliases), or a Claude Code command the `/` menu offers. */
-function isCommandText(text: string, commands: CommandRow[]): boolean {
-  if (parseContextCommand(text)) return true;
-  const name = /^\/(\S+)/.exec(text.trim())?.[1]?.toLowerCase();
-  return name !== undefined && commands.some((c) => [c.name, ...c.aliases].some((n) => n.toLowerCase() === name));
 }
 
 /**
@@ -240,6 +233,16 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       ...prev,
       ...taken.flatMap((n) => n.attachments).filter((a) => !prev.some((p) => p.id === a.attachmentId)).map((a) => ({ id: a.attachmentId, filename: a.filename, mime: a.mime })),
     ]);
+    // A note doesn't carry its attachments' sizes; unsent again, they are in the chat's list.
+    if (taken.some((n) => n.attachments.length > 0)) {
+      Promise.resolve(api.attachments.list(chat.id))
+        .then((list) => {
+          if (!Array.isArray(list)) return;
+          const sizes = new Map(list.map((a) => [a.id, a.size]));
+          setAttachments((now) => now.map((a) => (a.size === undefined && sizes.has(a.id) ? { ...a, size: sizes.get(a.id) } : a)));
+        })
+        .catch((err: unknown) => console.error(`[otherbench-web] failed to load the sizes of returned attachments for chat ${chat.id}:`, err));
+    }
     if (taken.some((n) => !n.takenBack)) setNoteReturned(true);
     // Taken back: the button that did it goes with its note, so the cursor comes here rather than to the page.
     if (taken.some((n) => n.takenBack)) {
@@ -488,7 +491,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     returnedAttachmentIds.current.clear();
     try {
       // The chat went quiet between the click and the server: a normal message after all.
-      if (!busy || !(await sendNote(trimmed))) await sendTurn(trimmed);
+      if (!busy || !(await sendNote(trimmed))) await sendTurnOrNote(trimmed);
       // Only what was sent: a note that came back meanwhile went after it, and stays, chips included.
       const sentIds = new Set(attachments.map((a) => a.id).filter((id) => !returnedAttachmentIds.current.has(id)));
       setText((now) => (now.startsWith(text) ? now.slice(text.length).trimStart() : now));
@@ -521,6 +524,15 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.kind === 'idle') return false;
       throw err;
+    }
+  }
+
+  /** Sends the box as a turn, or as a note when notes this box hadn't heard of are waiting (another tab's, or a reply just started). */
+  async function sendTurnOrNote(trimmed: string): Promise<void> {
+    try {
+      await sendTurn(trimmed);
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 409 && err.kind === 'notes-waiting') || !(await sendNote(trimmed))) throw err;
     }
   }
 
