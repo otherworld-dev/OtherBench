@@ -63,6 +63,11 @@ function offeredWhileReconnecting(client: McpClient): boolean {
  * Also owns sign-in state (spec 2026-10-12-mcp-oauth-design §4): one
  * `McpOAuthStore`, and a background `OtherBenchOAuthProvider` on every http
  * connection without a fixed Authorization header.
+ *
+ * `onChange` hears whenever `health()` may have changed: a client's status or
+ * tool list, a client torn down, a sign-in started, cancelled or finished, and
+ * every `sync()` (null: any server, as the routes write a row and then sync).
+ * The server turns it into the `mcp-changed` app event.
  */
 export class McpServerManager {
   private readonly clients = new Map<string, McpClient>();
@@ -76,6 +81,7 @@ export class McpServerManager {
    * to change, or connect it twice. The owner connects it itself.
    */
   private readonly busy = new Set<string>();
+  private readonly changeListeners = new Set<(serverId: string | null) => void>();
 
   constructor(
     private readonly store: Store,
@@ -91,8 +97,34 @@ export class McpServerManager {
     });
   }
 
+  /** Calls `listener` whenever a server's health may have changed (`serverId` null: any of them). Returns the unsubscribe. */
+  onChange(listener: (serverId: string | null) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
+  }
+
+  private changed(serverId: string | null): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener(serverId);
+      } catch (err) {
+        console.error('[McpServerManager] a change listener threw:', err);
+      }
+    }
+  }
+
   /** Takes no lock, so a caller holding a server's lock may call it; servers being reconfigured (`busy`) are skipped. */
   async sync(): Promise<void> {
+    try {
+      await this.syncRows();
+    } finally {
+      this.changed(null);
+    }
+  }
+
+  private async syncRows(): Promise<void> {
     const rows = this.store.mcpServers.list();
     const rowById = new Map(rows.map((r) => [r.id, r]));
 
@@ -219,15 +251,24 @@ export class McpServerManager {
     const row = this.store.mcpServers.get(id);
     if (!row) throw new SignInError(404, `MCP server "${id}" not found.`);
     const headers = await this.resolveSecretRefs(row.headerRefs);
-    return this.signIns.start(row, redirectUri, headers);
+    try {
+      return await this.signIns.start(row, redirectUri, headers);
+    } finally {
+      this.changed(id);
+    }
   }
 
   /** Finishes a sign-in (the callback, or paste-back with `serverId`), then reconnects the server if it is enabled. */
   async completeSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
     // The flow is found first (and used up) without the lock, to learn which server's lock to take; the token exchange and save run under it.
     const serverId = this.signIns.serverOf(params.state);
-    if (serverId === null) return this.finishSignIn(params);
-    return this.withLock(serverId, () => this.finishSignIn(params));
+    try {
+      if (serverId === null) return await this.finishSignIn(params);
+      return await this.withLock(serverId, () => this.finishSignIn(params));
+    } finally {
+      // Finished or failed, it's no longer pending; a failure leaves its error to show.
+      this.changed(serverId);
+    }
   }
 
   private async finishSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
@@ -239,6 +280,7 @@ export class McpServerManager {
 
   cancelSignIn(id: string): void {
     this.signIns.cancel(id);
+    this.changed(id);
   }
 
   /**
@@ -261,6 +303,7 @@ export class McpServerManager {
       this.signIns.forget(id);
       await this.oauth.forget(id, opts);
     });
+    this.changed(id);
   }
 
   /**
@@ -350,6 +393,7 @@ export class McpServerManager {
     } catch (err) {
       this.store.mcpServers.update(row.id, { status: 'error' });
       console.error(`[McpServerManager] "${row.name}" (${row.id}) is misconfigured, not connecting:`, err);
+      this.changed(row.id);
       return;
     }
     // While the secrets were read, someone else connected it, or a reconfigure took it over.
@@ -362,6 +406,7 @@ export class McpServerManager {
         status: persistedStatus(status),
         ...(status === 'ok' ? { toolsCache: client.tools } : {}),
       });
+      this.changed(row.id);
     });
     this.unsubscribes.set(row.id, unsubscribe);
     const connecting = client.connect();
@@ -371,7 +416,8 @@ export class McpServerManager {
   private teardown(id: string): void {
     this.unsubscribes.get(id)?.();
     this.unsubscribes.delete(id);
-    this.clients.delete(id);
+    // Health falls back to the row's status now.
+    if (this.clients.delete(id)) this.changed(id);
   }
 
   private async resolveTransportConfig(row: McpServer): Promise<McpTransportConfig> {

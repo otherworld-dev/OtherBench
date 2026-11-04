@@ -375,7 +375,10 @@ of work landed after that plan closed out:
   chats it moved. Posting a turn now sets the chat head to the new user
   message server-side, so the turn's chat-updated event never carries a
   stale head. The web app subscribes once (`useAppEvents`) and keeps chats
-  and `selectPendingApprovalCount` current.
+  and `selectPendingApprovalCount` current. The Inspector's MCP, grants and
+  audit sections are fed from the same stream (`mcp-changed`,
+  `grants-changed`, `audit-changed`); see "Inspector and MCP health are
+  pushed" under Known gaps.
 - **Desktop notifications** (#775, Task 38). While the window isn't focused,
   a finished or failed reply and a tool call needing approval raise a native
   notification titled with the chat, once per message or request
@@ -768,8 +771,10 @@ panel under `packages/web/src/views/settings/`:
   checklist).
 - **MCP Servers** (`McpServersPanel.tsx`) — full CRUD (create/edit/delete)
   for stdio and HTTP servers, env vars and headers (write-only, same pattern
-  as connection API keys), and live health via the same 4-second poll the
-  Inspector uses (`usePolled`, `packages/web/src/lib/usePolled.ts`).
+  as connection API keys), and live health read the same way as the
+  Inspector's: once, then again on each `mcp-changed` app event and each
+  reconnect (`useLiveData`, `packages/web/src/lib/useLiveData.ts`), and at
+  once after the panel's own actions.
 - **Features** (`FeaturesPanel.tsx`) — turns GitHub and Nextcloud on or off
   on this machine (`githubEnabled`/`nextcloudEnabled` in `app_setting`, never
   synced). Off hides every surface that uses it (Issues, the Overview inbox,
@@ -2247,12 +2252,27 @@ this on startup.
   repeating it here because it's the sharpest instance of "narrowed, not
   closed": Node has no fd-based `readdir`, so this one is structural, not a
   matter of writing a tighter check.
-- **The Inspector (and the Settings > MCP Servers panel) poll every 4s
-  rather than pushing.** Deliberate, per `Inspector.tsx`'s own comment: MCP
-  health, grants, and the audit trail each change on a different, unrelated
-  timeline with no existing push channel to piggyback on, unlike the thread
-  itself (SSE-driven). A Revoke action removes its row optimistically so it
-  doesn't *look* laggy, but the other sections can be up to 4s stale.
+- **Inspector and MCP health are pushed, not polled.** The Inspector's MCP
+  servers, Tool grants and Audit trail sections, and Settings > MCP servers,
+  no longer poll every 4 s. The server announces changes on the app-wide
+  `GET /api/events` stream, with no new connection: `mcp-changed`
+  (`serverId`, or null for any) from `McpServerManager.onChange` (a client's
+  status or tool list, a client torn down, a sign-in started, cancelled or
+  finished, and every `sync()`, which the routes call after each write);
+  `grants-changed` (`chatId`, null for an "always" grant) and
+  `audit-changed` (`chatId`) from the store's grant and audit repos being
+  wrapped like the chat repo (`withStoreEvents`), so the broker's grants, a
+  used-up "once" grant and Revoke are all covered. The payloads carry ids
+  only; the web re-reads the section (`useLiveData`), 200 ms after the last
+  of a burst but at most 1 s after its first, and re-reads all three on
+  every `hello`, so a change missed
+  while the stream was down still shows. There is no safety poll: every
+  change comes from this process. Revoke still removes its row at once. The
+  audit trail's "Ns ago" times are redrawn every 10 s without a fetch. What
+  is left: a pending MCP sign-in that runs out of time ends with no event,
+  so Settings > MCP servers still checks once a second while one is pending
+  (`McpSignIn.tsx`); and `/api/events` isn't on the peer listener, so none
+  of these events reaches a paired machine.
 - **An accepted upload is held in memory, not streamed to disk.** The 25MB
   cap now holds while the body is read (see Attachments above), so an
   oversized upload is refused about a megabyte past the cap. An upload

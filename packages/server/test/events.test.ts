@@ -13,7 +13,7 @@ import { McpServerManager } from '@otherbench/tools/mcp/manager.js';
 import { OtherBenchToolProvider } from '@otherbench/tools/provider.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
-import { AppEventBus, markUnreadOnFinish, withStoreEvents } from '../src/stream/events.js';
+import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { sseStream } from '../src/stream/sse.js';
 
@@ -52,6 +52,7 @@ function build(engine: ChatEngine): void {
   const turnRunner = new TurnRunner(store, engine, { toolProvider });
   events.attach(turnRunner, store);
   markUnreadOnFinish(events, store);
+  announceMcpChanges(events, mcpManager);
   container = {
     store, events, secrets, engine, registry: {} as never, toolProvider, mcpManager, turnRunner,
     // A real blob store: deleting a chat sweeps blobs.
@@ -300,6 +301,85 @@ describe('app-wide events', () => {
     build(new FakeChatEngine([]));
     await app().request('/api/apps');
     await app().request('/api/app-folders');
+    expect(seen).toEqual([]);
+  });
+
+  it('every grant made, changed, used up or revoked announces grants-changed with its chat, or null for an always grant', async () => {
+    build(new FakeChatEngine([]));
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    seen.length = 0;
+    const grant = { profileId: 'profile-1', toolName: 'write_file', source: 'fs', constraint: null, expiresAt: null } as const;
+
+    container.store.grants.create({ ...grant, id: 'g-chat', chatId: 'chat-1', scope: 'chat' });
+    container.store.grants.create({ ...grant, id: 'g-always', chatId: null, scope: 'always' });
+    container.store.grants.update('g-chat', { expiresAt: 5 });
+    expect((await app().request('/api/grants/g-chat', { method: 'DELETE' })).status).toBe(204);
+    expect((await app().request('/api/grants/g-always', { method: 'DELETE' })).status).toBe(204);
+
+    expect(seen).toEqual([
+      { type: 'grants-changed', chatId: 'chat-1' },
+      { type: 'grants-changed', chatId: null },
+      { type: 'grants-changed', chatId: 'chat-1' },
+      { type: 'grants-changed', chatId: 'chat-1' },
+      { type: 'grants-changed', chatId: null },
+    ]);
+  });
+
+  it('a gated tool call announces audit-changed for its chat, and an approval for this chat announces its grant', async () => {
+    const hanging = hangingEngine();
+    build(hanging.engine);
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null });
+    const { assistantMessageIds } = (await (await post('/api/chats/chat-1/turns', { parts: [{ type: 'text', text: 'write' }], profileIds: ['profile-1'] })).json()) as {
+      assistantMessageIds: string[];
+    };
+    const messageId = assistantMessageIds[0]!;
+    const writeFile = hanging.requests[0]!.tools.find((t) => t.name === 'write_file')!;
+    const running = writeFile.execute(
+      { path: 'note.txt', content: 'x' },
+      { chatId: 'chat-1', messageId, profileId: 'profile-1', workspaceRoot: ws, signal: new AbortController().signal }
+    );
+    await flush();
+    const requestId = (seen.find((e) => e.type === 'approval-requested') as { requestId: string }).requestId;
+    expect(seen.some((e) => e.type === 'audit-changed')).toBe(false);
+
+    await post(`/api/approvals/${requestId}/resolve`, { choice: 'chat' });
+    await running;
+
+    expect(seen).toContainEqual({ type: 'grants-changed', chatId: 'chat-1' });
+    expect(seen).toContainEqual({ type: 'audit-changed', chatId: 'chat-1' });
+    expect(container.store.audit.list('chat-1')).toHaveLength(1);
+    container.turnRunner.cancel(messageId);
+  });
+
+  it('adding, editing and deleting an MCP server announces mcp-changed, and the events stream carries it', async () => {
+    build(new FakeChatEngine([]));
+    const stream = await app().request('/api/events');
+    const reader = stream.body!.getReader();
+    await reader.read(); // the hello
+
+    const created = await post('/api/mcp-servers', { name: 'Off', transport: 'stdio', command: 'nothing', enabled: false });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    expect(seen.filter((e) => e.type === 'mcp-changed')).not.toHaveLength(0);
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('"type":"mcp-changed"');
+    await reader.cancel();
+
+    seen.length = 0;
+    await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Renamed' }) });
+    expect(seen.some((e) => e.type === 'mcp-changed')).toBe(true);
+
+    seen.length = 0;
+    await app().request(`/api/mcp-servers/${id}`, { method: 'DELETE' });
+    expect(seen.some((e) => e.type === 'mcp-changed')).toBe(true);
+  });
+
+  it('reading grants, the audit trail and MCP health announces nothing', async () => {
+    build(new FakeChatEngine([]));
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    seen.length = 0;
+    await app().request('/api/chats/chat-1/grants');
+    await app().request('/api/chats/chat-1/audit');
+    await app().request('/api/mcp-servers');
     expect(seen).toEqual([]);
   });
 

@@ -7,6 +7,8 @@ import type { MessageStatus } from './messages.js';
  * opposed to one chat's turn stream. `GET /api/events` sends them so every
  * window (and the tray) stays current without polling. `peer-status` and
  * `sync-applied` are declared for the sync milestones and not emitted yet.
+ * None of them reaches a paired machine: `/api/events` isn't on the peer
+ * listener.
  */
 export type AppEvent =
   | { type: 'chat-created' | 'chat-updated'; chat: Chat }
@@ -57,7 +59,16 @@ export type AppEvent =
   /** The Overview's GitHub and Deck check started or finished, or something was ticked off: re-read it (spec 2026-10-26-overview-design). */
   | { type: 'overview-changed' }
   /** GitHub or Nextcloud was turned on or off (Settings, Features): re-read the settings, as each window holds its own. */
-  | { type: 'settings-changed' };
+  | { type: 'settings-changed' }
+  /**
+   * An MCP server's health may have changed (its status, error, tool count or sign-in state), or a server was added,
+   * edited or deleted: re-read `GET /api/mcp-servers`. `serverId` is null when it could be any of them.
+   */
+  | { type: 'mcp-changed'; serverId: string | null }
+  /** A grant was made, used up or revoked: re-read the chat's grants. `chatId` is null for an "always" grant, which every chat lists. */
+  | { type: 'grants-changed'; chatId: string | null }
+  /** A gated tool call was audited in this chat: re-read its audit trail. */
+  | { type: 'audit-changed'; chatId: string };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {
