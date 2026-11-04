@@ -1,5 +1,6 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { SubagentEvent } from '@otherbench/core/domain/parts.js';
+import { IMAGE_NOT_KEPT } from '@otherbench/core/domain/tool-images.js';
 import type { EngineEvent } from '@otherbench/core/ports/chat-engine.js';
 import type { HelperRegistry } from './helpers.js';
 
@@ -34,6 +35,41 @@ function resultText(content: unknown): unknown {
       .join('\n');
   }
   return content;
+}
+
+const isImageBlock = (c: unknown): boolean => !!c && typeof c === 'object' && (c as { type?: unknown }).type === 'image';
+
+/**
+ * A main-agent tool result that holds an image, as the items an API model's
+ * tool returns (`{ type: 'text', text }` and `{ type: 'image', data, mimeType }`,
+ * in order), so TurnRunner stores each image the one way every tool image is
+ * stored (`keepToolImages`: checked by its bytes, kept in the blob store,
+ * replaced by a reference before anything is broadcast or saved). An image
+ * block with base64 data becomes an inline item, its `media_type` only a
+ * claim the bytes are checked against; any other image (a URL or file source,
+ * no data) is the not-kept note; anything that is neither text nor an image is
+ * left out, as `resultText` leaves it. A result with no image block is
+ * `resultText`'s string, as it always was.
+ */
+function resultItems(content: unknown): unknown {
+  if (!Array.isArray(content) || !content.some(isImageBlock)) return resultText(content);
+  const items: unknown[] = [];
+  for (const c of content as unknown[]) {
+    if (!c || typeof c !== 'object') continue;
+    const block = c as Record<string, unknown>;
+    if (typeof block['text'] === 'string' && block['type'] !== 'image') {
+      items.push({ type: 'text', text: block['text'] });
+      continue;
+    }
+    if (block['type'] !== 'image') continue;
+    const source = (block['source'] ?? null) as Record<string, unknown> | null;
+    if (source !== null && typeof source === 'object' && source['type'] === 'base64' && typeof source['data'] === 'string') {
+      items.push({ type: 'image', data: source['data'], mimeType: typeof source['media_type'] === 'string' ? source['media_type'] : '' });
+    } else {
+      items.push({ type: 'text', text: IMAGE_NOT_KEPT });
+    }
+  }
+  return items;
 }
 
 /** The text of a user message whose string content is wrapped in `<local-command-stderr>`, or null. */
@@ -243,7 +279,11 @@ export class SdkEventMapper {
           // store), or its text when OtherBench's server held none (the call never reached it). A held
           // result says itself whether it failed.
           const held = helper === null && MEDIA_TOOLS.has(name) ? this.options.relayedResult?.(id) : undefined;
-          const result = held !== undefined ? held : resultText(block['content']);
+          // The reply's own call keeps its images (a relayed screenshot, a picture Claude Code read) for TurnRunner
+          // to store. A helper's call and a helper's report (its Task call) keep their text: TurnRunner stores images
+          // only from the reply's own tool results, so base64 must never reach a helper's card.
+          const keepsImages = helper === null && !HELPER_TOOLS.has(name);
+          const result = held !== undefined ? held : keepsImages ? resultItems(block['content']) : resultText(block['content']);
           const isError = held !== undefined ? isErrorResult(held) : block['is_error'] === true;
           if (helper !== null) {
             out.push(this.helperEvent(helper, { type: 'tool-result', id, name, result, isError }));
