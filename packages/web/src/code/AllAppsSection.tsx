@@ -132,7 +132,7 @@ export function AllAppsSectionView({ section, layout, menu, rename, reorder, fil
               ▶
             </span>
             <span className="truncate">{name}</span>
-            <span className="font-sans text-xs font-normal normal-case tracking-normal text-[var(--text-faint)]">{section.total}</span>
+            <span data-testid={`all-apps-count-${section.key}`} className="font-sans text-xs font-normal normal-case tracking-normal text-[var(--text-faint)]">{section.total}</span>
           </button>
         )}
         {menu && <MenuButton label="Folder actions" menu={menu} />}

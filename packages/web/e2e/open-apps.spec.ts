@@ -25,7 +25,7 @@ test('an app is opened from All apps, listed in the sidebar, closed with × and 
   await nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' }).click();
 
   // Closed: not in the sidebar, but in All apps.
-  await expect(nav.getByTestId('all-apps-entry')).toBeVisible();
+  await expect(nav.getByTestId('all-apps-entry')).toContainText('All apps');
   await expect(nav.getByTestId(`group-${appId}`)).toHaveCount(0);
   await nav.getByTestId('all-apps-entry').click();
   const card = page.getByTestId(`all-apps-card-${appId}`);

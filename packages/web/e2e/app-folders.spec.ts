@@ -40,28 +40,43 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   await expect(nameBox).toBeVisible();
   await nameBox.fill(folderName);
   await nameBox.press('Enter');
-  const heading = allApps.locator('[data-testid^="all-apps-heading-folder:"]').filter({ hasText: folderName });
-  await expect(heading).toBeVisible();
-  const folderKey = (await heading.getAttribute('data-testid'))!.replace(/^all-apps-heading-/, '');
+  const createdHeading = allApps.locator('[data-testid^="all-apps-heading-folder:"]').filter({ hasText: folderName });
+  await expect(createdHeading).toBeVisible();
+  const folderKey = (await createdHeading.getAttribute('data-testid'))!.replace(/^all-apps-heading-/, '');
   const folderId = folderKey.replace(/^folder:/, '');
+  const heading = allApps.getByTestId(`all-apps-heading-${folderKey}`);
   const folderSection = allApps.getByTestId(`all-apps-section-${folderKey}`);
+  const count = allApps.getByTestId(`all-apps-count-${folderKey}`);
+  const appRows = async () => (await (await request.get(`${BASE_URL}/api/apps`)).json()) as { id: string; folderId: string | null }[];
+  const folderRows = async () => (await (await request.get(`${BASE_URL}/api/app-folders`)).json()) as { id: string; name: string; sortOrder: number }[];
+
+  // Rename from the folder's menu, in the UI and in the API.
+  const renamed = `Play ${suffix}`;
+  await heading.getByRole('button', { name: 'Folder actions' }).click();
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  const renameBox = allApps.getByRole('textbox', { name: 'Folder name' });
+  await renameBox.fill(renamed);
+  await renameBox.press('Enter');
+  await expect(heading).toContainText(renamed);
+  await expect(heading).not.toContainText(folderName);
+  await expect.poll(async () => (await folderRows()).find((f) => f.id === folderId)?.name).toBe(renamed);
 
   // Drag the first app's card onto the folder's section (real HTML5 drag-and-drop).
   await card(ids.one).dragTo(folderSection);
   await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toBeVisible();
-  await expect(heading).toContainText('1');
+  await expect(count).toHaveText('1');
   await expect(card(ids.two)).toBeVisible();
   await expect(folderSection.getByTestId(`all-apps-card-${ids.two}`)).toHaveCount(0);
 
   // Fold it; the fold survives a reload, with the count still showing.
-  const toggle = heading.getByRole('button').first();
+  const toggle = heading.getByRole('button', { name: new RegExp(renamed) });
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toHaveCount(0);
   await page.reload();
   await expect(nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(heading).toContainText('1');
+  await expect(count).toHaveText('1');
   await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toHaveCount(0);
   await toggle.click();
   await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toBeVisible();
@@ -69,9 +84,37 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   // The other path: the second app's menu, Move to folder….
   await card(ids.two).getByRole('button', { name: 'App actions' }).click();
   await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
-  await page.getByRole('menuitemradio', { name: folderName }).click();
+  await page.getByRole('menuitemradio', { name: renamed }).click();
   await expect(folderSection.getByTestId(`all-apps-card-${ids.two}`)).toBeVisible();
-  await expect(heading).toContainText('2');
+  await expect(count).toHaveText('2');
+  expect((await appRows()).find((a) => a.id === ids.two)?.folderId).toBe(folderId);
+
+  // Reorder: a second folder starts below this one; its menu's Move up puts it above, in the page and in the API.
+  const secondName = `Work ${suffix}`;
+  await allApps.getByRole('button', { name: '+ New folder' }).click();
+  const secondBox = allApps.getByRole('textbox', { name: 'Folder name' });
+  await secondBox.fill(secondName);
+  await secondBox.press('Enter');
+  const secondHeading = allApps.locator('[data-testid^="all-apps-heading-folder:"]').filter({ hasText: secondName });
+  await expect(secondHeading).toBeVisible();
+  const secondKey = (await secondHeading.getAttribute('data-testid'))!.replace(/^all-apps-heading-/, '');
+  const secondId = secondKey.replace(/^folder:/, '');
+  const sectionKeys = () =>
+    allApps.locator('[data-testid^="all-apps-section-folder:"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace(/^all-apps-section-/, '')));
+  const mine = async () => (await sectionKeys()).filter((k) => k === folderKey || k === secondKey);
+  expect(await mine()).toEqual([folderKey, secondKey]);
+  await secondHeading.getByRole('button', { name: 'Folder actions' }).click();
+  await page.getByRole('menuitem', { name: 'Move up' }).click();
+  await expect.poll(mine).toEqual([secondKey, folderKey]);
+  await expect
+    .poll(async () => {
+      const rows = await folderRows();
+      return rows.find((f) => f.id === secondId)!.sortOrder < rows.find((f) => f.id === folderId)!.sortOrder;
+    })
+    .toBe(true);
+  await page.reload();
+  await expect.poll(mine).toEqual([secondKey, folderKey]);
+  await request.delete(`${BASE_URL}/api/app-folders/${secondId}`);
 
   // Deleting the folder frees its apps and deletes none of them.
   await heading.getByRole('button', { name: 'Folder actions' }).click();
@@ -84,7 +127,7 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   for (const key of ['one', 'two'] as const) {
     await expect(unfiled.getByTestId(`all-apps-card-${ids[key]}`)).toBeVisible();
   }
-  const apps = (await (await request.get(`${BASE_URL}/api/apps`)).json()) as { id: string; folderId: string | null }[];
+  const apps = await appRows();
   for (const key of ['one', 'two'] as const) {
     expect(apps.find((a) => a.id === ids[key])?.folderId).toBeNull();
   }
