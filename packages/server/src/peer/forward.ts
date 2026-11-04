@@ -11,7 +11,7 @@ import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
-import { turnsRoutes } from '../routes/turns.js';
+import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { PeerError } from './service.js';
 
@@ -467,6 +467,52 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     if (!nodeId) return next();
     return forward(container, c, nodeId, `/chats/${chatId}/helpers/${encodeURIComponent(c.req.param('taskId'))}/stop`);
   });
+  /** `nodeId` stopping the chat's replies running there: the ids it stopped. */
+  const stopOn = async (nodeId: string, chatId: string): Promise<string[]> => {
+    const res = await container.peers!.call(nodeId, { method: 'POST', path: `/api/chats/${encodeURIComponent(chatId)}/stop` });
+    const ids = (res.body as { stopped?: unknown } | null)?.stopped;
+    if (res.status === 200 && Array.isArray(ids)) return ids.filter(isString);
+    // An older build has no chat Stop: each reply it is writing gets its own.
+    const { messages } = await fetchInFlight(container, nodeId, chatId);
+    const stopped: string[] = [];
+    for (const m of messages.filter((m) => m.role === 'assistant' && m.status === 'streaming')) {
+      const cancel = await container.peers!.call(nodeId, { method: 'POST', path: `/api/messages/${encodeURIComponent(m.id)}/cancel` });
+      if (cancel.status === 204) stopped.push(m.id);
+    }
+    return stopped;
+  };
+
+  /**
+   * The chat's Stop: its replies running here, and on each machine that may be
+   * running one: the one it runs on, and any paired machine that says it has a
+   * reply running in it (the chat was moved away from there mid-reply). Only
+   * this call goes there, over the peer channel like every other forwarded
+   * call. `{ stopped }` with every id stopped; 503 when a machine couldn't be
+   * reached and nothing was stopped anywhere.
+   */
+  app.post('/chats/:id/stop', async (c, next) => {
+    const chatId = c.req.param('id');
+    const peers = container.peers!;
+    const nodes = new Set<string>();
+    const runsOn = remoteNode(chatId);
+    if (runsOn) nodes.add(runsOn);
+    for (const peer of container.store.peers.list()) if (peers.activeChats(peer.nodeId).includes(chatId)) nodes.add(peer.nodeId);
+    nodes.delete(self());
+    if (nodes.size === 0) return next();
+    const stopped = stopChatReplies(container, chatId);
+    const failures: { nodeId: string; message: string }[] = [];
+    const answers = await Promise.allSettled([...nodes].map(async (nodeId) => ({ nodeId, ids: await stopOn(nodeId, chatId) })));
+    [...nodes].forEach((nodeId, i) => {
+      const answer = answers[i]!;
+      if (answer.status === 'fulfilled') stopped.push(...answer.value.ids);
+      else if (answer.reason instanceof PeerError) failures.push({ nodeId, message: answer.reason.message });
+      else throw answer.reason;
+    });
+    const failed = failures[0];
+    if (failed && stopped.length === 0) return unreachable(c, failed.nodeId, failed.message);
+    return c.json({ stopped });
+  });
+
   // The slash menu: that machine has the chat's Claude Code processes and folder.
   app.get('/chats/:id/commands', async (c, next) => {
     const chatId = c.req.param('id');
@@ -485,6 +531,8 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   /** Cancel and retry name a reply; the machine running it is known from the turn that started it, or the reply's chat. */
   const messageRoute = (suffix: string) => async (c: Context, next: Next): Promise<Response | void> => {
     const messageId = c.req.param('id')!;
+    // A reply running here is this machine's to stop or retry, even if its chat was moved elsewhere while it ran.
+    if (container.turnRunner.runningInfo(messageId)) return next();
     const message = container.store.messages.get(messageId);
     const nodeId = runs.messageNode(messageId) ?? (message ? remoteNode(message.chatId) : null);
     if (!nodeId || nodeId === self()) return next();
@@ -520,8 +568,9 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
 
 /**
  * What a paired machine may call on this one's API over the peer listener:
- * running, steering and watching a chat that runs here, and answering its
- * approvals, questions and plans. Nothing else -- no settings, no folder browsing, no attaching
+ * running, steering, stopping and watching a chat that runs here, answering
+ * its approvals, questions and plans, and stopping a reply still running here
+ * in a chat moved elsewhere. Nothing else -- no settings, no folder browsing, no attaching
  * files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
@@ -536,6 +585,10 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // While computer use may be in control of this machine, a paired machine changes nothing here (no answer,
   // no message): that machine's UI could be open in a browser the model is using. Only Stops pass.
   app.use('*', changesOnlyFromTheDesktopApp(container.computer, []));
+
+  // The chat's Stop: its replies running here. Ahead of the check below, as a reply's Stop is: a chat moved to
+  // another machine while a reply ran here must still be able to stop that reply, and a stop starts nothing.
+  app.post('/chats/:id/stop', chatStop(container));
 
   // A chat this machine doesn't run (its runs-on changed elsewhere and the
   // change hasn't arrived) is refused rather than run in two places.
