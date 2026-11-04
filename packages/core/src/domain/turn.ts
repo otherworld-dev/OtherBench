@@ -523,6 +523,11 @@ export class TurnRunner {
     return this.running.get(messageId) ?? null;
   }
 
+  /** The ids of the replies running here now in `chatId`, whether or not the chat still has a row. */
+  runningIn(chatId: string): string[] {
+    return [...this.running].filter(([, info]) => info.chatId === chatId).map(([id]) => id);
+  }
+
   /**
    * Re-runs one existing assistant message IN PLACE (same id, same
    * `parentId`) -- task 27's per-tab Retry on a failed compare variant.

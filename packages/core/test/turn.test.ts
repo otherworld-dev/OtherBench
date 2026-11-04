@@ -2953,10 +2953,13 @@ describe('TurnRunner and notes sent mid-reply', () => {
     });
     await vi.waitFor(() => expect(runner.runningInfo(assistantMessageId)).toEqual({ chatId: 'chat-1', unattended: true }));
     expect(runner.runningInfo('nope')).toBeNull();
+    expect(runner.runningIn('chat-1')).toEqual([assistantMessageId]);
+    expect(runner.runningIn('chat-2')).toEqual([]);
 
     release();
     await vi.waitFor(() => expect(store.messages.get(assistantMessageId)!.status).toBe('complete'));
     expect(runner.runningInfo(assistantMessageId)).toBeNull();
+    expect(runner.runningIn('chat-1')).toEqual([]);
   });
 
   it('runFollowOn makes a user message and a reply under the parent and runs the given stream', async () => {
