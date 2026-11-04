@@ -455,9 +455,12 @@ export class NotesService {
     return this.engine.knowsNote?.(noteId) === false;
   }
 
-  /** The chat's replies streaming here now. */
+  /** The chat's replies streaming here now, in start order. */
   private streaming(chatId: string): CanonMessage[] {
-    return this.store.messages.listByStatus('streaming').filter((m) => m.chatId === chatId && m.role === 'assistant' && this.turnRunner.runningInfo(m.id) !== null);
+    return this.turnRunner
+      .runningIn(chatId)
+      .map((id) => this.store.messages.get(id))
+      .filter((m): m is CanonMessage => m?.chatId === chatId && m.role === 'assistant' && m.status === 'streaming');
   }
 
   private waitingIn(chatId: string): Held[] {
