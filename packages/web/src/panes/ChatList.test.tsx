@@ -37,6 +37,8 @@ vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 import { saveFile } from '../lib/saveFile.js';
 import { useToasts } from '../lib/toasts.js';
 import { ApiError, api } from '../state/api.js';
+import { appTabId } from '../state/appTab.js';
+import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed, UNKNOWN_APP_KEY } from '../state/sidebarGroups.js';
 import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -2205,6 +2207,17 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedPatch).not.toHaveBeenCalled();
       expect(mockedDelete).not.toHaveBeenCalled();
       expect(mockedAppPatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("× leaves the app's open tabs alone: its home and its chat stay open in their panes", async () => {
+      const paneState = { ...DEFAULT_PANE_STATE, tabs: [appTabId('A'), 'ca'], layout: 'columns-2' as const, panes: [appTabId('A'), 'ca'], focusedPane: 1 };
+      const user = setup({ mode: 'code', paneState, activeChatId: 'ca' });
+      const before = useOtherBenchStore.getState().paneState;
+      await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'Close Alpha' }));
+      await waitFor(() => expect(screen.queryByTestId('group-A')).toBeNull());
+      expect(useOtherBenchStore.getState().paneState).toEqual(before);
+      expect(useOtherBenchStore.getState().paneState.tabs).toEqual([appTabId('A'), 'ca']);
+      expect(useOtherBenchStore.getState().activeChatId).toBe('ca');
     });
 
     it("Undo patches open true and keeps the app's current name", async () => {
