@@ -36,9 +36,17 @@ export function apiUrl(path: string): string {
  */
 export function streamApiUrl(path: string): string {
   const url = apiUrl(path);
-  if (!url.startsWith('http://127.0.0.1:')) return url;
+  if (streamsShareHost()) return url;
   const name = crypto.getRandomValues(new Uint32Array(1))[0]!.toString(16).padStart(8, '0');
   return url.replace('127.0.0.1', `s${name}.localhost`);
+}
+
+/**
+ * Whether streams share one host name, and so the browser's ~6 connections, with each other and every request. False
+ * in the desktop app, where `streamApiUrl` gives each its own; true in browser mode and against a remote server.
+ */
+export function streamsShareHost(): boolean {
+  return !apiUrl('').startsWith('http://127.0.0.1:');
 }
 
 /** A URL on the OtherBench server outside `/api` (the viewer's `/view/` links, Deck #826). */
