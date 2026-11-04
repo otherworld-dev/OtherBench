@@ -209,9 +209,10 @@ function ComputerResultBlock({ result, isError, scope }: { result: unknown; isEr
   if (Array.isArray(result)) {
     body = result.map((item, i) => <ComputerResultItem key={i} item={item} scope={scope} />);
   } else if (typeof result === 'string') {
-    // Claude Code's results are kept as their text, one item per line (engine-claude-code/src/events.ts): the
-    // screen-content line is the label, and each line after it is plain text. A result stored before that had
-    // its items run together, so the line is taken off the front whatever follows it.
+    // A Claude Code result with no image (or one stored before its screenshots were kept as items) is its text,
+    // one item per line (engine-claude-code/src/events.ts): the screen-content line is the label, and each line
+    // after it is plain text. A result stored before that had its items run together, so the line is taken off
+    // the front whatever follows it.
     const labelled = result.startsWith(COMPUTER_SCREEN_ABOUT);
     const lines = (labelled ? result.slice(COMPUTER_SCREEN_ABOUT.length) : result).split('\n').filter((l) => l.trim().length > 0);
     body = (

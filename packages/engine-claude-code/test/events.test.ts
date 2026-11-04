@@ -61,20 +61,110 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map({ type: 'stream_event', parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
     expect(m.map({ type: 'stream_event', event: null, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
   });
-  it('keeps each text item of a tool result on its own line, and leaves out the items that are not text', () => {
+  it('keeps each text item of a tool result with no image on its own line, and leaves out the items that are not text', () => {
     const m = new SdkEventMapper();
     const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', input: { action: 'left_click', coordinate: [1, 2] } }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
     m.map(call);
     const content = [
       { type: 'text', text: 'This is content from the computer\'s screen.' },
       { type: 'text', text: 'Done.' },
-      { type: 'text', text: 'Screenshot, 1366×768.' },
-      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } },
     ];
     const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
     expect(m.map(result)).toEqual([
-      { type: 'tool-result', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.\nScreenshot, 1366×768.", isError: false },
+      { type: 'tool-result', id: 't1', name: 'mcp__otherbench_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.", isError: false },
     ]);
+  });
+
+  describe('images in a tool result', () => {
+    const SERVER = 'mcp__otherbench_0123456789abcdef__';
+    const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUg==';
+    const assistant = (content: object[], parent: string | null = null) => ({ type: 'assistant', message: { content }, parent_tool_use_id: parent, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    const user = (content: object[], parent: string | null = null) => ({ type: 'user', message: { content }, parent_tool_use_id: parent, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    const block = (data: unknown, media_type: unknown = 'image/png', type = 'base64') => ({ type: 'image', source: { type, media_type, data } });
+
+    it("keeps a relayed screenshot as an inline image item, in order with the text items, for TurnRunner to store", () => {
+      const m = new SdkEventMapper({ renames: new Map([[`${SERVER}computer`, 'computer']]) });
+      m.map(assistant([{ type: 'tool_use', id: 't1', name: `${SERVER}computer`, input: { action: 'screenshot' } }]));
+      const content = [
+        { type: 'text', text: "This is content from the computer's screen." },
+        { type: 'text', text: 'Screenshot, 1366×768.' },
+        block(PNG_B64),
+      ];
+      expect(m.map(user([{ type: 'tool_result', tool_use_id: 't1', content }]))).toEqual([
+        {
+          type: 'tool-result',
+          id: 't1',
+          name: 'computer',
+          result: [
+            { type: 'text', text: "This is content from the computer's screen." },
+            { type: 'text', text: 'Screenshot, 1366×768.' },
+            { type: 'image', data: PNG_B64, mimeType: 'image/png' },
+          ],
+          isError: false,
+        },
+      ]);
+    });
+
+    it("keeps an image from Claude Code's own tool (Read of a picture) the same way", () => {
+      const m = new SdkEventMapper();
+      m.map(assistant([{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'shot.png' } }]));
+      expect(m.map(user([{ type: 'tool_result', tool_use_id: 'r1', content: [block(PNG_B64)] }]))).toEqual([
+        { type: 'tool-result', id: 'r1', name: 'Read', result: [{ type: 'image', data: PNG_B64, mimeType: 'image/png' }], isError: false },
+      ]);
+    });
+
+    it('turns an image it cannot carry (a URL or file source, no data) into the not-kept note, and still leaves out other blocks', () => {
+      const m = new SdkEventMapper();
+      m.map(assistant([{ type: 'tool_use', id: 'r1', name: 'Read', input: {} }]));
+      const content = [
+        { type: 'text', text: 'two pictures' },
+        block('https://example.com/x.png', undefined, 'url'),
+        { type: 'image', source: { type: 'file', file_id: 'file_1' } },
+        { type: 'image' },
+        block(42),
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } },
+        block(PNG_B64, 7),
+      ];
+      expect(m.map(user([{ type: 'tool_result', tool_use_id: 'r1', content }]))).toEqual([
+        {
+          type: 'tool-result',
+          id: 'r1',
+          name: 'Read',
+          result: [
+            { type: 'text', text: 'two pictures' },
+            { type: 'text', text: '[image not kept]' },
+            { type: 'text', text: '[image not kept]' },
+            { type: 'text', text: '[image not kept]' },
+            { type: 'text', text: '[image not kept]' },
+            // The label is only a claim (TurnRunner takes the type from the bytes); one that isn't a string is left empty.
+            { type: 'image', data: PNG_B64, mimeType: '' },
+          ],
+          isError: false,
+        },
+      ]);
+    });
+
+    it("keeps only the text of a helper's result, image or not: a helper's card is not stored through TurnRunner's image path", () => {
+      const m = new SdkEventMapper({ helpers: new HelperRegistry() });
+      m.map(assistant([{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Look', prompt: 'p' } }]));
+      m.map(assistant([{ type: 'tool_use', id: 'h1', name: 'Read', input: {} }], 'task-1'));
+      expect(m.map(user([{ type: 'tool_result', tool_use_id: 'h1', content: [{ type: 'text', text: 'a picture' }, block(PNG_B64)] }], 'task-1'))).toEqual([
+        { type: 'subagent', callId: 'task-1', event: { type: 'tool-result', id: 'h1', name: 'Read', result: 'a picture', isError: false } },
+      ]);
+      // The Task call's own result is the helper's report: its text, never an image.
+      const done = m.map(user([{ type: 'tool_result', tool_use_id: 'task-1', content: [{ type: 'text', text: 'Found it.' }, block(PNG_B64)] }]));
+      expect(done[0]).toEqual({ type: 'tool-result', id: 'task-1', name: 'Task', result: 'Found it.', isError: false });
+      expect(done).toContainEqual({ type: 'subagent', callId: 'task-1', event: { type: 'text-delta', text: 'Found it.' } });
+    });
+
+    it('keeps an error result with an image as items too, flagged as an error', () => {
+      const m = new SdkEventMapper();
+      m.map(assistant([{ type: 'tool_use', id: 't1', name: 'mcp__x__shot', input: {} }]));
+      expect(m.map(user([{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'failed, last frame:' }, block(PNG_B64)], is_error: true }]))).toEqual([
+        { type: 'tool-result', id: 't1', name: 'mcp__x__shot', result: [{ type: 'text', text: 'failed, last frame:' }, { type: 'image', data: PNG_B64, mimeType: 'image/png' }], isError: true },
+      ]);
+    });
   });
   it("keeps a generator's whole result, image and all, for the main agent's call, and only the text of anyone else's", () => {
     const SERVER = 'mcp__otherbench_0123456789abcdef__';

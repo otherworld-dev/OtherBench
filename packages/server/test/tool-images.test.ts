@@ -9,6 +9,8 @@ import type { Store } from '@otherbench/core/ports/store.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { FakeChatEngine, FakeSecretStore } from '@otherbench/core/testing/fakes.js';
+import { SdkEventMapper } from '@otherbench/engine-claude-code/events.js';
+import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import { createBlobStore, sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { openDatabase } from '@otherbench/store-sqlite/db.js';
 import { runMigrations } from '@otherbench/store-sqlite/migrations/index.js';
@@ -281,6 +283,47 @@ describe('a screenshot from a tool, from the turn to the next turn', () => {
     // Not for another chat, and not as another reply's.
     expect(await next.loadToolImage!({ chatId: 'chat-2', messageId: replyId, attachmentId })).toBeNull();
     expect(await next.loadToolImage!({ chatId: 'chat-1', messageId: second.assistantMessageIds[0]!, attachmentId })).toBeNull();
+  });
+
+  it("a Claude Code turn's screenshot, as its transcript carries it, takes the same path: stored, served typed from its bytes, kept by blob GC", async () => {
+    // What Claude Code's SDK hands the engine: the relayed computer call, then its result with the image as an API block.
+    const SERVER = 'mcp__otherbench_0123456789abcdef__';
+    const mapper = new SdkEventMapper({ renames: new Map([[`${SERVER}computer`, 'computer']]) });
+    const sdk = (type: 'assistant' | 'user', content: object[]) => ({ type, message: { content }, parent_tool_use_id: null, uuid: 'u', session_id: 's' }) as unknown as Parameters<SdkEventMapper['map']>[0];
+    const mapped = [
+      ...mapper.map(sdk('assistant', [{ type: 'tool_use', id: 'toolu_1', name: `${SERVER}computer`, input: { action: 'screenshot' } }])),
+      // Labelled JPEG: the label is a claim, the bytes say PNG.
+      ...mapper.map(sdk('user', [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'Screenshot, 1x1.' }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: INLINE.data } }] }])),
+    ] as EngineEvent[];
+    const { container, turnRunner } = build(new FakeChatEngine([...mapped, FINISH]));
+    const broadcast: unknown[] = [];
+    turnRunner.on((e) => broadcast.push(e));
+
+    const first = await turnRunner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'look' }], profiles: [profile()] });
+    const replyId = first.assistantMessageIds[0]!;
+    await finished(replyId);
+
+    const part = store.messages.get(replyId)!.parts.find((p) => p.type === 'tool-result') as { name: string; result: unknown[] };
+    expect(part.name).toBe('computer');
+    expect(part.result[0]).toEqual({ type: 'text', text: 'Screenshot, 1x1.' });
+    expect(part.result[1]).toEqual({ type: 'image', attachmentId: expect.stringMatching(UUID), mimeType: 'image/png' });
+    expect(JSON.stringify(store.messages.get(replyId))).not.toContain(INLINE.data);
+    expect(JSON.stringify(broadcast)).not.toContain(INLINE.data);
+    const attachmentId = (part.result[1] as { attachmentId: string }).attachmentId;
+    expect(store.attachments.get(attachmentId)).toMatchObject({ chatId: 'chat-1', messageId: replyId, mime: 'image/png', filename: 'tool-image.png' });
+
+    const app = createApp(container);
+    const served = await app.request(url('chat-1', replyId, attachmentId));
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(FAKE_PNG);
+    expect((await app.request(url('chat-2', replyId, attachmentId))).status).toBe(404);
+
+    // Blob GC sees the reference while the reply exists, and collects the blob once the chat is gone.
+    expect(await sweepOrphanedBlobs(store, blobStore)).toEqual({ scanned: 1, removed: 0 });
+    expect(await blobStore.get(sha256Of(FAKE_PNG))).toEqual(FAKE_PNG);
+    store.chats.delete('chat-1');
+    expect(await sweepOrphanedBlobs(store, blobStore)).toEqual({ scanned: 1, removed: 1 });
   });
 
   it('shows a note, and stores nothing, when the image cannot be kept', async () => {
