@@ -1346,8 +1346,10 @@ function browserSummary(args: unknown): string {
       return `Use ${host}: scroll ${stringField(args, 'direction') ?? 'down'}${ref !== null ? ` to${on}` : ''}`;
     case 'back':
       return `Use ${host}: go back`;
-    case 'snapshot':
-      return `Use ${host}: read the page`;
+    case 'snapshot': {
+      const part = record['part'];
+      return typeof part === 'number' && Number.isSafeInteger(part) && part > 1 ? `Use ${host}: read part ${part} of the page` : `Use ${host}: read the page`;
+    }
     case 'close':
       return `Use ${host}: close the browser`;
     default:

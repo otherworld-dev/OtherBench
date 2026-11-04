@@ -1,22 +1,56 @@
-/** A snapshot this long is about 10,000 tokens: anything past it is cut (spec §2). */
+/** One part of a snapshot is at most this long, about 10,000 tokens (spec §2); a longer page comes in several parts. */
 export const MAX_SNAPSHOT_CHARS = 40_000;
+/** The highest part a call may ask for: four billion characters of snapshot, far past any page. */
+export const MAX_SNAPSHOT_PART = 100_000;
 /** The longest page text shown on a card (a ref's line) or as the title; notes and errors may run to 300. */
 export const MAX_TARGET_CHARS = 200;
 export const MAX_NOTE_CHARS = 300;
-const CUT_NOTE = '[The rest of the page was cut: its snapshot is longer than 40,000 characters.]';
 
 /**
- * The snapshot, cut at the last line break before 40,000 characters (or, with
- * none, at 40,000 itself, never between the two halves of a surrogate pair),
- * with a note saying so.
+ * The snapshot in parts of at most 40,000 characters, in order. Each part
+ * ends at the last line break before the limit, and that line break belongs
+ * to neither part; a part with no line break to end at is cut at the limit
+ * itself, never between the two halves of a surrogate pair. Nothing else is
+ * dropped. A snapshot within the limit is one part, an empty one included.
  */
-export function cutSnapshot(snapshot: string): { snapshot: string; truncated: boolean } {
-  if (snapshot.length <= MAX_SNAPSHOT_CHARS) return { snapshot, truncated: false };
-  const cut = snapshot.lastIndexOf('\n', MAX_SNAPSHOT_CHARS);
-  let end = cut > 0 ? cut : MAX_SNAPSHOT_CHARS;
-  const last = snapshot.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return { snapshot: `${snapshot.slice(0, end)}\n${CUT_NOTE}`, truncated: true };
+export function snapshotParts(snapshot: string): string[] {
+  const parts: string[] = [];
+  let rest = snapshot;
+  while (rest.length > MAX_SNAPSHOT_CHARS) {
+    const cut = rest.lastIndexOf('\n', MAX_SNAPSHOT_CHARS);
+    if (cut > 0) {
+      parts.push(rest.slice(0, cut));
+      rest = rest.slice(cut + 1);
+      continue;
+    }
+    let end = MAX_SNAPSHOT_CHARS;
+    const last = rest.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+    parts.push(rest.slice(0, end));
+    rest = rest.slice(end);
+  }
+  if (rest !== '' || parts.length === 0) parts.push(rest);
+  return parts;
+}
+
+/**
+ * Part `part` (from 1) of the snapshot, as the model is shown it. A snapshot
+ * of more than one part ends with a note saying which part this is and, until
+ * the last, how to get the next: scrolling the page never shows the rest of a
+ * snapshot, so without it the model could not tell there was more. A part
+ * past the end gives only how many parts there are.
+ */
+export function snapshotPart(snapshot: string, part: number): { snapshot: string; part: number; parts: number } | { parts: number } {
+  const all = snapshotParts(snapshot);
+  const parts = all.length;
+  const text = all[part - 1];
+  if (text === undefined) return { parts };
+  if (parts === 1) return { snapshot: text, part, parts };
+  const note =
+    part < parts
+      ? `[This is part ${part} of ${parts} of the page's snapshot. To read on, use snapshot with part ${part + 1}; scrolling does not change which part you get.]`
+      : `[This is part ${part} of ${parts} of the page's snapshot: the end of the page.]`;
+  return { snapshot: `${text}\n${note}`, part, parts };
 }
 
 /** Any whitespace, line and paragraph separators and NEL: a single space in page text shown outside the snapshot. */
