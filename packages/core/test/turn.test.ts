@@ -1769,7 +1769,7 @@ describe('TurnRunner.retry', () => {
 describe('engine meta and notices', () => {
   const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
   const newChat = (store: InMemoryStore) =>
-    store.chats.create({ id: 'chat-1', title: 't', profileId: null, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.chats.create({ id: 'chat-1', title: 't', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
 
   it('persists engine-meta on the assistant message without emitting it', async () => {
     const store = new InMemoryStore();

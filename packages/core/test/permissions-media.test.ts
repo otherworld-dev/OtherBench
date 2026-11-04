@@ -10,7 +10,7 @@ const VIDEO: ToolSpec = { name: 'generate_video', description: '', parameters: {
 const OTHER: ToolSpec = { name: 'generate_audio', description: '', parameters: {}, risk: 'execute', source: 'media', execute: async () => null };
 
 function policy(over: Partial<ToolPolicy> = {}): ToolPolicy {
-  return { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'c1' } }, ...over } as ToolPolicy;
+  return { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'c1', model: 'm1' } }, ...over } as ToolPolicy;
 }
 
 function ctx(over: Partial<ToolContext> = {}): ToolContext {
@@ -44,12 +44,12 @@ describe('PermissionBroker and media generation', () => {
     expect(broker.decide(IMAGE, {}, policy({ media: undefined }), ctx())).toEqual({ kind: 'deny', reason: MEDIA_OFF_REASON });
     expect(broker.decide(IMAGE, {}, policy({ media: {} }), ctx())).toEqual({ kind: 'deny', reason: MEDIA_OFF_REASON });
     expect(broker.decide(VIDEO, {}, policy(), ctx())).toEqual({ kind: 'deny', reason: MEDIA_OFF_REASON });
-    expect(broker.decide(OTHER, {}, policy({ media: { image: { connectionId: 'c1' }, video: { connectionId: 'c2' } } }), ctx())).toEqual({ kind: 'deny', reason: MEDIA_OFF_REASON });
+    expect(broker.decide(OTHER, {}, policy({ media: { image: { connectionId: 'c1', model: 'm1' }, video: { connectionId: 'c2', model: 'm2' } } }), ctx())).toEqual({ kind: 'deny', reason: MEDIA_OFF_REASON });
   });
 
   it('allows a configured tool by policy under ask_on_mutate, attended or not, with confirmPrompts on or off', () => {
-    const video = policy({ media: { video: { connectionId: 'c2' } } });
-    for (const p of [policy(), policy({ media: { image: { connectionId: 'c1' }, confirmPrompts: false } })]) {
+    const video = policy({ media: { video: { connectionId: 'c2', model: 'm2' } } });
+    for (const p of [policy(), policy({ media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: false } })]) {
       expect(broker.decide(IMAGE, {}, p, ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
       expect(broker.decide(IMAGE, {}, p, ctx({ unattended: true }))).toEqual({ kind: 'allow', grantedBy: 'policy' });
     }
@@ -57,7 +57,7 @@ describe('PermissionBroker and media generation', () => {
   });
 
   it('asks under always_ask with confirmPrompts off, and a chat grant covers the tool by name and source', () => {
-    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: false } });
     const asked = broker.decide(IMAGE, { prompt: 'a cat' }, p, ctx());
     expect(asked).toMatchObject({ kind: 'ask', request: { toolName: 'generate_image', source: 'media', risk: 'execute' } });
     grant();
@@ -65,17 +65,17 @@ describe('PermissionBroker and media generation', () => {
     // Another chat, another profile and another tool are not covered.
     expect(broker.decide(IMAGE, {}, p, ctx({ chatId: 'chat-2' })).kind).toBe('ask');
     expect(broker.decide(IMAGE, {}, p, ctx({ profileId: 'profile-2' })).kind).toBe('ask');
-    expect(broker.decide(VIDEO, {}, policy({ approvalMode: 'always_ask', media: { video: { connectionId: 'c2' }, confirmPrompts: false } }), ctx()).kind).toBe('ask');
+    expect(broker.decide(VIDEO, {}, policy({ approvalMode: 'always_ask', media: { video: { connectionId: 'c2', model: 'm2' }, confirmPrompts: false } }), ctx()).kind).toBe('ask');
   });
 
   it('mints a chat and an always grant from a card answer, and later calls match it', () => {
-    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: false } });
     for (const choice of ['chat', 'always'] as const) {
       store = new InMemoryStore();
       broker = new PermissionBroker(store);
       const asked = broker.decide(IMAGE, { prompt: 'x' }, p, ctx());
       if (asked.kind !== 'ask') throw new Error('expected ask');
-      broker.resolve(asked.request.id, { choice });
+      broker.resolve(asked.request.id, choice === 'always' ? { choice, constraint: null } : { choice });
       expect(store.grants.list()).toHaveLength(1);
       expect(store.grants.list()[0]).toMatchObject({ toolName: 'generate_image', source: 'media', profileId: 'profile-1', constraint: null });
       expect(broker.decide(IMAGE, { prompt: 'y' }, p, ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
@@ -83,20 +83,20 @@ describe('PermissionBroker and media generation', () => {
   });
 
   it('refuses an always grant that carries a constraint', () => {
-    const asked = broker.decide(IMAGE, {}, policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } }), ctx());
+    const asked = broker.decide(IMAGE, {}, policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: false } }), ctx());
     if (asked.kind !== 'ask') throw new Error('expected ask');
     expect(() => broker.resolve(asked.request.id, { choice: 'always', constraint: { pathPrefix: '.' } })).toThrow(/media/);
   });
 
   it('allows by policy under always_ask when the generation ask is the confirmation (confirmPrompts on or absent, attended)', () => {
-    for (const p of [policy({ approvalMode: 'always_ask' }), policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: true } })]) {
+    for (const p of [policy({ approvalMode: 'always_ask' }), policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: true } })]) {
       expect(broker.decide(IMAGE, { prompt: 'a cat' }, p, ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
     }
     expect(broker.pendingCount).toBe(0);
   });
 
   it('still asks under always_ask with confirmPrompts off', () => {
-    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1' }, confirmPrompts: false } });
+    const p = policy({ approvalMode: 'always_ask', media: { image: { connectionId: 'c1', model: 'm1' }, confirmPrompts: false } });
     expect(broker.decide(IMAGE, {}, p, ctx()).kind).toBe('ask');
   });
 

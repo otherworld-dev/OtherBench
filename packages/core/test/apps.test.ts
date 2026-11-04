@@ -3,7 +3,7 @@ import { APP_NAME_MAX, compareApps, githubRepoFromRemote, githubRepoFromRemotes,
 import type { App } from '../src/ports/store.js';
 
 function app(id: string, name: string, sortOrder = 0): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, sortOrder, createdAt: 0, updatedAt: 0 };
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder, createdAt: 0, updatedAt: 0 };
 }
 
 describe('githubRepoFromRemote', () => {

@@ -11,8 +11,8 @@ const by = (name: string, extra: { regenerated?: boolean } = {}) => ({ profileId
 
 function chat(over: Partial<Chat> = {}): Chat {
   return {
-    id: 'c1', title: 'Plans', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false,
-    projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
+    id: 'c1', title: 'Plans', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-1', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
+    projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
   };
 }
 
@@ -62,7 +62,7 @@ describe('chatToMarkdown', () => {
     const ms = [
       msg({ id: 'u1', createdAt: 1, parts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }, { type: 'file', attachmentId: 'att-2', mime: 'text/plain', filename: 'notes.txt' }] }),
       msg({
-        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'), status: 'error', error: { code: 'x', message: 'rate limited', retryable: true } as CanonMessage['error'],
+        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'), status: 'error', error: { kind: 'rate_limit', message: 'rate limited', retryable: true },
         parts: [
           { type: 'reasoning', text: 'considering' },
           { type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a.txt' } },

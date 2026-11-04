@@ -3,7 +3,7 @@ import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectInstructi
 import type { Project } from '../src/ports/store.js';
 
 function project(id: string, name: string, sortOrder: number): Project {
-  return { id, name, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 describe('compareProjects', () => {

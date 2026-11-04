@@ -47,15 +47,16 @@ describe('toolContextFor', () => {
   // Integration: thread cards and sub-agents each made this function. Every
   // field either needs is in one context, so a sub-agent's call can't lose the
   // plan gate or the unattended flag, nor a planned turn its sub-agent host.
-  // `live` is the one field left out: only OtherBenchToolProvider.runLiveCall sets it.
+  // `live` is left out: only OtherBenchToolProvider.runLiveCall sets it. So is
+  // `shownSubagent`: only the Claude Code engine's approval gate sets it.
   it('carries every field at once: plan gate, unattended, folders, call id, sub-agent host and tag', () => {
     const plan = createPlanGate();
     const host: SubagentHost = { run: async () => 'ok' };
     const folders = [{ root: '/x', access: 'read' }] as never;
     const call = new AbortController().signal;
     const subagent = { callId: 'c1', label: 'Helper', parentProfileId: 'profile-a', profileName: 'B' };
-    const req = request({ profile: { id: 'profile-b' } as ResolvedProfile, folders, plan, unattended: true, subagents: host, subagent });
-    const expected: Required<Omit<ToolContext, 'live'>> = {
+    const req = request({ profile: { id: 'profile-b' } as ResolvedProfile, folders, plan, unattended: true, autoMode: true, subagents: host, subagent });
+    const expected: Required<Omit<ToolContext, 'live' | 'shownSubagent'>> = {
       chatId: 'chat-1',
       messageId: 'reply-1',
       profileId: 'profile-a',
@@ -63,6 +64,7 @@ describe('toolContextFor', () => {
       folders,
       plan,
       unattended: true,
+      unattendedAuto: true,
       signal: call,
       toolCallId: 'call-9',
       subagents: host,
