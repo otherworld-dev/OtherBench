@@ -124,13 +124,28 @@ describe('AppEventBus', () => {
   });
 
   it('keeps the kind of a pending question or plan for the hello', () => {
-    const bus = new AppEventBus();
+    const bus = new AppEventBus(() => 500);
     bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
     bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
     expect(bus.pendingApprovals()).toEqual([
-      { chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' },
-      { chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' },
+      { chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question', at: 500 },
+      { chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file', at: 500 },
     ]);
+  });
+
+  it('stamps when each card started waiting, in the event every window hears and in the hello, so Needs you keeps its order', () => {
+    let now = 100;
+    const bus = new AppEventBus(() => now);
+    const heard: AppEvent[] = [];
+    bus.subscribe((e) => heard.push(e));
+    bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
+    now = 200;
+    bus.emit({ type: 'approval-requested', chatId: 'd', messageId: 'm2', requestId: 'r2', toolName: 'ask_user', kind: 'question' });
+    expect(heard.map((e) => (e.type === 'approval-requested' ? e.at : null))).toEqual([100, 200]);
+    expect(bus.pendingApprovals().map((p) => [p.chatId, p.at])).toEqual([['c', 100], ['d', 200]]);
+    // One that already carries its time keeps it.
+    bus.emit({ type: 'approval-requested', chatId: 'e', messageId: 'm3', requestId: 'r3', toolName: 'Bash', at: 50 });
+    expect(bus.pendingApprovals().find((p) => p.chatId === 'e')?.at).toBe(50);
   });
 });
 

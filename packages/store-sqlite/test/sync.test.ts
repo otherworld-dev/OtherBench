@@ -239,6 +239,30 @@ describe('sync (Task 50)', () => {
 
   // Peers on different schema versions refuse to sync (server peer/syncer.ts), so an older build never
   // meets this column in practice; this pins the fallback if that gate relaxes: upsert writes only known columns.
+  it("when a reply stopped travels with it, so a paired machine orders Needs you the same; an older build takes the reply without it", () => {
+    const a = node('a');
+    const b = node('b');
+    const old = openDatabase(':memory:');
+    runMigrations(old, MIGRATIONS.filter((m) => m.version < 36));
+    old.prepare('UPDATE node_self SET id = ?').run('old');
+    const o: Node = { id: 'old', db: old, store: new SqliteStore(old) };
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'u', 'c', null, { createdAt: 10 });
+    message(a, 'r', 'c', 'u', { role: 'assistant', status: 'streaming', parts: [], createdAt: 20 });
+    a.store.chats.update('c', { headMessageId: 'u' });
+    a.store.messages.updateStatus('r', 'complete');
+    const finishedAt = a.store.messages.heads('c')[0]!.finishedAt;
+    expect(finishedAt).toEqual(expect.any(Number));
+
+    pair(a, b).aToB();
+    pair(a, o).aToB();
+
+    expect(b.store.messages.heads('c')).toEqual([{ chatId: 'c', role: 'assistant', status: 'complete', createdAt: 20, finishedAt }]);
+    expect(old.prepare("SELECT status FROM message WHERE id = 'r'").get()).toEqual({ status: 'complete' });
+    old.close();
+  });
+
   it("a sub-agent usage row's call id syncs, and (fallback if the schema gate relaxes) an older build takes the row and drops only that", () => {
     const a = node('a');
     const b = node('b');

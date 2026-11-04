@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  asksUser, buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, tickOffAt, type OverviewInput,
+  asksUser, buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, needsYouSince, tickOffAt, type OverviewInput,
 } from '../src/domain/overview.js';
 import type { App, Chat } from '../src/ports/store.js';
 import type { DeckBoardView, DeckCardSummary } from '../src/types/nextcloud.js';
@@ -105,6 +105,27 @@ describe('chatNeedsYou', () => {
     expect(chatNeedsYou({ archivedAt: 1 }, head('complete'), true, 0)).toBe(false);
     expect(chatNeedsYou(open, head('streaming', 'user'), true, 0)).toBe(true);
     expect(chatNeedsYou(open, null, false, 0)).toBe(false);
+  });
+});
+
+describe('needsYouSince', () => {
+  const reply = (over: Partial<ChatHead> = {}): ChatHead => ({ chatId: 'c', role: 'assistant', status: 'complete', createdAt: 10, ...over });
+
+  it('is when the reply stopped, not when it started', () => {
+    expect(needsYouSince(reply({ finishedAt: 90 }), null)).toBe(90);
+  });
+
+  it("is when it started for a reply from before that was recorded, or one made finished", () => {
+    expect(needsYouSince(reply(), null)).toBe(10);
+  });
+
+  it('is when the card started waiting, whatever the reply below it', () => {
+    expect(needsYouSince(reply({ status: 'streaming' }), 50)).toBe(50);
+    expect(needsYouSince(null, 50)).toBe(50);
+  });
+
+  it('is null with nothing to go on', () => {
+    expect(needsYouSince(null, null)).toBeNull();
   });
 });
 

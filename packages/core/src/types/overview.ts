@@ -25,6 +25,12 @@ export interface GithubNotification {
 /** A chat's latest message, as far as the Overview cares. */
 export interface ChatHead {
   chatId: string; role: Role; status: MessageStatus; createdAt: number;
+  /**
+   * When the message stopped being written (ms): set as a reply leaves `streaming`, so it's when the reply finished,
+   * failed or was stopped. Absent for one still streaming, made already finished, or from before it was recorded
+   * (migration 036); `createdAt` stands in for those.
+   */
+  finishedAt?: number;
   /** A finished reply that asks the user something (`asksUser`). */
   asks?: true;
 }

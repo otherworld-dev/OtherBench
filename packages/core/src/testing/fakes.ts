@@ -1179,6 +1179,8 @@ const MAX_PATH_DEPTH = 10_000;
 
 class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
+  /** When each message stopped being written (`ChatHead.finishedAt`): store-only, not part of CanonMessage. */
+  private readonly finishedAt = new Map<string, number>();
   constructor(private readonly selfNodeId: string, private readonly chats: ChatRepo) {}
 
   heads(chatId?: string): ChatHead[] {
@@ -1206,7 +1208,11 @@ class InMemoryMessageRepo implements MessageRepo {
       }
       const text = tip.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
       const asks = tip.role === 'assistant' && tip.status === 'complete' && asksUser(text.slice(-QUESTION_TAIL));
-      heads.push({ chatId: c.id, role: tip.role, status: tip.status, createdAt: tip.createdAt, ...(asks ? { asks } : {}) });
+      const finishedAt = this.finishedAt.get(tip.id);
+      heads.push({
+        chatId: c.id, role: tip.role, status: tip.status, createdAt: tip.createdAt,
+        ...(finishedAt !== undefined ? { finishedAt } : {}), ...(asks ? { asks } : {}),
+      });
     }
     return heads;
   }
@@ -1279,6 +1285,8 @@ class InMemoryMessageRepo implements MessageRepo {
     }
     m.status = status;
     m.error = error ? structuredClone(error) : null;
+    if (status === 'streaming') this.finishedAt.delete(id);
+    else this.finishedAt.set(id, Date.now());
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {

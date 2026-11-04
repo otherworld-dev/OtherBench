@@ -367,7 +367,7 @@ describe('ChatList status', () => {
     useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [finished('done', { projectId: 'p-a' }), finished('asking'), makeChat({ id: 'quiet' })],
-      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'ask_user', kind: 'question' } },
+      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'ask_user', kind: 'question', at: Date.now() } },
     });
     render(<ChatList />);
 
@@ -462,19 +462,48 @@ describe('ChatList status', () => {
   });
 
   it('puts a chat at the bottom when it stops, however long ago its reply started, and again when it comes back', () => {
-    const longReply = finished('long', { head: { chatId: 'long', role: 'assistant', status: 'complete', createdAt: Date.now() - 3_600_000 } });
-    useOtherBenchStore.setState({ chats: [finished('first'), finished('second'), longReply], appRunningTurns: { m1: 'long' } });
+    const t = Date.now();
+    const stopped = (id: string, createdAt: number, finishedAt: number): Chat =>
+      finished(id, { head: { chatId: id, role: 'assistant', status: 'complete', createdAt, finishedAt } });
+    useOtherBenchStore.setState({
+      chats: [stopped('first', t - 60_000, t - 50_000), stopped('second', t - 40_000, t - 30_000), finished('long', { head: { chatId: 'long', role: 'assistant', status: 'streaming', createdAt: t - 3_600_000 } })],
+      appRunningTurns: { m1: 'long' },
+    });
     render(<ChatList />);
     expect(listIds()).toEqual(['first', 'second']);
 
-    act(() => useOtherBenchStore.setState({ appRunningTurns: {} }));
+    // The server records when each reply stopped, and the chat arrives with it.
+    act(() => useOtherBenchStore.setState((st) => ({
+      appRunningTurns: {},
+      chats: st.chats.map((c) => (c.id === 'long' ? stopped('long', t - 3_600_000, t - 20_000) : c)),
+    })));
     expect(listIds()).toEqual(['first', 'second', 'long']);
 
     act(() => useOtherBenchStore.setState({ appRunningTurns: { m2: 'first' } }));
     expect(listIds()).toEqual(['second', 'long']);
 
-    act(() => useOtherBenchStore.setState({ appRunningTurns: {} }));
+    act(() => useOtherBenchStore.setState((st) => ({
+      appRunningTurns: {},
+      chats: st.chats.map((c) => (c.id === 'first' ? stopped('first', t - 15_000, t - 10_000) : c)),
+    })));
     expect(listIds()).toEqual(['second', 'long', 'first']);
+  });
+
+  it('keeps that order through a reload: it comes from when each chat came to need you, not from memory', () => {
+    const t = Date.now();
+    const stopped = (id: string, createdAt: number, finishedAt: number): Chat =>
+      finished(id, { head: { chatId: id, role: 'assistant', status: 'complete', createdAt, finishedAt } });
+    const chats = [stopped('long', t - 3_600_000, t - 10_000), stopped('quick', t - 30_000, t - 25_000), finished('card', { head: { chatId: 'card', role: 'assistant', status: 'streaming', createdAt: t - 7_200_000 } })];
+    const pending = { r1: { chatId: 'card', messageId: 'm1', requestId: 'r1', toolName: 'write_file', at: t - 20_000 } };
+    useOtherBenchStore.setState({ chats, appPendingApprovals: pending });
+    const first = render(<ChatList />);
+    expect(listIds()).toEqual(['quick', 'card', 'long']);
+    first.unmount();
+
+    // A fresh window gets the chats in another order: the list doesn't change.
+    useOtherBenchStore.setState({ chats: [...chats].reverse(), appPendingApprovals: pending });
+    render(<ChatList />);
+    expect(listIds()).toEqual(['quick', 'card', 'long']);
   });
 
   it('keeps a chat in the list while it is open', () => {

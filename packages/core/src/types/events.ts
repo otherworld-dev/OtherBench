@@ -14,7 +14,8 @@ export type AppEvent =
   /** `selfStarted`: nobody asked for this reply, the agent carried on by itself after a background task finished. */
   | { type: 'turn-started'; chatId: string; messageIds: string[]; selfStarted?: boolean }
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
-  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser' }
+  /** `at`: when the card started waiting (ms), stamped by the server's event bus if the emitter didn't. */
+  | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser'; at?: number }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
   /** A chat moved to another Claude account after the first hit its usage limit. `from`/`to` are display names; `resetsAt` is ms epoch. */
   | { type: 'claude-account-switched'; chatId: string; from: string; to: string; resetsAt: number | null; midReply: boolean }
@@ -66,6 +67,11 @@ export interface PendingApprovalSummary {
   toolName: string;
   /** Set for a question or plan card (spec 2026-10-12-thread-cards-design); absent for a tool approval. */
   kind?: 'question' | 'plan' | 'generation' | 'browser';
+  /**
+   * When the card started waiting (ms), so the sidebar's Needs you list keeps a chat's place across reloads. Always
+   * set by the server; optional only so older objects type-check.
+   */
+  at?: number;
 }
 
 /** A reply still being written, as the app-wide stream reports it. */

@@ -841,6 +841,27 @@ export function runStoreContract(
         expect(store.messages.heads()).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'error', createdAt: 30 }]);
       });
 
+      it('says when the reply at the tip stopped: set as it leaves streaming, cleared when it streams again (a retry)', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'streaming', createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'u1' });
+        expect(store.messages.heads()[0]).not.toHaveProperty('finishedAt');
+
+        const before = Date.now();
+        store.messages.updateStatus('a1', 'error', { kind: 'transient', message: 'boom', retryable: true });
+        const failedAt = store.messages.heads()[0]!.finishedAt!;
+        expect(failedAt).toBeGreaterThanOrEqual(before);
+        expect(failedAt).toBeLessThanOrEqual(Date.now());
+
+        store.messages.updateStatus('a1', 'streaming');
+        expect(store.messages.heads()[0]).not.toHaveProperty('finishedAt');
+        store.messages.updateStatus('a1', 'complete');
+        expect(store.messages.heads()[0]!.finishedAt).toBeGreaterThanOrEqual(failedAt);
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20, finishedAt: store.messages.heads()[0]!.finishedAt }]);
+      });
+
       it('can be a user message when a follow-up below the head is the newest', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

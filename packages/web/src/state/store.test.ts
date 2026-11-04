@@ -714,6 +714,13 @@ describe('asks and the app-wide pending list', () => {
     expect(useOtherBenchStore.getState().appPendingApprovals['a1']).toMatchObject({ kind: 'question' });
     expect(selectPendingApprovalCount(useOtherBenchStore.getState())).toBe(1);
   });
+  it('keeps when a card started waiting, from the event and from the hello', () => {
+    const s = useOtherBenchStore.getState();
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'r1', toolName: 'write_file', at: 700 });
+    expect(useOtherBenchStore.getState().appPendingApprovals['r1']).toMatchObject({ at: 700 });
+    s.applyAppHello({ pendingApprovals: [{ chatId: 'c2', messageId: 'm2', requestId: 'r2', toolName: 'x', at: 800 }], runningTurns: [] });
+    expect(useOtherBenchStore.getState().appPendingApprovals['r2']).toMatchObject({ at: 800 });
+  });
 });
 
 describe('notes (messages sent while a reply runs)', () => {

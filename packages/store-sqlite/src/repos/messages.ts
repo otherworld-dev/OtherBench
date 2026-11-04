@@ -244,11 +244,14 @@ export class SqliteMessageRepo implements MessageRepo {
   // The status and the change log move together (`atomic`): a failure part way
   // leaves the reply as it was and its files' log entries where they were, so
   // a reply is never stopped with its files dropped from what a peer is sent.
+  //
+  // `finished_at` is when it stopped: now as it leaves streaming, cleared as it
+  // streams again (a retry). It's in the same stamped write, so it syncs with the row.
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void {
     atomic(this.db, () => {
       const result = this.db
-        .prepare(`UPDATE message SET status = ?, error = ?, hlc = ? WHERE id = ?`)
-        .run(status, toJsonNullable(error ?? null), this.clock.stamp(), id);
+        .prepare(`UPDATE message SET status = ?, error = ?, finished_at = ?, hlc = ? WHERE id = ?`)
+        .run(status, toJsonNullable(error ?? null), status === 'streaming' ? null : Date.now(), this.clock.stamp(), id);
       if (Number(result.changes) === 0) {
         throw new Error(`message: not found: ${id}`);
       }
@@ -277,15 +280,16 @@ export class SqliteMessageRepo implements MessageRepo {
            SELECT b.chat_id, m.id FROM message m JOIN below b ON m.parent_id = b.id
          ),
          ranked AS (
-           SELECT b.chat_id, m.role, m.status, m.created_at, substr(m.search_text, -?2) AS tail,
+           SELECT b.chat_id, m.role, m.status, m.created_at, m.finished_at, substr(m.search_text, -?2) AS tail,
                   ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
              FROM below b JOIN message m ON m.id = b.id
          )
-         SELECT chat_id, role, status, created_at, tail FROM ranked WHERE rn = 1`
+         SELECT chat_id, role, status, created_at, finished_at, tail FROM ranked WHERE rn = 1`
       )
       .all(chatId ?? null, QUESTION_TAIL) as Record<string, unknown>[];
     return rows.map((r) => {
-      const head = { chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number };
+      const head: ChatHead = { chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number };
+      if (r.finished_at != null) head.finishedAt = r.finished_at as number;
       return head.role === 'assistant' && head.status === 'complete' && asksUser(r.tail as string) ? { ...head, asks: true } : head;
     });
   }

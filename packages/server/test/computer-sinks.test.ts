@@ -158,8 +158,8 @@ describe('screen-derived text at every place a computer reply puts it', () => {
     // The one string on a card that is not a clean line is the text to type, which the card shows spelled out.
     expect(unclean(cards)).toEqual([TYPED]);
     expect(typedTextForCard(cards[1]!.args)).toBe('pay <U+202E>eno on');
-    // The app-wide stream says only that a card is up, for which tool.
-    expect(appEvents.filter((e) => e.type === 'approval-requested')).toEqual(cards.map((c) => ({ type: 'approval-requested', chatId: 'chat-1', messageId: replyId, requestId: c.id, toolName: 'computer' })));
+    // The app-wide stream says only that a card is up, for which tool, and since when.
+    expect(appEvents.filter((e) => e.type === 'approval-requested')).toEqual(cards.map((c) => ({ type: 'approval-requested', chatId: 'chat-1', messageId: replyId, requestId: c.id, toolName: 'computer', at: expect.any(Number) })));
 
     // 2. What the model is given, call by call. A screenshot's own base64 is in the stored copy as a reference (4).
     const results = sent.filter((e): e is Extract<TurnEvent, { type: 'tool-result' }> => e.type === 'tool-result').map((e) => e.result);

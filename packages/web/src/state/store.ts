@@ -998,8 +998,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         case 'chat-deleted':
           return { chats: state.chats.filter((c) => c.id !== event.chatId), ...forgetInBoth(state, (p) => forgetChat(p, event.chatId)) };
         case 'approval-requested': {
-          const { chatId, messageId, requestId, toolName, kind } = event;
-          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName, ...(kind ? { kind } : {}) } } };
+          const { chatId, messageId, requestId, toolName, kind, at } = event;
+          const summary = { chatId, messageId, requestId, toolName, ...(kind ? { kind } : {}), ...(at !== undefined ? { at } : {}) };
+          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: summary } };
         }
         case 'approval-resolved': {
           if (!(event.requestId in state.appPendingApprovals)) return state;
