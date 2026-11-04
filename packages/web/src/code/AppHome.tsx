@@ -5,7 +5,7 @@ import { StartBox } from '../components/StartBox.js';
 import { StatusWord } from '../components/StatusWord.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
-import { buildCodeSidebar } from '../panes/sidebar/model.js';
+import { appChats } from '../panes/sidebar/model.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { useFeatures } from '../state/features.js';
@@ -152,17 +152,11 @@ function NewChat({ app }: { app: App }): JSX.Element {
 
 function AppChats({ app }: { app: App }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
-  const apps = useOtherBenchStore((s) => s.apps);
-  const appFolders = useOtherBenchStore((s) => s.appFolders);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const activity = useChatActivity();
   const now = useNow(60_000);
-  // The Code sidebar's own grouping, so the page and the sidebar always agree on order.
-  const listed = useMemo(() => {
-    // The app may be closed, so mark it live to get its group either way.
-    const model = buildCodeSidebar(chats, apps, appFolders, null, '', null, new Map([[app.id, 'running' as const]]));
-    return model.groups.find((g) => g.app?.id === app.id)?.chats ?? [];
-  }, [chats, apps, appFolders, app.id]);
+  // In its sidebar group's order, so the page and the sidebar agree; listed whether the app is open or closed.
+  const listed = useMemo(() => appChats(chats, app.id), [chats, app.id]);
 
   return (
     <section data-testid="app-home-chats" aria-label="Chats" className="min-w-0">

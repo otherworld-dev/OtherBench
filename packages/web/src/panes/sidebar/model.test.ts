@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatStatus } from '../../state/chatStatus.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, liveApps, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, appChats, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, liveApps, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -141,13 +141,13 @@ describe('buildCodeSidebar with open and live apps', () => {
 
   it('includes a closed app with a live chat, marked', () => {
     const live = new Map<string, 'card' | 'running'>([['b', 'card'], ['a', 'running']]);
-    const model = buildCodeSidebar([], apps, folders, null, '', null, live);
+    const model = buildCodeSidebar([], apps, folders, null, live);
     expect(model.groups.map((g) => [g.key, g.shownBecause])).toEqual([['a', null], ['b', 'card'], ['c', null], ['t', null], ['lost', null]]);
   });
 
   it('searching includes closed apps and has no folders', () => {
     const chats = [chat('hit', { appId: 'b' }), chat('miss', { appId: 'a' })];
-    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'hit', null, new Map([['b', 'card']]));
+    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), new Map([['b', 'card']]));
     expect(model.groups.map((g) => [g.key, g.shownBecause])).toEqual([['b', null]]);
     expect(model).not.toHaveProperty('folders');
   });
@@ -155,6 +155,23 @@ describe('buildCodeSidebar with open and live apps', () => {
   it('the Unknown app group still trails', () => {
     const model = buildCodeSidebar([chat('x', { appId: 'ghost' })], apps, folders, null);
     expect(model.groups.at(-1)!.key).toBe(UNKNOWN_APP_KEY);
+  });
+});
+
+describe('appChats', () => {
+  it("lists an app's unarchived chats as its sidebar group does, pinned first, open or closed", () => {
+    const chats = [
+      chat('low', { appId: 'b', sortOrder: 1 }),
+      chat('high', { appId: 'b', sortOrder: 5 }),
+      chat('pin', { appId: 'b', pinned: true, sortOrder: 0 }),
+      chat('arch', { appId: 'b', archivedAt: 3 }),
+      chat('other', { appId: 'a' }),
+      chat('plain'),
+    ];
+    expect(ids(appChats(chats, 'b'))).toEqual(['pin', 'high', 'low']);
+    const open = buildCodeSidebar(chats, [app('b', 'Beta')], [], null);
+    expect(ids(appChats(chats, 'b'))).toEqual(ids(open.groups[0]!.chats));
+    expect(appChats(chats, 'nobody')).toEqual([]);
   });
 });
 

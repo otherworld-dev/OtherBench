@@ -62,45 +62,23 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
   });
 });
 
-describe('appMenuItems', () => {
-  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), move: vi.fn(), moveToFolder: vi.fn(), requestDelete: vi.fn() });
+describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
+  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), close: vi.fn(), requestDelete: vi.fn() });
 
-  it('offers Rename, Edit…, Move up, Move down and Delete…, each calling its handler', () => {
+  it('the app menu has Close app and no Move up / Move to folder…, each item calling its handler', () => {
     const h = appHandlers();
-    const items = appMenuItems(1, 3, h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Move up', 'Move down', 'Delete…']);
-    expect(items[4]!.danger).toBe(true);
+    const items = appMenuItems(h);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Close app', 'Delete…']);
+    expect(items[3]!.danger).toBe(true);
     for (const item of items) item.onSelect!();
     expect(h.rename).toHaveBeenCalled();
     expect(h.edit).toHaveBeenCalled();
-    expect(h.move.mock.calls).toEqual([[-1], [1]]);
+    expect(h.close).toHaveBeenCalled();
     expect(h.requestDelete).toHaveBeenCalled();
   });
 
-  it('disables Move up for the first app and Move down for the last', () => {
-    const h = appHandlers();
-    const first = appMenuItems(0, 2, h);
-    expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
-    expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
-    expect(appMenuItems(1, 2, h).find((i) => i.id === 'down')!.disabled).toBe(true);
-  });
-
-  it('with folders, offers Move to folder… after Edit…: No folder first, then each folder, the current one checked', () => {
-    const h = appHandlers();
-    const folders = [folder('f1', 'Games'), folder('f2', 'Work')];
-    const items = appMenuItems(0, 1, h, folders, 'f2');
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
-    const submenu = items.find((i) => i.id === 'move-folder')!.submenu!;
-    expect(submenu.map((i) => [i.label, i.checked])).toEqual([
-      ['No folder', false],
-      ['Games', false],
-      ['Work', true],
-    ]);
-    submenu[1]!.onSelect!();
-    submenu[0]!.onSelect!();
-    expect(h.moveToFolder.mock.calls).toEqual([['f1'], [null]]);
-    // An app in no folder has No folder checked.
-    expect(appMenuItems(0, 1, h, folders, null).find((i) => i.id === 'move-folder')!.submenu![0]!.checked).toBe(true);
+  it('a closed app (shown because a chat is live, or found by a search) has no Close app', () => {
+    expect(appMenuItems(appHandlers(), false).map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Delete…']);
   });
 });
 

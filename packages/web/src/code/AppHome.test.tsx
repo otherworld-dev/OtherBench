@@ -132,6 +132,16 @@ describe('AppHome', () => {
     expect(within(screen.getByTestId('app-home-chats')).getAllByRole('listitem').map((r) => r.getAttribute('data-chat-id'))).toEqual(['c1']);
   });
 
+  it("a closed app's home still lists its chats", () => {
+    useOtherBenchStore.setState({
+      apps: [app({ open: false })],
+      appsLoaded: true,
+      chats: [chat('c1', { sortOrder: 1 }), chat('c2', { pinned: true }), chat('c3', { sortOrder: 2 }), chat('c4', { appId: 'other' })],
+    });
+    render(<AppHome appId="a1" />);
+    expect(within(screen.getByTestId('app-home-chats')).getAllByRole('listitem').map((r) => r.getAttribute('data-chat-id'))).toEqual(['c2', 'c3', 'c1']);
+  });
+
   it('shows the open issues', async () => {
     useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
     render(<AppHome appId="a1" />);

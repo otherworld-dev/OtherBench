@@ -230,8 +230,8 @@ export function liveApps(chats: readonly Chat[], statusOf: (c: Chat) => ChatStat
 
 export interface CodeSidebarModel {
   /**
-   * The top-level apps (no folder, or a folder that isn't loaded) in `compareApps` order (while searching, only
-   * those with a match), then Unknown app when it has chats.
+   * The open apps and the closed ones with a live chat, in `codeSidebarAppOrder` (while searching, every app with a
+   * match instead), then Unknown app when it has chats.
    */
   groups: CodeSidebarGroup[];
   /** Archived app chats, newest activity first; only search matches while searching. */
@@ -258,13 +258,18 @@ export interface CodeSidebarModel {
  * unfiled ones), but the folders themselves are only on the All apps page. While searching, every app is a
  * candidate, open or not, flat: one with a matching chat shows, with `shownBecause` null.
  */
-export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[], matches: ReadonlySet<string> | null, _query = '', _chipMatches: ReadonlySet<string> | null = null, live: ReadonlyMap<string, LiveReason> = new Map()): CodeSidebarModel {
-  const appChats = chats.filter((c) => c.appId !== null);
-  const unarchived = appChats.filter((c) => c.archivedAt === null);
+export function buildCodeSidebar(
+  chats: Chat[],
+  apps: App[],
+  folders: AppFolder[],
+  matches: ReadonlySet<string> | null,
+  live: ReadonlyMap<string, LiveReason> = new Map()
+): CodeSidebarModel {
+  const inApps = chats.filter((c) => c.appId !== null);
+  const unarchived = inApps.filter((c) => c.archivedAt === null);
   const known = new Set(apps.map((a) => a.id));
   const keyOf = (c: Chat): string => (c.appId !== null && known.has(c.appId) ? c.appId : UNKNOWN_APP_KEY);
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
-  const pinnedFirst = (a: Chat, b: Chat): number => Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
 
   const group = (key: string, app: App | null): CodeSidebarGroup => {
     const members = unarchived.filter((c) => keyOf(c) === key);
@@ -280,9 +285,22 @@ export function buildCodeSidebar(chats: Chat[], apps: App[], folders: AppFolder[
   return {
     // Unknown app shows only with chats; while searching, any group only with a match.
     groups: groups.filter((g) => (matches === null ? g.app !== null || g.total > 0 : g.chats.length > 0)),
-    archived: appChats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
+    archived: inApps.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
     otherMode: otherModeMatches(chats, matches, (c) => c.appId === null),
   };
+}
+
+/** An app chat's place in its group: pinned ones first, then sidebar order (`byOrder`). */
+function pinnedFirst(a: Chat, b: Chat): number {
+  return Number(b.pinned) - Number(a.pinned) || byOrder(a, b);
+}
+
+/**
+ * One app's unarchived chats in the order its sidebar group lists them, whether the app is open or not: for its
+ * home page, which lists them even while the app is closed and out of the sidebar.
+ */
+export function appChats(chats: readonly Chat[], appId: string): Chat[] {
+  return chats.filter((c) => c.appId === appId && c.archivedAt === null).sort(pinnedFirst);
 }
 
 /**
