@@ -48,11 +48,14 @@ describe('semver', () => {
 });
 
 describe('the beta feed', () => {
-  test('is only ever replaced by a higher version', () => {
+  test('never moves to a lower version', () => {
     expect(shouldReplaceFeed(null, '0.2.0-beta.1')).toBe(true);
     expect(shouldReplaceFeed('0.2.0-beta.5', '0.2.0-beta.6')).toBe(true);
     expect(shouldReplaceFeed('0.2.0-beta.6', '0.2.0-beta.5')).toBe(false);
-    expect(shouldReplaceFeed('0.2.0-beta.6', '0.2.0-beta.6')).toBe(false);
+  });
+
+  test('is replaced by a re-run of its own version, whose installer was signed afresh', () => {
+    expect(shouldReplaceFeed('0.2.0-beta.6', '0.2.0-beta.6')).toBe(true);
   });
 
   test('the manifest is what tauri-plugin-updater reads', () => {

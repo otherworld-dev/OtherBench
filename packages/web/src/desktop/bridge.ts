@@ -237,13 +237,18 @@ export interface UpdateStatus {
   /** Runs from its installer; a development build never updates itself. */
   installed: boolean;
   beta: boolean;
-  state: 'dev-build' | 'idle' | 'checking' | 'up-to-date' | 'ahead' | 'no-releases' | 'downloading' | 'ready' | 'ask' | 'installing' | 'error';
+  /** `failed`: `available` couldn't be downloaded or installed (`error` says why); `error`: the check itself failed. */
+  state: 'dev-build' | 'idle' | 'checking' | 'up-to-date' | 'ahead' | 'no-releases' | 'downloading' | 'ready' | 'ask' | 'installing' | 'failed' | 'error';
   available: string | null;
   newestFull: string | null;
   lastCheckedAt: number | null;
   /** What a ready update waits for before it installs. */
   waitingFor: string[];
   error: string | null;
+  /** While `failed`: when it's tried again (each failure in a row waits longer); null when that's at the next check. */
+  retryAt: number | null;
+  /** While `failed`: how many times in a row it has failed. */
+  failures: number;
 }
 
 /** The updater's status, or null in a browser. */
@@ -258,11 +263,15 @@ export function onUpdateStatus(cb: (status: UpdateStatus) => void): Promise<() =
   return onDesktopEvent<UpdateStatus>('update-status', cb);
 }
 
-/** Checks the release feeds now instead of at the next 4-hourly check. */
-export async function checkForUpdates(): Promise<void> {
+/**
+ * Checks the release feeds now instead of at the next 4-hourly check.
+ * `retry` (a person asked) also tries a build that failed now, instead of
+ * after its wait; an automatic check leaves the wait alone.
+ */
+export async function checkForUpdates(opts: { retry?: boolean } = {}): Promise<void> {
   if (!isDesktop()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('update_check_now');
+  await invoke('update_check_now', { retry: opts.retry ?? false });
 }
 
 /** "Get beta releases early", for this machine. */

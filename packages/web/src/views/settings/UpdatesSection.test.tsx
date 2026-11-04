@@ -21,7 +21,7 @@ import { UpdatesSection, updateStatusText } from './UpdatesSection.js';
 function status(over: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
     current: '0.2.0-beta.7', installed: true, beta: false, state: 'up-to-date', available: null, newestFull: null,
-    lastCheckedAt: null, waitingFor: [], error: null, ...over,
+    lastCheckedAt: null, waitingFor: [], error: null, retryAt: null, failures: 0, ...over,
   };
 }
 
@@ -48,6 +48,15 @@ describe('updateStatusText', () => {
     expect(updateStatusText(status({ state: 'error', error: 'dns' }))).toBe("Couldn't check for updates: dns");
     expect(updateStatusText(status({ state: 'downloading', available: '0.2.0-beta.8' }))).toBe('Downloading 0.2.0-beta.8…');
   });
+
+  it('says a download or install failed, not that the check did, and when it tries again', () => {
+    const failed = status({ state: 'failed', available: '0.2.0-beta.8', error: 'Downloading 0.2.0-beta.8 failed: connection reset', failures: 1 });
+    expect(updateStatusText(failed)).toBe('Downloading 0.2.0-beta.8 failed: connection reset. It tries again at the next check, or now with Check now');
+    expect(updateStatusText({ ...failed, failures: 2 })).toBe(
+      'Downloading 0.2.0-beta.8 failed: connection reset (2 times in a row). It tries again at the next check, or now with Check now'
+    );
+    expect(updateStatusText({ ...failed, error: null })).toMatch(/^Updating to 0\.2\.0-beta\.8 failed\. /);
+  });
 });
 
 describe('UpdatesSection', () => {
@@ -64,7 +73,21 @@ describe('UpdatesSection', () => {
     render(<UpdatesSection />);
     expect(await screen.findByTestId('update-last-checked')).toHaveTextContent(new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     await userEvent.click(screen.getByRole('button', { name: /check now/i }));
-    expect(checkForUpdates).toHaveBeenCalled();
+    // Asked for by hand, so it also tries a build held back after failing.
+    expect(checkForUpdates).toHaveBeenCalledWith({ retry: true });
+  });
+
+  it('says a build that failed is waiting before it is tried again', async () => {
+    const retryAt = new Date(2026, 10, 5, 9, 30).getTime();
+    vi.mocked(updateStatus).mockResolvedValue(
+      status({ state: 'failed', available: '0.2.0-beta.8', error: 'Installing 0.2.0-beta.8 failed: access denied', failures: 3, retryAt })
+    );
+    render(<UpdatesSection />);
+    const line = await screen.findByTestId('update-status');
+    expect(line).toHaveTextContent('Installing 0.2.0-beta.8 failed: access denied (3 times in a row).');
+    expect(line).toHaveTextContent(`It tries again ${new Date(retryAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`);
+    expect(line).not.toHaveTextContent("Couldn't check");
+    expect(screen.getByRole('button', { name: /check now/i })).toBeEnabled();
   });
 
   it('follows the shell as the status changes, and offers a restart once one is ready', async () => {

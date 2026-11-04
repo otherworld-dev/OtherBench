@@ -26,6 +26,12 @@ export function updateStatusText(s: UpdateStatus): string {
       return `${s.available ?? 'An update'} has been waiting a day.`;
     case 'installing':
       return `Installing ${s.available ?? 'the update'}…`;
+    case 'failed': {
+      const what = s.error ?? `Updating to ${s.available ?? 'the new version'} failed`;
+      const times = s.failures > 1 ? ` (${s.failures} times in a row)` : '';
+      const when = s.retryAt != null ? retryClock(s.retryAt) : 'at the next check';
+      return `${what}${times}. It tries again ${when}, or now with Check now`;
+    }
     case 'error':
       return `Couldn't check for updates: ${s.error ?? 'unknown error'}`;
   }
@@ -33,6 +39,11 @@ export function updateStatusText(s: UpdateStatus): string {
 
 function clock(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** A retry can be up to two days off, so it names the day too. */
+function retryClock(at: number): string {
+  return new Date(at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 /**
@@ -76,7 +87,7 @@ export function UpdatesSection(): JSX.Element {
     <fieldset className="space-y-2">
       <legend className="mb-1 font-medium">Updates</legend>
       {status && (
-        <p data-testid="update-status" className={status.state === 'error' ? 'text-[var(--danger)]' : undefined}>
+        <p data-testid="update-status" className={status.state === 'error' || status.state === 'failed' ?'text-[var(--danger)]' : undefined}>
           {updateStatusText(status)}
         </p>
       )}
@@ -99,7 +110,7 @@ export function UpdatesSection(): JSX.Element {
         Get beta releases early
       </label>
       <div className="flex gap-2">
-        <button type="button" className="btn px-3 py-1.5" disabled={!installed || status?.state === 'checking'} onClick={() => void act(checkForUpdates)}>
+        <button type="button" className="btn px-3 py-1.5" disabled={!installed || status?.state === 'checking'} onClick={() => void act(() => checkForUpdates({ retry: true }))}>
           Check now
         </button>
         {(status?.state === 'ready' || status?.state === 'ask') && (
