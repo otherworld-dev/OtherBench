@@ -1,7 +1,9 @@
 import { Fragment, useState, type DragEvent, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
+import { AllAppsPage } from '../code/AllAppsPage.js';
 import { AppHome } from '../code/AppHome.js';
 import { PinIcon } from '../components/icons.js';
+import { isAllAppsTab } from '../state/allAppsTab.js';
 import { parseAppTab } from '../state/appTab.js';
 import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
@@ -36,6 +38,7 @@ function Pane({ index, chatId, focused, multi, maximised, pinned }: PaneProps): 
   // An app's home (spec 2026-10-20-code-tab-design), named the same way.
   const appId = parseAppTab(chatId);
   const appName = useOtherBenchStore((s) => (appId === null ? null : (s.apps.find((a) => a.id === appId)?.name ?? (s.appsLoaded ? 'Missing app' : 'Loading…'))));
+  const allApps = isAllAppsTab(chatId);
   const chat = useOtherBenchStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useOtherBenchStore((s) => s.focusPane);
   const placeChat = useOtherBenchStore((s) => s.placeChat);
@@ -83,7 +86,7 @@ function Pane({ index, chatId, focused, multi, maximised, pinned }: PaneProps): 
           className={`flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-1 text-xs ${focused ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
         >
           <span className="tabular-nums text-[var(--text-faint)]">{index + 1}</span>
-          <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (projectName ?? appName ?? chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
+          <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (projectName ?? appName ?? (allApps ? 'All apps' : null) ?? chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
           <button
             type="button"
             aria-label={pinned ? 'Unpin pane' : 'Pin pane'}
@@ -116,6 +119,8 @@ function Pane({ index, chatId, focused, multi, maximised, pinned }: PaneProps): 
         <ProjectHome projectId={projectId} />
       ) : appId !== null ? (
         <AppHome appId={appId} />
+      ) : allApps ? (
+        <AllAppsPage />
       ) : (
         <Thread chat={chat} />
       )}

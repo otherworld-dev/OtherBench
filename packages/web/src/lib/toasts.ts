@@ -9,6 +9,8 @@ export interface Toast {
   path?: string;
   /** A chat to open: the toast's text becomes a button that opens it. */
   chatId?: string;
+  /** A button after the text ("Undo"): runs `run`, then the toast goes. */
+  action?: { label: string; run: () => void };
 }
 
 /** How long a toast stays before it goes on its own. */

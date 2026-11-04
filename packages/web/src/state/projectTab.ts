@@ -1,4 +1,5 @@
 import { isViewTab } from '../viewer/items.js';
+import { isAllAppsTab } from './allAppsTab.js';
 import { parseAppTab } from './appTab.js';
 
 /**
@@ -18,7 +19,7 @@ export function parseProjectTab(id: string | null | undefined): string | null {
   return projectId.length > 0 ? projectId : null;
 }
 
-/** A tab or pane id that names a chat, not a viewer item, a project page or an app's home (`appTab.ts`). */
+/** A tab or pane id that names a chat, not a viewer item, a project page, an app's home (`appTab.ts`) or All apps. */
 export function isChatTab(id: string | null | undefined): id is string {
-  return typeof id === 'string' && !isViewTab(id) && parseProjectTab(id) === null && parseAppTab(id) === null;
+  return typeof id === 'string' && !isViewTab(id) && parseProjectTab(id) === null && parseAppTab(id) === null && !isAllAppsTab(id);
 }

@@ -29,6 +29,18 @@ export function Toaster(): JSX.Element {
           ) : (
             <span className="min-w-0 flex-1 break-words">{t.text}</span>
           )}
+          {t.action && (
+            <button
+              type="button"
+              className="btn shrink-0 px-2 py-0.5"
+              onClick={() => {
+                t.action!.run();
+                dismiss(t.id);
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
           {t.path && (
             <button type="button" className="btn shrink-0 px-2 py-0.5" onClick={() => void revealPath(t.path!)}>
               Show in folder

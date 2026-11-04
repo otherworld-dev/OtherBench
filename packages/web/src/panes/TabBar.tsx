@@ -5,6 +5,7 @@ import { Menu } from '../components/Menu.js';
 import { StatusWord } from '../components/StatusWord.js';
 import { useNow } from '../lib/useNow.js';
 import { chatStatus, useChatActivity } from '../state/chatStatus.js';
+import { isAllAppsTab } from '../state/allAppsTab.js';
 import { parseAppTab } from '../state/appTab.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
@@ -81,6 +82,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         // An app's home (spec 2026-10-20-code-tab-design), named like a project's.
         const appId = parseAppTab(id);
         if (appId !== null) return [{ id, title: apps.find((a) => a.id === appId)?.name ?? (appsLoaded ? 'Missing app' : 'Loading…') }];
+        if (isAllAppsTab(id)) return [{ id, title: 'All apps' }];
         const chat = chats.find((c) => c.id === id);
         return chat ? [{ id: chat.id, title: chat.title }] : [];
       }),
@@ -198,7 +200,9 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                     ? 'Close tab (the project stays in the sidebar)'
                     : parseAppTab(t.id) !== null
                       ? 'Close tab (the app stays in the sidebar)'
-                      : 'Close tab (the chat stays in the sidebar)'
+                      : isAllAppsTab(t.id)
+                        ? 'Close tab (All apps stays in the sidebar)'
+                        : 'Close tab (the chat stays in the sidebar)'
                 }
                 onClick={() => closeTab(t.id)}
                 className="mr-1 shrink-0 rounded px-1 text-xs text-[var(--text-muted)] opacity-60 hover:bg-[var(--bg-sunken)] hover:opacity-100 focus-visible:opacity-100"

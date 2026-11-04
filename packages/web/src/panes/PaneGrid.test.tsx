@@ -13,12 +13,14 @@ vi.mock('./Thread.js', () => ({
   Thread: ({ chat }: { chat: Chat | null }) => <div data-testid="thread">{chat?.title ?? 'no chat'}</div>,
 }));
 
+vi.mock('../code/AllAppsPage.js', () => ({ AllAppsPage: () => <div data-testid="all-apps-stub" /> }));
 vi.mock('../code/AppHome.js', () => ({ AppHome: ({ appId }: { appId: string }) => <div data-testid="app-home-stub">{appId}</div> }));
 vi.mock('../views/ProjectHome.js', () => ({ ProjectHome: ({ projectId }: { projectId: string }) => <div data-testid="project-home-stub">{projectId}</div> }));
 
 vi.mock('../viewer/ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
 
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { ALL_APPS_TAB_ID } from '../state/allAppsTab.js';
 import { appTabId } from '../state/appTab.js';
 import { projectTabId } from '../state/projectTab.js';
 import { viewTabId } from '../viewer/items.js';
@@ -213,5 +215,17 @@ describe('PaneGrid (#824)', () => {
     expect(screen.getByTestId('app-home-stub')).toHaveTextContent('a1');
     expect(within(screen.getByTestId('pane-0')).getByText('OtherBench')).toBeInTheDocument();
     expect(synced.filter((s) => s.chatId === tab)).toEqual([]);
+  });
+
+  it('shows the All apps tab as the All apps page, named in the pane header, with no chat sync (plan 2026-11-04-open-apps)', () => {
+    useOtherBenchStore.setState({
+      mode: 'code',
+      paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [ALL_APPS_TAB_ID, 'a'], panes: [ALL_APPS_TAB_ID, 'a'], focusedPane: 0 },
+      activeChatId: ALL_APPS_TAB_ID,
+    });
+    render(<PaneGrid narrow={false} />);
+    expect(within(screen.getByTestId('pane-0')).getByTestId('all-apps-stub')).toBeInTheDocument();
+    expect(within(screen.getByTestId('pane-0')).getByText('All apps')).toBeInTheDocument();
+    expect(synced.filter((s) => s.chatId === ALL_APPS_TAB_ID)).toEqual([]);
   });
 });

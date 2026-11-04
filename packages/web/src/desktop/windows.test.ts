@@ -49,6 +49,7 @@ describe('undocked windows', () => {
     expect(parseOpenRequest({ kind: 'chat', chatId: 'c1' })).toEqual({ kind: 'chat', chatId: 'c1' });
     expect(parseOpenRequest({ kind: 'issue', appId: 'a', n: 4, state: 'open', extra: 1 })).toEqual({ kind: 'issue', appId: 'a', n: 4, state: 'open' });
     expect(parseOpenRequest({ kind: 'card', appId: 'a', cardId: 9 })).toEqual({ kind: 'card', appId: 'a', cardId: 9 });
+    expect(parseOpenRequest({ kind: 'all-apps', extra: 1 })).toEqual({ kind: 'all-apps' });
     expect(parseOpenRequest({ kind: 'issue', appId: 'a', n: 1.5, state: 'open' })).toBeNull();
     expect(parseOpenRequest({ kind: 'issue', appId: 'a', n: 1, state: 'merged' })).toBeNull();
     expect(parseOpenRequest({ kind: 'chat', chatId: '' })).toBeNull();

@@ -46,6 +46,15 @@ describe('Toaster', () => {
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
   });
 
+  it('an action button runs and dismisses', async () => {
+    const run = vi.fn();
+    render(<Toaster />);
+    act(() => void toast({ tone: 'ok', text: "Closed Alpha. It's still in All apps.", action: { label: 'Undo', run } }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Undo' }));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+  });
+
   it('makes a toast with a chat a button that opens the chat and dismisses the toast', async () => {
     render(<Toaster />);
     act(() => void toast({ tone: 'ok', text: 'Fix login moved to VH', chatId: 'c9' }));

@@ -64,10 +64,12 @@ describe('the main window with Code or the Overview undocked', () => {
     s().setActiveChatId('app-chat');
     s().openTab('app-chat');
     s().openAppHome('a');
+    s().openAllApps();
     expect(bridge.openIn.mock.calls).toEqual([
       ['code', { kind: 'chat', chatId: 'app-chat' }],
       ['code', { kind: 'tab', chatId: 'app-chat' }],
       ['code', { kind: 'home', appId: 'a' }],
+      ['code', { kind: 'all-apps' }],
     ]);
     expect(s().mode).toBe('chat');
     expect(s().activeChatId).toBe('plain-1');
@@ -118,6 +120,14 @@ describe('the main window with Code or the Overview undocked', () => {
     s().setActiveChatId('plain-1');
     s().setActiveChatId('app-chat');
     expect(bridge.openIn.mock.calls).toEqual([['code', { kind: 'chat', chatId: 'app-chat' }]]);
+  });
+
+  it('opens the All apps page handed over by another window', () => {
+    s().setUndocked(['code']);
+    applyOpenRequest({ kind: 'all-apps' });
+    expect(bridge.openIn).not.toHaveBeenCalled();
+    expect(s().mode).toBe('code');
+    expect(s().activeChatId).toBe('apps:all');
   });
 
   it("sends the Overview's issues and cards to the Code window with their panel", () => {

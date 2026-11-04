@@ -9,6 +9,7 @@ import { formatReset } from '../components/PlanUsageMeter.js';
 import { useToasts } from '../lib/toasts.js';
 import { useClaudeAccounts } from './claudeAccounts.js';
 import { viewTabId } from '../viewer/items.js';
+import { ALL_APPS_TAB_ID } from './allAppsTab.js';
 import { appTabId } from './appTab.js';
 import { MODE_STORAGE_KEY } from './mode.js';
 import { CODE_PANE_STATE_STORAGE_KEY, DEFAULT_PANE_STATE, PANE_STATE_STORAGE_KEY, type PaneState } from './panes.js';
@@ -900,6 +901,24 @@ describe('Code mode: apps and a pane state per mode (spec 2026-10-20-code-tab-de
     expect(s().activeChatId).toBe('app:a');
     expect(s().paneState.panes).toEqual(['app:a']);
     expect(s().paneState.tabs).toEqual([]);
+    expect(s().otherPaneState).toEqual(chatPanes);
+  });
+
+  it('openAllApps shows apps:all in the focused pane and switches to Code mode', () => {
+    s().setOverviewOpen(true);
+    s().openAllApps();
+    expect(s().mode).toBe('code');
+    expect(s().overviewOpen).toBe(false);
+    expect(s().activeChatId).toBe(ALL_APPS_TAB_ID);
+    expect(s().paneState.panes).toEqual([ALL_APPS_TAB_ID]);
+    expect(s().paneState.tabs).toEqual([]);
+    expect(s().otherPaneState).toEqual(chatPanes);
+  });
+
+  it('the All apps page belongs to Code mode: opening it as a tab from Chat mode switches mode', () => {
+    s().openTab(ALL_APPS_TAB_ID);
+    expect(s().mode).toBe('code');
+    expect(s().paneState.tabs).toEqual([ALL_APPS_TAB_ID]);
     expect(s().otherPaneState).toEqual(chatPanes);
   });
 

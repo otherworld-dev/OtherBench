@@ -11,6 +11,7 @@
  */
 
 import { parseViewTab } from '../viewer/items.js';
+import { isAllAppsTab } from './allAppsTab.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { parseProjectTab, projectTabId } from './projectTab.js';
 
@@ -245,12 +246,13 @@ export function openTab(state: PaneState, chatId: string): PaneState {
  * doesn't sit on a chat with no tab left to close it by. A viewer tab (Deck
  * #826) hands its pane back to the file's chat when no other pane shows that
  * chat. Otherwise the pane takes the next tab not already showing, or empties.
- * A project page or an app's home goes with its tab: its pane is emptied.
+ * A project page, an app's home or All apps goes with its tab: its pane is emptied.
  */
 export function closeTab(state: PaneState, chatId: string): PaneState {
   // A project page goes even without a tab (an old saved layout), or its pane would be stuck on it. An app's home the same.
   if (parseProjectTab(chatId) !== null) return forgetProject(state, parseProjectTab(chatId)!);
   if (parseAppTab(chatId) !== null) return forgetApp(state, parseAppTab(chatId)!);
+  if (isAllAppsTab(chatId)) return forgetPage(state, chatId);
   if (!state.tabs.includes(chatId)) return state;
   const tabs = state.tabs.filter((id) => id !== chatId);
   if (!state.panes.includes(chatId)) return { ...state, tabs };
@@ -268,18 +270,20 @@ export function forgetChat(state: PaneState, chatId: string): PaneState {
   return withoutEmptyPins({ ...state, tabs: state.tabs.filter((id) => !gone(id)), panes: state.panes.map((id) => (gone(id) ? null : id)) });
 }
 
-/** A deleted project's page leaves the tabs and every pane. */
-export function forgetProject(state: PaneState, projectId: string): PaneState {
-  const tab = projectTabId(projectId);
+/** A page (a project's, an app's home, All apps) leaves the tabs and every pane. */
+function forgetPage(state: PaneState, tab: string): PaneState {
   if (!state.tabs.includes(tab) && !state.panes.includes(tab)) return state;
   return withoutEmptyPins({ ...state, tabs: state.tabs.filter((id) => id !== tab), panes: state.panes.map((id) => (id === tab ? null : id)) });
 }
 
+/** A deleted project's page leaves the tabs and every pane. */
+export function forgetProject(state: PaneState, projectId: string): PaneState {
+  return forgetPage(state, projectTabId(projectId));
+}
+
 /** A deleted app's home leaves the tabs and every pane, as `forgetProject`. Its chats are the caller's to forget. */
 export function forgetApp(state: PaneState, appId: string): PaneState {
-  const tab = appTabId(appId);
-  if (!state.tabs.includes(tab) && !state.panes.includes(tab)) return state;
-  return withoutEmptyPins({ ...state, tabs: state.tabs.filter((id) => id !== tab), panes: state.panes.map((id) => (id === tab ? null : id)) });
+  return forgetPage(state, appTabId(appId));
 }
 
 /** Moves the tab `chatId` so it sits before `beforeId` (null = the end). */

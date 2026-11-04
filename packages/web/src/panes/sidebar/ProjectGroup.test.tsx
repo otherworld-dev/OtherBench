@@ -218,3 +218,36 @@ describe('ProjectGroup with a page to open', () => {
     });
   });
 });
+
+describe('ProjectGroup close and note (plan 2026-11-04-open-apps)', () => {
+  it('a × beside the name calls onClose, swapping in for the count on hover and focus', async () => {
+    const onClose = vi.fn();
+    renderGroup({ onClose, closeLabel: 'Close Alpha', onOpen: vi.fn() });
+    const close = screen.getByRole('button', { name: 'Close Alpha' });
+    expect(close).toHaveAttribute('title', 'Close Alpha');
+    // Its own button, not inside the one that opens the group's page.
+    expect(screen.getByTestId('group-heading-p-a').querySelector('[data-heading-main]')).not.toContainElement(close);
+    expect(close.className).toContain('group-hover/heading:flex');
+    expect(close.className).toContain('group-focus-within/heading:flex');
+    expect(screen.getByTestId('group-count-p-a').className).toContain('group-hover/heading:hidden');
+    await userEvent.setup().click(close);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no × without onClose, and the count never hides', () => {
+    renderGroup();
+    expect(screen.queryByRole('button', { name: /^Close/ })).toBeNull();
+    expect(screen.getByTestId('group-count-p-a').className).not.toContain('hidden');
+  });
+
+  it('shows a note as a faint line under the heading, folded or not', () => {
+    renderGroup({ note: 'Shown because a chat needs you' });
+    expect(screen.getByTestId('group-note-p-a')).toHaveTextContent('Shown because a chat needs you');
+    cleanup();
+    renderGroup({ note: 'Shown because a chat is running', collapsed: true });
+    expect(screen.getByTestId('group-note-p-a')).toHaveTextContent('Shown because a chat is running');
+    cleanup();
+    renderGroup();
+    expect(screen.queryByTestId('group-note-p-a')).toBeNull();
+  });
+});
