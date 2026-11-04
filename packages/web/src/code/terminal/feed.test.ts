@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../state/api.js';
+import { createFetchSseConnect, openStreamCount } from '../../state/sse.js';
 import { openTerminalFeed, STREAM_BUDGET } from './feed.js';
 
 beforeEach(() => {
@@ -42,5 +43,43 @@ describe('openTerminalFeed', () => {
     feed.close();
     await vi.advanceTimersByTimeAsync(2000);
     expect(output.mock.calls.length).toBe(calls);
+  });
+
+  it('streams in the desktop app however many streams are open: each has a host of its own there', () => {
+    const output = vi.spyOn(api.terminals, 'output');
+    const feed = openTerminalFeed('a1', 't1', { onReset: () => {}, onOutput: () => {} }, { openStreams: () => 20, sharedHost: () => false });
+    expect(feed.mode).toBe('stream');
+    expect(output).not.toHaveBeenCalled();
+    feed.close();
+  });
+
+  it('counts the streams of other tabs too', () => {
+    // Another tab holds events and 3 panes; this one holds its events stream.
+    const feed = openTerminalFeed('a1', 't1', { onReset: () => {}, onOutput: () => {} }, { openStreams: () => 4 + 1, onStreamsChange: () => () => {} });
+    expect(feed.mode).toBe('poll');
+    feed.close();
+  });
+
+  // The page holds /api/events when the terminal opens, so it streams; then four chat panes open, one stream each.
+  it('drops to polling when four chat panes open after it', async () => {
+    vi.spyOn(api.terminals, 'output').mockResolvedValue({ data: 'PS> ', next: 4, reset: false, exitCode: null });
+    const connect = createFetchSseConnect(() => new Promise<Response>(() => {}));
+    const events = connect('/api/events', { onEvent: () => {}, onError: () => {} });
+    expect(openStreamCount()).toBe(1);
+    const resets: string[] = [];
+    const feed = openTerminalFeed('a1', 't1', { onReset: (d) => resets.push(d), onOutput: () => {} });
+    expect(feed.mode).toBe('stream');
+    expect(openStreamCount()).toBe(2);
+    const panes = [1, 2, 3].map((n) => connect(`/api/chats/c${n}/stream`, { onEvent: () => {}, onError: () => {} }));
+    expect(feed.mode).toBe('stream'); // 5 held: one connection still free
+    panes.push(connect('/api/chats/c4/stream', { onEvent: () => {}, onError: () => {} }));
+    expect(feed.mode).toBe('poll');
+    // Its own stream went back, so one connection is free for requests again.
+    expect(openStreamCount()).toBe(STREAM_BUDGET);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resets).toEqual(['PS> ']);
+    feed.close();
+    for (const s of [events, ...panes]) s.close();
+    expect(openStreamCount()).toBe(0);
   });
 });
