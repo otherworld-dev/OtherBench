@@ -60,7 +60,7 @@ import { createMediaHost } from './media.js';
 import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { ScheduleService } from './schedule/service.js';
-import { AppEventBus, markUnreadOnFinish, withStoreEvents } from './stream/events.js';
+import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
@@ -459,6 +459,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   }
   const broker = new PermissionBroker(store, { allowLoopbackPorts });
   const mcpManager = new McpServerManager(store, secrets);
+  announceMcpChanges(events, mcpManager);
   // Next to the database, like its attachments; a :memory: database (tests) uses the temp folder.
   const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-data-${process.pid}`) : dirname(options.dbPath);
   const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });

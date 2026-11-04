@@ -1,12 +1,13 @@
 import type { TurnRunner } from '@otherbench/core/domain/turn.js';
-import type { Chat, ChatRepo, NewChat, Store } from '@otherbench/core/ports/store.js';
+import type { AuditEntry, AuditRepo, Chat, ChatRepo, Grant, GrantRepo, NewChat, Store } from '@otherbench/core/ports/store.js';
 import type { AppEvent, BackgroundChatSummary, ComputerSessionSummary, PendingApprovalSummary, RunningTurnSummary } from '@otherbench/core/types/events.js';
 
 /**
  * The app-wide event bus behind `GET /api/events` (v2 plan, Task 34). Chat
  * events come from `withStoreEvents`, which wraps the store's chat repo so
  * every create, update and delete is announced whoever made it (a route,
- * auto-title, project memory), and its app repos the same way. Turn and approval events come from the
+ * auto-title, project memory), and its app, grant and audit repos the same
+ * way. MCP health comes from the MCP manager (`announceMcpChanges`). Turn and approval events come from the
  * `TurnRunner` via `attach`; turn starts are emitted by the turn routes,
  * which know the chat and the new reply ids.
  *
@@ -196,13 +197,99 @@ class EventedAppsRepo<Row, New, Patch> {
   }
 }
 
-/** `store` with its chat, app and app folder repos announcing changes on `events`; every other repo is the same object. */
+/**
+ * A grant repo that says `grants-changed` after each write, with the grant's
+ * chat (null for an "always" grant), so the Inspector re-reads its grants.
+ * Covers the broker's grants and its use of a "once" grant as well as Revoke.
+ */
+class EventedGrantRepo implements GrantRepo {
+  constructor(
+    private readonly inner: GrantRepo,
+    private readonly events: AppEventBus
+  ) {}
+
+  create(g: Grant): Grant {
+    const grant = this.inner.create(g);
+    this.events.emit({ type: 'grants-changed', chatId: grant.chatId });
+    return grant;
+  }
+
+  get(id: string): Grant | null {
+    return this.inner.get(id);
+  }
+
+  list(chatId?: string): Grant[] {
+    return this.inner.list(chatId);
+  }
+
+  update(id: string, patch: Partial<Omit<Grant, 'id'>>): Grant {
+    const before = this.inner.get(id);
+    const grant = this.inner.update(id, patch);
+    this.events.emit({ type: 'grants-changed', chatId: grant.chatId });
+    // Moved to another chat (or to "always"): the one it left re-reads too.
+    if (before && before.chatId !== grant.chatId) this.events.emit({ type: 'grants-changed', chatId: before.chatId });
+    return grant;
+  }
+
+  delete(id: string): void {
+    const grant = this.inner.get(id);
+    this.inner.delete(id);
+    if (grant) this.events.emit({ type: 'grants-changed', chatId: grant.chatId });
+  }
+}
+
+/** An audit repo that says `audit-changed` with the entry's chat after each write, so the Inspector re-reads the trail. */
+class EventedAuditRepo implements AuditRepo {
+  constructor(
+    private readonly inner: AuditRepo,
+    private readonly events: AppEventBus
+  ) {}
+
+  create(a: Omit<AuditEntry, 'createdAt'> & { createdAt?: number }): AuditEntry {
+    const entry = this.inner.create(a);
+    this.events.emit({ type: 'audit-changed', chatId: entry.chatId });
+    return entry;
+  }
+
+  get(id: string): AuditEntry | null {
+    return this.inner.get(id);
+  }
+
+  list(chatId: string): AuditEntry[] {
+    return this.inner.list(chatId);
+  }
+
+  update(id: string, patch: Partial<Omit<AuditEntry, 'id'>>): AuditEntry {
+    const entry = this.inner.update(id, patch);
+    this.events.emit({ type: 'audit-changed', chatId: entry.chatId });
+    return entry;
+  }
+
+  delete(id: string): void {
+    const entry = this.inner.get(id);
+    this.inner.delete(id);
+    if (entry) this.events.emit({ type: 'audit-changed', chatId: entry.chatId });
+  }
+}
+
+/**
+ * Says `mcp-changed` whenever the MCP manager's health may have changed (a
+ * status, a tool list, a sign-in, a server added, edited or removed), so the
+ * Inspector and Settings > MCP servers re-read it. Returns the unsubscribe.
+ */
+export function announceMcpChanges(events: AppEventBus, mcp: { onChange(listener: (serverId: string | null) => void): () => void }): () => void {
+  return mcp.onChange((serverId) => events.emit({ type: 'mcp-changed', serverId }));
+}
+
+/** `store` with its chat, app, app folder, grant and audit repos announcing changes on `events`; every other repo is the same object. */
 export function withStoreEvents(store: Store, events: AppEventBus): Store {
   return {
     ...store,
     chats: new EventedChatRepo(store.chats, events),
     apps: new EventedAppsRepo(store.apps, events),
     appFolders: new EventedAppsRepo(store.appFolders, events),
+    grants: new EventedGrantRepo(store.grants, events),
+    audit: new EventedAuditRepo(store.audit, events),
     transaction: (fn) => store.transaction(fn),
     close: () => store.close(),
   };
