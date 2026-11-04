@@ -18,7 +18,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
 }
 
 function makeApp(overrides: Partial<App> = {}): App {
-  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { id: 'a', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, open: true, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 const s = () => useOtherBenchStore.getState();

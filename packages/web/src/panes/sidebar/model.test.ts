@@ -12,7 +12,7 @@ function project(id: string, name: string, sortOrder = 0): Project {
 }
 
 function app(id: string, name: string, sortOrder = 0, folderId: string | null = null): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId, open: true, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 function folder(id: string, name: string, sortOrder = 0): AppFolder {

@@ -294,16 +294,18 @@ export interface App {
   bookmarkTag: string | null;
   /** The Code sidebar folder this app is in, or null for the top level. Not trusted on read: not a foreign key (migration 032), so a synced row can name a folder that is missing here, which shows as none. */
   folderId: string | null;
+  /** Shown in the Code sidebar (spec 2026-11-04-open-apps). Synced: every machine shows the same open apps. */
+  open: boolean;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareApps`. */
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
 }
 
-/** What `AppRepo.create` takes: timestamps default to now, `sortOrder` to 0, the links to null; `workspace` and a bare `workspaceRoot` as on `NewProject`. */
+/** What `AppRepo.create` takes: timestamps default to now, `sortOrder` to 0, `open` to true, the links to null; `workspace` and a bare `workspaceRoot` as on `NewProject`. */
 export type NewApp = Omit<
   App,
-  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId' | 'deckBoardId' | 'wikiCollective' | 'wikiPagePath' | 'bookmarkTag' | 'folderId'
+  'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'githubRepo' | 'linkedProjectId' | 'defaultProfileId' | 'deckBoardId' | 'wikiCollective' | 'wikiPagePath' | 'bookmarkTag' | 'folderId' | 'open'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
@@ -315,6 +317,7 @@ export type NewApp = Omit<
   wikiPagePath?: string | null;
   bookmarkTag?: string | null;
   folderId?: string | null;
+  open?: boolean;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;

@@ -105,7 +105,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
 }
 
 function makeApp(overrides: Partial<App> & { id: string }): App {
-  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, workspace: null, workspaceRoot: '/repo', githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, open: true, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 function makeFolder(overrides: Partial<AppFolder> & { id: string }): AppFolder {

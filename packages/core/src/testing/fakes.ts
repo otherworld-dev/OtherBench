@@ -872,6 +872,7 @@ class InMemoryAppRepo implements AppRepo {
       wikiPagePath: a.wikiPagePath ?? null,
       bookmarkTag: a.bookmarkTag ?? null,
       folderId: a.folderId ?? null,
+      open: a.open ?? true,
       sortOrder: a.sortOrder ?? 0,
       createdAt: a.createdAt ?? now,
       updatedAt: a.updatedAt ?? now,
