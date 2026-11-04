@@ -6,7 +6,7 @@ import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import type { Usage } from '@otherbench/core/types/usage.js';
 import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
 import { configureTransport } from '../state/transport.js';
-import { Message } from './Message.js';
+import { Message, userTextPreview } from './Message.js';
 
 function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
   return {
@@ -149,6 +149,38 @@ describe('Message', () => {
     const { container } = render(<Message message={message} />);
     expect(container).not.toHaveTextContent('END');
     expect(screen.getByRole('button', { name: 'Show all (5,003 characters)' })).toBeInTheDocument();
+  });
+
+  it('unfolds a long user message when find goes to a match in its folded part, and stays open after', () => {
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: lines.join('\n') }] });
+    const { container, rerender } = render(<Message message={message} />);
+    expect(container).not.toHaveTextContent('line 300');
+    rerender(<Message message={message} showAllText />);
+    expect(container).toHaveTextContent('line 300');
+    rerender(<Message message={message} />);
+    expect(container).toHaveTextContent('line 300');
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
+  });
+
+  it('draws a long user message open when find draws it to show a match', () => {
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: `${'a'.repeat(5000)}END` }] });
+    const { container } = render(<Message message={message} showAllText />);
+    expect(container).toHaveTextContent('END');
+  });
+
+  it('marks the text find searches, and the Show all button as not part of it', () => {
+    const message = base({ role: 'user', producedBy: null, parts: [{ type: 'text', text: 'x'.repeat(5000) }] });
+    const { container } = render(<Message message={message} />);
+    const body = container.querySelector('[data-message-body]');
+    expect(body).not.toBeNull();
+    expect(screen.getByRole('button', { name: /Show all/ }).closest('[data-find-skip]')).not.toBeNull();
+  });
+
+  it('knows where a long user message is cut', () => {
+    expect(userTextPreview('short')).toBeNull();
+    expect(userTextPreview(Array.from({ length: 50 }, (_, i) => `l${i}`).join('\n'))).toBe(Array.from({ length: 40 }, (_, i) => `l${i}`).join('\n'));
+    expect(userTextPreview('a'.repeat(5000))).toHaveLength(4000);
   });
 
   it('leaves a short user message whole', () => {

@@ -84,6 +84,11 @@ body {
   ::selection {
     background: color-mix(in srgb, var(--accent) 30%, transparent);
   }
+  /* Find in a chat's current match (lib/findInDom.ts): a browser's find yellow, dark text on it in either theme. */
+  ::highlight(chat-find) {
+    background-color: #facc15;
+    color: #0a1118;
+  }
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;

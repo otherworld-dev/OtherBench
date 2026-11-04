@@ -137,6 +137,7 @@ function CopySection({
         <button
           type="button"
           onClick={() => void handleCopy()}
+          data-copy-chrome=""
           title="Copy the text below this line"
           className="label-caps text-xs text-[var(--text-faint)] hover:text-[var(--text)] focus-visible:text-[var(--text)]"
         >

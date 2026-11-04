@@ -6,17 +6,20 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { GitBar } from '../code/GitBar.js';
 import { Composer } from '../components/Composer.js';
+import { FindBar } from '../components/FindBar.js';
 import { Gwyn } from '../components/Gwyn.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
 import { ElsewhereWorking } from '../components/ElsewhereWorking.js';
 import { BackgroundHelpers } from '../components/BackgroundHelpers.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
-import { Message } from '../components/Message.js';
+import { Message, userTextPreview } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
 import { escapeStopsReply } from '../lib/escapeStopsReply.js';
+import { findMatches, firstMatchFrom, isFindShortcut, isMacPlatform, messageFindText, stepMatch, type FindMatch } from '../lib/chatFind.js';
+import { findRoots, locateMatch, showFindHighlight } from '../lib/findInDom.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useStopReply } from '../state/useStopReply.js';
@@ -38,6 +41,22 @@ const NEAR_BOTTOM_PX = 80;
 export const THREAD_WINDOW = 40;
 /** How close (px) to the top the reader gets before earlier messages are drawn. */
 const DRAW_EARLIER_PX = 600;
+/** Find's key: Cmd+F on a Mac, else Ctrl+F. */
+const MAC = isMacPlatform();
+
+/** Find in this chat, while its bar is open: what's looked for, and the match shown (by message, and which in it). */
+interface FindState {
+  chatId: string | null;
+  query: string;
+  at: { messageId: string; occurrence: number } | null;
+}
+
+/** A drawn message in this thread's scroller. Not by `document.getElementById`: two panes can show the same chat. */
+function drawnMessage(scroller: HTMLElement | null, messageId: string): HTMLElement | null {
+  if (!scroller) return null;
+  const id = `msg-${messageId}`;
+  return Array.from(scroller.querySelectorAll<HTMLElement>('[id^="msg-"]')).find((el) => el.id === id) ?? null;
+}
 
 /**
  * Centre pane: the active branch (head -> root), extended forward through
@@ -201,6 +220,94 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     setGoingTo(null);
     document.getElementById(`msg-${goingTo}`)?.scrollIntoView({ block: 'start' });
   }, [goingTo]);
+
+  // Find in this chat (Ctrl+F in the pane). It searches every message on the thread's path, drawn or not
+  // (lib/chatFind.ts); going to a match draws back to it as the outline does, then scrolls to it and highlights it
+  // (lib/findInDom.ts). The bar belongs to the chat it was opened on, so switching chats in the pane closes it.
+  const [find, setFind] = useState<FindState | null>(null);
+  const findOpen = find !== null && find.chatId === chatId;
+  const findQuery = findOpen ? find.query : '';
+  const matches = useMemo(() => findMatches(displayPath, findQuery), [displayPath, findQuery]);
+  const findAt = findOpen ? find.at : null;
+  const findIndex = findAt ? matches.findIndex((m) => m.messageId === findAt.messageId && m.occurrence === findAt.occurrence) : -1;
+  const findTarget = findIndex >= 0 ? matches[findIndex] : undefined;
+  // A long user message is drawn folded; one whose match is past the fold is drawn open.
+  const findMessage = findTarget ? displayPath[findTarget.index] : undefined;
+  const findPreview = findMessage?.role === 'user' ? userTextPreview(messageFindText(findMessage)) : null;
+  const unfoldId = findTarget && findPreview !== null && findTarget.start + findQuery.length > findPreview.length ? findTarget.messageId : null;
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const findReturnRef = useRef<HTMLElement | null>(null);
+  const lastFindQueryRef = useRef('');
+  const findOwner = useRef({}).current;
+  const [findGoing, setFindGoing] = useState<FindMatch | null>(null);
+
+  /** The first message on the path at least partly in view, for find to start from as a browser's does. */
+  const firstInView = (): number => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    const top = el.getBoundingClientRect().top;
+    const seen = Array.from(el.querySelectorAll('[id^="msg-"]')).find((node) => node.getBoundingClientRect().bottom > top);
+    const at = seen ? displayPath.findIndex((m) => `msg-${m.id}` === seen.id) : -1;
+    return Math.max(0, at);
+  };
+  const showMatch = (match: FindMatch): void => {
+    if (match.index < start) setDrawnFrom({ chatId, start: match.index });
+    setFindGoing(match);
+  };
+  const search = (query: string): void => {
+    lastFindQueryRef.current = query;
+    const found = findMatches(displayPath, query);
+    const first = found[firstMatchFrom(found, firstInView())];
+    setFind({ chatId, query, at: first ? { messageId: first.messageId, occurrence: first.occurrence } : null });
+    if (first) showMatch(first);
+    else showFindHighlight(findOwner, null);
+  };
+  const stepFind = (delta: 1 | -1): void => {
+    const next = matches[stepMatch(matches.length, findIndex, delta)];
+    if (!next) return;
+    setFind({ chatId, query: findQuery, at: { messageId: next.messageId, occurrence: next.occurrence } });
+    showMatch(next);
+  };
+  const openFind = (): void => {
+    if (findOpen) {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+      return;
+    }
+    findReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    search(lastFindQueryRef.current);
+  };
+  const closeFind = (): void => {
+    setFind(null);
+    showFindHighlight(findOwner, null);
+    const back = findReturnRef.current;
+    (back?.isConnected ? back : sectionRef.current)?.focus();
+  };
+  useLayoutEffect(() => {
+    if (!findGoing) return;
+    setFindGoing(null);
+    const el = scrollRef.current;
+    const article = drawnMessage(el, findGoing.messageId);
+    if (!el || !article) return;
+    const range = locateMatch(findRoots(article), findQuery, findGoing.occurrence);
+    showFindHighlight(findOwner, range);
+    // jsdom has no layout for a Range; there the message is scrolled to instead.
+    const box = range && typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+    if (box && (box.width > 0 || box.height > 0)) {
+      const view = el.getBoundingClientRect();
+      // Left where it is when it's already in view (clear of the find bar), else put a third of the way down.
+      if (box.top < view.top + 48 || box.bottom > view.bottom - 16) el.scrollTop += box.top - view.top - el.clientHeight / 3;
+    } else {
+      article.scrollIntoView({ block: 'center' });
+    }
+    // Moving off the bottom stops the thread following new text before the scroll event says so.
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  }, [findGoing]);
+  useLayoutEffect(() => {
+    if (!findOpen) showFindHighlight(findOwner, null);
+  }, [findOpen, findOwner]);
+  useEffect(() => () => showFindHighlight(findOwner, null), [findOwner]);
 
   const jumpToLatest = useCallback((): void => {
     const el = scrollRef.current;
@@ -430,12 +537,24 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       <div className="flex h-full min-h-0 w-full min-w-0 flex-1">
         {/* A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads. */}
         <section
+          ref={sectionRef}
           aria-label={chat.title}
           {...(tint ? { 'data-account': pinned } : {})}
           style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0', ...(tint ? { '--account-colour': tint } : {}) } as CSSProperties}
-          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+          // Focusable (not by Tab), so a click on the thread's text keeps Ctrl+F in this chat.
+          tabIndex={-1}
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden outline-none"
+          // Ctrl+F (Cmd+F on a Mac) in this chat finds in it; anywhere else it stays the browser's.
           // Escape anywhere in this chat stops its running reply, as Stop does (lib/escapeStopsReply.ts).
           onKeyDown={(e) => {
+            if (isFindShortcut(e, MAC)) {
+              e.preventDefault();
+              openFind();
+              return;
+            }
+            // The section itself only has focus from a click on the thread's text: Escape there (to drop a selection,
+            // say) doesn't stop the reply, as before the section took focus.
+            if (e.target === e.currentTarget) return;
             if (!replies.canStop || !escapeStopsReply({ key: e.key, defaultPrevented: e.defaultPrevented, isComposing: e.nativeEvent.isComposing, target: e.target })) return;
             e.preventDefault();
             void replies.stop();
@@ -454,6 +573,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               tree, every branch and variant this window holds (GET /chats/:id/messages sends all of it), not just the path shown. */}
           {chat.appId !== null && <GitBar chat={chat} messages={chatMessages} />}
           <div className="relative min-h-0 flex-1">
+            {findOpen && (
+              <FindBar query={findQuery} current={findIndex} total={matches.length} onQueryChange={search} onStep={stepFind} onClose={closeFind} inputRef={findInputRef} />
+            )}
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
                 {displayPath.length === 0 && chat.headMessageId !== null ? (
@@ -507,6 +629,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         key={m.id}
                         message={m}
                         framed
+                        showAllText={m.id === unfoldId}
                         otherVariantsCount={compare ? siblings.length - 1 : 0}
                         onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                         pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
