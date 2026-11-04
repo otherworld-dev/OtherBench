@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import type { McpServer } from '@otherbench/core/ports/store.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
-import { usePolled } from '../../lib/usePolled.js';
+import { useLiveData } from '../../lib/useLiveData.js';
 import { ClaudeDesktopImport } from './ClaudeDesktopImport.js';
 import { McpSignIn } from './McpSignIn.js';
 import { ApiError, api, type CreateMcpServerBody } from '../../state/api.js';
@@ -199,9 +199,9 @@ function KvRowsEditor({
 interface McpServerFormProps {
   /** `null` means "creating a new server". */
   server: McpServer | null;
-  /** The selected server's live health from the panel's poll (null while loading, or for a new server). */
+  /** The selected server's live health from the panel's list (null while loading, or for a new server). */
   health: McpServerHealth | null;
-  /** Asks the panel to re-poll after a sign-in action. */
+  /** Asks the panel to re-read the health list after a sign-in action. */
   onSignInChanged: () => void;
   onSaved: (server: McpServer) => void;
   onDeleted: (id: string) => void;
@@ -757,21 +757,18 @@ function McpServerRow({
  * servers, so `Profile.toolPolicy.mcpServerIds` (this panel's sibling in
  * ProfilesPanel) had nothing to select from.
  *
- * `list()` (`GET /mcp-servers`, polled here every few seconds like
- * Inspector's own health section) returns live health only -- status, tool
- * COUNT, enabled -- so the row list is built from that directly. The edit
- * form needs the full stored config (command/args/url/env/headers), which
- * has no place in the health shape, so selecting a row fetches it separately
- * via `GET /mcp-servers/:id`. `pollNonce` forces `usePolled` to restart (and
- * therefore re-fetch immediately, not waiting out the rest of the interval)
- * right after any action this panel itself performs -- create, delete,
- * enable/disable, refresh -- so those actions are reflected in the list
- * without a several-second-long "did that work?" gap.
+ * `list()` (`GET /mcp-servers`, re-read on every `mcp-changed` app event
+ * like Inspector's own health section, see `useLiveData`) returns live
+ * health only -- status, tool COUNT, enabled -- so the row list is built
+ * from that directly. The edit form needs the full stored config
+ * (command/args/url/env/headers), which has no place in the health shape, so
+ * selecting a row fetches it separately via `GET /mcp-servers/:id`.
+ * `reloadHealth` re-reads the list at once right after any action this panel
+ * itself performs -- create, delete, enable/disable, refresh, sign-in -- so
+ * the result shows without waiting for the event and its debounce.
  */
 export function McpServersPanel(): JSX.Element {
-  const [pollNonce, setPollNonce] = useState(0);
-  const { data: servers, failed: healthFailed } = usePolled(() => api.mcpServers.list(), [pollNonce]);
-  const bumpPoll = (): void => setPollNonce((n) => n + 1);
+  const { data: servers, failed: healthFailed, refetch: reloadHealth } = useLiveData(() => api.mcpServers.list(), [], (e) => e.type === 'mcp-changed');
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [importing, setImporting] = useState(false);
@@ -828,20 +825,20 @@ export function McpServersPanel(): JSX.Element {
     if (editingId !== server.id) skipNextFetch.current = true;
     setSelectedConfig(server);
     setEditingId(server.id);
-    bumpPoll();
+    reloadHealth();
   }
 
   function handleDeleted(): void {
     setEditingId(null);
     setSelectedConfig(null);
-    bumpPoll();
+    reloadHealth();
   }
 
   async function toggleEnabled(health: McpServerHealth): Promise<void> {
     setBusyIds((s) => new Set(s).add(health.id));
     try {
       await api.mcpServers.patch(health.id, { enabled: !health.enabled });
-      bumpPoll();
+      reloadHealth();
     } catch (err) {
       console.error(`[otherbench-web] failed to toggle MCP server ${health.id}:`, err);
     } finally {
@@ -857,7 +854,7 @@ export function McpServersPanel(): JSX.Element {
     setBusyIds((s) => new Set(s).add(health.id));
     try {
       await api.mcpServers.refresh(health.id);
-      bumpPoll();
+      reloadHealth();
     } catch (err) {
       console.error(`[otherbench-web] failed to refresh MCP server ${health.id}:`, err);
     } finally {
@@ -921,9 +918,9 @@ export function McpServersPanel(): JSX.Element {
 
       <div className="flex-1">
         {importing ? (
-          <ClaudeDesktopImport onImported={bumpPoll} onClose={() => setImporting(false)} />
+          <ClaudeDesktopImport onImported={reloadHealth} onClose={() => setImporting(false)} />
         ) : editingId === 'new' ? (
-          <McpServerForm key="new" server={null} health={null} onSignInChanged={bumpPoll} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
+          <McpServerForm key="new" server={null} health={null} onSignInChanged={reloadHealth} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
         ) : editingId && loadingConfig ? (
           <p className="text-sm text-[var(--text-faint)]">Loading…</p>
         ) : editingId && loadError ? (
@@ -933,7 +930,7 @@ export function McpServersPanel(): JSX.Element {
             key={selectedConfig.id}
             server={selectedConfig}
             health={servers?.find((h) => h.id === selectedConfig.id) ?? null}
-            onSignInChanged={bumpPoll}
+            onSignInChanged={reloadHealth}
             onSaved={handleSaved}
             onDeleted={handleDeleted}
             onCancel={() => setEditingId(null)}

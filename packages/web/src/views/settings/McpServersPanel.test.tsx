@@ -1,9 +1,11 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
+import { LIVE_DEBOUNCE_MS } from '../../lib/useLiveData.js';
+import { emitAppEvent } from '../../state/appEventListeners.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { McpServersPanel } from './McpServersPanel.js';
 
@@ -87,6 +89,25 @@ function reset(): void {
 describe('McpServersPanel', () => {
   beforeEach(reset);
   afterEach(cleanup);
+
+  it('re-reads the health list when the server says it changed, and not on a timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockedList.mockResolvedValue([makeHealth({ status: 'connecting', toolCount: 0 })]);
+      render(<McpServersPanel />);
+      await screen.findByTestId('mcp-servers-list');
+      await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)));
+      expect(mockedList).toHaveBeenCalledTimes(1);
+
+      mockedList.mockResolvedValue([makeHealth({ status: 'ok', toolCount: 3 })]);
+      act(() => emitAppEvent({ type: 'mcp-changed', serverId: 'srv-1' }));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(LIVE_DEBOUNCE_MS)));
+      expect(await within(screen.getByTestId('mcp-servers-list')).findByText(/3 tools/)).toBeInTheDocument();
+      expect(mockedList).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('lists servers with their live health (status, transport, tool count)', async () => {
     mockedList.mockResolvedValue([

@@ -4,7 +4,7 @@ import { focusedWindow, isDesktop, onDesktopEvent, showNotification } from '../d
 import { windowForMode } from '../desktop/windows.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
 import { api } from './api.js';
-import { emitAppEvent } from './appEventListeners.js';
+import { emitAppEvent, emitAppEventsHello } from './appEventListeners.js';
 import { refreshFeatures } from './features.js';
 import { refreshMachines } from './machines.js';
 import { SseClient } from './sse.js';
@@ -99,6 +99,8 @@ export function useAppEvents(): void {
       onHello: (hello) => {
         applyAppHello(hello);
         emitAppEvent({ type: 'overview-changed' });
+        // The Inspector's MCP, grants and audit sections re-read everything (useLiveData).
+        emitAppEventsHello();
         // Missed a switch while disconnected, or this is start-up.
         refreshFeatures();
       },

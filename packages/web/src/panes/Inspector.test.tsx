@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
@@ -10,6 +10,8 @@ import { Inspector } from './Inspector.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, groupDomId, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
 import { INSPECTOR_SECTIONS_STORAGE_KEY, resetInspectorSectionsForTests } from '../state/inspectorSections.js';
+import { emitAppEvent, emitAppEventsHello } from '../state/appEventListeners.js';
+import { LIVE_DEBOUNCE_MS } from '../lib/useLiveData.js';
 
 vi.mock('../desktop/bridge.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../desktop/bridge.js')>()),
@@ -553,7 +555,7 @@ describe("Inspector MCP servers on the chat's profile", () => {
 describe('Inspector tool grants', () => {
   afterEach(cleanup);
 
-  it('lists active grants for the chat and revoking one removes it immediately, without waiting for the next poll', async () => {
+  it('lists active grants for the chat and revoking one removes it immediately, without waiting for a re-read', async () => {
     mockedGrantsList.mockResolvedValue([
       { id: 'g1', chatId: 'chat-1', profileId: null, toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null },
       { id: 'g2', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null },
@@ -567,7 +569,7 @@ describe('Inspector tool grants', () => {
     const user = userEvent.setup();
     await user.click(within(grantsSection()).getByRole('button', { name: 'Revoke grant for run_command' }));
     expect(mockedGrantsRevoke).toHaveBeenCalledWith('g2');
-    // Gone from the DOM right away -- optimistic removal, not "eventually, on the next poll".
+    // Gone from the DOM right away -- optimistic removal, not "eventually, on the next re-read".
     expect(within(grantsSection()).queryByTestId('grant-g2')).not.toBeInTheDocument();
     expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
   });
@@ -709,6 +711,114 @@ describe('Inspector audit trail', () => {
     mockedAuditList.mockResolvedValue([]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(auditSection()).findByText('No tool calls recorded in this chat yet.')).toBeInTheDocument();
+  });
+});
+
+describe('Inspector MCP, grants and audit are pushed, not polled', () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const renderChat = () => render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+  const settled = async () => {
+    await waitFor(() => {
+      expect(mockedMcpList).toHaveBeenCalled();
+      expect(mockedGrantsList).toHaveBeenCalled();
+      expect(mockedAuditList).toHaveBeenCalled();
+    });
+  };
+
+  it('reads each section once and never again on a timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderChat();
+    await settled();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)));
+    expect(mockedMcpList).toHaveBeenCalledTimes(1);
+    expect(mockedGrantsList).toHaveBeenCalledTimes(1);
+    expect(mockedAuditList).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads only the section an event is about, once for a burst', async () => {
+    renderChat();
+    await settled();
+
+    act(() => {
+      emitAppEvent({ type: 'grants-changed', chatId: 'chat-2' });
+      emitAppEvent({ type: 'audit-changed', chatId: 'chat-2' });
+      emitAppEvent({ type: 'chat-updated', chat: makeChat({ title: 'Renamed' }) });
+    });
+    await new Promise((r) => setTimeout(r, LIVE_DEBOUNCE_MS * 2));
+    expect(mockedGrantsList).toHaveBeenCalledTimes(1);
+    expect(mockedAuditList).toHaveBeenCalledTimes(1);
+    expect(mockedMcpList).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      emitAppEvent({ type: 'audit-changed', chatId: 'chat-1' });
+      emitAppEvent({ type: 'audit-changed', chatId: 'chat-1' });
+    });
+    await waitFor(() => expect(mockedAuditList).toHaveBeenCalledTimes(2));
+    act(() => emitAppEvent({ type: 'grants-changed', chatId: null }));
+    await waitFor(() => expect(mockedGrantsList).toHaveBeenCalledTimes(2));
+    act(() => emitAppEvent({ type: 'mcp-changed', serverId: 'srv-1' }));
+    await waitFor(() => expect(mockedMcpList).toHaveBeenCalledTimes(2));
+    expect(mockedAuditList).toHaveBeenCalledTimes(2);
+    expect(mockedGrantsList).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads all three after a reconnect, as events may have been missed', async () => {
+    renderChat();
+    await settled();
+    act(() => emitAppEventsHello());
+    await waitFor(() => {
+      expect(mockedMcpList).toHaveBeenCalledTimes(2);
+      expect(mockedGrantsList).toHaveBeenCalledTimes(2);
+      expect(mockedAuditList).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('shows a grant and an audit entry made elsewhere when the server says so', async () => {
+    renderChat();
+    expect(await within(grantsSection()).findByText('No grants issued in this chat yet.')).toBeInTheDocument();
+    mockedGrantsList.mockResolvedValue([{ id: 'g1', chatId: 'chat-1', profileId: 'p1', toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null }]);
+    mockedAuditList.mockResolvedValue([{ id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 'write_file', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'ask:chat', createdAt: Date.now() }]);
+    act(() => {
+      emitAppEvent({ type: 'grants-changed', chatId: 'chat-1' });
+      emitAppEvent({ type: 'audit-changed', chatId: 'chat-1' });
+    });
+    expect(await within(grantsSection()).findByTestId('grant-g1')).toBeInTheDocument();
+    expect(await within(auditSection()).findByTestId('audit-a1')).toBeInTheDocument();
+  });
+
+  it('after a revoke, a grant made later still shows', async () => {
+    const g1 = { id: 'g1', chatId: 'chat-1', profileId: 'p1', toolName: 'write_file', source: 'fs' as const, scope: 'chat' as const, constraint: null, expiresAt: null };
+    const g2 = { ...g1, id: 'g2', toolName: 'edit_file' };
+    mockedGrantsList.mockResolvedValue([g1]);
+    renderChat();
+    await userEvent.setup().click(await within(grantsSection()).findByRole('button', { name: 'Revoke grant for write_file' }));
+    expect(within(grantsSection()).queryByTestId('grant-g1')).not.toBeInTheDocument();
+
+    mockedGrantsList.mockResolvedValue([g2]);
+    act(() => emitAppEvent({ type: 'grants-changed', chatId: 'chat-1' }));
+    expect(await within(grantsSection()).findByTestId('grant-g2')).toBeInTheDocument();
+  });
+
+  it("re-reads the grants when the chat's profile changes, as other always grants may apply", async () => {
+    const { rerender } = renderChat();
+    await settled();
+    rerender(<Inspector chat={makeChat({ profileId: 'p2' })} profile={makeProfile({ id: 'p2' })} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await waitFor(() => expect(mockedGrantsList).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the audit times counting with nothing new to fetch', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedAuditList.mockResolvedValue([{ id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 'read_file', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: Date.now() }]);
+    renderChat();
+    const row = await within(auditSection()).findByTestId('audit-a1');
+    expect(row).toHaveTextContent(/read_file\ds ago/);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(20_000)));
+    expect(row).toHaveTextContent(/read_file2\ds ago/);
+    expect(mockedAuditList).toHaveBeenCalledTimes(1);
   });
 });
 

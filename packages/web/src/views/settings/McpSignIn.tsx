@@ -18,15 +18,16 @@ function errorText(err: unknown, fallback: string): string {
 /**
  * Settings > MCP servers, one saved http server's Sign-in section (spec
  * 2026-10-12-mcp-oauth-design §6). Shows the server's sign-in state from
- * the panel's health poll; while a sign-in is pending it also checks every
- * second and asks the panel to re-poll once it has ended. Tokens never
- * reach the browser: only the state, account and date do.
+ * the panel's health list; while a sign-in is pending it also checks every
+ * second and asks the panel to re-read once it has ended (one that runs out
+ * of time ends with no `mcp-changed` event). Tokens never reach the
+ * browser: only the state, account and date do.
  */
 export function McpSignIn({ server, health, onChanged }: { server: McpServer; health: McpServerHealth | null; onChanged: () => void }): JSX.Element {
   const auth = health?.auth ?? null;
   const fixedHeader = Object.keys(server.headerRefs).some((name) => name.toLowerCase() === 'authorization');
   const [authUrl, setAuthUrl] = useState<string | null>(null);
-  // Set when a start succeeds, until the next health poll says so itself.
+  // Set when a start succeeds, until the next health read says so itself.
   const [optimisticPending, setOptimisticPending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);

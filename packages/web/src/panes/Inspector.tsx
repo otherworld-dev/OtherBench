@@ -6,7 +6,8 @@ import type { AuditEntry, Chat, Grant } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
-import { usePolled } from '../lib/usePolled.js';
+import { useLiveData } from '../lib/useLiveData.js';
+import { useNow } from '../lib/useNow.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
 import { alsoActive } from '../state/machines.js';
@@ -66,21 +67,16 @@ function formatCost(cost: number): string {
 }
 
 /**
- * How often the honest-state sections below (MCP health, grants, audit)
- * re-poll -- there is no push channel for any of the three (unlike the
- * thread itself, which is SSE-driven): MCP server status changes on its own
- * timeline (health checks, reconnects) with nothing to notify this pane;
- * a grant can be created as a side effect of an approval resolved from
- * Thread.tsx, a sibling component with no direct line to this one; and the
- * audit trail grows on every gated tool call, same story. Polling is the
- * simple, honest choice here over wiring a second SSE channel or lifting
- * shared state up -- "the inspector is the honest-state surface" (task 26
- * decision #3) is about never rendering an empty state that HIDES real
- * activity, not about sub-second live-ness.
+ * The honest-state sections below (MCP health, grants, audit) are pushed,
+ * not polled: the server says `mcp-changed`, `grants-changed` or
+ * `audit-changed` on the app-wide `GET /api/events` stream whenever one may
+ * have changed (an MCP status or tool list, a grant made, used up or revoked
+ * by an approval resolved anywhere, a gated tool call), and `useLiveData`
+ * re-reads just that section, debounced, over the stream `useAppEvents`
+ * already holds rather than a connection of its own. Every hello (a
+ * reconnect) re-reads all three, so a change missed while the stream was down
+ * still shows. Settings > MCP servers reads its health list the same way.
  */
-// `usePolled` moved to ../lib/usePolled.js so the Settings > MCP servers
-// panel can reuse the exact same "no push channel, poll and don't flash to
-// loading on a routine re-fetch" behaviour for its own health list.
 
 // ---------------------------------------------------------------------------
 // Workspace root -- the single setting that unblocks the whole tool runtime.
@@ -510,7 +506,7 @@ function mcpSummary(servers: McpServerHealth[] | null, failed: boolean, onIds: s
  * dimmed, so a green dot doesn't read as "this chat has these tools".
  */
 function McpServersSection({ profile }: { profile: Profile | null }): JSX.Element {
-  const { data: servers, failed } = usePolled(() => api.mcpServers.list(), []);
+  const { data: servers, failed } = useLiveData(() => api.mcpServers.list(), [], (e) => e.type === 'mcp-changed');
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
   const upsertProfile = useOtherBenchStore((s) => s.upsertProfile);
   const profileIds = profile?.toolPolicy.mcpServerIds ?? [];
@@ -629,13 +625,23 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
   );
 }
 
-/** "Tool grants" -- every grant currently in effect for this chat (chat-scoped + global 'always' grants, see routes/tools.ts), each with a Revoke action that takes effect on the VERY NEXT tool call (no restart -- see PermissionBroker.decide, which reads the grant list fresh every time). */
-function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
-  const { data: grants, failed } = usePolled(() => api.grants.list(chatId), [chatId]);
+/**
+ * "Tool grants" -- every grant currently in effect for this chat (chat-scoped + global 'always' grants, see
+ * routes/tools.ts), each with a Revoke action that takes effect on the VERY NEXT tool call (no restart -- see
+ * PermissionBroker.decide, which reads the grant list fresh every time). Which 'always' grants apply depends on the
+ * chat's profile, so a profile change reads the list again.
+ */
+function GrantsSection({ chatId, profileId }: { chatId: string; profileId: string }): JSX.Element {
+  const { data: grants, failed } = useLiveData(
+    () => api.grants.list(chatId),
+    [chatId, profileId],
+    (e) => e.type === 'grants-changed' && (e.chatId === null || e.chatId === chatId)
+  );
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
   const [localGrants, setLocalGrants] = useState<Grant[] | null>(null);
 
-  useEffect(() => setLocalGrants(null), [chatId]);
+  // A fresh read (or another chat) replaces the optimistic list.
+  useEffect(() => setLocalGrants(null), [chatId, grants]);
   const shown = localGrants ?? grants;
   useSectionSummary(failed ? "couldn't load" : shown === null ? null : shown.length === 0 ? 'none' : `${shown.length} active`);
 
@@ -643,9 +649,9 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
     setRevoking((s) => new Set(s).add(id));
     try {
       await api.grants.revoke(id);
-      // Optimistic removal -- the next poll would also drop it, but a
-      // Revoke button that visibly does nothing for up to POLL_INTERVAL_MS
-      // reads as broken, and decision #3 requires this to be verifiably
+      // Optimistic removal -- the `grants-changed` the revoke announces
+      // re-reads the list too, but only after a round trip and the
+      // debounce, and decision #3 requires this to be verifiably
       // immediate, not eventually-consistent-looking.
       setLocalGrants((shown ?? []).filter((g) => g.id !== id));
     } catch (err) {
@@ -700,8 +706,8 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
   );
 }
 
-function formatAuditTime(createdAt: number): string {
-  const seconds = Math.max(0, Math.round((Date.now() - createdAt) / 1000));
+function formatAuditTime(createdAt: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - createdAt) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -730,6 +736,8 @@ function grantedByLabel(grantedBy: string): string {
 }
 
 const AUDIT_COLLAPSED_COUNT = 5;
+/** How often the audit trail's "Ns ago" times are redrawn; nothing is fetched. */
+const AUDIT_CLOCK_MS = 10_000;
 
 /** "Show all (N)" / "Show fewer" toggle shared by the capped Inspector lists. */
 function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; limit: number; expanded: boolean; onToggle: () => void }): JSX.Element | null {
@@ -743,7 +751,9 @@ function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; li
 
 /** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see OtherBenchToolProvider), and duration. Newest first. */
 function AuditSection({ chatId }: { chatId: string }): JSX.Element {
-  const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
+  const { data: entries, failed } = useLiveData(() => api.audit.list(chatId), [chatId], (e) => e.type === 'audit-changed' && e.chatId === chatId);
+  // "12s ago" keeps counting with no new entry to redraw it.
+  const now = useNow(AUDIT_CLOCK_MS);
   const [expanded, setExpanded] = useState(false);
   useSectionSummary(
     failed ? "couldn't load" : entries === null ? null : entries.length === 0 ? 'none' : `${entries.length} call${entries.length === 1 ? '' : 's'}`
@@ -764,7 +774,7 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
           <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium">{entry.toolName}</span>
-              <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
+              <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt, now)}</span>
             </div>
             <div className="text-xs text-[var(--text-muted)]">
               {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
@@ -1000,7 +1010,7 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       {chat && <ClaudeCodeInspectorSection chatId={chat.id} />}
 
       <Section title="Tool grants">
-        {chat ? <GrantsSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
+        {chat ? <GrantsSection chatId={chat.id} profileId={chat.profileId} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       <Section title="MCP servers">

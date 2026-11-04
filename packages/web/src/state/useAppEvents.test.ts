@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { AppEvent, AppEventsHello } from '@otherbench/core/types/events.js';
 import { api } from './api.js';
-import { onAppEvent } from './appEventListeners.js';
+import { onAppEvent, onAppEventsHello } from './appEventListeners.js';
 import { useOtherBenchStore } from './store.js';
 import { refreshAfterSync, useAppEvents } from './useAppEvents.js';
 
@@ -70,6 +70,16 @@ describe('useAppEvents', () => {
     sse.onHello!({ pendingApprovals: [{ requestId: 'r1' } as never], runningTurns: [] });
     expect(seen).toEqual([{ type: 'overview-changed' }]);
     expect(Object.keys(useOtherBenchStore.getState().appPendingApprovals)).toEqual(['r1']);
+    off();
+  });
+
+  it('a hello also tells the hello listeners (the Inspector re-reads MCP, grants and audit)', () => {
+    let hellos = 0;
+    const off = onAppEventsHello(() => hellos++);
+    renderHook(() => useAppEvents());
+    sse.onHello!({ pendingApprovals: [], runningTurns: [] });
+    sse.onHello!({ pendingApprovals: [], runningTurns: [] });
+    expect(hellos).toBe(2);
     off();
   });
 
