@@ -2514,14 +2514,12 @@ surprise.
   request to an address the model chose. Claude Code's own WebFetch is
   allowed while planning, so allowing `open` on a site that already has a
   grant would be consistent; it wasn't done.
-- **Test files have type errors.** `tsc -b` builds `src` only, so tests were
+- **Test files are typechecked.** `tsc -b` builds `src` only, so tests were
   never typechecked. `npm run typecheck:tests` (each package's
-  `tsconfig.test.json`, after `tsc -b`) checks them; it found 146 errors, the
-  cheap ones were fixed, and 101 in 24 test files are left (mostly
-  `server/test/cli.test.ts`, the AI SDK mock streams in
-  `engine-aisdk/test/engine.test.ts`, and `ApprovalOutcome` narrowing in
-  `tools/test/provider.test.ts`). CI runs it with `continue-on-error: true`;
-  take that off once they are fixed.
+  `tsconfig.test.json`, after `tsc -b`) checks them. It found 146 errors at
+  first; the cheap ones were fixed then, and the rest (175 by 2026-11-04,
+  with the tests written since) were fixed for Deck d954. CI now runs it as a
+  required step, so a test that doesn't compile fails the build.
 - **Sub-agents share the chat's one browser page** (see the browser section).
   A browser per sub-agent would need `BrowserManager` keyed on more than the
   chat.
