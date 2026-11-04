@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { commandNameOf, isCommandText, OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { NoteAttachment } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
 import { requireNonEmptyString } from '../validation.js';
+import { engineCommands } from './commands.js';
 import { contextCommandOf, getChatOrThrow, isPlainObject, parseProfileIds, workspaceRefusal } from './turns.js';
 
 interface NoteBody {
@@ -50,6 +53,27 @@ function parseAttachments(container: Container, chatId: string, value: unknown):
 }
 
 /**
+ * Whether a note's text is a command, which can't be sent while a reply
+ * runs: /clear or /compact, or, for a Claude Code profile, a `/name` its
+ * Claude Code lists (asked only when the text starts with one). The same
+ * rule as the composer's (`isCommandText`), so it doesn't matter whether the
+ * composer had loaded the chat's list. A list that can't be had counts as
+ * none, as the composer's menu then has only OtherBench's own commands.
+ */
+async function isCommandNote(container: Container, chatId: string, text: string, profiles: ResolvedProfile[]): Promise<boolean> {
+  if (contextCommandOf([{ type: 'text', text }], profiles)) return true;
+  const claudeCode = profiles.find((p) => p.connection.kind === 'claude_code');
+  if (!claudeCode || commandNameOf(text) === null) return false;
+  let rows: readonly CommandRow[] = [];
+  try {
+    rows = await engineCommands(container, chatId, claudeCode);
+  } catch (err) {
+    console.warn(`[otherbench-server] could not list chat ${chatId}'s commands to check a note:`, err instanceof Error ? err.message : err);
+  }
+  return isCommandText(text, [...OWN_COMMANDS, ...rows]);
+}
+
+/**
  * Messages sent while a reply runs (spec 2026-10-18-send-while-replying-design):
  * `NotesService` decides where each goes. A chat with nothing running is
  * refused as `idle`, and the client sends a normal turn instead.
@@ -76,7 +100,7 @@ export function notesRoutes(container: Container): Hono {
 
     const notes = container.notes;
     if (!notes?.isBusy(chatId)) return c.json({ kind: 'idle' }, 409);
-    if (contextCommandOf([{ type: 'text', text }], profiles)) return c.json({ kind: 'command', error: COMMAND_MID_REPLY }, 409);
+    if (await isCommandNote(container, chatId, text, profiles)) return c.json({ kind: 'command', error: COMMAND_MID_REPLY }, 409);
 
     // Checked again after the awaits above, with nothing awaited between here and the note being held:
     // another note sent meanwhile may have taken one of these attachments, or it may have been sent.

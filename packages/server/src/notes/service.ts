@@ -18,6 +18,9 @@ import { lineAfter } from '../turn-start.js';
  */
 const OUTCOME_KEEP = 200;
 
+/** How many of each chat's last note deliveries `send` checks a note's parent against. */
+const DELIVERY_KEEP = 20;
+
 export interface NotesServiceDeps {
   store: Store;
   turnRunner: TurnRunner;
@@ -90,6 +93,8 @@ export class NotesService {
   private readonly inFlight = new Map<string, ReplyNote[]>();
   /** Each chat's last outcomes, oldest first, for `helloState`. */
   private readonly outcomes = new Map<string, { noteId: string; outcome: NoteOutcome }[]>();
+  /** Each chat's last note deliveries, oldest first: the user message notes made under each parent. */
+  private readonly deliveries = new Map<string, { parentId: string | null; userMessageId: string }[]>();
 
   constructor(deps: NotesServiceDeps) {
     this.store = deps.store;
@@ -123,6 +128,8 @@ export class NotesService {
   async send(input: SendNoteInput): Promise<ReplyNote | null> {
     const { chatId } = input;
     if (!this.isBusy(chatId)) return null;
+    // Notes already went out under the composer's parent, before it showed them: this one goes on from there.
+    input = { ...input, parentId: this.caughtUp(chatId, input.parentId) };
     const replies = this.streaming(chatId);
     const target = this.liveTarget(input, replies);
     const note: ReplyNote = {
@@ -245,6 +252,7 @@ export class NotesService {
       // The chat is gone: nobody is there to give them back to.
       this.waiting.delete(chatId);
       this.outcomes.delete(chatId);
+      this.deliveries.delete(chatId);
       return;
     }
     const ids = new Set(noteIds);
@@ -355,23 +363,49 @@ export class NotesService {
     return true;
   }
 
-  /** Notes went out as user message `userMessageId` under `parentId`: notes still waiting on that parent go on from it. */
+  /**
+   * Notes went out as user message `userMessageId` under `parentId`: notes
+   * still waiting on that parent go on from it, and so does one sent there
+   * later by a composer that hasn't shown it yet (`caughtUp`).
+   */
   private delivered(chatId: string, parentId: string | null, userMessageId: string): void {
     for (const held of this.waitingIn(chatId)) {
       if (held.follows === undefined && held.note.parentId === parentId) held.follows = userMessageId;
     }
+    const list = this.deliveries.get(chatId) ?? [];
+    list.push({ parentId, userMessageId });
+    if (list.length > DELIVERY_KEEP) list.splice(0, list.length - DELIVERY_KEEP);
+    this.deliveries.set(chatId, list);
+  }
+
+  /**
+   * The parent a note sent under `parentId` goes on from. A composer still
+   * pointing at a message notes were delivered under hasn't shown that
+   * delivery yet (a thread's tail always follows its children), so the note
+   * goes on from the tail of the delivered branch rather than starting a
+   * branch beside it; `parentId` otherwise.
+   */
+  private caughtUp(chatId: string, parentId: string | null): string | null {
+    const delivery = this.deliveries.get(chatId)?.findLast((d) => d.parentId === parentId);
+    if (!delivery || this.store.messages.get(delivery.userMessageId)?.parentId !== parentId) return parentId;
+    return this.tailFrom(delivery.userMessageId) ?? parentId;
   }
 
   /**
    * Where a turn made from `held` goes: its parent, or, when notes delivered
-   * after it was sent went under that parent, the tail of their branch
-   * (following single children, as the thread's tail does). An unresolved
-   * compare turn there leaves it on its parent: which variant to go on from
-   * is the user's call.
+   * after it was sent went under that parent, the tail of their branch.
    */
   private turnParent(held: Held): string | null {
     if (held.follows === undefined) return held.note.parentId;
-    let id = held.follows;
+    return this.tailFrom(held.follows) ?? held.note.parentId;
+  }
+
+  /**
+   * The tail of the branch from user message `id`, following single children
+   * as the thread's tail does. Null when it ends at an unresolved compare
+   * turn (or isn't a reply): which variant to go on from is the user's call.
+   */
+  private tailFrom(id: string): string | null {
     const seen = new Set([id]);
     for (;;) {
       const children = this.store.messages.children(id);
@@ -380,7 +414,7 @@ export class NotesService {
       id = only.id;
       seen.add(id);
     }
-    return this.store.messages.get(id)?.role === 'assistant' ? id : held.note.parentId;
+    return this.store.messages.get(id)?.role === 'assistant' ? id : null;
   }
 
   /** Moves notes from waiting to in flight. They stay listed, so the set clients see doesn't change. */
@@ -421,9 +455,12 @@ export class NotesService {
     return this.engine.knowsNote?.(noteId) === false;
   }
 
-  /** The chat's replies streaming here now. */
+  /** The chat's replies streaming here now, in start order. */
   private streaming(chatId: string): CanonMessage[] {
-    return this.store.messages.listByStatus('streaming').filter((m) => m.chatId === chatId && m.role === 'assistant' && this.turnRunner.runningInfo(m.id) !== null);
+    return this.turnRunner
+      .runningIn(chatId)
+      .map((id) => this.store.messages.get(id))
+      .filter((m): m is CanonMessage => m?.chatId === chatId && m.role === 'assistant' && m.status === 'streaming');
   }
 
   private waitingIn(chatId: string): Held[] {

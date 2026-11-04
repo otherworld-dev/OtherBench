@@ -44,6 +44,23 @@ export function parseContextCommand(text: string): ParsedCommand | null {
   return null;
 }
 
+/** The name typed text starts with as `/name` (no slash, lower case), or null when it doesn't start with one. */
+export function commandNameOf(text: string): string | null {
+  return /^\/(\S+)/.exec(text.trim())?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Whether typed text is a command: /clear or /compact (and their aliases,
+ * /clear with text after it too), or one of `commands` by name or alias, in
+ * any case. The composer and the server both judge a message sent while a
+ * reply runs by this.
+ */
+export function isCommandText(text: string, commands: readonly CommandRow[]): boolean {
+  if (parseContextCommand(text)) return true;
+  const name = commandNameOf(text);
+  return name !== null && commands.some((c) => [c.name, ...c.aliases].some((n) => n.toLowerCase() === name));
+}
+
 export function contextPart(cmd: ContextCommand): Part {
   return cmd.kind === 'compact'
     ? { type: 'context', kind: 'compact', ...(cmd.focus ? { focus: cmd.focus } : {}) }

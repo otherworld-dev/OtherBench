@@ -2,15 +2,18 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { ReplyNote } from '@otherbench/core/types/notes.js';
 
 const streams = vi.hoisted(() => [] as { url: string; closed: boolean }[]);
+const hellos = vi.hoisted(() => [] as ((hello: unknown) => void)[]);
 
 vi.mock('./sse.js', () => ({
   SseClient: class {
     private readonly stream: { url: string; closed: boolean };
-    constructor(opts: { url: string }) {
+    constructor(opts: { url: string; onHello: (hello: unknown) => void }) {
       this.stream = { url: opts.url, closed: false };
       streams.push(this.stream);
+      hellos.push(opts.onHello);
     }
     connect(): void {}
     close(): void {
@@ -31,6 +34,7 @@ import { KEPT_RECENT_CHATS } from './messagePool.js';
 import { DEFAULT_PANE_STATE } from './panes.js';
 import { useOtherBenchStore } from './store.js';
 import { useChatSync } from './useChatSync.js';
+import { CLIENT_ID } from '../lib/clientId.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return {
@@ -43,6 +47,7 @@ describe('useChatSync', () => {
   beforeEach(() => {
     useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     streams.length = 0;
+    hellos.length = 0;
   });
   // Unmounting lets go of each chat the hook followed, which the message pool keeps while followed.
   afterEach(cleanup);
@@ -88,5 +93,27 @@ describe('useChatSync', () => {
     fetchMessages.mockClear();
     await show('c0');
     expect(fetchMessages).toHaveBeenCalledWith('c0');
+  });
+
+  it("a hello before the messages load doesn't put a note a reply shows read back in the box", async () => {
+    const sent = (id: string): ReplyNote => ({
+      id, chatId: 'c1', text: id, attachments: [], path: 'live', replyIds: ['r1'], parentId: 'r1', profileIds: ['p'], clientId: CLIENT_ID, sentAt: 1,
+    });
+    const reply: CanonMessage = {
+      id: 'r1', chatId: 'c1', parentId: null, role: 'assistant', parts: [{ type: 'user-note', noteId: 'read', text: 'read', attachments: [] }], status: 'complete', error: null, producedBy: null, createdAt: 1,
+    };
+    let respond!: (value: { messages: CanonMessage[]; headMessageId: string | null; usage: Record<string, never> }) => void;
+    vi.mocked(api.chats.messages).mockImplementation(() => new Promise((resolve) => (respond = resolve)));
+    useOtherBenchStore.setState({ chats: [chat('c1')] });
+    for (const id of ['read', 'lost']) useOtherBenchStore.getState().noteSent(sent(id));
+    renderHook(() => useChatSync('c1'));
+
+    // The server has lost both notes' outcomes (a restart): only the reply says one was read.
+    act(() => hellos[0]!({ notes: [], noteOutcomes: [] }));
+    expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
+    await act(async () => respond({ messages: [reply], headMessageId: null, usage: {} }));
+
+    await waitFor(() => expect(useOtherBenchStore.getState().returnedNotes.map((n) => n.id)).toEqual(['lost']));
+    expect(useOtherBenchStore.getState().sentNotes).toEqual({});
   });
 });

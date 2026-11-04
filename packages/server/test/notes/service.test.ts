@@ -663,6 +663,43 @@ describe('NotesService', () => {
     expect(ctx.store.messages.children(r!).map((m) => m.id)).toEqual([turn.userMessageId]);
   });
 
+  /** Sends a wait note under `r`, lets it go out as a turn once `r` ends, and returns that turn (still running). */
+  async function notesTurnRunning(ctx: Ctx, r: string) {
+    await ctx.notes.send(input({ text: 'first', parentId: r, profileIds: ['p2'] }));
+    ctx.engine.finish(r);
+    await ctx.ended(r);
+    await vi.waitFor(() => expect(ctx.resolved()).toHaveLength(1));
+    return (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
+  }
+
+  it('a note sent under the old parent just after notes went out as a turn goes into that turn\'s reply, not beside it', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const turn = await notesTurnRunning(ctx, r!);
+    const t = turn.assistantMessageIds[0]!;
+
+    // The composer hasn't shown the turn yet, so it still sends under r.
+    const note = (await ctx.notes.send(input({ text: 'late', parentId: r!, profileIds: ['p2'] })))!;
+
+    expect(note).toMatchObject({ path: 'live', replyIds: [t], parentId: t });
+    expect(ctx.sendToReply).toHaveBeenLastCalledWith(t, expect.objectContaining({ id: note.id }));
+  });
+
+  it('a note sent under the old parent for another profile waits and goes on from the turn the notes made', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const turn = await notesTurnRunning(ctx, r!);
+    const t = turn.assistantMessageIds[0]!;
+
+    const note = (await ctx.notes.send(input({ text: 'late', parentId: r!, profileIds: ['p1'] })))!;
+    expect(note).toMatchObject({ path: 'wait', parentId: t });
+    ctx.engine.finish(t);
+
+    await vi.waitFor(() => expect(ctx.startTurnSpy).toHaveBeenCalledTimes(2));
+    expect(ctx.startTurnSpy.mock.calls[1]![0]).toMatchObject({ parentId: t, userParts: [{ type: 'text', text: 'late' }] });
+    expect(ctx.store.messages.children(r!).map((m) => m.id)).toEqual([turn.userMessageId]);
+  });
+
   it("a note that would follow an unresolved compare turn goes where it was sent: which variant to go on from is the user's call", async () => {
     const ctx = setup();
     const { assistantMessageIds: [r] } = await ctx.running();

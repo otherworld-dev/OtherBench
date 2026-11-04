@@ -262,6 +262,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private readonly commandLists = new Map<string, CommandRow[]>();
   /** The replies running now (a user's or a self-started one), by message id: where a note sent to one goes. */
   private readonly running = new Map<string, { live: LiveProcess; req: EngineRequest }>();
+  /** Notes `sendToReply` is reading the images of, before they're pushed: `withdrawn` once taken back meanwhile. */
+  private readonly pendingNotes = new Map<string, { withdrawn: boolean }>();
 
   constructor(private readonly deps: ClaudeCodeEngineDeps) {
     this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
@@ -323,23 +325,36 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   async sendToReply(messageId: string, note: { id: string; text: string; attachments: NoteAttachment[] }): Promise<boolean> {
     const run = this.running.get(messageId);
     if (!run || run.live.isClosed || run.req.signal.aborted || !run.live.capabilities.includes('msg_lifecycle_v1')) return false;
-    const content = await this.noteContent(run.req, note);
-    // The reply may have ended while its images were read.
-    if (this.running.get(messageId) !== run || run.live.isClosed || run.req.signal.aborted) return false;
-    run.live.notes.set(note.id, messageId);
-    run.live.input.push(userMessage(content, note.id));
-    return true;
+    // Pending while its images are read, so a Take back meanwhile neither finds it unknown nor misses it.
+    const pending = { withdrawn: false };
+    this.pendingNotes.set(note.id, pending);
+    try {
+      const content = await this.noteContent(run.req, note);
+      // Taken back, or the reply ended, while its images were read.
+      if (pending.withdrawn || this.running.get(messageId) !== run || run.live.isClosed || run.req.signal.aborted) return false;
+      run.live.notes.set(note.id, messageId);
+      run.live.input.push(userMessage(content, note.id));
+      return true;
+    } finally {
+      this.pendingNotes.delete(note.id);
+    }
   }
 
   /** Takes back a note Claude Code hasn't started. False when no process holds it, it can't cancel one, or it had already started. */
   async withdrawNote(noteId: string): Promise<boolean> {
+    const pending = this.pendingNotes.get(noteId);
+    if (pending) {
+      // Not pushed yet: sendToReply drops it.
+      pending.withdrawn = true;
+      return true;
+    }
     const live = [...this.processes].find((p) => !p.isClosed && p.notes.has(noteId));
     return live ? this.cancelNote(live, noteId) : false;
   }
 
-  /** Whether an open process still has note `noteId` (queued, starting or read): false means nothing here will ever report it. */
+  /** Whether note `noteId` is being pushed or an open process still has it (queued, starting or read): false means nothing here will ever report it. */
   knowsNote(noteId: string): boolean {
-    return [...this.processes].some((p) => !p.isClosed && p.knows(noteId));
+    return this.pendingNotes.has(noteId) || [...this.processes].some((p) => !p.isClosed && p.knows(noteId));
   }
 
   /**

@@ -75,6 +75,9 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
       if (reportRef.current) setStreamStatus(status);
     };
 
+    const { applyChatEvent, setChatBackground, setChatNotes, settleUnsureNotes } = useOtherBenchStore.getState();
+    // A hello before the messages have loaded can't yet tell a note Claude read from a lost one (setChatNotes).
+    let messagesLoaded = false;
     api.chats
       .messages(chatId)
       .then(({ messages, headMessageId, usage }) => {
@@ -83,16 +86,20 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
       })
       .catch((err: unknown) => {
         console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        messagesLoaded = true;
+        settleUnsureNotes(chatId);
       });
 
-    const { applyChatEvent, setChatBackground, setChatNotes } = useOtherBenchStore.getState();
     const client = new SseClient<ChatHello, (TurnEvent & Partial<BackgroundMark>) | ChatLevelEvent>({
       url: api.streamUrl(chatId),
       readHello: (payload) => payload as ChatHello,
       onHello: (hello) => {
         applyHello(hello.inFlight ?? []);
         setChatBackground(chatId, hello.helpers ?? [], hello.backgroundApprovals ?? []);
-        setChatNotes(chatId, hello.notes ?? [], hello.noteOutcomes ?? []);
+        setChatNotes(chatId, hello.notes ?? [], hello.noteOutcomes ?? [], messagesLoaded);
       },
       onEvent: (event) => applyChatEvent(chatId, event),
       onStatusChange: report,
