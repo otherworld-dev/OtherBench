@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import { COMPUTER_DESKTOP_ONLY_REASON } from '@otherbench/core/domain/computer-apps.js';
 import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
@@ -269,7 +270,7 @@ describe('computer use routes and the peer listener', () => {
   it('takes no answer and no change from a paired machine while the computer may be in control here; a Stop still passes', async () => {
     await holding();
     const api = forwardedApi(container);
-    for (const path of ['/approvals/req-1/resolve', '/asks/ask-1/answer', '/chats/c1/turns', '/messages/m1/retry']) {
+    for (const path of ['/approvals/req-1/resolve', '/asks/ask-1/answer', '/chats/c1/turns', '/messages/m1/retry', '/chats/c1/helpers/t1/stop', '/chats/c1/notes']) {
       const res = await api.request(path, { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' });
       expect(res.status, path).toBe(403);
       expect(((await res.json()) as { error: string }).error).toBe(COMPUTER_DESKTOP_ONLY_REASON);
@@ -277,8 +278,43 @@ describe('computer use routes and the peer listener', () => {
     // Whatever Origin it claims: a paired machine is never the desktop app's window.
     const claimed = await api.request('/approvals/req-1/resolve', { method: 'POST', headers: { ...JSON_HEADERS, Origin: 'http://tauri.localhost' }, body: '{}' }, { peerNodeId: 'node-pc' });
     expect(claimed.status).toBe(403);
-    // A reply's Stop is not a change it could misuse.
+    // A reply's Stop, and the chat's (its replies running here), are not changes it could misuse.
     expect((await api.request('/messages/m1/cancel', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' })).status).not.toBe(403);
+    const chatStop = await api.request('/chats/c1/stop', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' });
+    expect(chatStop.status).toBe(200);
+    expect(await chatStop.json()).toEqual({ stopped: [] });
+    // It stops replies only: the session is the banner's, on this machine.
+    expect(driver.hasSession('c1')).toBe(true);
+  });
+
+  it("the chat's Stop over the peer listener cancels the chat's replies running here, even in a chat that now runs elsewhere", async () => {
+    const slow: ChatEngine = {
+      async *stream(req) {
+        await new Promise<void>((resolve) => {
+          if (req.signal.aborted) resolve();
+          req.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      listModels: async () => [],
+      testConnection: async () => ({ ok: true, message: 'ok', latencyMs: 0 }),
+    };
+    const turnRunner = new TurnRunner(container.store, slow);
+    container = { ...container, turnRunner, engine: slow };
+    container.store.chats.update('c1', { runsOn: 'node-elsewhere' });
+    const profile: ResolvedProfile = {
+      id: 'p', name: 'P', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null,
+      connection: { id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null },
+      apiKey: null, model: null,
+    };
+    const { assistantMessageIds } = await turnRunner.run({ chatId: 'c1', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [profile] });
+    const api = forwardedApi(container);
+    // Anything else in that chat is refused here: it runs on another machine now.
+    expect((await api.request('/chats/c1/turns', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' })).status).toBe(409);
+    const res = await api.request('/chats/c1/stop', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: assistantMessageIds });
+    await expect.poll(() => container.store.messages.get(assistantMessageIds[0]!)?.status).toBe('cancelled');
   });
 
   it('the forwarded API itself has no computer route and no event stream', async () => {

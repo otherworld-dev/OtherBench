@@ -192,6 +192,35 @@ function notesWaiting(container: Container, c: Context, chatId: string): Respons
   return container.notes?.hasWaiting(chatId) ? c.json({ kind: 'notes-waiting', error: NOTES_WAITING }, 409) : null;
 }
 
+/**
+ * Cancels every reply of `chatId` running on this machine, as each one's own
+ * Stop does, and returns their ids. Never depends on the chat's row: a reply
+ * running here is stopped even if its chat has gone, or now runs on another
+ * machine (it was moved while the reply ran).
+ */
+export function stopChatReplies(container: Container, chatId: string): string[] {
+  const ids = container.turnRunner.runningIn(chatId);
+  // As the cancel route: a computer-use start still waiting on an earlier end is given up, so no dialog comes up.
+  if (ids.length > 0) container.computer?.replyStopping(chatId);
+  for (const id of ids) container.turnRunner.cancel(id);
+  return ids;
+}
+
+/**
+ * `POST /chats/:id/stop`: the chat's Stop, every reply of it running here.
+ * `{ stopped: [ids] }`; 404 only for a chat that doesn't exist here with
+ * nothing running. On the peer listener it is mounted ahead of the check
+ * that the chat runs here (forward.ts): a stop starts nothing.
+ */
+export function chatStop(container: Container) {
+  return (c: Context): Response => {
+    const chatId = c.req.param('id')!;
+    const stopped = stopChatReplies(container, chatId);
+    if (stopped.length === 0 && !container.store.chats.get(chatId)) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
+    return c.json({ stopped });
+  };
+}
+
 export function turnsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -254,6 +283,8 @@ export function turnsRoutes(container: Container): Hono {
     container.turnRunner.cancel(messageId);
     return c.body(null, 204);
   });
+
+  app.post('/chats/:id/stop', chatStop(container));
 
   // Task 27: per-tab "Retry" on a failed compare variant. Re-runs the SAME
   // message row in place (TurnRunner.retry) rather than posting a new turn,

@@ -307,6 +307,44 @@ describe('POST /api/messages/:id/cancel', () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/chats/:id/stop
+// ---------------------------------------------------------------------------
+
+describe('POST /api/chats/:id/stop', () => {
+  it("cancels every reply running in the chat, both sides of a compare, and says which", async () => {
+    const { chatId, profileIds } = seedChat(2);
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+
+    const stopRes = await app().request(`/api/chats/${chatId}/stop`, { method: 'POST' });
+    await flush();
+
+    expect(stopRes.status).toBe(200);
+    expect(((await stopRes.json()) as { stopped: string[] }).stopped.sort()).toEqual([...assistantMessageIds].sort());
+    for (const id of assistantMessageIds) expect(container.store.messages.get(id)?.status).toBe('cancelled');
+  });
+
+  it("stops nothing in another chat, and answers an empty list when nothing runs", async () => {
+    const a = seedChat();
+    const res = await postTurn(a.chatId, a.profileIds);
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    const other = container.store.chats.create({ id: 'other-chat', title: 'Other', profileId: a.profileIds[0]!, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null } as never);
+
+    const stopRes = await app().request(`/api/chats/${other.id}/stop`, { method: 'POST' });
+    expect(stopRes.status).toBe(200);
+    expect(await stopRes.json()).toEqual({ stopped: [] });
+    await flush();
+    expect(container.store.messages.get(replyId)?.status).toBe('streaming');
+    push(replyId, null);
+  });
+
+  it('404s for an unknown chat with nothing running', async () => {
+    const res = await app().request('/api/chats/no-such-chat/stop', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/messages/:id/retry
 // ---------------------------------------------------------------------------
 

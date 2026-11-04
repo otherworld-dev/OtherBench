@@ -220,6 +220,13 @@ describe('while the computer may be in control, changes come only from the deskt
     expect((await send('/api/chats/chat-2', { method: 'GET', origin: OTHERBENCH_TAB })).status).toBe(200);
     const replyId = await startReply('chat-2');
     expect((await send(`/api/messages/${replyId}/cancel`, { origin: OTHERBENCH_TAB })).status).toBe(204);
+    // The chat's Stop (every reply of it, wherever it runs) is a Stop too.
+    const otherReply = await startReply('chat-2');
+    const chatStop = await send('/api/chats/chat-2/stop', { origin: OTHERBENCH_TAB });
+    expect(chatStop.status).toBe(200);
+    expect(await chatStop.json()).toEqual({ stopped: [otherReply] });
+    // A background task's Stop is not one of them.
+    expect((await send('/api/chats/chat-2/helpers/t1/stop', { origin: OTHERBENCH_TAB })).status).toBe(403);
     expect((await send('/api/chats/chat-1/computer/stop')).status).toBe(204);
     expect(sessions.holder()).toBeNull();
     expect(sessions.mayBeInControl()).toBe(false);

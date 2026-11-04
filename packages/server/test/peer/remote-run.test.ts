@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
+import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
 import { createApp } from '../../src/app.js';
 import { handleBackground } from '../../src/background.js';
 import { createContainer, type Container } from '../../src/container.js';
@@ -21,9 +22,11 @@ afterEach(async () => {
   for (const c of cleanup.splice(0).reverse()) await c();
 });
 
-async function machine(name: string, streamTimings?: StreamTimings): Promise<Machine> {
+async function machine(name: string, streamTimings?: StreamTimings, computer?: FakeComputerDriver): Promise<Machine> {
   const dir = mkdtempSync(join(tmpdir(), `otherbench-remote-${name}-`));
-  const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), peerPort: 0, peerHosts: ['127.0.0.1'], ...(streamTimings ? { streamTimings } : {}) });
+  const container = await createContainer({
+    dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), peerPort: 0, peerHosts: ['127.0.0.1'], ...(streamTimings ? { streamTimings } : {}), ...(computer ? { computer } : {}),
+  });
   container.store.nodes.rename(name);
   const app = createApp(container);
   cleanup.push(async () => {
@@ -45,8 +48,8 @@ async function machine(name: string, streamTimings?: StreamTimings): Promise<Mac
 }
 
 /** The PC has a chat running on it, in a folder of its own with a file in it; the laptop has synced it. */
-async function setup(streamTimings?: StreamTimings): Promise<{ pc: Machine; laptop: Machine; chatId: string; profileId: string; folder: string }> {
-  const pc = await machine('PC', streamTimings);
+async function setup(streamTimings?: StreamTimings, pcComputer?: FakeComputerDriver): Promise<{ pc: Machine; laptop: Machine; chatId: string; profileId: string; folder: string }> {
+  const pc = await machine('PC', streamTimings, pcComputer);
   const laptop = await machine('Laptop', streamTimings);
   const view = await pc.container.peers!.startPairing();
   await laptop.container.peers!.pairWith(view.addresses[0]!, view.code);
@@ -516,5 +519,133 @@ describe('running a chat on the machine it runs on', () => {
     expect(token).toBeTruthy();
     const refused = await laptop.container.peers!.call(pc.id, { method: 'POST', path: `/api/chats/${chatId}/turns`, body: { parentId: null, parts: [{ type: 'text', text: 'x' }], profileIds: [profileId] } });
     expect(refused.status).toBe(409);
+  });
+});
+
+describe("the chat's Stop reaches the machine running its reply", () => {
+  /** A slow reply the PC starts in its own chat, once the laptop has heard it running there. */
+  async function replyOnPc(pc: Machine, laptop: Machine, chatId: string, profileId: string): Promise<string> {
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await expect.poll(() => laptop.container.peers!.activeChats(pc.id)).toEqual([chatId]);
+    return replyId;
+  }
+
+  it('stops a reply the PC started, with no stream open on the laptop', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const replyId = await replyOnPc(pc, laptop, chatId, profileId);
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: [replyId] });
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it('stops a reply still running on the PC after the chat was moved to run on the laptop', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const replyId = await replyOnPc(pc, laptop, chatId, profileId);
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: laptop.id, workspace: null })).status).toBe(200);
+    // The PC has heard of the move: the chat no longer runs there, but its reply still does.
+    pc.container.store.chats.update(chatId, { runsOn: laptop.id });
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: [replyId] });
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it("a reply's Stop for a reply still running here, after its chat was moved to the PC, stops it here", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: laptop.id, workspace: null })).status).toBe(200);
+    const started = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    expect(started.status).toBe(202);
+    const replyId = ((await started.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: pc.id, workspace: null })).status).toBe(200);
+
+    expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
+    await expect.poll(() => laptop.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it("the chat's Stop also stops a reply still running here after the chat was moved to the PC", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: laptop.id, workspace: null })).status).toBe(200);
+    const started = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await started.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: pc.id, workspace: null })).status).toBe(200);
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { stopped: string[] }).stopped).toContain(replyId);
+    await expect.poll(() => laptop.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it("stops each reply by its own Stop when the PC runs an older build with no chat Stop", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const replyId = await replyOnPc(pc, laptop, chatId, profileId);
+    const peers = laptop.container.peers!;
+    const call = peers.call.bind(peers);
+    // What an older build answers: no such route.
+    vi.spyOn(peers, 'call').mockImplementation(async (nodeId, req, limits) =>
+      req.path === `/api/chats/${chatId}/stop` ? { status: 404, body: { error: 'Not found' }, address: '127.0.0.1', fingerprint: '' } : call(nodeId, req, limits)
+    );
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: [replyId] });
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it('says the PC is unreachable when it is the only machine that could be running the reply', async () => {
+    const { pc, laptop, chatId } = await setup();
+    await pc.container.peers!.listener.stop();
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ kind: 'peer_unreachable', nodeId: pc.id });
+  });
+
+  it("while the PC is under computer control, the laptop's chat Stop still passes there and a message does not", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    const replyId = await replyOnPc(pc, laptop, chatId, profileId);
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    expect(pc.container.computer!.mayBeInControl()).toBe(true);
+
+    const turn = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: replyId, parts: [{ type: 'text', text: 'more' }], profileIds: [profileId] });
+    expect(turn.status).toBe(403);
+    expect(await turn.json()).toMatchObject({ kind: 'desktop_only' });
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/stop`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: [replyId] });
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it("while the PC is under computer control, the laptop's reply Stop passes there over the real listener", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    let replyId = '';
+    const events = await readStream(stream, async (e) => {
+      if (e.event === 'hello') {
+        const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+        replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+        await pc.container.computer!.ensureSession(chatId, 'Held');
+      }
+      if (e.data.type === 'text-delta' && e.data.messageId === replyId) {
+        expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'cancelled';
+    });
+    expect(events.at(-1)!.data).toMatchObject({ type: 'status', status: 'cancelled' });
+  });
+
+  it("is refused by the PC's listener without the token it issued", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const replyId = await replyOnPc(pc, laptop, chatId, profileId);
+    const target = laptop.container.peers!.peer(pc.id)!;
+    const res = await laptop.container.peers!.client.request({ addresses: target.addresses, fingerprint: target.fingerprint }, { method: 'POST', path: `/api/chats/${chatId}/stop`, token: 'not-the-token' });
+    expect(res.status).toBe(401);
+    expect(pc.container.store.messages.get(replyId)?.status).toBe('streaming');
   });
 });

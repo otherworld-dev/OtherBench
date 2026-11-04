@@ -9,8 +9,15 @@ export interface ComputerHold {
   holder(): string | null;
 }
 
-/** Writes that only ever stop something, which anyone may still send: the banner's Stop and a reply's Stop. */
-const ALWAYS_ALLOWED: readonly RegExp[] = [/^(?:\/api)?\/chats\/[^/]+\/computer\/stop$/, /^(?:\/api)?\/messages\/[^/]+\/cancel$/];
+/**
+ * Writes that only ever stop something, which anyone may still send: the banner's Stop, a reply's Stop, and the
+ * chat's Stop (each of its replies' Stops at once, wherever they run). Not a background task's Stop.
+ */
+const ALWAYS_ALLOWED: readonly RegExp[] = [
+  /^(?:\/api)?\/chats\/[^/]+\/computer\/stop$/,
+  /^(?:\/api)?\/messages\/[^/]+\/cancel$/,
+  /^(?:\/api)?\/chats\/[^/]+\/stop$/,
+];
 
 const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -27,7 +34,7 @@ const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * request with no `Origin` at all), and so a model holding a lasting grant
  * for that browser, which could otherwise open OtherBench there and answer its own
  * cards, or post a message to a chat whose grants would run it with no card.
- * Reads, and the two Stops, always pass.
+ * Reads, and the Stops (the banner's, a reply's and the chat's), always pass.
  *
  * On the desktop server the per-launch API token is the real barrier against
  * a browser tab or any other program driving the API: a tab can't send it

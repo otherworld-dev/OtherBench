@@ -20,7 +20,7 @@ vi.mock('../state/api.js', () => ({
       cancel: vi.fn(),
       setHead: vi.fn(),
     },
-    chats: { patch: vi.fn(), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
+    chats: { patch: vi.fn(), stop: vi.fn(async () => ({ stopped: [] })), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
     notes: { send: vi.fn(), withdraw: vi.fn() },
     claude: { planUsage: vi.fn(async () => ({ usage: null })), accounts: { list: vi.fn(async () => ({ accounts: [] })) } },
     attachments: {
@@ -133,6 +133,7 @@ function reset(): void {
   mockedDelete.mockReset();
   mockedChatsPatch.mockReset();
   mockedNoteSend.mockReset();
+  vi.mocked(api.chats.stop).mockClear();
 }
 
 describe('Composer', () => {
@@ -379,13 +380,11 @@ describe('Composer', () => {
     expect(box).toHaveValue('hello');
   });
 
-  it('shows a stop button while a variant is streaming, and it cancels every in-flight variant', async () => {
+  it("shows a stop button while a variant is streaming, and it stops the chat's replies (every in-flight variant) in one call", async () => {
     const chat = makeChat();
     useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
     useOtherBenchStore.getState().registerMessage(streamingMessage('a2', { parentId: 'user-1' }));
-    // A completed message in the same chat must NOT be cancelled.
     useOtherBenchStore.getState().registerMessage(streamingMessage('a3', { status: 'complete' }));
-    mockedCancel.mockResolvedValue(undefined);
     const user = userEvent.setup();
 
     render(<Composer chat={chat} />);
@@ -393,9 +392,30 @@ describe('Composer', () => {
     const stopButton = await screen.findByRole('button', { name: /stop/i });
     await user.click(stopButton);
 
-    expect(mockedCancel).toHaveBeenCalledTimes(2);
-    expect(mockedCancel).toHaveBeenCalledWith('a1');
-    expect(mockedCancel).toHaveBeenCalledWith('a2');
+    // The server stops whatever runs in the chat, here or on the machine running it.
+    expect(vi.mocked(api.chats.stop)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.chats.stop)).toHaveBeenCalledWith('chat-1');
+    expect(mockedCancel).not.toHaveBeenCalled();
+  });
+
+  it('shows a stop button while a paired machine says it is replying in this chat, before the reply is on screen', async () => {
+    const chat = makeChat({ runsOn: 'node-pc' });
+    const user = userEvent.setup();
+    const machines = (activeChats: string[]) =>
+      ({
+        self: { id: 'node-self', name: 'Laptop' },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null, activeChats }],
+      }) as never;
+    useOtherBenchStore.getState().setMachines(machines(['chat-1']));
+
+    render(<Composer chat={chat} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    expect(vi.mocked(api.chats.stop)).toHaveBeenCalledWith('chat-1');
+
+    // Once that machine says it has finished, there is nothing to stop.
+    act(() => useOtherBenchStore.getState().setMachines(machines([])));
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 
   it('does not show a stop button when nothing in this chat is streaming', () => {
