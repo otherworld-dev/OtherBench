@@ -119,6 +119,7 @@ describe("OtherBench's MCP server, on raw handlers", () => {
       name: 'boom',
       description: 'Always throws',
       inputSchema: { type: 'object', properties: {} },
+      alwaysLoad: false,
       call: async () => {
         throw new Error('server went away');
       },

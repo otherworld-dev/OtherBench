@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { EngineBackgroundEvent, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
-import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
+import type { ToolContext, ToolProvider } from '@otherbench/core/ports/tool-provider.js';
 import type { Connection, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { MAIN_ACCOUNT, type ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
@@ -51,7 +51,7 @@ function fakeQuery(script: (ctx: { options: Options; prompt: SDKUserMessage }) =
 }
 
 async function collect(it: AsyncIterable<EngineEvent>): Promise<EngineEvent[]> { const out: EngineEvent[] = []; for await (const e of it) out.push(e); return out; }
-const approvals = { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
+const approvals = { requestApproval: vi.fn<ToolProvider['requestApproval']>(async () => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
 const engine = (query: QueryFn) => new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', ANTHROPIC_API_KEY: 'leak' } });
 
 /** A fake long-lived Claude Code: runs `turn` for every message pushed into its input, until the input ends or it is stopped. */
@@ -666,7 +666,7 @@ describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in V
     const switched: string[] = [];
     const query: QueryFn = ({ prompt, options }) => {
       starts.push(options);
-      let mode = options.permissionMode ?? 'default';
+      let mode: string = options.permissionMode ?? 'default';
       let n = 0;
       const gen = (async function* () {
         for await (const msg of prompt) {
@@ -1229,7 +1229,7 @@ describe('ClaudeCodeChatEngine artifacts', () => {
 
   it("gives Claude Code OtherBench's artifact server, under a name no project config can guess, whose tool acts for the reply that's running", async () => {
     const artifactTool = vi.fn(async (_ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => ({ ok: true, args }));
-    let tools: { handler: (args: unknown, extra: unknown) => Promise<unknown> }[] = [];
+    let tools: OtherBenchServerTool[] = [];
     const mcpServer = vi.fn((name: string, defs: typeof tools) => {
       tools = defs;
       return { type: 'sdk', name, instance: {} } as never;
@@ -1331,7 +1331,7 @@ describe('ClaudeCodeChatEngine recall', () => {
 
   it('puts recall on the same OtherBench server as artifacts, acting for the chat that is running', async () => {
     const recallTool = vi.fn(async (_ctx: { chatId: string }, args: unknown) => ({ chats: [], projects: [], args }));
-    let tools: { name: string; handler: (args: unknown, extra: unknown) => Promise<unknown> }[] = [];
+    let tools: OtherBenchServerTool[] = [];
     const mcpServer = vi.fn((name: string, defs: typeof tools) => {
       tools = defs;
       return { type: 'sdk', name, instance: {} } as never;
@@ -1449,8 +1449,8 @@ describe('ClaudeCodeChatEngine and the sandboxed shell', () => {
     const sandboxPolicy: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
     const hostPolicy: ToolPolicy = { ...sandboxPolicy, shellRuns: 'host' };
     const relayHash = buildRelay([runCommandSpec(async () => ({}))]).hash;
-    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, relay: relayHash })).not.toBe(
-      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, relay: '' })
+    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: relayHash })).not.toBe(
+      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: '' })
     );
   });
 });

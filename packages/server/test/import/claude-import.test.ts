@@ -302,7 +302,7 @@ describe('ClaudeImportService: files saved from claude.ai', () => {
 
   it('logs the filled-in messages as changes, so a paired machine gets the files too', async () => {
     await runImport(makeService());
-    const before = store.sync.latestSeq();
+    const before = store.sync!.latestSeq();
 
     await runImport(filesService());
 

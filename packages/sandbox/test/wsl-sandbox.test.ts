@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlannedMount } from '@otherbench/core/domain/sandbox-paths.js';
-import type { SandboxRunRequest, StoredSandboxState } from '@otherbench/core/ports/sandbox.js';
+import type { Sandbox, SandboxRunRequest, StoredSandboxState } from '@otherbench/core/ports/sandbox.js';
 import { SELF_TEST_STEP } from '../src/setup.js';
 import { UnsupportedSandbox } from '../src/unsupported-sandbox.js';
 import { WslSandbox, type StateStore, type WslSandboxOptions } from '../src/wsl-sandbox.js';
@@ -874,7 +874,7 @@ describe('WslSandbox remove and packages', () => {
 
 describe('UnsupportedSandbox', () => {
   it('says the sandbox is not available on this platform, and refuses everything but release and close', async () => {
-    const sandbox = new UnsupportedSandbox(() => 'Laptop');
+    const sandbox: Sandbox = new UnsupportedSandbox(() => 'Laptop');
     expect(await sandbox.status()).toEqual({ state: 'unsupported', detail: "The sandbox isn't available on this platform yet.", packages: [], machine: 'Laptop' });
     await expect(sandbox.setup()).rejects.toMatchObject({ code: 'unsupported' });
     await expect(sandbox.run(request())).rejects.toMatchObject({ code: 'unsupported', message: "The sandbox isn't available on this platform yet." });

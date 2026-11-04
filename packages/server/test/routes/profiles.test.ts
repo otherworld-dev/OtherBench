@@ -544,7 +544,7 @@ describe('media policy and generation connections', () => {
     return ((await res.json()) as { id: string }).id;
   }
   function patch(id: string, body: unknown): Promise<Response> {
-    return app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return Promise.resolve(app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
   }
 
   it("refuses a generation connection as a profile's chat model", async () => {

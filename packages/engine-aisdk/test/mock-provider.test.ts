@@ -619,7 +619,7 @@ describe('MockChatEngine', () => {
     });
 
     it('#ask asks which colour through the real tool and repeats the answer', async () => {
-      const execute = vi.fn(async () => 'User has answered your questions: "Which colour?"="Blue".');
+      const execute = vi.fn(async (_args: unknown) => 'User has answered your questions: "Which colour?"="Blue".');
       const ask: ToolSpec = { name: 'ask_user', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
       const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#ask', { tools: [ask] })));
       expect((execute.mock.calls[0]![0] as { questions: { question: string; options: { label: string }[] }[] }).questions[0]).toMatchObject({ question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] });

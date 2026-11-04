@@ -56,10 +56,10 @@ function app() {
   return createApp(container);
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
   await vi.waitFor(
-    () => {
-      if (!predicate()) throw new Error('condition not met yet');
+    async () => {
+      if (!(await predicate())) throw new Error('condition not met yet');
     },
     { timeout: timeoutMs, interval: 25 }
   );

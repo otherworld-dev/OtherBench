@@ -21,7 +21,7 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 // and the cross-site check all apply to them, and none of them is on the peer
 // listener.
 
-const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null };
+const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true };
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const PUBLIC_HOST = 'otherbench.test:4747';
 const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
@@ -46,6 +46,9 @@ beforeEach(async () => {
     close: vi.fn(async () => {}),
     watch: vi.fn((_chatId: string, _onFrame: (f: BrowserFrame) => void, _onState: (s: BrowserState) => void) => () => {}),
     closeAll: vi.fn(async () => {}),
+    input: vi.fn(async () => true),
+    show: vi.fn(async () => true),
+    forgetProfile: vi.fn(async () => {}),
   };
   container = {
     store,

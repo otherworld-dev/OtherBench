@@ -475,7 +475,7 @@ describe('ComfyUI backend', () => {
     ws.made[0]!.send('execution_error', {
       prompt_id: 'p1', node_type: 'KSampler', exception_message: `line one\nline two\r\n${'x'.repeat(5000)}`,
     });
-    const err = await p.catch((e: Error) => e);
+    const err = await p.then(() => { throw new Error('expected a failure'); }, (e: Error) => e);
     expect(err.message.startsWith('ComfyUI failed in KSampler: line one line two x')).toBe(true);
     expect(err.message).not.toMatch(/[\r\n]/);
     expect(err.message.length).toBeLessThan(400);
@@ -493,7 +493,7 @@ describe('ComfyUI backend', () => {
     );
     const err = await createComfyBackend(conn, registry, sockets().open)
       .generate(req, () => {}, new AbortController().signal)
-      .catch((e: Error) => e);
+      .then(() => { throw new Error('expected a refusal'); }, (e: Error) => e);
     expect(err.message.startsWith('ComfyUI refused the workflow: CLIPTextEncode: Bad input (ddd')).toBe(true);
     expect(err.message).not.toMatch(/[\r\n]/);
     expect(err.message.length).toBeLessThan(1200);

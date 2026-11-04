@@ -139,6 +139,15 @@ beforeEach(() => {
         fail();
         return { number: n, title: 'Add it', body: 'Does it', url: `https://github.com/${repo}/pull/${n}`, branch: 'feat/it' };
       },
+      // Not used by these routes.
+      async notifications() {
+        return { list: [], more: false };
+      },
+      async markDone() {},
+      async markRead() {},
+      async login() {
+        return 'someone';
+      },
     },
     close: () => {},
   };

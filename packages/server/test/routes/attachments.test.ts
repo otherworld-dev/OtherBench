@@ -48,7 +48,7 @@ function app() {
   return createApp(container);
 }
 
-function uploadForm(filename: string, content: string | Uint8Array, mime: string): FormData {
+function uploadForm(filename: string, content: string | Uint8Array<ArrayBuffer>, mime: string): FormData {
   const form = new FormData();
   form.append('file', new File([content], filename, { type: mime }));
   return form;

@@ -28,7 +28,7 @@ beforeEach(() => {
 
 const sdxl = BUILTIN_WORKFLOWS.find((w) => w.id === 'builtin:sdxl-txt2img')!;
 
-function call(method: string, path: string, body?: unknown): Promise<Response> {
+function call(method: string, path: string, body?: unknown): Response | Promise<Response> {
   return createApp(container).request(`/api/media${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },

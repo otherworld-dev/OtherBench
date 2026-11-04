@@ -58,7 +58,7 @@ describe('pickSession when a branch is started from a non-tip point (regenerate 
   // u1 -> a1 (session s1) -> u2 -> a2 (continued s1, so a2 is s1's tip)
   function seeded() {
     const store = new InMemoryStore();
-    store.chats.create({ id: 'c', title: 't', profileId: null, headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null });
+    store.chats.create({ id: 'c', title: 't', profileId: 'p1', headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null });
     const mk = (id: string, parentId: string | null, role: 'user' | 'assistant', createdAt: number, withMeta = false) => {
       store.messages.create({ id, chatId: 'c', parentId, role, parts: [{ type: 'text', text: id }], status: 'complete', error: null, producedBy: null, createdAt });
       if (withMeta) store.messages.updateEngineMeta(id, meta());

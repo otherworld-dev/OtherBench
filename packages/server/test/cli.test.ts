@@ -25,6 +25,7 @@ import {
   sameScriptPath,
   SHUTDOWN_WAIT_MS,
   terminalsAllowed,
+  type ServeDeps,
 } from '../src/cli.js';
 import {
   InsecurePublicUrlError,
@@ -66,13 +67,14 @@ function fakeDeps() {
   const containerClose = vi.spyOn(container, 'close');
   return {
     fakeServerHandle,
+    container,
     containerClose,
-    createContainer: vi.fn(async () => container),
-    createApp: vi.fn(() => ({ fetch: vi.fn() }) as never),
+    createContainer: vi.fn<ServeDeps['createContainer']>(async () => container),
+    createApp: vi.fn<ServeDeps['createApp']>(() => ({ fetch: vi.fn() }) as never),
     // Mirrors @hono/node-server: the listening callback gets the real bound
-    // address, which for port 0 is whatever the OS picked.
-    serve: vi.fn((opts: { port: number }, onListening?: (info: { port: number }) => void) => {
-      onListening?.({ port: opts.port === 0 ? EPHEMERAL_PORT : opts.port });
+    // address, which for port 0 is whatever the OS picked. runServe always passes a port.
+    serve: vi.fn<ServeDeps['serve']>((opts, onListening) => {
+      onListening?.({ address: '127.0.0.1', family: 'IPv4', port: opts.port === 0 ? EPHEMERAL_PORT : opts.port! });
       return fakeServerHandle as never;
     }),
     // Never the real one here: it would move this machine's own ~/.grunt.
@@ -225,7 +227,7 @@ describe('runServe desktop mode', () => {
   it("waits for the container's background shutdown (the sandbox's agents and mounts) before exiting", async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
-    const container = await deps.createContainer();
+    const container = deps.container;
     let settle!: () => void;
     container.settled = () => new Promise<void>((resolve) => (settle = resolve));
     await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
@@ -245,7 +247,7 @@ describe('runServe desktop mode', () => {
     try {
       const deps = fakeDeps();
       const io = fakeStdio();
-      const container = await deps.createContainer();
+      const container = deps.container;
       container.settled = () => new Promise<void>(() => undefined);
       await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
 
@@ -831,7 +833,7 @@ describe('the Code tab terminals (spec 2026-10-21-code-terminal-design)', () => 
   it('SIGINT stops the terminals, then exits 130; SIGTERM exits 143', async () => {
     for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
       const deps = fakeDeps();
-      const container = await deps.createContainer();
+      const container = deps.container;
       let release: () => void = () => {};
       const closeAll = vi.fn(() => new Promise<void>((r) => (release = r)));
       container.terminals = { closeAll } as never;

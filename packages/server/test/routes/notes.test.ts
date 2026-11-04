@@ -135,7 +135,7 @@ beforeEach(() => {
 const FINISH: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
 
 function request(method: string, path: string, body?: unknown): Promise<Response> {
-  return createApp(container).request(path, { method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return Promise.resolve(createApp(container).request(path, { method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
 }
 
 /** Starts a reply in chat-1 that runs until the test ends it. */

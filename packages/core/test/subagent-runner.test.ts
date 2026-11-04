@@ -338,7 +338,7 @@ describe('SubagentRunner', () => {
     const provider = new FakeToolProvider({ tools: [readFile] });
     const requests: ApprovalRequest[] = [];
     const resolved: string[] = [];
-    provider.onApprovalEvent((e) => (e.type === 'request' ? requests.push(e.request) : resolved.push(e.requestId)));
+    provider.onApprovalEvent((e) => (e.type === 'request' ? requests.push(e.request) : resolved.push(e.type === 'resolved' ? e.requestId : `unexpected ${e.type}`)));
     const engine = childEngine(async function* (req) {
       const tool = req.tools.find((t) => t.name === 'read_file')!;
       yield { type: 'tool-call', id: 'r1', name: 'read_file', args: { path: 'a.txt' } };

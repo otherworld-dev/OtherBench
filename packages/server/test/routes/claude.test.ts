@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
-import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
+import type { AccountView, ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { Connection } from '@otherbench/core/types/config.js';
 import type { PlanUsage } from '@otherbench/core/types/usage.js';
 import { createApp } from '../../src/app.js';
@@ -13,7 +13,7 @@ import { StreamRegistry } from '../../src/stream/registry.js';
 const usage: PlanUsage = { fetchedAt: 5, windows: [{ id: 'seven_day', label: 'Weekly', percent: 80, resetsAt: null }] };
 
 let container: Container;
-let planUsage: ReturnType<typeof vi.fn<(conn: Connection) => Promise<PlanUsage | null>>>;
+let planUsage: ReturnType<typeof vi.fn<(conn: Connection, account?: ClaudeAccountRef) => Promise<PlanUsage | null>>>;
 
 beforeEach(() => {
   const store = new InMemoryStore();
@@ -132,7 +132,7 @@ describe('Claude account routes', () => {
     function fakeLogin(over: Record<string, unknown> = {}) {
       const login = {
         status: vi.fn(async (ref: { slug: string }) => (ref.slug === 'vh' ? { signedIn: true, email: 'a@b.c', subscriptionType: 'max' } : { signedIn: false, email: null, subscriptionType: null })),
-        signIn: vi.fn(async () => ({ started: true, url: 'https://claude.com/cai/oauth/authorize?x=1' })),
+        signIn: vi.fn(async (_ref: { slug: string }) => ({ started: true, url: 'https://claude.com/cai/oauth/authorize?x=1' })),
         signingIn: vi.fn((slug: string) => slug === 'vh'),
         submitCode: vi.fn(() => true),
         signOut: vi.fn(async () => {}),
@@ -189,11 +189,12 @@ describe('Claude account routes', () => {
     });
 
     it('ends the pending sign-in when the account is deleted', async () => {
-      const login = fakeLogin({ cancel: vi.fn() });
+      const cancel = vi.fn();
+      fakeLogin({ cancel });
       const app = withAccounts();
       await send(app, 'POST', '/api/claude/accounts', vh);
       expect((await send(app, 'DELETE', '/api/claude/accounts/vh')).status).toBe(204);
-      expect(login.cancel).toHaveBeenCalledWith('vh');
+      expect(cancel).toHaveBeenCalledWith('vh');
     });
 
     it('is 503 without a runner', async () => {

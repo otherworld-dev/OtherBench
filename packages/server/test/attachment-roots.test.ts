@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runServe } from '../src/cli.js';
+import { runServe, type ServeDeps } from '../src/cli.js';
 import { createApp } from '../src/app.js';
 import { createContainer, type Container } from '../src/container.js';
 
@@ -290,8 +290,8 @@ describe(':memory: never touches the real default ~/.otherbench directory', () =
     const fakeServerHandle = { close: vi.fn() };
     const handle = await runServe(['--db', ':memory:', '--port', '45699'], {
       // Like the real @hono/node-server, report the bound port once listening.
-      serve: vi.fn((opts: { port: number }, onListening?: (info: { port: number }) => void) => {
-        onListening?.({ port: opts.port });
+      serve: vi.fn<ServeDeps['serve']>((opts, onListening) => {
+        onListening?.({ address: '127.0.0.1', family: 'IPv4', port: opts.port! });
         return fakeServerHandle as never;
       }),
     });

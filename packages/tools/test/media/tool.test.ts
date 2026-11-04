@@ -15,7 +15,7 @@ const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom',
 
 function policy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
   return {
-    fs: 'none',
+    fs: 'off',
     shell: false,
     mcpServerIds: [],
     approvalMode: 'ask_on_mutate',

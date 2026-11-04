@@ -83,7 +83,7 @@ const outputs = (messages: Awaited<ReturnType<typeof toModelMessages>>): { type:
 describe('tool images: the caps are decided from the references before any bytes are read', () => {
   it('reads at most three images for fifty references across many messages, and none for the rest', async () => {
     const ids = Array.from({ length: 50 }, (_, i) => `img-${i}`);
-    const load = vi.fn(async () => png());
+    const load = vi.fn(async (_ref: { attachmentId: string }) => png());
     const size = vi.fn(() => FAKE_PNG.length);
     const out = await toModelMessages(shots(ids), CAPS, never, { chatId: 'c', load, size });
     expect(load).toHaveBeenCalledTimes(3);
@@ -132,7 +132,7 @@ describe("user attachments: picked from the references, then read once each", ()
   const images = (n: number): Part[] => Array.from({ length: n }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mime: 'image/png' }) as Part);
 
   it('reads no more than the count cap for fifty distinct images, the newest ones', async () => {
-    const load = vi.fn(async () => png());
+    const load = vi.fn(async (_id: string) => png());
     const out = await toModelMessages([userMessage(images(50))], CAPS, load, undefined, () => FAKE_PNG.length);
     expect(load).toHaveBeenCalledTimes(MAX_REQUEST_ATTACHMENTS);
     expect(load.mock.calls.map((c) => c[0])).toEqual(Array.from({ length: MAX_REQUEST_ATTACHMENTS }, (_, i) => `f${30 + i}`));

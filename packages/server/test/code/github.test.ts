@@ -81,7 +81,7 @@ describe('githubService', () => {
 
   it('gh-failed carries the first stderr line, redacted', async () => {
     const f = fake(fail('failed https://user:tok@github.com/x\nsecond'));
-    const err = await githubService(f.run).list('o/r', 'open').catch((e: unknown) => e as GhError);
+    const err = await githubService(f.run).list('o/r', 'open').then(() => { throw new Error('expected a failure'); }, (e: unknown) => e as GhError);
     expect(err.message).toBe('failed https://github.com/x');
     // The whole stderr too, redacted, for the panel to show as-is (spec "Error states").
     expect(err.stderr).toBe('failed https://github.com/x\nsecond');

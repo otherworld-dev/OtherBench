@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { APICallError } from '@ai-sdk/provider';
+import { APICallError, type LanguageModelV3StreamPart, type LanguageModelV3StreamResult } from '@ai-sdk/provider';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
@@ -92,8 +92,13 @@ async function drain(iterable: AsyncIterable<EngineEvent>): Promise<EngineEvent[
  * and this helper padded a dummy step 0; that was fixed upstream by 6.0.300,
  * so no padding is needed any more.
  */
-function stepsForModel(...steps: unknown[][]): { stream: ReadableStream<unknown> }[] {
-  return steps.map((chunks) => ({ stream: convertArrayToReadableStream(chunks) }));
+function stepsForModel(...steps: unknown[][]): LanguageModelV3StreamResult[] {
+  return steps.map((chunks) => ({ stream: streamOf(chunks) }));
+}
+
+/** The chunks are written loosely (a usage with only `total`, say), as a provider may send them. */
+function streamOf(chunks: unknown[]): ReadableStream<LanguageModelV3StreamPart> {
+  return convertArrayToReadableStream(chunks) as ReadableStream<LanguageModelV3StreamPart>;
 }
 
 function resolverFor(model: MockLanguageModelV3): ProviderResolver {
@@ -112,7 +117,7 @@ describe('AiSdkChatEngine.stream', () => {
   it('maps text-delta chunks through to text-delta EngineEvents, then finish', async () => {
     const model = new MockLanguageModelV3({
       doStream: async () => ({
-        stream: convertArrayToReadableStream([
+        stream: streamOf([
           { type: 'stream-start', warnings: [] },
           { type: 'text-start', id: 't1' },
           { type: 'text-delta', id: 't1', delta: 'Hello' },
@@ -183,7 +188,7 @@ describe('AiSdkChatEngine.stream', () => {
   it('maps reasoning-delta chunks through to reasoning-delta EngineEvents', async () => {
     const model = new MockLanguageModelV3({
       doStream: async () => ({
-        stream: convertArrayToReadableStream([
+        stream: streamOf([
           { type: 'stream-start', warnings: [] },
           { type: 'reasoning-start', id: 'r1' },
           { type: 'reasoning-delta', id: 'r1', delta: 'thinking...' },
