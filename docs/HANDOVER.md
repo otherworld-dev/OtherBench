@@ -81,6 +81,20 @@ by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On
 other platforms the Tauri notification plugin can't report clicks, so
 clicking the tray icon opens the last chat notified about instead.
 
+**Machines in the tray:** the tray menu has a greyed-out line for each
+paired machine between New chat and Quit: "PC: connected, synced 2 min
+ago", "PC: unreachable since 14:02", "PC: checking…" or "PC: sync stopped,
+versions differ" (Task 48). With nothing paired there are no lines and no
+extra separator. The web app words the lines (`web/src/desktop/useTrayStatus.ts`,
+reusing Settings → Machines' status text) from the machines list, which it
+re-reads on `peer-status`, `peers-changed` and `peer-activity` events and
+once a minute, and sends them with the approval count through the shell's
+`set_tray_status`. That works with the window closed because closing the
+main window only hides it, so its page keeps running. The shell caps them
+at four lines of 80 characters and changes a line's text in place; it only
+builds the menu again when the number of machines changes
+(`desktop/src-tauri/src/tray.rs`). An undocked window doesn't send them.
+
 **Tested how:** two-node behaviour is tested with real servers over real TLS
 on loopback, never mocks of each other: `server/test/peer/*.test.ts`
 (pairing, an intercepting proxy, monitor, sync, remote runs) and
@@ -1005,9 +1019,6 @@ as regression tests.
   server, bundled Node runtime); there's no `release.yml`, no code signing,
   no Explorer verbs (*Open folder in OtherBench*, *Send to OtherBench*), and no Linux
   packages. Task 40's Node SEA wasn't tried: see Deviations.
-- **The tray's machine status line** (part of Task 48): the peer statuses
-  exist (Settings → Machines, `peer-status` events) but the tray menu
-  doesn't show them yet. It needs a Rust change in `tray.rs`.
 - **A folder browser for another machine's folders** (part of Task 53).
   The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
   is deliberately never mounted there (it lists directories anywhere on the
@@ -2593,7 +2604,7 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 The natural next steps, roughly in order of value:
 1. Try two physical machines: pair the PC and the laptop over the LAN (allow the firewall prompt on Private networks only), then over the VPN. `docs/desktop-checklist.md` has the steps.
 2. Tasks 40-41: installers and a bundled Node runtime, so the app doesn't need this checkout.
-3. The tray's machine status line, and the small v2 UI gaps under What is NOT built.
+3. The small v2 UI gaps under What is NOT built.
 4. The legacy shared blob directory is the one remaining place disk usage can grow without bound; abandoned unsent attachments are now collected after 30 days (see Known gaps above).
 5. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
 6. Computer use: go through its section of `docs/desktop-checklist.md` on the PC before switching it on for real use.
