@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
-import { appMenuItems, chatMenuItems, folderMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
+import { appCardMenuItems, appMenuItems, chatMenuItems, folderMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -79,6 +79,51 @@ describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
 
   it('a closed app (shown because a chat is live, or found by a search) has no Close app', () => {
     expect(appMenuItems(appHandlers(), false).map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Delete…']);
+  });
+});
+
+describe('appCardMenuItems (the All apps page, plan 2026-11-04-open-apps)', () => {
+  const cardHandlers = () => ({ open: vi.fn(), close: vi.fn(), rename: vi.fn(), edit: vi.fn(), move: vi.fn(), moveToFolder: vi.fn(), requestDelete: vi.fn() });
+  const folders = [folder('f1', 'Games'), folder('f2', 'Work')];
+
+  it('card menu items and order: Open, Close app, Rename, Edit…, Move to folder…, Move up, Move down, Delete…, each calling its handler', () => {
+    const h = cardHandlers();
+    const items = appCardMenuItems(1, 3, h, folders, 'f2', true);
+    expect(items.map((i) => i.label)).toEqual(['Open', 'Close app', 'Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
+    expect(items[7]!.danger).toBe(true);
+    for (const item of items) item.onSelect?.();
+    expect(h.open).toHaveBeenCalled();
+    expect(h.close).toHaveBeenCalled();
+    expect(h.rename).toHaveBeenCalled();
+    expect(h.edit).toHaveBeenCalled();
+    expect(h.move.mock.calls).toEqual([[-1], [1]]);
+    expect(h.requestDelete).toHaveBeenCalled();
+  });
+
+  it('a closed app has no Close app, and with no folders there is no Move to folder…', () => {
+    expect(appCardMenuItems(0, 1, cardHandlers(), [], null, false).map((i) => i.label)).toEqual(['Open', 'Rename', 'Edit…', 'Move up', 'Move down', 'Delete…']);
+  });
+
+  it('disables Move up for the first app of its section and Move down for the last', () => {
+    const h = cardHandlers();
+    const first = appCardMenuItems(0, 2, h, [], null, true);
+    expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
+    expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
+    expect(appCardMenuItems(1, 2, h, [], null, true).find((i) => i.id === 'down')!.disabled).toBe(true);
+  });
+
+  it('Move to folder… lists No folder first, then each folder, the current one checked', () => {
+    const h = cardHandlers();
+    const submenu = appCardMenuItems(0, 1, h, folders, 'f2', true).find((i) => i.id === 'move-folder')!.submenu!;
+    expect(submenu.map((i) => [i.label, i.checked])).toEqual([
+      ['No folder', false],
+      ['Games', false],
+      ['Work', true],
+    ]);
+    submenu[1]!.onSelect!();
+    submenu[0]!.onSelect!();
+    expect(h.moveToFolder.mock.calls).toEqual([['f1'], [null]]);
+    expect(appCardMenuItems(0, 1, h, folders, null, true).find((i) => i.id === 'move-folder')!.submenu![0]!.checked).toBe(true);
   });
 });
 

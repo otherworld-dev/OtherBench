@@ -149,6 +149,58 @@ export function appMenuItems(h: AppMenuHandlers, open = true): MenuItem[] {
   ];
 }
 
+export interface AppCardMenuHandlers {
+  /** Opens the app (it joins the sidebar) and shows its home, as a click on the card does. */
+  open(): void;
+  /** Closes the app: it leaves the sidebar and stays on the All apps page. */
+  close(): void;
+  rename(): void;
+  /** Opens the app form on this app. */
+  edit(): void;
+  /** Moves the app one place up (-1) or down (+1) within its section. */
+  move(dir: -1 | 1): void;
+  /** Files the app last in a folder, or (null) in Unfiled. */
+  moveToFolder(folderId: string | null): void;
+  requestDelete(): void;
+}
+
+/**
+ * An app card's ⋯ menu on the All apps page (spec 2026-11-04-open-apps-design, "Menus"): Open, Close app (only while
+ * `open`), Rename, Edit…, Move to folder…, Move up, Move down, Delete…. `index` and `count`: the app's place in its
+ * section, for Move up / Move down. `folders` (in page order) adds "Move to folder…": No folder, then each folder,
+ * with `folderId` (the app's loaded folder, or null) checked; left out while there are no folders.
+ */
+export function appCardMenuItems(
+  index: number,
+  count: number,
+  h: AppCardMenuHandlers,
+  folders: AppFolder[],
+  folderId: string | null,
+  open: boolean
+): MenuItem[] {
+  return [
+    { id: 'open', label: 'Open', onSelect: h.open },
+    ...(open ? [{ id: 'close', label: 'Close app', onSelect: h.close }] : []),
+    { id: 'rename', label: 'Rename', onSelect: h.rename },
+    { id: 'edit', label: 'Edit…', onSelect: h.edit },
+    ...(folders.length === 0
+      ? []
+      : [
+          {
+            id: 'move-folder',
+            label: 'Move to folder…',
+            submenu: [
+              { id: 'no-folder', label: 'No folder', checked: folderId === null, onSelect: () => h.moveToFolder(null) },
+              ...folders.map((f) => ({ id: f.id, label: f.name, checked: folderId === f.id, onSelect: () => h.moveToFolder(f.id) })),
+            ],
+          },
+        ]),
+    { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
+    { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
+    { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
+  ];
+}
+
 export interface FolderMenuHandlers {
   rename(): void;
   /** Moves the folder one place up (-1) or down (+1) among the folders. */
@@ -156,7 +208,7 @@ export interface FolderMenuHandlers {
   requestDelete(): void;
 }
 
-/** An app folder heading's ⋯ menu in Code mode (plan 2026-10-25-app-folders). `index` of `count`: its place among the folders. */
+/** A folder section's ⋯ menu on the All apps page (plan 2026-10-25-app-folders). `index` of `count`: its place among the folders. */
 export function folderMenuItems(index: number, count: number, h: FolderMenuHandlers): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },

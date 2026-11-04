@@ -63,10 +63,6 @@ export interface ProjectGroupProps {
   renameMaxLength?: number;
   /** The name's hover text when it opens a page. */
   openTitle?: string;
-  /** What `count` counts: chats, or an app folder's apps (Code mode). */
-  countNoun?: 'chat' | 'app';
-  /** Shown under the heading when `empty`. */
-  emptyText?: string;
   /**
    * An open app (Code mode): a × that closes it, shown in place of the count while the heading is hovered or has
    * focus (plan 2026-11-04-open-apps). `closeLabel` is its name and hover text.
@@ -86,15 +82,15 @@ function carriesProject(e: DragEvent): boolean {
 }
 
 /**
- * A collapsible sidebar group (a project, or No project; in Code mode an app folder, an app, or Unknown app) whose
+ * A collapsible sidebar group (a project, or No project; in Code mode an app, or Unknown app) whose
  * heading is also a drop target for chat rows.
  */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, statusSummary, onOpen, active = false } = props;
   const { menuLabel = 'Project actions', reorder, renameLabel = 'Project name', renameMaxLength = PROJECT_NAME_MAX, openTitle = 'Open the project page' } = props;
-  const { countNoun = 'chat', emptyText = 'No chats yet', onClose, closeLabel = `Close ${name}`, note } = props;
-  const counted = count === 1 ? countNoun : `${countNoun}s`;
+  const { onClose, closeLabel = `Close ${name}`, note } = props;
+  const counted = count === 1 ? 'chat' : 'chats';
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -273,7 +269,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
       )}
       {!collapsed &&
         (empty ? (
-          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">{emptyText}</p>
+          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>
         ) : (
           // The guide line sits under the heading's chevron, marking the chats as the group's.
           <ul id={listId} className="ml-3 border-l border-[var(--border)] pl-1">
