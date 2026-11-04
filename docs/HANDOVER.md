@@ -571,6 +571,51 @@ of work landed after that plan closed out:
       `web/e2e/remote-access.spec.ts` (g), whose server trusts 127.0.0.1 as
       a proxy so it can sign in from many forwarded addresses; its port is
       `OTHERBENCH_E2E_REMOTE_PORT` (default 4781).
+  - **Sessions** (`remote/sessions.ts`, migration 038, 2026-11-04). Kept in
+    the database's `remote_session` table, so a restart keeps everyone
+    signed in. A row holds the SHA-256 of the cookie's token (never the
+    token), a random id of its own, when it was made, last seen and expires,
+    *Keep me signed in*, the password epoch, the address it signed in from
+    and a device label read off the user agent ("Chrome on Android",
+    `remote/device-label.ts`; only a label, nothing is decided by it). The
+    expiry rules are unchanged: 12 hours, or 30 days with *Keep me signed
+    in*, with no idle timeout. An expired row is deleted when it is looked
+    up and by the sweep, which runs at start (rows that expired while the
+    server was off, or made under a password changed meanwhile with
+    `otherbench password`) and once a minute. Last seen is written at most
+    once a minute per session. At most 100 sessions; a new one past that
+    ends the oldest. The table has no `hlc` column and no sync triggers and
+    isn't in `SYNC_TABLES`, so a session never reaches a paired machine and
+    a batch naming the table is skipped (`store-sqlite/test/repos/remote-sessions.test.ts`).
+    - **Signed-in devices** (Settings → Remote access). `GET
+      /api/auth/sessions` lists them newest first (label, address, signed in,
+      last seen, which one is this browser), by their own ids, never a token
+      or its hash; `DELETE /api/auth/sessions/:id` signs one out. Both take
+      a session cookie (same-origin only, as everywhere) or the bearer token,
+      like *Sign out everywhere*; with a header present it is judged alone,
+      as in the gate. Both are under `/api/auth` on the main listener, never
+      on the peer listener, and the delete is a write under `/api`, so the
+      cross-site write check covers it. Signing a device out closes its open
+      event streams at once (`endWithSession`); a request it already has
+      running finishes, and its next is refused. Signing this browser out
+      from the list is the ordinary Sign out (both cookies cleared). A
+      device's remembered-device cookie isn't revoked by signing its session
+      out (nothing is kept per device); *Sign out everywhere* still deletes
+      every row and forgets every remembered device. Tests:
+      `server/test/remote/signed-in-devices.test.ts` (a restart on the same
+      database file, the raw token absent from the database and its WAL,
+      expiry, revoke one, revoke all, the peer listener),
+      `sessions.test.ts`, `device-label.test.ts`,
+      `web/src/views/settings/RemoteAccessPanel.test.tsx`.
+  - **Certificate files** (`TlsFileWatcher` in `remote/tls.ts`). With
+    `--tls-cert`/`--tls-key`, the two files' size and modification time are
+    checked once a minute; when either changes the pair is loaded with the
+    start-up checks (key matches, every public host covered) and put into
+    service with `setSecureContext`, so new connections get it; open ones
+    keep theirs. A pair that doesn't load (half written, the wrong key) is
+    logged once and the old certificate stays in use until the files change
+    again. Settings shows the new expiry. `--tls auto` still makes its
+    certificate only at start.
 
 - **`/clear` and `/compact` in Claude Code chats.** A command is a user message
   with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
@@ -1055,8 +1100,13 @@ every mode. With `--tls auto` the first visit is trust-on-first-use: only
 checking the CA's fingerprint against `otherbench serve`'s own output stops a
 man in the middle. The CA's private key is thrown away after it signs the
 one server certificate, so a stolen disk can't mint certificates that
-devices trusting it would accept. Sessions live in memory: a restart signs
-everyone out.
+devices trusting it would accept. Sessions are kept in the database
+(`remote_session`, local, never synced) so a restart keeps them; only each
+token's SHA-256 is stored, so a copy of the database (or of a
+`.before-schema-*` backup) hands out no usable cookie, though anyone who can
+write to the database could add a session of their own. Settings lists the
+signed-in devices and signs any one out; its open event streams close at
+once.
 
 **The host shell tool (`run_command` with `shellRuns` absent or `host`) is unsandboxed by design.** It executes
 whatever command string the model produces on the real OS with the real
@@ -2279,12 +2329,15 @@ this on startup.
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
-  no list of signed-in devices (only *Sign out everywhere*), sessions don't
-  survive a restart, certificate files aren't reloaded without a restart,
   no Web Push for approvals, and no phone layout work beyond the sidebar
   footer wrapping so Sign out stays reachable (the spec's §7 lists the other
   gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
-  on real devices.
+  on real devices. Sessions now survive a restart and Settings lists the
+  signed-in devices (see *Sessions* under Remote access), but the list shows
+  the address a device signed in from, not the one it was last seen at, and
+  signing one device out doesn't forget its remembered-device cookie (that
+  cookie opens nothing by itself). Renewed `--tls-cert`/`--tls-key` files
+  are loaded while running; the sign-in limits still reset on a restart.
 - **MCP sign-in, phase 2** (Deck #931). Not built: registering the public and loopback redirect addresses side by side (each change of address registers again), revoking tokens at the provider on sign-out (RFC 7009), a fixed callback port for providers that pin it, a sign-in button in the Inspector, and URL-based client IDs (SEP-991). In open or token mode with `--host ::1` or one specific non-loopback address, `127.0.0.1` isn't served, so the callback can't arrive; paste-back still works. Tool-call error text from an MCP server isn't redacted (only lifecycle errors are). After a URL change and a new sign-in, a stale refresh on the old URL can force one more sign-in; it never discloses a token.
 - **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Another LAN device's global IPv6 address outside this machine's own /64s is treated as the internet. Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. In a scheduled run a site needs an Always grant made beforehand; there is no way to allow a list of sites on the profile. Sub-agents share the chat's one browser.
 - **Computer use** (Deck #927). Ships switched off and none of its desktop side has run; a Claude Code helper's screenshots aren't stored or shown (the turn's own are). Scheduled runs, Plan mode and sub-agents never get it (see *Integration*). The full list is under *Computer use* above.
