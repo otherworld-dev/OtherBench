@@ -424,9 +424,15 @@ export interface OtherBenchState {
    * holds goes back to the composer if it was `returned` or the server has no
    * word of it (lost with a reply). One that was delivered (`folded`/`turn`)
    * or taken back (`removed`, the withdrawing tab already restored it) is
-   * simply forgotten.
+   * simply forgotten. Before the chat's messages have loaded (`messagesLoaded`
+   * false) a note with no outcome can't be told from one a reply shows was
+   * read, so it is held in `unsureNotes` until `settleUnsureNotes`.
    */
-  setChatNotes(chatId: string, notes: ReplyNote[], outcomes: { noteId: string; outcome: NoteOutcome }[]): void;
+  setChatNotes(chatId: string, notes: ReplyNote[], outcomes: { noteId: string; outcome: NoteOutcome }[], messagesLoaded?: boolean): void;
+  /** Each chat's notes a hello found lost before its messages loaded, by id: not yet known to be read or not. */
+  unsureNotes: Record<string, string[]>;
+  /** The chat's messages have loaded (or failed to): its unsure notes still unresolved come back to the box unless a reply shows them read. */
+  settleUnsureNotes(chatId: string): void;
   /**
    * One event from a chat's stream: its background tasks, a reload when its
    * stored messages changed, an approval card for a reply that isn't streaming
@@ -1344,7 +1350,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     if (taken.length > 0) set((state) => ({ returnedNotes: state.returnedNotes.filter((n) => n.chatId !== chatId) }));
     return taken;
   },
-  setChatNotes: (chatId, notes, outcomes) =>
+  unsureNotes: {},
+  setChatNotes: (chatId, notes, outcomes, messagesLoaded = true) =>
     set((state) => {
       const waiting = new Set(notes.map((n) => n.id));
       const delivered = new Set(outcomes.filter((o) => o.outcome === 'folded' || o.outcome === 'turn' || o.outcome === 'removed').map((o) => o.noteId));
@@ -1352,13 +1359,33 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       const lost: ReplyNote[] = [];
       for (const note of Object.values(state.sentNotes)) {
         if (note.chatId !== chatId || waiting.has(note.id)) continue;
-        delete sentNotes[note.id];
-        if (!delivered.has(note.id)) lost.push(note);
+        if (delivered.has(note.id)) delete sentNotes[note.id];
+        else lost.push(note);
       }
+      const chatNotes = { ...state.chatNotes, [chatId]: notes };
+      // The messages that may show them read aren't here yet: decided once they are, and still held meanwhile.
+      if (!messagesLoaded) {
+        const unsure = [...new Set([...(state.unsureNotes[chatId] ?? []), ...lost.map((n) => n.id)])];
+        return { chatNotes, sentNotes, unsureNotes: { ...state.unsureNotes, [chatId]: unsure } };
+      }
+      for (const note of lost) delete sentNotes[note.id];
       // A reply that shows the note was read is word enough, with no outcome kept for it.
       const read = lost.length > 0 ? readNoteIds(state, chatId) : new Set<string>();
       const back = lost.filter((n) => !read.has(n.id));
-      return { chatNotes: { ...state.chatNotes, [chatId]: notes }, sentNotes, returnedNotes: [...state.returnedNotes, ...back] };
+      return { chatNotes, sentNotes, returnedNotes: [...state.returnedNotes, ...back] };
+    }),
+  settleUnsureNotes: (chatId) =>
+    set((state) => {
+      const ids = state.unsureNotes[chatId];
+      if (!ids) return {};
+      const { [chatId]: _settled, ...unsureNotes } = state.unsureNotes;
+      // Those the stream has since resolved are gone from sentNotes already.
+      const lost = ids.flatMap((id) => (state.sentNotes[id] ? [state.sentNotes[id]] : []));
+      if (lost.length === 0) return { unsureNotes };
+      const sentNotes = { ...state.sentNotes };
+      for (const note of lost) delete sentNotes[note.id];
+      const read = readNoteIds(state, chatId);
+      return { unsureNotes, sentNotes, returnedNotes: [...state.returnedNotes, ...lost.filter((n) => !read.has(n.id))] };
     }),
   applyChatEvent: (chatId, event) => {
     if (event.type === 'helpers') {
