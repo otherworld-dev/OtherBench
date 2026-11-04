@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@otherbench/core/types/claude-import.js';
+import type { AboutOutcome, ChatRefresh, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@otherbench/core/types/claude-import.js';
 import type { Project } from '@otherbench/core/ports/store.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
@@ -29,6 +29,35 @@ function count(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 }
 
+/** Chats named in a list of chats given new messages before the rest are only counted. */
+const REFRESHES_SHOWN = 20;
+
+/**
+ * One chat already imported that has new messages: how many go in and how,
+ * and how many can't be placed. `done` is the report's wording, else the
+ * preview's.
+ */
+function refreshText(r: ChatRefresh, done: boolean): string {
+  const how = r.mode === 'append' ? 'on the end' : 'as a branch beside yours';
+  const added = r.messages === 0 ? null : done ? `${count(r.messages, 'new message')} added ${how}` : `${count(r.messages, 'new message')} ${r.messages === 1 ? 'goes' : 'go'} in ${how}${r.mode === 'branch' ? ', and the chat stays on yours' : ''}`;
+  const skipped = r.skipped === 0 ? null : done ? `${count(r.skipped, 'message')} couldn’t be placed and ${r.skipped === 1 ? 'was' : 'were'} left out` : `${count(r.skipped, 'message')} can’t be placed and ${r.skipped === 1 ? 'is' : 'are'} left out`;
+  return `“${r.title}”: ${[added, skipped].filter(Boolean).join('; ')}`;
+}
+
+/** The chats already imported that get new messages (or have some that can't be placed), each with how. */
+function RefreshList({ rows, done, testId }: { rows: ChatRefresh[]; done: boolean; testId: string }): JSX.Element | null {
+  if (rows.length === 0) return null;
+  const shown = rows.slice(0, REFRESHES_SHOWN);
+  return (
+    <ul data-testid={testId} className="list-[circle] space-y-0.5 pl-5">
+      {shown.map((r) => (
+        <li key={r.id}>{refreshText(r, done)}</li>
+      ))}
+      {rows.length > shown.length && <li>and {count(rows.length - shown.length, 'more chat')}</li>}
+    </ul>
+  );
+}
+
 /** The profile imported chats start on: a Claude one (Claude Code or the Anthropic API) if there is one, else the default, else the first. */
 export function defaultImportProfileId(profiles: Profile[], connections: Connection[]): string {
   const live = profiles.filter((p) => p.archivedAt === null);
@@ -41,9 +70,16 @@ function hasMemory(preview: ImportPreview): boolean {
   return preview.memory.about || preview.memory.note || preview.memory.projectNotes > 0;
 }
 
-/** The server doesn't announce projects as it makes them, so the sidebar's are fetched again once an import ends; chats come too. */
-function refreshAfterImport(): void {
-  const { setProjects, setChats } = useOtherBenchStore.getState();
+/**
+ * The server doesn't announce projects as it makes them, so the sidebar's are
+ * fetched again once an import ends; chats come too. A chat already open that
+ * the import gave new messages reloads them.
+ */
+function refreshAfterImport(report: ImportReport | null): void {
+  const { setProjects, setChats, applyChatEvent } = useOtherBenchStore.getState();
+  for (const r of [...(report?.chats.refreshes ?? []), ...(report?.cowork?.refreshes ?? [])]) {
+    if (r.messages > 0) applyChatEvent(r.id, { type: 'messages-changed', chatId: r.id });
+  }
   Promise.all([api.projects.list(), api.chats.list()])
     .then(([projects, chats]) => {
       setProjects(projects);
@@ -107,8 +143,9 @@ export function ImportPanel(): JSX.Element {
   const previousState = useRef<ImportStatus['state'] | null>(null);
   useEffect(() => {
     const state = status?.state ?? null;
-    if (previousState.current === 'running' && state !== 'running') refreshAfterImport();
+    if (previousState.current === 'running' && state !== 'running') refreshAfterImport(status?.report ?? null);
     previousState.current = state;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the report comes with the state that ends the import.
   }, [status?.state]);
 
   async function check(): Promise<void> {
@@ -261,7 +298,12 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
           {chats.updates > 0 && <li>{count(chats.updates, 'imported chat gets', 'imported chats get')} the messages added on claude.ai since</li>}
           {chats.newer > 0 && (
             <li>
-              {count(chats.newer, 'imported chat was', 'imported chats were')} carried on here, so {chats.newer === 1 ? 'its' : 'their'} newer messages on claude.ai aren&rsquo;t added
+              {count(chats.newer, 'imported chat has', 'imported chats have')} newer messages on claude.ai that can&rsquo;t be placed beside the ones added here, so they aren&rsquo;t added
+            </li>
+          )}
+          {chats.refreshes.length > 0 && (
+            <li className="list-none">
+              <RefreshList rows={chats.refreshes} done={false} testId="import-refreshes" />
             </li>
           )}
           {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
@@ -321,6 +363,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
             ))}
             .
           </p>
+          {cowork && <RefreshList rows={preview.cowork.refreshes} done={false} testId="cowork-refreshes" />}
           {cowork &&
             preview.cowork.spaces.map((space) => (
               <label key={space.id} className="flex flex-wrap items-center gap-2">
@@ -474,7 +517,8 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
           Imported {count(report.chats.imported, 'chat')} ({count(report.chats.messages, 'message')})
           {report.chats.existing > 0 ? `; ${report.chats.existing.toLocaleString('en-US')} were already here` : ''}
           {report.chats.updated > 0 ? `, ${report.chats.updated.toLocaleString('en-US')} of them given the messages added on claude.ai since` : ''}
-          {report.chats.newer > 0 ? `; ${report.chats.newer.toLocaleString('en-US')} carried on here, whose newer messages on claude.ai weren't added` : ''}
+          {report.chats.newer > 0 ? `; ${report.chats.newer.toLocaleString('en-US')} with newer messages on claude.ai that couldn't be placed, so weren't added` : ''}
+          <RefreshList rows={report.chats.refreshes} done testId="import-report-refreshes" />
         </li>
         {report.chats.filed > 0 && <li>Filed {count(report.chats.filed, 'chat')} into {report.chats.filed === 1 ? 'its project' : 'their projects'}</li>}
         {report.artifacts.imported + report.artifacts.existing > 0 && <li>Imported {count(report.artifacts.imported, 'published artifact')}</li>}
@@ -484,6 +528,7 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
             {report.cowork.existing > 0 ? `; ${report.cowork.existing.toLocaleString('en-US')} were already here` : ''}
             {report.cowork.updated > 0 ? `, ${report.cowork.updated.toLocaleString('en-US')} of them given new messages or images` : ''}
             {report.cowork.filed > 0 ? `; ${report.cowork.filed.toLocaleString('en-US')} filed into projects` : ''}
+            <RefreshList rows={report.cowork.refreshes} done testId="cowork-report-refreshes" />
           </li>
         )}
         {projects.created.length > 0 && <li>New projects: {projects.created.join(', ')}</li>}

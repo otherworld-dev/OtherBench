@@ -95,6 +95,80 @@ test('imports a claude.ai export from Settings > Import', async ({ page, request
   await expect(thread.getByText('claude-opus-4-7', { exact: true })).toBeVisible();
 });
 
+test("a second import adds claude.ai's new messages to a chat carried on here as a branch beside the user's", async ({ page, request }) => {
+  const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
+  expect(conn.ok()).toBeTruthy();
+  const { id: connectionId } = await conn.json();
+  const tag = randomUUID().slice(0, 8);
+  const profile = await request.post(`${BASE_URL}/api/profiles`, { data: { name: `Reimport Profile ${tag}`, connectionId, modelId: 'mock-standard' } });
+  expect(profile.ok()).toBeTruthy();
+
+  const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 12, minute)).toISOString();
+  const question = randomUUID();
+  const answer = randomUUID();
+  const later = randomUUID();
+  const turn = (uuid: string, sender: 'human' | 'assistant', parent: string, minute: number, text: string) => ({
+    uuid,
+    sender,
+    parent_message_uuid: parent,
+    created_at: at(minute),
+    content: [{ type: 'text', text }],
+    attachments: [],
+    files: [],
+  });
+  const writeExport = (messages: ReturnType<typeof turn>[]) =>
+    writeFileSync(join(dir, 'conversations', 'conversations.json'), JSON.stringify([{ uuid: chatId, name: `Carried ${tag}`, created_at: at(0), updated_at: at(9), chat_messages: messages }]));
+  mkdirSync(join(dir, 'conversations'));
+  writeExport([turn(question, 'human', ROOT, 1, `question ${tag}`), turn(answer, 'assistant', question, 2, `answer ${tag}`)]);
+
+  const importFolder = async (button: string) => {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('tab', { name: 'Import' }).click();
+    await page.getByLabel('Export folder').fill(dir);
+    await page.getByRole('button', { name: 'Check folder' }).click();
+    await page.getByLabel('Profile for imported chats').selectOption({ label: `Reimport Profile ${tag}` });
+    const preview = page.getByTestId('import-preview');
+    await expect(preview).toBeVisible();
+    return { preview, start: () => page.getByRole('button', { name: button }).click() };
+  };
+
+  await page.goto('/');
+  const first = await importFolder('Import 1 chat');
+  await first.start();
+  await expect(page.getByTestId('import-report')).toContainText('Imported 1 chat (2 messages)');
+  await page.getByRole('button', { name: 'Close settings' }).click();
+
+  // Carried on here...
+  await page.locator('[data-testid^="chat-row-"]', { hasText: `Carried ${tag}` }).click();
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill(`mine ${tag}`);
+  await textbox.press('Enter');
+  await expect(page.getByLabel('streaming')).toHaveCount(0);
+  const thread = page.getByTestId('thread-scroll');
+  await expect(thread.getByText(`mine ${tag}`)).toBeVisible();
+
+  // ...and on claude.ai.
+  writeExport([
+    turn(question, 'human', ROOT, 1, `question ${tag}`),
+    turn(answer, 'assistant', question, 2, `answer ${tag}`),
+    turn(later, 'human', answer, 3, `later ${tag}`),
+    turn(randomUUID(), 'assistant', later, 4, `later answer ${tag}`),
+  ]);
+  const second = await importFolder('Update 1 chat');
+  await expect(page.getByTestId('import-refreshes')).toContainText(`“Carried ${tag}”: 2 new messages go in as a branch beside yours, and the chat stays on yours`);
+  await second.start();
+  await expect(page.getByTestId('import-report-refreshes')).toContainText(`“Carried ${tag}”: 2 new messages added as a branch beside yours`);
+  await page.getByRole('button', { name: 'Close settings' }).click();
+
+  // The chat is still on the user's branch, with claude.ai's beside it to switch to.
+  await page.locator('[data-testid^="chat-row-"]', { hasText: `Carried ${tag}` }).click();
+  await expect(thread.getByText(`mine ${tag}`)).toBeVisible();
+  await expect(thread.getByText(`later ${tag}`, { exact: true })).toHaveCount(0);
+  await thread.getByRole('button', { name: 'Previous branch' }).click();
+  await expect(thread.getByText(`later answer ${tag}`)).toBeVisible();
+  await expect(thread.getByText(`mine ${tag}`)).toHaveCount(0);
+});
+
 test("imports another machine's Cowork sessions from a copy of its Cowork folder", async ({ page, request }) => {
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
   expect(conn.ok()).toBeTruthy();
