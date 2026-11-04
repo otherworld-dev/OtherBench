@@ -7,7 +7,7 @@ import type { Profile } from '@otherbench/core/types/config.js';
 vi.mock('../state/api.js', () => ({
   api: {
     profiles: { list: vi.fn() },
-    chats: { create: vi.fn(), patch: vi.fn() },
+    chats: { create: vi.fn(), patch: vi.fn(), stop: vi.fn(async () => ({ stopped: [] })) },
     turns: { create: vi.fn(), cancel: vi.fn(async () => {}) },
   },
   ApiError: class ApiError extends Error {},
@@ -128,7 +128,7 @@ describe('QuickChat', () => {
       useOtherBenchStore.getState().registerMessage({ id: 'a-run', chatId: 'q1', parentId: null, role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null, createdAt: 2 } as never);
     });
     await user.keyboard('{Escape}');
-    expect(api.turns.cancel).toHaveBeenCalledWith('a-run');
+    expect(api.chats.stop).toHaveBeenCalledWith('q1');
     expect(hideQuick).not.toHaveBeenCalled();
   });
 

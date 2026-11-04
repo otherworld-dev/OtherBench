@@ -641,6 +641,8 @@ export const api = {
     },
     /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
     stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+    /** Stops every reply running in the chat, here or on the paired machine running it (the reply's Stop): `POST /api/chats/:id/stop`. */
+    stop: (id: string) => post<{ stopped: string[] }>(`/chats/${encodeURIComponent(id)}/stop`),
   },
 
   /** Computer use (spec 2026-10-12-computer-use-design section 7). */

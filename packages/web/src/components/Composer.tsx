@@ -218,7 +218,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
-  const { streaming: isStreaming, stop: stopReplies } = useStopReply(chat.id);
+  const { streaming: isStreaming, canStop, stop: stopReplies } = useStopReply(chat.id);
   // While a reply runs, or messages sent during one still wait, Send makes a note (spec 2026-10-18-send-while-replying-design).
   const waitingCount = useOtherBenchStore((s) => s.chatNotes[chat.id]?.length ?? 0);
   const busy = isStreaming || waitingCount > 0;
@@ -913,7 +913,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
             {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} account={(storedChat ?? chat).claudeAccount ?? null} />}
             {/* While a reply runs, Send stays beside Stop: what's sent then waits for the reply or goes into it. */}
-            {isStreaming && (
+            {canStop && (
               <button
                 type="button"
                 onClick={() => void handleStop()}

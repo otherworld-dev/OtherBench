@@ -59,7 +59,7 @@ export function QuickChat(): JSX.Element {
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
       e.preventDefault();
-      if (repliesRef.current.streaming) {
+      if (repliesRef.current.canStop) {
         void repliesRef.current.stop();
         return;
       }

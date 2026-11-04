@@ -436,7 +436,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           // Escape anywhere in this chat stops its running reply, as Stop does (lib/escapeStopsReply.ts).
           onKeyDown={(e) => {
-            if (!replies.streaming || !escapeStopsReply({ key: e.key, defaultPrevented: e.defaultPrevented, isComposing: e.nativeEvent.isComposing, target: e.target })) return;
+            if (!replies.canStop || !escapeStopsReply({ key: e.key, defaultPrevented: e.defaultPrevented, isComposing: e.nativeEvent.isComposing, target: e.target })) return;
             e.preventDefault();
             void replies.stop();
           }}
