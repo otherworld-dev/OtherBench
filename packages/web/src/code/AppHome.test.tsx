@@ -11,7 +11,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
       ...actual.api,
       chats: { ...actual.api.chats, create: vi.fn() },
       turns: { ...actual.api.turns, create: vi.fn() },
-      apps: { ...actual.api.apps, issues: { list: vi.fn(), get: vi.fn(), comment: vi.fn(), close: vi.fn(), reopen: vi.fn() } },
+      apps: { ...actual.api.apps, patch: vi.fn(), issues: { list: vi.fn(), get: vi.fn(), comment: vi.fn(), close: vi.fn(), reopen: vi.fn() } },
     },
   };
 });
@@ -19,6 +19,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { useFeatures } from '../state/features.js';
+import { ALL_APPS_TAB_ID } from '../state/allAppsTab.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { AppHome } from './AppHome.js';
@@ -186,5 +187,49 @@ describe('AppHome', () => {
     expect(screen.getByText(/This app no longer exists/)).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
     expect(useOtherBenchStore.getState().paneState.tabs).toEqual([]);
+  });
+
+  it("an open app's home has Close app, which closes it", async () => {
+    useOtherBenchStore.setState({ apps: [app({ open: true })], appsLoaded: true });
+    vi.mocked(api.apps.patch).mockResolvedValue(app({ open: false }));
+    render(<AppHome appId="a1" />);
+    expect(screen.queryByRole('button', { name: 'Keep in sidebar' })).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Close app' }));
+    await waitFor(() => expect(api.apps.patch).toHaveBeenCalledWith('a1', { open: false }));
+    await waitFor(() => expect(useOtherBenchStore.getState().apps[0]?.open).toBe(false));
+    expect(await screen.findByRole('button', { name: 'Keep in sidebar' })).toBeInTheDocument();
+  });
+
+  it("a closed app's home has Keep in sidebar, which opens it", async () => {
+    useOtherBenchStore.setState({ apps: [app({ open: false })], appsLoaded: true });
+    vi.mocked(api.apps.patch).mockResolvedValue(app({ open: true }));
+    render(<AppHome appId="a1" />);
+    expect(screen.queryByRole('button', { name: 'Close app' })).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Keep in sidebar' }));
+    await waitFor(() => expect(api.apps.patch).toHaveBeenCalledWith('a1', { open: true }));
+    await waitFor(() => expect(useOtherBenchStore.getState().apps[0]?.open).toBe(true));
+  });
+
+  it('a failed close says why and leaves the app open', async () => {
+    useOtherBenchStore.setState({ apps: [app({ open: true })], appsLoaded: true });
+    vi.mocked(api.apps.patch).mockRejectedValue(new ApiError(500, 'Server down.'));
+    render(<AppHome appId="a1" />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Close app' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server down.');
+    expect(useOtherBenchStore.getState().apps[0]?.open).toBe(true);
+  });
+
+  it("the breadcrumb's All apps opens the All apps page and names the folder, or Unfiled", async () => {
+    useOtherBenchStore.setState({ apps: [app({ folderId: 'f1' })], appsLoaded: true, appFolders: [{ id: 'f1', name: 'Work', sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    const { unmount } = render(<AppHome appId="a1" />);
+    const crumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(crumb).getByText('Work')).toBeInTheDocument();
+    expect(within(crumb).getByText('OtherBench')).toBeInTheDocument();
+    await userEvent.setup().click(within(crumb).getByRole('button', { name: 'All apps' }));
+    expect(useOtherBenchStore.getState().activeChatId).toBe(ALL_APPS_TAB_ID);
+    unmount();
+    useOtherBenchStore.setState({ apps: [app({ folderId: null })] });
+    render(<AppHome appId="a1" />);
+    expect(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('Unfiled')).toBeInTheDocument();
   });
 });
