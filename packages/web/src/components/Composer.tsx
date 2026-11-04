@@ -242,6 +242,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       ...taken.flatMap((n) => n.attachments).filter((a) => !prev.some((p) => p.id === a.attachmentId)).map((a) => ({ id: a.attachmentId, filename: a.filename, mime: a.mime })),
     ]);
     if (taken.some((n) => !n.takenBack)) setNoteReturned(true);
+    // Taken back: the button that did it goes with its note, so the cursor comes here rather than to the page.
+    if (taken.some((n) => n.takenBack)) {
+      // Only when text was added: an unchanged box wouldn't use up the caret move until the next keystroke.
+      if (taken.some((n) => n.text.trim().length > 0)) caretTo.current = 'end';
+      textareaRef.current?.focus();
+    }
   }, [returnedCount, chat.id]);
 
   // Text handed to this chat's box from outside (an issue's "Start a chat on

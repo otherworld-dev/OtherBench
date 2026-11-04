@@ -1442,6 +1442,43 @@ describe('Composer while a reply runs (notes)', () => {
     await waitFor(() => expect(box()).toHaveValue('never mind'));
     expect(screen.queryByText(/Not sent:/)).not.toBeInTheDocument();
   });
+
+  it('a note taken back puts the cursor at the end of the box, not on the page', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button type="button">Take back</button>
+        <Composer chat={makeChat()} />
+      </>,
+    );
+    await user.type(box(), 'my draft');
+    // The Take back button had the focus, and goes away with its note.
+    screen.getByRole('button', { name: 'Take back' }).focus();
+    act(() => useOtherBenchStore.getState().noteTakenBack(note('n1', { text: 'never mind' })));
+
+    await waitFor(() => expect(box()).toHaveValue('my draft\n\nnever mind'));
+    expect(box()).toHaveFocus();
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe('my draft\n\nnever mind'.length);
+  });
+
+  it('a note returned because the reply ended leaves the cursor where it is', async () => {
+    render(
+      <>
+        <input aria-label="elsewhere" />
+        <Composer chat={makeChat()} />
+      </>,
+    );
+    const elsewhere = screen.getByRole('textbox', { name: 'elsewhere' });
+    elsewhere.focus();
+    const returned = note('n1', { text: 'came back' });
+    act(() => {
+      useOtherBenchStore.getState().noteSent(returned);
+      useOtherBenchStore.getState().applyChatEvent('chat-1', { type: 'note-resolved', chatId: 'chat-1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: returned });
+    });
+
+    await waitFor(() => expect(box()).toHaveValue('came back'));
+    expect(elsewhere).toHaveFocus();
+  });
 });
 
 describe('Composer prefill (spec 2026-10-20-code-tab-design, Goal 7)', () => {
