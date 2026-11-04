@@ -397,12 +397,13 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
     expect(fold('folder:F1').getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('Move to folder… on the current folder files nothing', async () => {
+  it('Move to folder… on the current folder files nothing and returns focus to the card', async () => {
     const u = setupFolders();
     await openCardMenu(u, 'A');
     await u.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
     await u.click(within(screen.getByRole('menu', { name: 'Move to folder…' })).getByRole('menuitemradio', { name: 'Games' }));
     expect(mockedAppPatch).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(card('A')));
   });
 
   it("Move to folder… that fails says so and shows the server's apps", async () => {
