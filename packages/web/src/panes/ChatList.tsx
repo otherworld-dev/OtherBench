@@ -1253,9 +1253,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
             >
               <AppsIcon className="shrink-0" />
               <span className="min-w-0 flex-1 truncate">All apps</span>
+              {/* Read as "All apps 3 apps", not a bare number, as a group heading's count is. The spaces sit between the
+                  spans (a flex row draws none) so the name keeps them. */}
+              {' '}
               <span data-testid="all-apps-count" className="shrink-0 text-xs tabular-nums text-[var(--text-faint)]" title={`${apps.length} ${apps.length === 1 ? 'app' : 'apps'}`}>
                 {apps.length}
               </span>
+              {' '}
+              <span className="sr-only">{apps.length === 1 ? 'app' : 'apps'}</span>
             </button>
           )}
 

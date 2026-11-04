@@ -2171,6 +2171,9 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       const entry = screen.getByTestId('all-apps-entry');
       expect(entry).toHaveTextContent('All apps');
       expect(within(entry).getByTestId('all-apps-count')).toHaveTextContent('3');
+      // The count reads with its noun, not as a bare number.
+      expect(entry).toHaveAccessibleName('All apps 3 apps');
+      expect(screen.getByRole('button', { name: 'All apps 3 apps' })).toBe(entry);
       expect(entry).not.toHaveAttribute('aria-current');
       // Above the app list.
       expect(entry.compareDocumentPosition(screen.getByTestId('group-A')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
