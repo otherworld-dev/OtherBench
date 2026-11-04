@@ -33,14 +33,23 @@ afterEach(async () => {
 });
 
 describe('resolveSecretsPassphrase', () => {
-  it('uses OTHERBENCH_SECRETS_PASSPHRASE when set, without touching the filesystem', async () => {
-    process.env['OTHERBENCH_SECRETS_PASSPHRASE'] = 'env-supplied-passphrase';
+  it('uses the passphrase it is given (OTHERBENCH_SECRETS_PASSPHRASE, read by the CLI), without touching the filesystem', async () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const passphrase = await resolveSecretsPassphrase(secretsPath, 'env-supplied-passphrase');
+
+    expect(passphrase).toBe('env-supplied-passphrase');
+    await expect(stat(`${secretsPath}.key`)).rejects.toThrow();
+  });
+
+  it('no longer reads OTHERBENCH_SECRETS_PASSPHRASE itself: the CLI scrubs it from the environment before this runs', async () => {
+    process.env['OTHERBENCH_SECRETS_PASSPHRASE'] = 'left-in-the-environment';
     const secretsPath = join(dir, 'secrets.json');
 
     const passphrase = await resolveSecretsPassphrase(secretsPath);
 
-    expect(passphrase).toBe('env-supplied-passphrase');
-    await expect(stat(`${secretsPath}.key`)).rejects.toThrow();
+    expect(passphrase).not.toBe('left-in-the-environment');
+    expect((await readFile(`${secretsPath}.key`, 'utf8')).trim()).toBe(passphrase);
   });
 
   it('generates and persists a random passphrase on first call', async () => {
