@@ -446,6 +446,40 @@ describe('TurnRunner.run', () => {
     expect(usageRows.some((u) => u.messageId === otherId)).toBe(false);
   });
 
+  it("cancel(messageId, notice) ends the stopped reply with the notice, kept and sent before its status; a later stop's notice and a plain stop add none", async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Go' }],
+      profiles: [makeResolvedProfile({ id: 'profile-a' }), makeResolvedProfile({ id: 'profile-b' })],
+    });
+    await flush();
+    const [limited, plain] = result.assistantMessageIds as [string, string];
+    push(limited, { type: 'text-delta', text: 'Partial' });
+    await flush();
+
+    runner.cancel(limited, 'Out of time.');
+    runner.cancel(limited, 'A second reason.');
+    runner.cancel(plain);
+    await flush();
+
+    expect(store.messages.get(limited)).toMatchObject({ status: 'cancelled', parts: [{ type: 'text', text: 'Partial' }, { type: 'notice', text: 'Out of time.' }] });
+    const mine = events.filter((e) => e.messageId === limited).map((e) => e.type);
+    expect(mine.slice(-2)).toEqual(['notice', 'status']);
+    expect(events.filter((e) => e.type === 'notice')).toEqual([{ messageId: limited, type: 'notice', text: 'Out of time.' }]);
+    expect(store.messages.get(plain)!.parts.some((p) => p.type === 'notice')).toBe(false);
+    // A reply no longer running is left alone, notice or not.
+    runner.cancel(limited, 'Too late.');
+    await flush();
+    expect(store.messages.get(limited)!.parts).toHaveLength(2);
+  });
+
   it("still announces the reply's end when its chat was deleted mid-stream and the final writes throw", async () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();

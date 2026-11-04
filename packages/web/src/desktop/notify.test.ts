@@ -178,11 +178,13 @@ describe('Notifier and scheduled runs', () => {
   it('words each outcome, and opens just OtherBench when there is no chat', async () => {
     const { notifier, show } = setup();
     await notifier.handle(runFinished({ runId: 'r1', status: 'error', detail: 'Rate limited.' }));
-    await notifier.handle(runFinished({ runId: 'r2', status: 'timed_out', detail: 'Stopped after 30 minutes.' }));
+    await notifier.handle(runFinished({ runId: 'r2', status: 'timed_out', detail: "Stopped at the schedule's time limit of 30 minutes." }));
+    await notifier.handle(runFinished({ runId: 'r2b', status: 'timed_out', detail: null }));
     await notifier.handle(runFinished({ runId: 'r3', status: 'cancelled' }));
     await notifier.handle(runFinished({ runId: 'r4', status: 'not_started', detail: "The project's folder is missing.", chatId: null, messageId: null }));
     expect(show.mock.calls).toEqual([
       ['Weekly report', 'Failed: Rate limited.', 'c1'],
+      ['Weekly report', "Timed out. Stopped at the schedule's time limit of 30 minutes.", 'c1'],
       ['Weekly report', 'Timed out', 'c1'],
       ['Weekly report', 'Stopped', 'c1'],
       ['Weekly report', "Didn't run: The project's folder is missing.", null],

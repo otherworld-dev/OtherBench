@@ -1660,6 +1660,19 @@ export function runStoreContract(
         expect(store.schedules.list().map((s) => s.autoMode)).toEqual([true, false]);
       });
 
+      it('timeLimitMinutes defaults to 30, keeps null for no limit, and round-trips through create and update', () => {
+        const ids = seedTargets();
+        expect(store.schedules.create(schedule({ id: 's1' }, ids)).timeLimitMinutes).toBe(30);
+        expect(store.schedules.create(schedule({ id: 's2', timeLimitMinutes: null }, ids)).timeLimitMinutes).toBeNull();
+        expect(store.schedules.create(schedule({ id: 's3', timeLimitMinutes: 240 }, ids)).timeLimitMinutes).toBe(240);
+        expect(store.schedules.update('s1', { timeLimitMinutes: null }).timeLimitMinutes).toBeNull();
+        expect(store.schedules.get('s1')!.timeLimitMinutes).toBeNull();
+        expect(store.schedules.update('s2', { name: 'Renamed' }).timeLimitMinutes).toBeNull();
+        expect(store.schedules.update('s2', { timeLimitMinutes: 10 }).timeLimitMinutes).toBe(10);
+        expect(store.schedules.update('s3', { enabled: false }).timeLimitMinutes).toBe(240);
+        expect(store.schedules.list().map((s) => s.timeLimitMinutes)).toEqual([null, 10, 240]);
+      });
+
       it('due lists enabled schedules whose time has come, oldest due first', () => {
         const ids = seedTargets();
         store.schedules.create(schedule({ id: 'late', nextRunAt: 500 }, ids));

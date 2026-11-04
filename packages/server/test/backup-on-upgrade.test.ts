@@ -23,11 +23,13 @@ describe('starting on a database from an older build', () => {
     const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
     container.close();
 
-    const copy = `${dbPath}.before-schema-${SCHEMA_VERSION - 1}`;
+    // The version the older build left: the highest one below SCHEMA_VERSION, which needn't be SCHEMA_VERSION - 1.
+    const previous = Math.max(...MIGRATIONS.filter((m) => m.version < SCHEMA_VERSION).map((m) => m.version));
+    const copy = `${dbPath}.before-schema-${previous}`;
     expect(existsSync(copy)).toBe(true);
     const opened = openDatabase(copy);
     try {
-      expect((opened.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION - 1);
+      expect((opened.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(previous);
     } finally {
       opened.close();
     }
