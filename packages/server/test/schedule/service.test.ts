@@ -494,7 +494,9 @@ describe('ScheduleService: targets, endings and Run now', () => {
     await settle();
     expect(engine.requests).toHaveLength(0);
     expect(store.schedules.runs('s1')).toEqual([]);
-    expect(() => service.runNow('s2')).toThrow(expect.objectContaining({ kind: 'busy' }));
+    expect(() => service.runNow('s2')).toThrow(
+      expect.objectContaining({ kind: 'busy', message: 'Messages you sent in this chat are still waiting to go out. Try again when they have.' }),
+    );
 
     // The notes went out: the run that waited starts.
     waiting.clear();
@@ -502,6 +504,16 @@ describe('ScheduleService: targets, endings and Run now', () => {
     await settle();
     await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
     expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'scheduled', status: 'running' });
+  });
+
+  it('Run now names a reply being written, not waiting notes, when both hold', () => {
+    service.dispose();
+    service = build({ isChatBusy: (chatId) => chatId === 'chat-1', hasWaitingNotes: (chatId) => chatId === 'chat-1' });
+    addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
+    service.start();
+    expect(() => service.runNow('s1')).toThrow(
+      expect.objectContaining({ kind: 'busy', message: 'A reply is being written in this chat. Try again when it has finished.' }),
+    );
   });
 
   it('a schedule deleted while its run is going lets the reply finish, unrecorded', async () => {
