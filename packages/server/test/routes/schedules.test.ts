@@ -126,8 +126,11 @@ describe('POST /api/schedules', () => {
       [{ target: { chatId: 'chat-1', projectId: 'proj' } }, /"target"/],
       [{ target: { chatId: 'nope' } }, /"target.chatId"/],
       [{ target: { projectId: 'nope' } }, /"target.projectId"/],
-      [{ rule: { cadence: 'hourly', time: '09:00' } }, /"rule.cadence"/],
+      [{ rule: { cadence: 'yearly', time: '09:00' } }, /"rule.cadence"/],
       [{ rule: { cadence: 'weekly', time: '09:00', weekdays: [] } }, /"rule.weekdays"/],
+      [{ rule: { cadence: 'hourly', time: '09:00', everyHours: 24 } }, /"rule.everyHours"/],
+      [{ rule: { cadence: 'cron', cron: '0 9 * *' } }, /^"rule.cron": A cron rule has five fields/],
+      [{ rule: { cadence: 'cron', cron: '61 9 * * *' } }, /^"rule.cron": The minute field's "61" is out of range: 0 to 59.$/],
       [{ enabled: 'yes' }, /"enabled"/],
       [{ autoMode: 'yes' }, /"autoMode"/],
     ];
@@ -182,6 +185,17 @@ describe('PATCH and DELETE /api/schedules/:id', () => {
     expect(renamed).toMatchObject({ name: 'Daily', prompt: 'hi', nextRunAt: made.nextRunAt });
     const weekly = (await (await send('PATCH', `/${made.id}`, { rule: { cadence: 'weekly', time: '09:00', weekdays: [1] } })).json()) as ScheduleView;
     expect(weekly.describe).toBe('Mondays at 09:00');
+    const before = Date.now();
+    const hourly = (await (await send('PATCH', `/${made.id}`, { rule: { cadence: 'hourly', time: '00:00', everyHours: 1 } })).json()) as ScheduleView;
+    expect(hourly.describe).toBe('Every hour from 00:00 to 23:00');
+    expect(hourly.nextRunAt! - before).toBeLessThanOrEqual(2 * 60 * 60_000);
+    const cron = (await (await send('PATCH', `/${made.id}`, { rule: { cadence: 'cron', cron: ' */5  * * * * ' } })).json()) as ScheduleView;
+    expect(cron).toMatchObject({ describe: 'Cron rule */5 * * * *', rule: { cadence: 'cron', cron: '*/5 * * * *' } });
+    expect(cron.nextRunAt! - before).toBeLessThanOrEqual(5 * 60_000 + 1000);
+    const bad = await send('PATCH', `/${made.id}`, { rule: { cadence: 'cron', cron: '0 0 30 2 *' } });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe('"rule.cron": It never runs: none of those months has any of those days.');
+    expect(container.store.schedules.get(made.id)!.rule).toEqual({ cadence: 'cron', cron: '*/5 * * * *' });
     expect((await send('PATCH', `/${made.id}`, { target: { chatId: 'chat-2' } })).status).toBe(400);
     expect((await send('PATCH', '/nope', { name: 'x' })).status).toBe(404);
   });
