@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { SqliteArtifactRepo } from './repos/artifacts.js';
-import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, AppFolderRepo, IssueTickRepo, MediaWorkflowRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo, RemoteSessionRepo } from '@otherbench/core/ports/store.js';
+import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, AppRepo, AppFolderRepo, IssueTickRepo, MediaWorkflowRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo, RemoteSessionRepo, PushSubscriptionRepo } from '@otherbench/core/ports/store.js';
 import { SqliteAttachmentRepo } from './repos/attachments.js';
 import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
@@ -23,6 +23,7 @@ import { SqliteIssueTickRepo } from './repos/issue-ticks.js';
 import { SqliteMediaWorkflowRepo } from './repos/media-workflows.js';
 import { SqliteProjectRepo } from './repos/projects.js';
 import { SqliteRemoteSessionRepo } from './repos/remote-sessions.js';
+import { SqlitePushSubscriptionRepo } from './repos/push-subscriptions.js';
 import { SqliteScheduleRepo } from './repos/schedules.js';
 import { SqliteSettingsRepo } from './repos/settings.js';
 import { SqliteUsageRepo } from './repos/usage.js';
@@ -61,6 +62,7 @@ export class SqliteStore implements Store {
   readonly audit: AuditRepo;
   readonly schedules: ScheduleRepo;
   readonly remoteSessions: RemoteSessionRepo;
+  readonly pushSubscriptions: PushSubscriptionRepo;
 
   /** `options.now`: the wall clock row stamps are read from, `Date.now` unless a test fixes it. */
   constructor(
@@ -95,6 +97,7 @@ export class SqliteStore implements Store {
     this.audit = new SqliteAuditRepo(db, selfId);
     this.schedules = new SqliteScheduleRepo(db);
     this.remoteSessions = new SqliteRemoteSessionRepo(db);
+    this.pushSubscriptions = new SqlitePushSubscriptionRepo(db);
   }
 
   transaction<T>(fn: () => T): T {
