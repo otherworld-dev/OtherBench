@@ -1319,7 +1319,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
         <div className="mb-2 flex items-stretch gap-1">
-          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
+          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid min-w-0 flex-1 grid-cols-[minmax(3rem,1fr)_minmax(3rem,1fr)_minmax(0,auto)] gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
             {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
               <button
                 key={m}
@@ -1327,11 +1327,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
                 aria-pressed={mode === m && !overviewOpen && !modeElsewhere(m)}
                 onClick={() => setMode(m)}
                 title={modeElsewhere(m) ? `${m === 'chat' ? 'Chat' : 'Code'} is in its own window` : undefined}
-                className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
+                className={`flex min-w-0 items-center justify-center gap-1 overflow-hidden rounded-[3px] px-2 py-1 text-xs ${
                   mode === m && !overviewOpen && !modeElsewhere(m) ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
                 }`}
               >
-                {m === 'chat' ? 'Chat' : 'Code'}
+                <span className="truncate">{m === 'chat' ? 'Chat' : 'Code'}</span>
                 {modeElsewhere(m) && elsewhereMark}
               </button>
             ))}
@@ -1340,13 +1340,13 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               aria-pressed={overviewOpen}
               onClick={() => setOverviewOpen(true)}
               title={overviewElsewhere ? 'The Overview is in its own window' : undefined}
-              className={`flex items-center justify-center gap-1 rounded-[3px] px-2 py-1 text-xs ${
+              className={`flex min-w-0 items-center justify-center gap-1 overflow-hidden rounded-[3px] px-2 py-1 text-xs ${
                 overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
               }`}
             >
-              Overview
+              <span className="truncate">Overview</span>
               {overviewTotal > 0 && (
-                <span data-testid="overview-count" className="rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
+                <span data-testid="overview-count" className="shrink-0 rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
                   {overviewTotal}
                 </span>
               )}
@@ -1541,12 +1541,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         )}
       </div>
 
-      <div className={`flex items-center gap-1 border-t border-[var(--border)] p-2${wrapFooter ? ' flex-wrap' : ''}`}>
+      {/* An @container so the main button's words give way to a bare "+" in a narrow sidebar rather than wrap
+          onto a second line; they stay in its accessible name. */}
+      <div className={`@container flex items-stretch gap-1 border-t border-[var(--border)] p-2${wrapFooter ? ' flex-wrap' : ''}`}>
         {codeMode ? (
           // In Code mode a new chat starts from its app's "+ New chat" row, so the main button makes an app.
           <>
-            <button type="button" onClick={() => openAppPage({ mode: 'create' })} className="btn btn-primary flex-1 px-2 py-1.5">
-              + New app
+            <button type="button" onClick={() => openAppPage({ mode: 'create' })} title="New app" className="btn btn-primary flex-1 whitespace-nowrap px-2 py-1.5">
+              + <span className="@max-[14.125rem]:sr-only">New app</span>
             </button>
             <button type="button" onClick={() => void createFolder()} aria-label="New folder" title="New folder" className="btn px-2 py-1.5">
               <FolderPlusIcon />
@@ -1559,10 +1561,10 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               onClick={() => void createChat()}
               // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
               aria-disabled={creating || profiles.length === 0 || undefined}
-              title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
-              className="btn btn-primary flex-1 px-2 py-1.5"
+              title={profiles.length === 0 ? 'Create a profile before starting a chat.' : 'New chat'}
+              className="btn btn-primary flex-1 whitespace-nowrap px-2 py-1.5"
             >
-              + New chat
+              + <span className="@max-[14.125rem]:sr-only">New chat</span>
             </button>
             <button type="button" onClick={() => openProjectPage({ mode: 'create' })} aria-label="New project" title="New project" className="btn px-2 py-1.5">
               <FolderPlusIcon />
