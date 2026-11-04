@@ -115,6 +115,23 @@ describe('AllAppsPage', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('alpha'));
   });
 
+  it('Enter and Space on a focused card open the app and show its home', async () => {
+    setup([app('alpha'), app('beta')]);
+    vi.mocked(api.apps.patch).mockImplementation(async (id) => app(id, { open: true }));
+    render(<AllAppsPage />);
+    const u = user();
+    screen.getByTestId('all-apps-card-alpha').focus();
+    await u.keyboard('{Enter}');
+    expect(api.apps.patch).toHaveBeenCalledWith('alpha', { open: true });
+    expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('alpha'));
+
+    screen.getByTestId('all-apps-card-beta').focus();
+    await u.keyboard(' ');
+    expect(api.apps.patch).toHaveBeenCalledWith('beta', { open: true });
+    expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('beta'));
+    expect(useOtherBenchStore.getState().apps.map((a) => a.open)).toEqual([true, true]);
+  });
+
   it('still shows the home when opening fails, and says so', async () => {
     setup([app('alpha')]);
     vi.mocked(api.apps.patch).mockRejectedValue(new Error('offline'));
