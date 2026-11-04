@@ -857,6 +857,21 @@ Ollama instance.
   `toPublicAttachment()` strips it before every `c.json()` call in that
   route; it's still used internally (loading the blob to serve `/content`),
   just never sent to the client.
+- **The 25MB upload cap holds while the body is read.** `limitUploadBody`
+  in `routes/attachments.ts` caps the whole multipart body at
+  `MAX_UPLOAD_BODY_BYTES` (25MB plus 1MB for the multipart framing). A
+  Content-Length over that is refused before any of the body is read.
+  Otherwise the body reaches the multipart parser through a stream that
+  counts the bytes as they're pulled, whatever the Content-Length says or
+  when there is none (a chunked upload), and refuses once the count passes
+  the cap: at most one chunk past it is read. Both answer 413 with the usual
+  `{ error }`. The rest of the body is left unread; `@hono/node-server`
+  drains it for up to half a second (or 64 MB) after the answer and then
+  closes the connection. Hono's own `bodyLimit` was used here before; it
+  trusts a Content-Length without counting and reads a chunked body into
+  memory before the handler starts. The per-file checks after parsing (the
+  `File`'s `.size`, then the bytes read) are unchanged and give the exact
+  byte count.
 - **Office files and files as text (Deck #928).** Uploads of .docx/.docm,
   .xlsx/.xlsm and .pptx/.pptm (by MIME type or extension; the main part in
   the ZIP decides what it really is) are read into `extracted_text` by
@@ -2235,15 +2250,14 @@ this on startup.
   timeline with no existing push channel to piggyback on, unlike the thread
   itself (SSE-driven). A Revoke action removes its row optimistically so it
   doesn't *look* laggy, but the other sections can be up to 4s stale.
-- **Attachment uploads are capped at 25MB, but not streamed.**
-  `packages/server/src/routes/attachments.ts`'s `MAX_ATTACHMENT_BYTES`
-  cap is enforced by first trusting the multipart `File`'s self-reported
-  `.size`, then re-checking the real byte length — but that second check
-  only happens after `Buffer.from(await file.arrayBuffer())` has already
-  read the entire file into memory. The cap bounds how much memory one
-  upload can ultimately hold, but does not stop the bytes from being
-  buffered in full before the size is verified; a true streaming
-  implementation would enforce the limit while reading, not after.
+- **An accepted upload is held in memory, not streamed to disk.** The 25MB
+  cap now holds while the body is read (see Attachments above), so an
+  oversized upload is refused about a megabyte past the cap. An upload
+  under the cap is still parsed whole in memory by `parseBody()` and then
+  copied into a `Buffer` before it's written, so one upload can briefly
+  hold about twice its size (at most around 52MB). Writing parts to disk as
+  they arrive would need a streaming multipart parser, which Node and Hono
+  don't provide.
 - **Abandoned unsent attachments are kept for 30 days, and a few never go.**
   The sweep (see Attachments above) deletes an unsent attachment 30 days
   after its row last changed, so a file abandoned in a chat holds its disk
@@ -2342,7 +2356,8 @@ this on startup.
     in the workspace, no argument-count check on formulas (`=ROUND(1)` is
     accepted and may make Excel complain), and a hostile uploaded file can
     hold the upload request for about 10-15 seconds (up to 64 MB of parts at
-    4-6 MB/s).
+    4-6 MB/s). The upload cap doesn't shorten this: the time goes on
+    unpacking a file that is already within 25MB.
   - Word fidelity gaps: an ordered list's start number is ignored; a
     reference-style link loses its URL; lists, tables and headings inside a
     blockquote lose the quote styling; link targets with spaces aren't

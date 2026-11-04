@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
-import { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
 import { sniffToolImageMime, sniffToolVideoMime, toolImageBound, toolVideoBound } from '@otherbench/core/domain/tool-images.js';
@@ -14,23 +13,77 @@ import { extractAttachmentText } from '../attachment-text.js';
 import { requireNonEmptyString } from '../validation.js';
 
 /**
- * 25MB per-file cap (task 21 decision #1). Enforced twice below: once
- * against the `File` object's self-reported `.size` (a fast rejection
- * before reading the body at all), and again against the actual byte
- * length after reading -- the first check trusts the multipart parser/
- * client, the second does not.
+ * 25MB per-file cap (task 21 decision #1). The upload route holds the whole
+ * request body to `MAX_UPLOAD_BODY_BYTES` while it is read (see
+ * `limitUploadBody`), then checks the file itself twice: against the `File`
+ * object's self-reported `.size`, and against the bytes actually read -- the
+ * first trusts the multipart parser, the second does not.
  */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /**
  * Cap on the whole multipart REQUEST body: the per-file cap plus allowance for
  * the multipart framing (boundaries, part headers, any small extra fields).
- * Enforced by `bodyLimit` BEFORE the body is parsed, so an oversized upload is
- * rejected from its Content-Length up front, or aborted mid-stream, instead of
- * being buffered whole by `parseBody()` and only then size-checked. The exact
- * per-file check in the handler stays as the precise backstop.
+ * Held by `limitUploadBody` as the body is read, so an oversized upload is
+ * refused at most one chunk past this many bytes, rather than buffered whole
+ * by `parseBody()` and only then size-checked.
  */
 export const MAX_UPLOAD_BODY_BYTES = MAX_ATTACHMENT_BYTES + 1024 * 1024;
+
+/** The `{ error }` an upload gets when its body passes `MAX_UPLOAD_BODY_BYTES`. */
+export const UPLOAD_TOO_LARGE = 'That upload is too large. Attachments are limited to 25MB per file.';
+
+/**
+ * Holds a request body to `MAX_UPLOAD_BODY_BYTES` while it is read. A
+ * Content-Length over the cap is refused before any of the body is read.
+ * Whatever the header says (it is missing on a chunked upload, and can be
+ * wrong), the body is handed on through a stream that counts the bytes as
+ * the multipart parser pulls them and errors once they pass the cap; the
+ * parse then fails and the request is answered 413.
+ *
+ * Hono's own `bodyLimit` isn't used here: it trusts a Content-Length without
+ * counting, and without one it reads the body into memory before the handler
+ * sees any of it. This pulls a chunk only when the parser asks for one.
+ *
+ * The rest of an over-limit body is left unread, not cancelled: cancelling
+ * Node's request stream can destroy the socket, and the 413 with it. Once the
+ * answer is sent, `@hono/node-server` drains what's left for a short while
+ * and then closes the connection (its `autoCleanupIncoming`).
+ */
+const limitUploadBody: MiddlewareHandler = async (c, next) => {
+  const source = c.req.raw.body;
+  if (!source) return next();
+  if (Number(c.req.header('content-length')) > MAX_UPLOAD_BODY_BYTES) {
+    throw new HTTPException(413, { message: UPLOAD_TOO_LARGE });
+  }
+
+  let read = 0;
+  let overLimit = false;
+  const reader = source.getReader();
+  const counted = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        read += value.byteLength;
+        if (read > MAX_UPLOAD_BODY_BYTES) {
+          overLimit = true;
+          controller.error(new HTTPException(413, { message: UPLOAD_TOO_LARGE }));
+          return;
+        }
+        controller.enqueue(value);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  c.req.raw = new Request(c.req.raw, { body: counted, duplex: 'half' } as RequestInit);
+  await next();
+  // The handler only saw its multipart parse fail (a 400); the cause was the size.
+  if (overLimit) throw new HTTPException(413, { message: UPLOAD_TOO_LARGE });
+};
 
 function getChatOrThrow(container: Container, chatId: string): void {
   if (!container.store.chats.get(chatId)) {
@@ -281,14 +334,6 @@ async function storeAttachment(container: Container, chatId: string, data: Buffe
 
 export function attachmentsRoutes(container: Container): Hono {
   const app = new Hono();
-
-  const limitUploadBody = bodyLimit({
-    maxSize: MAX_UPLOAD_BODY_BYTES,
-    // Thrown (not returned) so the app-wide onError renders the usual `{ error }` JSON.
-    onError: () => {
-      throw new HTTPException(413, { message: 'That upload is too large. Attachments are limited to 25MB per file.' });
-    },
-  });
 
   app.post('/chats/:id/attachments', limitUploadBody, async (c) => {
     const chatId = c.req.param('id');

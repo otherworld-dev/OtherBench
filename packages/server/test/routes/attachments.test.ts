@@ -1,12 +1,15 @@
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { serve, type ServerType } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { MAX_UPLOAD_BODY_BYTES, UPLOAD_TOO_LARGE } from '../../src/routes/attachments.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 let container: Container;
@@ -52,6 +55,44 @@ function uploadForm(filename: string, content: string | Uint8Array<ArrayBuffer>,
   const form = new FormData();
   form.append('file', new File([content], filename, { type: mime }));
   return form;
+}
+
+const MB = 1024 * 1024;
+const BOUNDARY = 'otherbench-test-boundary';
+const MULTIPART_TYPE = `multipart/form-data; boundary=${BOUNDARY}`;
+const MULTIPART_HEAD = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="big.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+const MULTIPART_TAIL = `\r\n--${BOUNDARY}--\r\n`;
+
+/**
+ * A multipart upload of one `fileBytes`-long file as a pull-only stream
+ * with no Content-Length, counting how many bytes the server pulled from it.
+ */
+function streamedUpload(fileBytes: number): { body: ReadableStream<Uint8Array>; contentType: string; pulled: () => number } {
+  const encoder = new TextEncoder();
+  const parts: (() => Uint8Array)[] = [() => encoder.encode(MULTIPART_HEAD)];
+  for (let left = fileBytes; left > 0; left -= MB) {
+    const size = Math.min(MB, left);
+    parts.push(() => new Uint8Array(size));
+  }
+  parts.push(() => encoder.encode(MULTIPART_TAIL));
+  let pulled = 0;
+  let next = 0;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const part = parts[next++];
+        if (!part) {
+          controller.close();
+          return;
+        }
+        const bytes = part();
+        pulled += bytes.length;
+        controller.enqueue(bytes);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { body, contentType: MULTIPART_TYPE, pulled: () => pulled };
 }
 
 describe('POST /api/chats/:id/attachments', () => {
@@ -131,17 +172,13 @@ describe('POST /api/chats/:id/attachments', () => {
   });
 
   describe('upload size limit is enforced before the file is read in full', () => {
-    const MB = 1024 * 1024;
-
     afterEach(() => {
       vi.restoreAllMocks();
     });
 
-    it('rejects an over-limit body with 413 and the usual {error} shape, without the handler ever running', async () => {
-      const chatsGet = vi.spyOn(container.store.chats, 'get');
+    it('rejects an over-limit body with 413 and the usual {error} shape, storing nothing', async () => {
       const attachmentsCreate = vi.spyOn(container.store.attachments, 'create');
       const blobPut = vi.spyOn(container.blobStore, 'put');
-      const formData = vi.spyOn(Request.prototype, 'formData');
 
       // Well past the cap plus multipart overhead; no Content-Length header, so
       // this exercises the streaming path.
@@ -153,9 +190,7 @@ describe('POST /api/chats/:id/attachments', () => {
       expect(res.status).toBe(413);
       const body = (await res.json()) as { error: string };
       expect(Object.keys(body)).toEqual(['error']);
-      expect(body.error).toMatch(/25MB/);
-      expect(chatsGet).not.toHaveBeenCalled();
-      expect(formData).not.toHaveBeenCalled();
+      expect(body.error).toBe(UPLOAD_TOO_LARGE);
       expect(blobPut).not.toHaveBeenCalled();
       expect(attachmentsCreate).not.toHaveBeenCalled();
       expect(container.store.attachments.list('chat-1')).toHaveLength(0);
@@ -195,6 +230,138 @@ describe('POST /api/chats/:id/attachments', () => {
       expect(res.status).toBe(413);
       expect(((await res.json()) as { error: string }).error).toMatch(/is \d+ bytes, over the/);
       expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+    });
+
+    it('stops reading a body with no Content-Length soon after it passes the limit', async () => {
+      const blobPut = vi.spyOn(container.blobStore, 'put');
+      const upload = streamedUpload(200 * MB);
+
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        headers: { 'content-type': upload.contentType },
+        body: upload.body,
+        duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: UPLOAD_TOO_LARGE });
+      // Read up to the limit and one chunk past it, then no further.
+      expect(upload.pulled()).toBeLessThanOrEqual(MAX_UPLOAD_BODY_BYTES + MB);
+      expect(blobPut).not.toHaveBeenCalled();
+      expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+    });
+
+    it('counts the bytes actually read even when Content-Length understates them', async () => {
+      const upload = streamedUpload(40 * MB);
+
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        headers: { 'content-type': upload.contentType, 'content-length': '1000' },
+        body: upload.body,
+        duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: UPLOAD_TOO_LARGE });
+      expect(upload.pulled()).toBeLessThanOrEqual(MAX_UPLOAD_BODY_BYTES + MB);
+      expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+    });
+
+    it('still accepts a streamed upload under the cap with no Content-Length', async () => {
+      const upload = streamedUpload(3 * MB);
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        headers: { 'content-type': upload.contentType },
+        body: upload.body,
+        duplex: 'half',
+      } as RequestInit);
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { size: number }).size).toBe(3 * MB);
+    });
+
+    describe('over a real socket', () => {
+      let server: ServerType | undefined;
+
+      afterEach(async () => {
+        await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+        server = undefined;
+      });
+
+      async function listen(): Promise<number> {
+        return new Promise((resolve) => {
+          server = serve({ fetch: app().fetch, port: 0, hostname: '127.0.0.1' }, (info) => resolve(info.port));
+        });
+      }
+
+      /**
+       * Sends an upload of up to `totalBytes`, a megabyte at a time, and
+       * stops writing as soon as the response arrives (or the server closes
+       * the connection).
+       */
+      function sendUpload(port: number, totalBytes: number, framing: Record<string, string>): Promise<{ status: number; body: string; written: number }> {
+        return new Promise((resolve, reject) => {
+          let written = 0;
+          let answered = false;
+          const req = request({
+            host: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: '/api/chats/chat-1/attachments',
+            headers: { 'content-type': MULTIPART_TYPE, ...framing },
+          });
+          req.on('response', (res) => {
+            answered = true;
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (d: string) => (body += d));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, body, written }));
+            res.on('error', reject);
+          });
+          // A reset after the answer is expected: the server drops the rest of the body.
+          req.on('error', (err) => {
+            if (!answered) reject(err);
+          });
+          req.write(MULTIPART_HEAD);
+          const pump = () => {
+            while (!answered && !req.destroyed && written < totalBytes) {
+              written += MB;
+              if (!req.write(Buffer.alloc(MB))) {
+                req.once('drain', pump);
+                return;
+              }
+            }
+            if (!answered && !req.destroyed) req.end(MULTIPART_TAIL);
+          };
+          pump();
+        });
+      }
+
+      it('answers 413 to a huge chunked upload while it is still being sent', async () => {
+        const port = await listen();
+        const result = await sendUpload(port, 400 * MB, { 'transfer-encoding': 'chunked' });
+        expect(result.status).toBe(413);
+        expect(JSON.parse(result.body)).toEqual({ error: UPLOAD_TOO_LARGE });
+        // The answer came once the limit was passed: what the client wrote past
+        // it is only what the socket buffers held (about 28MB here in all).
+        expect(result.written).toBeLessThan(MAX_UPLOAD_BODY_BYTES + 32 * MB);
+        expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+      });
+
+      it('answers 413 to an oversized Content-Length before the body is sent', async () => {
+        const port = await listen();
+        const result = await sendUpload(port, 400 * MB, { 'content-length': String(400 * MB) });
+        expect(result.status).toBe(413);
+        expect(JSON.parse(result.body)).toEqual({ error: UPLOAD_TOO_LARGE });
+        // Only what the socket buffers took before the answer (about 3MB here).
+        expect(result.written).toBeLessThan(32 * MB);
+      });
+
+      it('still takes a normal chunked upload', async () => {
+        const port = await listen();
+        const result = await sendUpload(port, 2 * MB, { 'transfer-encoding': 'chunked' });
+        expect(result.status).toBe(201);
+        expect((JSON.parse(result.body) as { size: number }).size).toBe(2 * MB);
+      });
     });
   });
 
