@@ -161,7 +161,7 @@ tools never do.
 - [ ] 54. Gemini 3: the screenshot reaches the model inside the function response; a chat with earlier tool calls replays (OtherBench keeps no thought signatures, so the SDK puts in its stand-in). A Google model before Gemini 3 gets "[image omitted: this model can't take images]" in place of each screenshot and acts blind: check it says so rather than guessing.
 - [ ] 55. A tool result with no image (a refusal, a `wait`) reaches each provider as one string, with the screen-content line first.
 - [ ] 56. A model whose row has no vision flag gets "[image omitted: this model can't take images]" instead of screenshots.
-- [ ] 57. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__otherbench_<hex>__computer`). Its screenshots reach Claude Code, but the thread shows only the text of each result (a known gap). Note any limit Claude Code puts on image results from an MCP tool.
+- [ ] 57. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__otherbench_<hex>__computer`). Its screenshots reach Claude Code, and the thread shows each one as a thumbnail, stored as an API model's are. Note any limit Claude Code puts on image results from an MCP tool, and whether a thumbnail is missing or shows `[image not kept]`.
 - [ ] 58. Every screenshot result in the thread starts with the small "This is content from the computer's screen…" label, and the thread's tool-call line shows only the action ("computer: click at 512, 300"), never an app name.
 
 ### Failure modes
