@@ -65,6 +65,7 @@ import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
 import { NotesService } from './notes/service.js';
+import { runAbandonedAttachmentSweep, startAbandonedAttachmentSweep, type AbandonedSweeper } from './attachment-sweep.js';
 import { workspaceResolver } from './workspace-view.js';
 import type { GithubService } from './code/github.js';
 import type { NextcloudClient, NextcloudConfig } from './nextcloud/client.js';
@@ -433,6 +434,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // touches `roots.writeRoot` -- see resolveAttachmentsRoots's doc for why
   // that's now safe to run unconditionally, even with another database's
   // own file sitting in the same parent directory.
+  //
+  // Before it: unsent attachments left longer than the grace period go,
+  // each through the same row-then-blob GC as a delete (attachment-sweep.ts,
+  // `sweepAbandonedAttachments`). No note can be holding one yet: notes live
+  // in memory and the service is built below. It runs daily from then on.
+  await runAbandonedAttachmentSweep({ store, blobStore });
   const swept = await sweepOrphanedBlobs(store, blobStore);
   if (swept.removed > 0) {
     console.warn(`[otherbench-server] startup blob sweep removed ${swept.removed} orphaned attachment blob(s) (of ${swept.scanned} scanned).`);
@@ -649,6 +656,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   });
   killTerminalsOfGoneApps(events, terminals, (id) => store.apps.get(id) !== null);
 
+  // The daily abandoned-attachment sweep, started once the notes service exists.
+  let abandonedSweep: AbandonedSweeper | null = null;
   // What close() set going without waiting, for settled().
   let sandboxClosed: Promise<void> = Promise.resolve();
   let terminalsClosed: Promise<void> = Promise.resolve();
@@ -688,6 +697,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       container.schedules?.dispose();
       // Before the store goes: stops the Overview's check timer.
       container.overview?.dispose();
+      // And the abandoned-attachment sweep's.
+      abandonedSweep?.stop();
       // Computer use ends with the server: the driver is told, and nothing starts afterwards.
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
@@ -752,6 +763,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   container.notes = notesService;
   turnRunner.on((e) => {
     if (e.type === 'status' && e.status !== 'streaming') notesService.replyEnded(e.messageId, e.status);
+  });
+  // Unsent attachments abandoned for longer than the grace period, every day while the server runs. One on a note still waiting to go out stays.
+  abandonedSweep = startAbandonedAttachmentSweep({
+    store,
+    blobStore,
+    isHeld: (a) => notesService.heldAttachmentIds(a.chatId).includes(a.id),
   });
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
