@@ -313,7 +313,27 @@ of work landed after that plan closed out:
   and the job `packages/server/src/import/claude-import.ts`. claude.ai's
   ids are kept, so importing the same export again skips what is already
   there, and each chat is written in one transaction (`Store.transaction`)
-  so a failed chat leaves nothing behind. Imported chats start with both
+  so a failed chat leaves nothing behind. Importing a newer export adds
+  what a chat gained on claude.ai since (`planNewMessages`,
+  `packages/core/src/domain/import-refresh.ts`): a message is new when its
+  claude.ai id isn't in the chat (`MessageRepo.outline`), so text is never
+  compared. A chat holding nothing but claude.ai's messages gets them on
+  the end and opens on claude.ai's branch, with the memory cursors moved
+  past them as on a first import. A chat carried on here (a message of its
+  own on any branch) keeps its branch and stays open on it: claude.ai's
+  messages go in under the parents they have on claude.ai, which makes them
+  a branch beside the user's to switch to, and the cursors aren't moved, so
+  the user's own messages are still summarised. A claude.ai reply that
+  lands beside a reply made here is marked regenerated, so the two aren't
+  taken for a compare turn. claude.ai's own edits and regenerations come in
+  as branches, as on a first import. Files on the new messages are stored
+  as a first import stores them. A message that can't be placed (its parent
+  isn't there, its id is another chat's, or it would sit beside one of the
+  chat's own messages of the other role) is left out with everything under
+  it. The preview lists each chat that gets messages, how many and whether
+  on the end or as a branch (the first 20 by name), the report says what
+  was done, and an open chat that was given messages reloads them. Cowork
+  sessions go through the same code. Imported chats start with both
   memory cursors at their newest message, which keeps the memory sweeps
   from summarising hundreds of old chats. Project docs and every claude.ai
   memory file are written under `<db>.imported/claude/`, and a project's
@@ -2377,10 +2397,13 @@ this on startup.
 - **Importing again with memory ticked folds claude.ai's notes in again.**
   The learned note and the project notes take whatever the model makes of
   the notes a second time. Untick the box for a re-run.
-- **A second import doesn't add messages a chat gained on claude.ai since
-  the first.** A chat that is already here is skipped whole, so one carried
-  on in OtherBench keeps its own branch; the preview and the report count the
-  chats this affects.
+- **A re-import leaves out claude.ai messages it can't place.** A new
+  message whose parent isn't in the chat, whose id is already another
+  chat's, or that would sit beside one of the chat's own messages of the
+  other role is skipped with everything under it; the preview and the
+  report give the count per chat. When claude.ai's messages go in as a
+  branch beside the user's, memory summarises them only if the user
+  switches to that branch.
 - **An imported project's docs folder does nothing until there is a
   workspace.** Extra folders only apply to a chat with a workspace folder
   (spec 2026-10-07-extra-folders), and imported projects have none, so the
@@ -2394,7 +2417,7 @@ this on startup.
   about 0.15 s slower, and the parsed export is held twice, in the worker
   and the main thread, until the worker is stopped. `planClaudeImport` and
   the preview's checks against the database still run on the main thread
-  after the read.
+  after the read; the checks of chats already here yield every 50 chats.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
   no Web Push for approvals, and no phone layout work beyond the sidebar
   footer wrapping so Sign out stays reachable (the spec's §7 lists the other
