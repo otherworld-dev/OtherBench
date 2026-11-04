@@ -1,6 +1,7 @@
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { HelloBuffer, StreamConnectionStatus } from './store.js';
 import { authHeaders, reportUnauthorized } from './transport.js';
+import { streamCensus } from './streamCensus.js';
 
 /** Backoff schedule (ms) between reconnect attempts; the last value repeats once exhausted. */
 const DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000, 15000];
@@ -58,32 +59,41 @@ export class SseParser {
 }
 
 /**
- * Opens an SSE stream with `fetch` rather than `EventSource`, because
- * `EventSource` can't send an `Authorization` header and the desktop
- * shell's server requires one. Reconnection is deliberately not handled
- * here -- `SseClient` owns that.
- */
-let openStreams = 0;
-
-/**
  * How many streams this page holds open right now. A browser keeps about 6 HTTP/1.1 connections to one server for
  * all its requests, and each stream holds one for as long as it's open, so the terminal checks this before it adds
  * one (code/terminal/feed.ts).
  */
 export function openStreamCount(): number {
-  return openStreams;
+  return streamCensus().ownCount();
 }
 
+/** The same across every tab of this browser on this server (streamCensus.ts): they share the 6 connections. */
+export function browserStreamCount(): number {
+  return streamCensus().total();
+}
+
+/** Told whenever `browserStreamCount` may have changed (a stream here or in another tab opened or closed). */
+export function onStreamCountChange(cb: () => void): () => void {
+  return streamCensus().subscribe(cb);
+}
+
+/**
+ * Opens an SSE stream with `fetch` rather than `EventSource`, because
+ * `EventSource` can't send an `Authorization` header and the desktop
+ * shell's server requires one. Reconnection is deliberately not handled
+ * here -- `SseClient` owns that.
+ */
 export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fetch(...args)): SseConnect {
   return (url, handlers) => {
     const controller = new AbortController();
     let done = false;
     let counted = true;
-    openStreams++;
+    const census = streamCensus();
+    census.setOwn(census.ownCount() + 1);
     const release = (): void => {
       if (!counted) return;
       counted = false;
-      openStreams--;
+      census.setOwn(census.ownCount() - 1);
     };
     const fail = () => {
       release();

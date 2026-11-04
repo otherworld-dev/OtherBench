@@ -360,6 +360,8 @@ export class TurnRunner {
   private readonly controllers = new Map<string, AbortController>();
   /** Running variants' chat and unattended flag, kept and cleared with `controllers`. */
   private readonly running = new Map<string, { chatId: string; unattended: boolean }>();
+  /** The same running variants by chat, in start order, so `runningIn` doesn't scan every chat's. */
+  private readonly runningByChat = new Map<string, Set<string>>();
   private readonly takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
   private readonly heldAttachment?: (attachmentId: string, chatId: string) => boolean;
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
@@ -525,7 +527,7 @@ export class TurnRunner {
 
   /** The ids of the replies running here now in `chatId`, whether or not the chat still has a row. */
   runningIn(chatId: string): string[] {
-    return [...this.running].filter(([, info]) => info.chatId === chatId).map(([id]) => id);
+    return [...(this.runningByChat.get(chatId) ?? [])];
   }
 
   /**
@@ -757,6 +759,8 @@ export class TurnRunner {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
     this.running.set(messageId, { chatId, unattended });
+    const inChat = this.runningByChat.get(chatId) ?? new Set<string>();
+    this.runningByChat.set(chatId, inChat.add(messageId));
     const startedAt = this.now();
 
     let parts: Part[] = [];
@@ -1094,6 +1098,9 @@ export class TurnRunner {
     } finally {
       this.controllers.delete(messageId);
       this.running.delete(messageId);
+      const inChat = this.runningByChat.get(chatId);
+      inChat?.delete(messageId);
+      if (inChat?.size === 0) this.runningByChat.delete(chatId);
       cancelled = controller.signal.aborted;
       // Whatever ended this variant (finish, error, throw, cancel), nothing
       // may still be waiting on it. Aborting releases anything tied to its

@@ -25,6 +25,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       apps: { ...actual.api.apps, list: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       appFolders: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      schedules: { ...actual.api.schedules, list: vi.fn() },
       searchChats: vi.fn(),
       health: vi.fn(),
     },
@@ -57,6 +58,9 @@ const mockedSearch = vi.mocked(api.searchChats);
 const mockedHealth = vi.mocked(api.health);
 const mockedAppPatch = vi.mocked(api.apps.patch);
 const mockedAppDelete = vi.mocked(api.apps.delete);
+const mockedScheduleList = vi.mocked(api.schedules.list);
+/** Enough of a schedule view for the delete dialogs, which only count targets. */
+const scheduleOn = (target: { kind: 'chat'; chatId: string } | { kind: 'project'; projectId: string }) => ({ target }) as Awaited<ReturnType<typeof api.schedules.list>>[number];
 
 const profile: Profile = {
   id: 'profile-1',
@@ -1081,6 +1085,23 @@ describe('ChatList chat menu', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(useOtherBenchStore.getState().activeChatId).toBeNull();
   });
+
+  it("Delete… says how many of the chat's schedules go with it, and nothing when it has none", async () => {
+    const user = setup();
+    mockedScheduleList.mockResolvedValue([scheduleOn({ kind: 'chat', chatId: 'c1' }), scheduleOn({ kind: 'chat', chatId: 'c1' }), scheduleOn({ kind: 'chat', chatId: 'c2' })]);
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    const dialog = screen.getByRole('alertdialog', { name: "Delete 'First'? This can't be undone." });
+    await waitFor(() => expect(dialog).toHaveTextContent('Its 2 schedules are deleted too.'));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    mockedScheduleList.mockResolvedValue([scheduleOn({ kind: 'project', projectId: 'c1' })]);
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await waitFor(() => expect(mockedScheduleList).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent('schedule');
+  });
 });
 
 describe('ChatList chat menu focus and unarchive (R4)', () => {
@@ -1243,6 +1264,15 @@ describe('ChatList project menu', () => {
     expect(mockedProjectDelete).toHaveBeenCalledWith('p-a');
     await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+  });
+
+  it("Delete… adds a line for the project's own schedule, which goes with it", async () => {
+    const user = setup();
+    mockedScheduleList.mockResolvedValue([scheduleOn({ kind: 'project', projectId: 'p-a' }), scheduleOn({ kind: 'project', projectId: 'p-b' }), scheduleOn({ kind: 'chat', chatId: 'c1' })]);
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    const dialog = screen.getByRole('alertdialog', { name: "Delete project 'Alpha'?" });
+    await waitFor(() => expect(dialog).toHaveTextContent('Its chats move to No project. Its schedule is deleted too.'));
   });
 
   it('Delete… treats a 404 as already removed: the project goes and the dialog closes', async () => {

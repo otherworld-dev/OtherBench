@@ -1084,6 +1084,42 @@ export interface ScheduleRepo {
   madeChat(chatId: string): boolean;
 }
 
+// --- remote sessions ---------------------------------------------------------
+
+/**
+ * A browser signed in through remote access's sign-in mode (migration 037).
+ * Local to this machine, never synced. The cookie's token is kept only as its
+ * SHA-256; `id` is a separate random id the devices list and Sign out use.
+ */
+export interface RemoteSession {
+  id: string;
+  /** SHA-256 of the cookie's token, lowercase hex. */
+  tokenHash: string;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  /** Signed in with "Keep me signed in on this device". */
+  remember: boolean;
+  /** The password file's epoch when it was made: a password change ends it. */
+  epoch: string;
+  /** The address it signed in from. */
+  address: string | null;
+  /** A short form of its user agent, such as "Chrome on Android". */
+  deviceLabel: string;
+}
+
+export interface RemoteSessionRepo {
+  insert(session: RemoteSession): void;
+  byTokenHash(tokenHash: string): RemoteSession | null;
+  get(id: string): RemoteSession | null;
+  /** Oldest first. */
+  list(): RemoteSession[];
+  count(): number;
+  touch(id: string, lastSeenAt: number): void;
+  /** Whether there was a row to delete. */
+  delete(id: string): boolean;
+}
+
 export interface Store {
   nodes: NodeRepo;
   locations: LocationRepo;
@@ -1111,6 +1147,8 @@ export interface Store {
   audit: AuditRepo;
   /** Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): local, never synced. */
   schedules: ScheduleRepo;
+  /** Remote access's signed-in browsers (migration 037): local, never synced. */
+  remoteSessions: RemoteSessionRepo;
   /**
    * Runs `fn` as one unit: SQLite commits everything it writes together, or
    * rolls it all back when it throws (the error is rethrown). Inside an open

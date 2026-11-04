@@ -141,6 +141,60 @@ describe('SchedulesView', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('takes a cron rule, showing a typo in place of the next three runs as it is typed, and saves it', async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    create.mockResolvedValue(view());
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    expect(within(within(dialog).getByTestId('schedule-preview')).getAllByRole('listitem')).toHaveLength(3);
+    await user.selectOptions(within(dialog).getByLabelText('Repeats'), 'Cron rule');
+    expect(within(dialog).queryByLabelText('Time')).not.toBeInTheDocument();
+    const rule = within(dialog).getByLabelText('Cron rule');
+    await user.clear(rule);
+    await user.type(rule, '0 9 * * 1-');
+    expect(within(dialog).getByTestId('schedule-preview')).toHaveTextContent('The day of week field\'s "1-" isn\'t a value, a range or "*".');
+    await user.type(rule, '5');
+    const preview = within(dialog).getByTestId('schedule-preview');
+    expect(preview).toHaveTextContent('Next runs');
+    const runs = within(preview).getAllByRole('listitem');
+    expect(runs).toHaveLength(3);
+    for (const item of runs) expect(item).toHaveTextContent(/^(Monday|Tuesday|Wednesday|Thursday|Friday) .*, 09:00$/);
+
+    await user.type(within(dialog).getByLabelText('Name'), 'Standup');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ rule: { cadence: 'cron', cron: '0 9 * * 1-5' } })));
+  });
+
+  it('takes an every-N-hours rule, on chosen days', async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    create.mockResolvedValue(view());
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    await user.selectOptions(within(dialog).getByLabelText('Repeats'), 'Every few hours');
+    const every = within(dialog).getByLabelText('Every (hours)');
+    await user.clear(every);
+    await user.type(every, '4');
+    fireEvent.change(within(dialog).getByLabelText('From'), { target: { value: '08:00' } });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Sat' }));
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Sun' }));
+    for (const item of within(within(dialog).getByTestId('schedule-preview')).getAllByRole('listitem')) {
+      expect(item).toHaveTextContent(/^(Monday|Tuesday|Wednesday|Thursday|Friday) .*, (08|12|16|20):00$/);
+    }
+    await user.type(within(dialog).getByLabelText('Name'), 'Check');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ rule: { cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [1, 2, 3, 4, 5] } }))
+    );
+  });
+
   it("offers Auto for a Claude Code profile: ticking it changes the warnings and is saved with the schedule", async () => {
     list.mockResolvedValue([]);
     useOtherBenchStore.setState({

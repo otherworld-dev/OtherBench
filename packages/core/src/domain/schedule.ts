@@ -6,6 +6,7 @@
  * fed by Intl's numeric parts, so no text here moves with the ICU version.
  */
 import { runsShellInSandbox, type ConnectionKind, type ToolPolicy } from '../types/config.js';
+import { cronMatchesDate, cronMinutesOfDay, normaliseCron, parseCron } from './cron.js';
 
 export const SCHEDULE_NAME_MAX = 80;
 export const SCHEDULE_PROMPT_MAX = 20_000;
@@ -16,11 +17,20 @@ export const SCHEDULE_RUN_TIMEOUT_MS = 30 * 60_000;
 export const SCHEDULE_LATE_AFTER_MS = 5 * 60_000;
 export const SCHEDULE_CHECK_MAX_MS = 30_000;
 
-/** `time` is `HH:MM`, 00:00-23:59. `weekdays` are 0-6 with 0 = Sunday (as `getUTCDay`), sorted, no repeats. `monthDay` 1-31; past the month's end means its last day. */
+/**
+ * `time` is `HH:MM`, 00:00-23:59. `weekdays` are 0-6 with 0 = Sunday (as
+ * `getUTCDay`), sorted, no repeats. `monthDay` 1-31; past the month's end
+ * means its last day. `hourly` runs at `time` and every `everyHours` (1-23)
+ * after it until midnight, starting again from `time` each day, on every day
+ * or only on `weekdays`. `cron` is a five-field rule (`cron.ts`), stored
+ * normalised.
+ */
 export type ScheduleRule =
   | { cadence: 'daily'; time: string }
   | { cadence: 'weekly'; time: string; weekdays: number[] }
-  | { cadence: 'monthly'; time: string; monthDay: number };
+  | { cadence: 'monthly'; time: string; monthDay: number }
+  | { cadence: 'hourly'; time: string; everyHours: number; weekdays?: number[] }
+  | { cadence: 'cron'; cron: string };
 
 /** Where a run's reply goes. Fixed once the schedule is made. */
 export type ScheduleTarget = { kind: 'chat'; chatId: string } | { kind: 'project'; projectId: string };
@@ -36,28 +46,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** The rule, or a message naming the field that's wrong. Weekdays come back sorted with no repeats. */
+const WEEKDAYS_PROBLEM = '"rule.weekdays" must be a non-empty list of days, 0 (Sunday) to 6 (Saturday).';
+
+/** Sorted with no repeats, or null when it isn't a non-empty list of 0-6. */
+function parseWeekdays(days: unknown): number[] | null {
+  if (!Array.isArray(days) || days.length === 0 || !days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) return null;
+  return [...new Set(days as number[])].sort((a, b) => a - b);
+}
+
+/** The rule, or a message naming the field that's wrong. Weekdays come back sorted with no repeats, a cron rule normalised. */
 export function parseRule(value: unknown): ScheduleRule | string {
   if (!isRecord(value)) return '"rule" must be an object.';
+  if (value['cadence'] === 'cron') {
+    const text = value['cron'];
+    if (typeof text !== 'string') return '"rule.cron" must be a cron rule, such as "0 9 * * 1-5".';
+    const spec = parseCron(text);
+    return typeof spec === 'string' ? `"rule.cron": ${spec}` : { cadence: 'cron', cron: normaliseCron(text) };
+  }
   const time = value['time'];
   if (typeof time !== 'string' || !TIME_PATTERN.test(time)) return '"rule.time" must be HH:MM, from 00:00 to 23:59.';
   switch (value['cadence']) {
     case 'daily':
       return { cadence: 'daily', time };
     case 'weekly': {
-      const days = value['weekdays'];
-      if (!Array.isArray(days) || days.length === 0 || !days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) {
-        return '"rule.weekdays" must be a non-empty list of days, 0 (Sunday) to 6 (Saturday).';
-      }
-      return { cadence: 'weekly', time, weekdays: [...new Set(days as number[])].sort((a, b) => a - b) };
+      const weekdays = parseWeekdays(value['weekdays']);
+      return weekdays ? { cadence: 'weekly', time, weekdays } : WEEKDAYS_PROBLEM;
     }
     case 'monthly': {
       const day = value['monthDay'];
       if (typeof day !== 'number' || !Number.isInteger(day) || day < 1 || day > 31) return '"rule.monthDay" must be a whole number from 1 to 31.';
       return { cadence: 'monthly', time, monthDay: day };
     }
+    case 'hourly': {
+      const every = value['everyHours'];
+      if (typeof every !== 'number' || !Number.isInteger(every) || every < 1 || every > 23) return '"rule.everyHours" must be a whole number from 1 to 23.';
+      if (value['weekdays'] === undefined) return { cadence: 'hourly', time, everyHours: every };
+      const weekdays = parseWeekdays(value['weekdays']);
+      return weekdays ? { cadence: 'hourly', time, everyHours: every, weekdays } : WEEKDAYS_PROBLEM;
+    }
     default:
-      return '"rule.cadence" must be "daily", "weekly" or "monthly".';
+      return '"rule.cadence" must be "daily", "weekly", "monthly", "hourly" or "cron".';
   }
 }
 
@@ -166,42 +194,121 @@ function addDays(date: WallDate, days: number): WallDate {
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
-function matchesRule(rule: ScheduleRule, date: WallDate): boolean {
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+function minutesOf(time: string): number {
+  const { hour, minute } = parseTime(time);
+  return hour * 60 + minute;
+}
+
+const timeOf = (minutes: number): string => `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
+
+/** An hourly rule's times of day: `time`, then every `everyHours` until midnight. */
+export function hourlyTimes(rule: { time: string; everyHours: number }): string[] {
+  const out: string[] = [];
+  for (let m = minutesOf(rule.time); m < 24 * 60; m += rule.everyHours * 60) out.push(timeOf(m));
+  return out;
+}
+
+/** Which dates a rule runs on, and at which times of day (minutes from midnight, ascending). */
+interface RulePlan {
+  matches(date: WallDate): boolean;
+  minutes: number[];
+}
+
+function planFor(rule: ScheduleRule): RulePlan {
   switch (rule.cadence) {
     case 'daily':
-      return true;
+      return { matches: () => true, minutes: [minutesOf(rule.time)] };
     case 'weekly':
-      return rule.weekdays.includes(weekdayOf(date));
+      return { matches: (date) => rule.weekdays.includes(weekdayOf(date)), minutes: [minutesOf(rule.time)] };
     case 'monthly':
-      return date.day === Math.min(rule.monthDay, daysInMonth(date.year, date.month));
+      return { matches: (date) => date.day === Math.min(rule.monthDay, daysInMonth(date.year, date.month)), minutes: [minutesOf(rule.time)] };
+    case 'hourly': {
+      const days = rule.weekdays;
+      return { matches: (date) => days === undefined || days.includes(weekdayOf(date)), minutes: hourlyTimes(rule).map(minutesOf) };
+    }
+    case 'cron': {
+      const spec = parseCron(rule.cron);
+      if (typeof spec === 'string') throw new Error(`Bad cron rule "${rule.cron}": ${spec}`);
+      return { matches: (date) => cronMatchesDate(spec, date.month, date.day, weekdayOf(date)), minutes: cronMinutesOfDay(spec) };
+    }
   }
 }
 
 /**
+ * The earliest of `date`'s slots strictly after `after`, or null. Each slot
+ * is what `wallToInstant` makes of it. On a day with no clock change within a
+ * day either side, the zone's offset is the same throughout, so a slot is its
+ * wall time less that offset (just what `wallToInstant` gives) and the first
+ * one after `after` is the answer; that keeps a minute-by-minute cron rule
+ * cheap. Near a change a slot moved forward out of a gap can land after a
+ * later one, so every slot goes through `wallToInstant` and the earliest wins.
+ */
+function firstSlotAfter(date: WallDate, minutes: number[], timezone: string, after: number): number | null {
+  const dayStart = Date.UTC(date.year, date.month - 1, date.day);
+  const offset = offsetAt(dayStart - DAY_MS, timezone);
+  if (offset === offsetAt(dayStart + 2 * DAY_MS, timezone)) {
+    for (const m of minutes) {
+      const instant = dayStart + m * 60_000 - offset;
+      if (instant > after) return instant;
+    }
+    return null;
+  }
+  let best: number | null = null;
+  for (const m of minutes) {
+    const instant = wallToInstant(date, timeOf(m), timezone);
+    if (instant > after && (best === null || instant < best)) best = instant;
+  }
+  return best;
+}
+
+/**
+ * How far `nextRunAt` looks. The fixed kinds need 400 days at most. A cron
+ * rule for 29 February can be 8 years off across 2100, and one that needs a
+ * date to fall on a given weekday too (Vixie's both-fields case) can be 11;
+ * for 29 February on a weekday, about 40 across 2100. 50 years covers every rule `parseCron` accepts, and
+ * the walk only gets that far for such a rule.
+ */
+const WALK_DAYS = 50 * 366;
+
+/**
  * The first instant strictly after `after` whose wall-clock date in
- * `timezone` matches `rule` and whose wall-clock time is its `time` (through
- * `wallToInstant`, so a slot in a fold runs once, at the first time). Walks
- * up to 400 days, which every valid rule falls inside. The walk starts the
- * day before `after`'s date: a clock change can push that day's slot past
+ * `timezone` matches `rule` and whose wall-clock time is one of its times,
+ * through `wallToInstant`: a slot in a fold runs once, at the first time; one
+ * in a gap moves forward by the gap; two slots that land on the same instant
+ * run once. Every kind of rule takes the same walk, so hourly and cron rules
+ * meet a clock change just as a daily one does. The walk starts the day
+ * before `after`'s date: a clock change can push that day's slot past
  * midnight (23:30 in a gap at 23:00 runs at 00:30), still ahead of `after`.
  */
 export function nextRunAt(rule: ScheduleRule, timezone: string, after: number): number {
+  const plan = planFor(rule);
   const start = wallClock(after, timezone);
-  for (let i = -1; i <= 400; i++) {
+  for (let i = -1; i <= WALK_DAYS; i++) {
     const date = addDays(start, i);
-    if (!matchesRule(rule, date)) continue;
-    const instant = wallToInstant(date, rule.time, timezone);
-    if (instant > after) return instant;
+    if (!plan.matches(date)) continue;
+    const instant = firstSlotAfter(date, plan.minutes, timezone, after);
+    if (instant !== null) return instant;
   }
-  throw new Error(`No run within 400 days for rule ${JSON.stringify(rule)}.`);
+  throw new Error(`No run within ${WALK_DAYS} days for rule ${JSON.stringify(rule)}.`);
+}
+
+/** The next `count` runs after `after`, for the editor's preview. */
+export function nextRuns(rule: ScheduleRule, timezone: string, after: number, count: number): number[] {
+  const out: number[] = [];
+  let t = after;
+  for (let i = 0; i < count; i++) {
+    t = nextRunAt(rule, timezone, t);
+    out.push(t);
+  }
+  return out;
 }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const WEEKDAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const pad2 = (n: number): string => String(n).padStart(2, '0');
 
 /**
  * `instant` in `timezone`: 'long' is "Monday 12 October 2026, 09:00", 'date'
@@ -235,22 +342,40 @@ function joinAnd(items: string[]): string {
   return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 }
 
-/** "Every day at 09:00", "Weekdays at 09:00", "Mondays at 09:00", "Mon, Wed and Fri at 09:00", "Monthly on the 1st at 09:00", "Monthly on the 31st (or the month's last day) at 09:00". */
+/** "Every day", "Weekdays", "Mondays", "Mon, Wed and Fri". */
+function daysPhrase(weekdays: number[]): string {
+  const days = [...weekdays].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)); // Monday first
+  if (days.length === 7) return 'Every day';
+  if (days.join(',') === '1,2,3,4,5') return 'Weekdays';
+  if (days.length === 1) return `${WEEKDAYS[days[0]!]}s`;
+  return joinAnd(days.map((d) => WEEKDAYS_SHORT[d]!));
+}
+
+/**
+ * "Every day at 09:00", "Weekdays at 09:00", "Mondays at 09:00", "Mon, Wed and Fri at 09:00", "Monthly on the 1st at 09:00",
+ * "Monthly on the 31st (or the month's last day) at 09:00", "Every 3 hours from 08:00 to 23:00", "Every hour from 09:00 to 23:00 on weekdays",
+ * "Every 5 hours from 22:00, once a day", "Cron rule 0 9 * * 1-5".
+ */
 export function describeRule(rule: ScheduleRule): string {
   switch (rule.cadence) {
     case 'daily':
       return `Every day at ${rule.time}`;
-    case 'weekly': {
-      const days = [...rule.weekdays].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)); // Monday first
-      if (days.length === 7) return `Every day at ${rule.time}`;
-      if (days.join(',') === '1,2,3,4,5') return `Weekdays at ${rule.time}`;
-      if (days.length === 1) return `${WEEKDAYS[days[0]!]}s at ${rule.time}`;
-      return `${joinAnd(days.map((d) => WEEKDAYS_SHORT[d]!))} at ${rule.time}`;
-    }
+    case 'weekly':
+      return `${daysPhrase(rule.weekdays)} at ${rule.time}`;
     case 'monthly':
       return rule.monthDay >= 29
         ? `Monthly on the ${ordinal(rule.monthDay)} (or the month's last day) at ${rule.time}`
         : `Monthly on the ${ordinal(rule.monthDay)} at ${rule.time}`;
+    case 'hourly': {
+      const times = hourlyTimes(rule);
+      const every = rule.everyHours === 1 ? 'Every hour' : `Every ${rule.everyHours} hours`;
+      const span = times.length === 1 ? `${every} from ${rule.time}, once a day` : `${every} from ${rule.time} to ${times.at(-1)}`;
+      const days = rule.weekdays === undefined ? 'Every day' : daysPhrase(rule.weekdays);
+      if (days === 'Every day') return span;
+      return `${span} on ${days === 'Weekdays' ? 'weekdays' : days}`;
+    }
+    case 'cron':
+      return `Cron rule ${rule.cron}`;
   }
 }
 

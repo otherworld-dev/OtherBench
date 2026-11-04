@@ -193,7 +193,8 @@ loopback browser mode don't change.
    `--public-url` can be given more than once; each is `https://host[:port]`.
    The other routes are your own certificate files (`--tls-cert <file>
    --tls-key <file>`, for example from mkcert or `tailscale cert`) or an
-   HTTPS proxy in front (`--trust-proxy <its IP>`).
+   HTTPS proxy in front (`--trust-proxy <its IP>`). Renewed certificate
+   files are picked up within a minute, without a restart.
 
 3. **Trust the certificate** on each device (with `--tls auto`). First, on
    the box, note the SHA-256 fingerprint `otherbench serve` prints. Then:
@@ -221,9 +222,10 @@ loopback browser mode don't change.
    URLs makes a new one; each device has to trust it again then.
 
 4. **Sign in** at the public URL. *Keep me signed in on this device* keeps
-   the session for 30 days, otherwise 12 hours. Restarting the server signs
-   every device out. Settings → Remote access shows the addresses and the
-   certificate and has *Sign out everywhere*.
+   the session for 30 days, otherwise 12 hours. Sessions survive a restart
+   of the server. Settings → Remote access shows the addresses, the
+   certificate and the signed-in devices, with *Sign out* for each and *Sign
+   out everywhere*.
 
 Behind a proxy, OtherBench listens in plain HTTP and the proxy does TLS. It must
 pass the original `Host` (or `127.0.0.1:<port>`) and set `X-Forwarded-For`:

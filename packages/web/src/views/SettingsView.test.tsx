@@ -10,6 +10,7 @@ vi.mock('./settings/MemoryPanel.js', () => ({ MemoryPanel: () => <div>memory pan
 vi.mock('./settings/McpServersPanel.js', () => ({ McpServersPanel: () => <div>mcp</div> }));
 vi.mock('./settings/SandboxPanel.js', () => ({ SandboxPanel: () => <div>sandbox panel</div> }));
 vi.mock('./settings/DesktopPanel.js', () => ({ DesktopPanel: () => <div>desktop panel</div> }));
+vi.mock('./settings/BrowserNotificationsPanel.js', () => ({ BrowserNotificationsPanel: () => <div>browser notifications panel</div> }));
 vi.mock('./settings/RemoteAccessPanel.js', () => ({ RemoteAccessPanel: () => <div>remote panel</div> }));
 vi.mock('./settings/FeaturesPanel.js', () => ({ FeaturesPanel: () => <div>features panel</div> }));
 vi.mock('./settings/NextcloudPanel.js', () => ({ NextcloudPanel: () => <div>nextcloud panel</div> }));
@@ -65,17 +66,20 @@ describe('SettingsView', () => {
     expect(screen.getByText('remote panel')).toBeInTheDocument();
   });
 
-  it('has no Desktop tab in a browser', () => {
+  it('has no Desktop tab in a browser, but a Notifications tab for browser notifications', () => {
     render(<SettingsView onClose={vi.fn()} />);
 
     expect(screen.queryByRole('tab', { name: 'Desktop' })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Notifications' }));
+    expect(screen.getByText('browser notifications panel')).toBeInTheDocument();
   });
 
-  it('has a Desktop tab inside the desktop app', () => {
+  it('has a Desktop tab inside the desktop app, and no browser Notifications tab', () => {
     desktop = true;
 
     render(<SettingsView onClose={vi.fn()} />);
 
     expect(screen.getByRole('tab', { name: 'Desktop' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Notifications' })).toBeNull();
   });
 });

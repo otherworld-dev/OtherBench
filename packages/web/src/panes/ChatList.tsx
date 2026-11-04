@@ -21,6 +21,7 @@ import { modeOfChat, type Mode } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
+import { schedulesDeletedLine, useScheduleCount } from '../views/schedules/useScheduleCount.js';
 import { OverviewJumpList } from '../overview/OverviewJumpList.js';
 import { selectOverviewTotal, useOtherBenchStore, WINDOW_ROLE } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
@@ -265,6 +266,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const menuProject = projectMenu ? (projects.find((p) => p.id === projectMenu.projectId) ?? null) : null;
   const menuSiblings = menuProject ? projectSiblings(projects, menuProject.id) : [];
   const deletingProject = deletingProjectId ? (projects.find((p) => p.id === deletingProjectId) ?? null) : null;
+  // Deleting a chat or project deletes its schedules: its delete dialog says how many.
+  const chatSchedulesLine = schedulesDeletedLine(useScheduleCount(deletingChatId ? { kind: 'chat', chatId: deletingChatId } : null));
+  const projectSchedulesLine = schedulesDeletedLine(useScheduleCount(deletingProjectId ? { kind: 'project', projectId: deletingProjectId } : null));
 
   // The chat under an open menu vanished (deleted or archived from elsewhere): close the menu, keep focus in the list.
   const menuChatGone = chatMenu !== null && menuChat === null;
@@ -1386,6 +1390,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       {deletingChat && (
         <ConfirmDialog
           title={`Delete '${deletingChat.title}'? This can't be undone.`}
+          {...(chatSchedulesLine ? { message: chatSchedulesLine } : {})}
           confirmLabel="Delete"
           onConfirm={() => deleteChat(deletingChat.id)}
           onCancel={() => {
@@ -1486,11 +1491,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       {deletingProject && (
         <ConfirmDialog
           title={`Delete project '${deletingProject.name}'?`}
-          message={
+          message={[
             projects.some((p) => p.parentId === deletingProject.id)
               ? 'Its chats move to No project. Its sub-projects become top-level projects.'
-              : 'Its chats move to No project.'
-          }
+              : 'Its chats move to No project.',
+            projectSchedulesLine,
+          ]
+            .filter((line) => line !== null)
+            .join(' ')}
           confirmLabel="Delete"
           onConfirm={() => deleteProject(deletingProject.id)}
           onCancel={() => {

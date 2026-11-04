@@ -647,8 +647,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     if (e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' || e.type === 'approval-resolved') peers.announceActivity();
   });
 
-  // The Code tab's terminals: the PTY loads and the shells are looked for on first use.
-  let shells: ShellOption[] | null = null;
+  // The Code tab's terminals: the PTY loads and the shells are looked for on first use, once, without blocking.
+  let shells: Promise<ShellOption[]> | null = null;
   const terminals = new TerminalManager({
     loadSpawn: loadNodePty,
     shells: () => (shells ??= detectShells(realShellProbe())),

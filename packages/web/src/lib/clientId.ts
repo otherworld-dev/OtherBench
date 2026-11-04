@@ -18,24 +18,47 @@ export function makeClientId(): string {
 /** sessionStorage key: this tab's client id. */
 export const CLIENT_ID_STORAGE_KEY = 'otherbench.clientId';
 
+/** sessionStorage key: set while a page of this tab shows, cleared as it's hidden (a reload, a close). */
+export const CLIENT_ID_LIVE_KEY = 'otherbench.clientIdLive';
+
+/** Marks the id as held by a page that shows, or (false) let go. */
+function claim(held: boolean): void {
+  try {
+    if (held) window.sessionStorage.setItem(CLIENT_ID_LIVE_KEY, '1');
+    else window.sessionStorage.removeItem(CLIENT_ID_LIVE_KEY);
+  } catch {
+    // storage blocked -- the id lasts this load anyway.
+  }
+}
+
 /**
  * This tab's id, kept in sessionStorage so a reload of the tab keeps it (a
  * note sent before the reload still finds its way back); a new tab gets its
- * own. A fresh one each load when storage is blocked.
+ * own. A duplicated tab copies the other's sessionStorage, id included, so
+ * the id is also marked held while its page shows: a reload hides the old
+ * page first and keeps the id, while a copy finds it still held by the tab it
+ * came from and makes its own. A fresh one each load when storage is blocked.
  */
 function tabClientId(): string {
+  let id: string | null = null;
   try {
     const stored = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
-    if (stored) return stored;
+    if (stored && window.sessionStorage.getItem(CLIENT_ID_LIVE_KEY) === null) id = stored;
   } catch {
     // storage blocked -- this load's own id.
   }
-  const id = makeClientId();
+  id ??= makeClientId();
   try {
     window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
   } catch {
     // storage blocked or full -- the id lasts this load.
   }
+  claim(true);
+  window.addEventListener('pagehide', () => claim(false));
+  // Back from the back-forward cache: the page shows again, so it holds the id again.
+  window.addEventListener('pageshow', (e) => {
+    if ((e as PageTransitionEvent).persisted) claim(true);
+  });
   return id;
 }
 

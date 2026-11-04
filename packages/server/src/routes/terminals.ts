@@ -27,7 +27,7 @@ export function terminalStatusRoutes(container: Container, allowed: boolean): Ho
     let status: TerminalStatus;
     if (!allowed) status = { available: false, reason: 'not-local', shells: [] };
     else if (!manager || !(await manager.available())) status = { available: false, reason: 'no-pty', shells: [] };
-    else status = { available: true, shells: manager.shellInfos() };
+    else status = { available: true, shells: await manager.shellInfos() };
     return c.json(status);
   });
   return app;

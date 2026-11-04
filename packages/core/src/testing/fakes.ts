@@ -65,6 +65,8 @@ import type {
   GlobalMemoryRepo,
   GlobalMemoryVersion,
   ProjectRepo,
+  RemoteSession,
+  RemoteSessionRepo,
   SettingsRepo,
   Store,
   UsageRecord,
@@ -851,6 +853,34 @@ class InMemoryIssueTickRepo implements IssueTickRepo {
   }
 }
 
+class InMemoryRemoteSessionRepo implements RemoteSessionRepo {
+  private readonly rows = new Map<string, RemoteSession>();
+  insert(session: RemoteSession): void {
+    this.rows.set(session.id, { ...session });
+  }
+  byTokenHash(tokenHash: string): RemoteSession | null {
+    for (const s of this.rows.values()) if (s.tokenHash === tokenHash) return { ...s };
+    return null;
+  }
+  get(id: string): RemoteSession | null {
+    const s = this.rows.get(id);
+    return s ? { ...s } : null;
+  }
+  list(): RemoteSession[] {
+    return [...this.rows.values()].sort((a, b) => a.createdAt - b.createdAt).map((s) => ({ ...s }));
+  }
+  count(): number {
+    return this.rows.size;
+  }
+  touch(id: string, lastSeenAt: number): void {
+    const s = this.rows.get(id);
+    if (s) s.lastSeenAt = lastSeenAt;
+  }
+  delete(id: string): boolean {
+    return this.rows.delete(id);
+  }
+}
+
 class InMemoryAppRepo implements AppRepo {
   private readonly repo = new InMemoryCrudRepo<App>();
   constructor(
@@ -1555,6 +1585,7 @@ export class InMemoryStore implements Store {
   readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
   readonly audit: AuditRepo;
   readonly schedules: ScheduleRepo;
+  readonly remoteSessions: RemoteSessionRepo = new InMemoryRemoteSessionRepo();
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {

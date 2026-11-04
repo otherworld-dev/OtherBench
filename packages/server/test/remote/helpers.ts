@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { RemoteSessionRepo } from '@otherbench/core/ports/store.js';
 import type { Container } from '../../src/container.js';
 import { createRemoteAccess, type RemoteAccess, type RemoteTls } from '../../src/remote/index.js';
 import { type Granted, LoginLimiter } from '../../src/remote/limiter.js';
@@ -43,8 +44,11 @@ export interface RemoteFixture {
   cleanup(): void;
 }
 
-/** A sign-in setup in a temp folder, with `PASSWORD` already set. */
-export async function remoteFixture(opts: { tls?: RemoteTls; trustProxies?: string[]; publicUrls?: string[] } = {}): Promise<RemoteFixture> {
+/**
+ * A sign-in setup in a temp folder, with `PASSWORD` already set. Sessions go
+ * to `sessionRepo` (a SQLite store's, to test a restart), else an in-memory one.
+ */
+export async function remoteFixture(opts: { tls?: RemoteTls; trustProxies?: string[]; publicUrls?: string[]; sessionRepo?: RemoteSessionRepo } = {}): Promise<RemoteFixture> {
   const dir = mkdtempSync(join(tmpdir(), 'otherbench-remote-'));
   const loginPath = join(dir, 'login.json');
   const clock = { now: 1_800_000_000_000 };
@@ -54,6 +58,7 @@ export async function remoteFixture(opts: { tls?: RemoteTls; trustProxies?: stri
     trustProxies: opts.trustProxies ?? [],
     loginPath,
     tls: opts.tls ?? { mode: 'proxy' },
+    sessionRepo: opts.sessionRepo ?? new InMemoryStore().remoteSessions,
     now: () => clock.now,
     log: () => {},
     scrypt: FAST,

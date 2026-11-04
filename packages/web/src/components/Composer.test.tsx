@@ -1395,6 +1395,44 @@ describe('Composer while a reply runs (notes)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it("a command mid-reply before the box has the chat's list is refused by the server, with the same copy", async () => {
+    useOtherBenchStore.getState().registerMessage(streamingMessage('a1'));
+    vi.mocked(api.chats.commands).mockImplementation(() => new Promise(() => {}));
+    mockedNoteSend.mockRejectedValue(new ApiError(409, 'Wait for the reply to finish, or stop it, before sending a command.', 'command'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ profileId: 'sonnet' })} />);
+    await user.type(box(), '/review the diff{Enter}');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wait for the reply to finish, or stop it, before sending a command.');
+    expect(box()).toHaveValue('/review the diff');
+    expect(mockedCreate).not.toHaveBeenCalled();
+  });
+
+  it('sends as a note when the turn is refused because notes are waiting', async () => {
+    // The box doesn't know the chat is busy: another tab's notes went in first.
+    mockedCreate.mockRejectedValue(new ApiError(409, 'Messages you sent are still waiting for this reply.', 'notes-waiting'));
+    mockedNoteSend.mockResolvedValue(note('n1', { text: 'me too' }));
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} parentId="a1" />);
+    await user.type(box(), 'me too{Enter}');
+
+    await waitFor(() => expect(mockedNoteSend).toHaveBeenCalledWith('chat-1', { text: 'me too', attachments: [], parentId: 'a1', profileIds: ['p1'], clientId: CLIENT_ID }));
+    await waitFor(() => expect(box()).toHaveValue(''));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(useOtherBenchStore.getState().sentNotes['n1']).toBeDefined();
+  });
+
+  it("a returned note's chips show their size", async () => {
+    render(<Composer chat={makeChat()} />);
+    await waitFor(() => expect(mockedAttachmentList).toHaveBeenCalled());
+    // Unsent again, so the chat's list has it, with its size.
+    mockedAttachmentList.mockResolvedValue([makeAttachment({ id: 'att-9', filename: 'shot.png', size: 2048 })]);
+    act(() => useOtherBenchStore.getState().noteTakenBack(note('n1', { text: 'never mind', attachments: [{ attachmentId: 'att-9', mime: 'image/png', filename: 'shot.png' }] })));
+
+    await waitFor(() => expect(screen.getByTestId('attachment-chip')).toHaveTextContent('2.0 KB'));
+  });
+
   it("a returned note's text and chips come back after the draft", async () => {
     const user = userEvent.setup();
     render(<Composer chat={makeChat()} />);

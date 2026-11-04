@@ -783,6 +783,27 @@ describe('notes (messages sent while a reply runs)', () => {
     expect(after.sentNotes).toEqual({});
   });
 
+  it("a hello before the messages load waits for them before restoring a lost note, so a folded one isn't shown as not sent", () => {
+    const s = useOtherBenchStore.getState();
+    for (const id of ['read', 'lost', 'resolved']) s.noteSent(note(id));
+
+    s.setChatNotes('c1', [], [], false);
+    // Undecided: nothing back yet, and still held (a reload meanwhile decides again).
+    expect(useOtherBenchStore.getState().returnedNotes).toEqual([]);
+    expect(Object.keys(useOtherBenchStore.getState().sentNotes).sort()).toEqual(['lost', 'read', 'resolved']);
+    // The stream's word on one comes first.
+    s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'resolved', outcome: 'turn', clientId: CLIENT_ID });
+    s.loadMessages('c1', [stubAssistant('m1', { chatId: 'c1', status: 'complete', parts: [{ type: 'user-note', noteId: 'read', text: 'read', attachments: [] }] })], null);
+    s.settleUnsureNotes('c1');
+
+    const after = useOtherBenchStore.getState();
+    expect(after.returnedNotes.map((n) => n.id)).toEqual(['lost']);
+    expect(after.sentNotes).toEqual({});
+    // Settled once: a second call has nothing left to decide.
+    s.settleUnsureNotes('c1');
+    expect(useOtherBenchStore.getState().returnedNotes.map((n) => n.id)).toEqual(['lost']);
+  });
+
   it('a note resolved before its send returned is not remembered as sent, so a reload never restores it again', () => {
     const s = useOtherBenchStore.getState();
     s.applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: CLIENT_ID, note: note('n1') });

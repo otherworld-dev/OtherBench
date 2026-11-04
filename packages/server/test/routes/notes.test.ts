@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
@@ -182,6 +182,40 @@ describe('POST /api/chats/:id/notes', () => {
       expect(await res.json()).toEqual({ kind: 'command', error: COMMAND_MID_REPLY });
     }
     expect(container.notes!.hasWaiting('chat-1')).toBe(false);
+  });
+
+  it("409 command for any command the chat's Claude Code lists, whatever the composer knew; other slashes go through", async () => {
+    container.store.connections.update('conn-1', { kind: 'claude_code' });
+    container.engine.listCommands = async () => [{ name: 'review', description: '', argumentHint: '', aliases: ['rv'] }];
+    const { replyId } = await running();
+
+    for (const text of ['/review', '/Review the diff', '/rv']) {
+      const res = await postNote({ text, parentId: replyId });
+      expect(res.status, text).toBe(409);
+      expect(await res.json()).toEqual({ kind: 'command', error: COMMAND_MID_REPLY });
+    }
+    expect(container.notes!.hasWaiting('chat-1')).toBe(false);
+    for (const text of ['/usr/bin is missing', '/reviews']) expect((await postNote({ text, parentId: replyId })).status, text).toBe(202);
+  });
+
+  it("a slash note goes through when the chat's command list can't be had", async () => {
+    container.store.connections.update('conn-1', { kind: 'claude_code' });
+    container.engine.listCommands = async () => {
+      throw new Error('no list');
+    };
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { replyId } = await running();
+
+    expect((await postNote({ text: '/review', parentId: replyId })).status).toBe(202);
+    expect(warned).toHaveBeenCalled();
+    warned.mockRestore();
+  });
+
+  it('a slash note in a chat without Claude Code is plain text', async () => {
+    container.engine.listCommands = async () => [{ name: 'review', description: '', argumentHint: '', aliases: [] }];
+    const { replyId } = await running();
+
+    expect((await postNote({ text: '/review', parentId: replyId })).status).toBe(202);
   });
 
   it('takes the attachments as stored, whatever the client says they are', async () => {

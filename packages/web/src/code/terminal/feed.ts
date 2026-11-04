@@ -1,11 +1,13 @@
 import { api } from '../../state/api.js';
-import { openStreamCount, SseClient } from '../../state/sse.js';
+import { browserStreamCount, onStreamCountChange, SseClient } from '../../state/sse.js';
+import { streamsShareHost } from '../../state/transport.js';
 
 /**
- * The most streams a page holds before the terminal polls instead of adding one. A browser keeps about 6 HTTP/1.1
- * connections to one server for all of a page's requests, and each stream holds one: `/api/events`, one per chat
- * pane (up to 4), sometimes a browser live view. With 5 held, a terminal stream would take the last one, and every
- * other request (its own typing, git status, a message) would wait for ever.
+ * The most streams the browser holds to the server before the terminal polls instead of adding one. A browser keeps
+ * about 6 HTTP/1.1 connections to one server for all its requests, in every tab, and each stream holds one:
+ * `/api/events`, one per chat pane (up to 4), sometimes a browser live view, and the same again in another tab. With 5
+ * held, a terminal stream would take the last one, and every other request (its own typing, git status, a message)
+ * would wait for ever.
  */
 export const STREAM_BUDGET = 5;
 
@@ -20,20 +22,61 @@ export interface TerminalFeedHandlers {
   onOutput(data: string): void;
 }
 
+export interface TerminalFeedDeps {
+  /** Streams the browser holds to this server, in every tab, this terminal's own included. */
+  openStreams?: () => number;
+  /** Told when that may have changed; returns the unsubscribe. */
+  onStreamsChange?: (cb: () => void) => () => void;
+  /** False in the desktop app, where each stream has a host name (and so connections) of its own. */
+  sharedHost?: () => boolean;
+}
+
 type StreamEvent = { type: 'output'; data: string } | { type: 'exit'; exitCode: number };
 
 /**
  * One terminal's output (spec 2026-10-21-code-terminal-design, "One terminal stream per page, at most"): a stream
- * while the page has a connection to spare, else short requests from where the last one left off, which share the
- * page's connections with everything else. Chosen when it opens.
+ * while the browser has a connection to spare, else short requests from where the last one left off, which share the
+ * connections with everything else. In the desktop app it always streams: each stream has its own host name there. In
+ * a browser it's chosen when the terminal opens, and a streaming terminal drops to polling when other streams (chat
+ * panes opened after it, another tab) take the connections it was leaving free. It doesn't go back to streaming.
  */
-export function openTerminalFeed(
-  appId: string,
-  id: string,
-  handlers: TerminalFeedHandlers,
-  deps: { openStreams?: () => number } = {}
-): { mode: 'stream' | 'poll'; close(): void } {
-  if ((deps.openStreams ?? openStreamCount)() < STREAM_BUDGET) {
+export function openTerminalFeed(appId: string, id: string, handlers: TerminalFeedHandlers, deps: TerminalFeedDeps = {}): { readonly mode: 'stream' | 'poll'; close(): void } {
+  const openStreams = deps.openStreams ?? browserStreamCount;
+  const shared = (deps.sharedHost ?? streamsShareHost)();
+  let stop: () => void;
+  let mode: 'stream' | 'poll';
+  let unsubscribe = (): void => {};
+
+  const startPolling = (): void => {
+    mode = 'poll';
+    let closed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let from = 0;
+    let first = true;
+    const poll = async (): Promise<void> => {
+      let wait = POLL_IDLE_MS;
+      try {
+        const answer = await api.terminals.output(appId, id, from);
+        if (closed) return;
+        if (first || answer.reset) handlers.onReset(answer.data);
+        else if (answer.data !== '') handlers.onOutput(answer.data);
+        first = false;
+        from = answer.next;
+        if (answer.data !== '') wait = POLL_BUSY_MS;
+      } catch {
+        wait = POLL_RETRY_MS;
+      }
+      if (!closed) timer = setTimeout(() => void poll(), wait);
+    };
+    void poll();
+    stop = () => {
+      closed = true;
+      clearTimeout(timer);
+    };
+  };
+
+  if (!shared || openStreams() < STREAM_BUDGET) {
+    mode = 'stream';
     const client = new SseClient<{ buffer: string; exitCode: number | null }, StreamEvent>({
       url: api.terminals.streamUrl(appId, id),
       readHello: (payload) => payload as { buffer: string; exitCode: number | null },
@@ -43,34 +86,28 @@ export function openTerminalFeed(
       },
     });
     client.connect();
-    return { mode: 'stream', close: () => client.close() };
+    stop = () => client.close();
+    if (shared) {
+      // Its own stream is counted: past the budget, the connection it was leaving free has gone, so it gives its own
+      // back. The first poll starts the screen again from the buffer.
+      unsubscribe = (deps.onStreamsChange ?? onStreamCountChange)(() => {
+        if (mode !== 'stream' || openStreams() <= STREAM_BUDGET) return;
+        unsubscribe();
+        client.close();
+        startPolling();
+      });
+    }
+  } else {
+    startPolling();
   }
 
-  let closed = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let from = 0;
-  let first = true;
-  const poll = async (): Promise<void> => {
-    let wait = POLL_IDLE_MS;
-    try {
-      const answer = await api.terminals.output(appId, id, from);
-      if (closed) return;
-      if (first || answer.reset) handlers.onReset(answer.data);
-      else if (answer.data !== '') handlers.onOutput(answer.data);
-      first = false;
-      from = answer.next;
-      if (answer.data !== '') wait = POLL_BUSY_MS;
-    } catch {
-      wait = POLL_RETRY_MS;
-    }
-    if (!closed) timer = setTimeout(() => void poll(), wait);
-  };
-  void poll();
   return {
-    mode: 'poll',
+    get mode() {
+      return mode;
+    },
     close: () => {
-      closed = true;
-      clearTimeout(timer);
+      unsubscribe();
+      stop();
     },
   };
 }

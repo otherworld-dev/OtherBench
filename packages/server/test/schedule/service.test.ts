@@ -333,6 +333,55 @@ describe('ScheduleService: when runs start', () => {
   });
 });
 
+describe('ScheduleService: every N hours and cron rules', () => {
+  it('runs an every-3-hours schedule at each slot, scheduled, and moves to the next slot that day', async () => {
+    addSchedule('s1', { rule: { cadence: 'hourly', time: '09:00', everyHours: 3 } });
+    service.start();
+    expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
+    clock.advance(HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(store.schedules.get('s1')!.nextRunAt).toBe(NINE + 3 * HOUR);
+    engine.push(engine.requests[0]!.messageId, FINISH);
+    await flush();
+
+    clock.advance(3 * HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    expect(store.schedules.runs('s1').map((r) => [r.trigger, r.dueAt])).toEqual([
+      ['scheduled', NINE + 3 * HOUR],
+      ['scheduled', NINE],
+    ]);
+    expect(store.schedules.get('s1')!.nextRunAt).toBe(NINE + 6 * HOUR);
+    // The check timer; the other pending one is the run's own 30-minute timeout.
+    expect(clock.pending()[0]).toBeGreaterThan(0);
+    expect(clock.pending()[0]).toBeLessThanOrEqual(SCHEDULE_CHECK_MAX_MS);
+  });
+
+  it('runs a cron schedule that missed several slots once, marked late, and moves on from now', async () => {
+    const due = NINE - 3 * HOUR; // 06:00 in London; every quarter hour since has been missed
+    addSchedule('s1', { rule: { cadence: 'cron', cron: '*/15 * * * *' }, nextRunAt: due });
+    service.start();
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(store.schedules.runs('s1')).toHaveLength(1);
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'late', dueAt: due, startedAt: T0 });
+    expect(store.schedules.get('s1')!.nextRunAt).toBe(T0 + 15 * 60_000);
+    expect(lastUserText(engine.requests[0]!)).toContain('It was due Monday 12 October 2026, 06:00.');
+  });
+
+  it('runs a cron slot reached within 5 minutes as scheduled, not late', async () => {
+    addSchedule('s1', { rule: { cadence: 'cron', cron: '0 9 * * 1-5' } });
+    service.start();
+    clock.advance(HOUR + 4 * 60_000);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'scheduled', dueAt: NINE });
+    // Monday 09:00 done: Tuesday 09:00 next.
+    expect(store.schedules.get('s1')!.nextRunAt).toBe(NINE + 24 * HOUR);
+  });
+});
+
 describe('ScheduleService: runs that cannot start are recorded as not started, with why', () => {
   async function runNowDetail(): Promise<string | null> {
     service.start();

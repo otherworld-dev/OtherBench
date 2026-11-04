@@ -1,4 +1,5 @@
 import { dirname, join } from 'node:path';
+import type { RemoteSessionRepo } from '@otherbench/core/ports/store.js';
 import { LoginFileError, NoPasswordError, RemoteStartError } from './errors.js';
 import { createRemoteAccess, type RemoteAccess, type RemoteTls } from './index.js';
 import { PasswordFile } from './password.js';
@@ -65,8 +66,8 @@ export interface SignIn {
   notes: string[];
 }
 
-/** After the container: `--tls auto` names its CA after this node. */
-export function startSignIn(o: SignInOptions, check: SignInCheck, nodeName: string, now: () => number = Date.now): SignIn {
+/** After the container: `--tls auto` names its CA after this node, and sessions are kept in its database. */
+export function startSignIn(o: SignInOptions, check: SignInCheck, nodeName: string, sessionRepo: RemoteSessionRepo, now: () => number = Date.now): SignIn {
   const parsed = o.publicUrls.map(parsePublicUrl);
   const names = [...new Set(parsed.map((p) => p.hostname))];
   const notes = [...check.notes];
@@ -90,6 +91,6 @@ export function startSignIn(o: SignInOptions, check: SignInCheck, nodeName: stri
   } else {
     summary = { mode: 'proxy' };
   }
-  const remote = createRemoteAccess({ publicUrls: o.publicUrls, trustProxies: o.trustProxies, loginPath: check.loginPath, tls: summary, now });
+  const remote = createRemoteAccess({ publicUrls: o.publicUrls, trustProxies: o.trustProxies, loginPath: check.loginPath, tls: summary, sessionRepo, now });
   return { remote, tls, notAfter, notes };
 }

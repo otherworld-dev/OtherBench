@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken, onUnauthorized, streamApiUrl } from './transport.js';
+import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken, onUnauthorized, streamApiUrl, streamsShareHost } from './transport.js';
 
 afterEach(() => {
   configureTransport({ baseUrl: '', token: null });
@@ -69,6 +69,14 @@ describe('streamApiUrl', () => {
     configureTransport({ baseUrl: 'https://otherbench.example.com', token: 't' });
 
     expect(streamApiUrl('/events')).toBe('https://otherbench.example.com/api/events');
+  });
+
+  it('says whether streams share a host, and so the connections, with everything else', () => {
+    expect(streamsShareHost()).toBe(true);
+    configureTransport({ baseUrl: 'https://otherbench.example.com', token: 't' });
+    expect(streamsShareHost()).toBe(true);
+    configureTransport({ baseUrl: 'http://127.0.0.1:51234', token: 't' });
+    expect(streamsShareHost()).toBe(false);
   });
 });
 

@@ -3276,6 +3276,26 @@ describe('ClaudeCodeChatEngine notes sent while a reply runs (spec 2026-10-18-se
     e.dispose();
   });
 
+  it('a note taken back while its images are read is known meanwhile, withdrawn, and never pushed', async () => {
+    const f = noteQuery();
+    const e = engine(f.query);
+    let release!: (b: Buffer) => void;
+    const load = vi.fn(() => new Promise<Buffer>((resolve) => { release = resolve; }));
+    const r = await running(e, f, req({ loadAttachment: load, attachmentSize: () => 10 }));
+    const sending = e.sendToReply('m1', note('n1', 'look', [{ attachmentId: 'shot', mime: 'image/png', filename: 'shot.png' }]));
+    await vi.waitFor(() => expect(load).toHaveBeenCalled());
+    // Mid-read the engine still has it, so the server never takes it as lost.
+    expect(e.knowsNote('n1')).toBe(true);
+    expect(await e.withdrawNote('n1')).toBe(true);
+    release(FAKE_PNG);
+    expect(await sending).toBe(false);
+    expect(f.pushed).toHaveLength(1);
+    expect(e.knowsNote('n1')).toBe(false);
+    f.emit(resultNaming([r.uuid]));
+    await r.done;
+    e.dispose();
+  });
+
   it('a note Claude Code starts mid-turn yields note-picked between the text around it', async () => {
     const f = noteQuery();
     const e = engine(f.query);

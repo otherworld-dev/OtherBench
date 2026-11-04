@@ -58,8 +58,8 @@ export interface NotifierDeps {
   prefs(): NotifyPrefs;
 }
 
-/** The body of a scheduled run's notification. */
-function scheduledRunBody(status: ScheduleRunStatus, detail: string | null): string {
+/** The body of a scheduled run's notification, desktop or browser (`lib/browserNotify.ts`). */
+export function scheduledRunBody(status: ScheduleRunStatus, detail: string | null): string {
   switch (status) {
     case 'complete':
       return 'Finished';

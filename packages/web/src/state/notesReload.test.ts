@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
 
-/** A page load: the modules evaluated afresh over the tab's session storage, as a reload does. */
-async function pageLoad() {
+/**
+ * A page load: the modules evaluated afresh over the tab's session storage.
+ * A reload hides the page it replaces first; `duplicate` is a second tab
+ * opened as a copy of this one (its storage copied while this one still shows).
+ */
+async function pageLoad(how: 'reload' | 'duplicate' = 'reload') {
+  if (how === 'reload') window.dispatchEvent(new Event('pagehide'));
   vi.resetModules();
   const { CLIENT_ID } = await import('../lib/clientId.js');
   const { useOtherBenchStore } = await import('./store.js');
@@ -23,6 +28,29 @@ describe('notes across a reload of the tab', () => {
     expect(reloaded.CLIENT_ID).toBe(first.CLIENT_ID);
     sessionStorage.clear();
     expect((await pageLoad()).CLIENT_ID).not.toBe(first.CLIENT_ID);
+  });
+
+  it("a duplicated tab gets its own client id and drops the copies of the other tab's notes", async () => {
+    const first = await pageLoad();
+    first.s().noteSent(note('n1', first.CLIENT_ID));
+
+    const copy = await pageLoad('duplicate');
+    expect(copy.CLIENT_ID).not.toBe(first.CLIENT_ID);
+    expect(copy.s().sentNotes).toEqual({});
+    // Neither the other tab's lost note nor its returned one comes back here.
+    copy.s().setChatNotes('c1', [], []);
+    copy.s().applyChatEvent('c1', { type: 'note-resolved', chatId: 'c1', noteId: 'n1', outcome: 'returned', clientId: first.CLIENT_ID, note: note('n1', first.CLIENT_ID) });
+    expect(copy.s().returnedNotes).toEqual([]);
+
+    // The copy keeps its own id across its own reloads.
+    expect((await pageLoad()).CLIENT_ID).toBe(copy.CLIENT_ID);
+  });
+
+  it('a page restored from the back-forward cache claims its id again', async () => {
+    const first = await pageLoad();
+    window.dispatchEvent(new Event('pagehide'));
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    expect((await pageLoad('duplicate')).CLIENT_ID).not.toBe(first.CLIENT_ID);
   });
 
   it('a note sent before a reload comes back to the box when it is returned after it', async () => {

@@ -43,6 +43,14 @@ describe('WaitingNotes', () => {
     expect(screen.getAllByRole('button', { name: 'Take back' })).toHaveLength(2);
   });
 
+  it('fades a note by colour, never by opacity over the muted text (AA contrast in both themes)', () => {
+    useOtherBenchStore.getState().applyChatEvent('c1', { type: 'notes', chatId: 'c1', notes: [note('n1', { text: 'and the docs' })] });
+    render(<WaitingNotes chatId="c1" />);
+    const item = screen.getByTestId('waiting-note');
+    for (const el of [item, ...item.querySelectorAll('*')]) expect(el.className).not.toMatch(/(^|\s)opacity-/);
+    expect(screen.getByText('Sends when the reply finishes').closest('.text-\\[var\\(--text-muted\\)\\]')).not.toBeNull();
+  });
+
   it('shows nothing when no notes wait', () => {
     const { container } = render(<WaitingNotes chatId="c1" />);
     expect(container).toBeEmptyDOMElement();
