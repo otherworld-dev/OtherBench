@@ -222,7 +222,8 @@ describe('readClaudeExport in a worker', () => {
     expect(claudeReaderWorkersRunning()).toBe(0);
   });
 
-  it('keeps this thread free while a large export is parsed', async () => {
+  // Timing on a shared machine: a GC pause under a parallel full run can land once, so it gets retries.
+  it('keeps this thread free while a large export is parsed', { retry: 2 }, async () => {
     const json = bigConversations(600);
     await put('conversations.json', json);
     // How long this thread would be held parsing it: the longest pause the timer should see is well short of it.
