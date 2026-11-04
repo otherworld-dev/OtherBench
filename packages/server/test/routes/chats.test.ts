@@ -1415,4 +1415,37 @@ describe('chats in apps (spec 2026-10-20-code-tab-design, "Data")', () => {
     // Leaving the app in the same PATCH frees the folder.
     expect(await json(await patchChat(id, { appId: null, workspaceRoot: OTHER_ROOT }))).toMatchObject({ appId: null, workspaceRoot: OTHER_ROOT });
   });
+
+  describe('opening an app', () => {
+    function close(id: string): void {
+      container.store.apps.update(id, { open: false, updatedAt: 1 });
+    }
+
+    it('POST /chats into a closed app opens it', async () => {
+      close('app-1');
+      expect((await post({ appId: 'app-1' })).status).toBe(201);
+      expect(container.store.apps.get('app-1')?.open).toBe(true);
+    });
+
+    it('PATCH /chats/:id with the appId of a closed app opens it', async () => {
+      const id = (await json(await post({ profileId: 'profile-1' })))['id'] as string;
+      close('app-1');
+      expect((await patchChat(id, { appId: 'app-1' })).status).toBe(200);
+      expect(container.store.apps.get('app-1')?.open).toBe(true);
+    });
+
+    it("PATCH /chats/:id that leaves an app doesn't touch any app", async () => {
+      const id = (await json(await post({ appId: 'app-1' })))['id'] as string;
+      close('app-1');
+      expect((await patchChat(id, { appId: null })).status).toBe(200);
+      expect(container.store.apps.get('app-1')).toMatchObject({ open: false, updatedAt: 1 });
+    });
+
+    it("PATCH /chats/:id with the appId of an open app doesn't write the app", async () => {
+      const id = (await json(await post({ profileId: 'profile-1' })))['id'] as string;
+      container.store.apps.update('app-1', { updatedAt: 5 });
+      expect((await patchChat(id, { appId: 'app-1' })).status).toBe(200);
+      expect(container.store.apps.get('app-1')).toMatchObject({ open: true, updatedAt: 5 });
+    });
+  });
 });

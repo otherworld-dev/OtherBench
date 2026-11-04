@@ -279,6 +279,24 @@ describe('apps CRUD', () => {
     expect((await send('DELETE', '/api/apps/nope')).status).toBe(404);
   });
 
+  it('POST creates an open app; PATCH open false then true round-trips', async () => {
+    const created = await json(await send('POST', '/api/apps', { name: 'Fresh', workspacePath: tmp() }));
+    expect(created['open']).toBe(true);
+    const id = created['id'] as string;
+    expect(await json(await send('PATCH', `/api/apps/${id}`, { open: false }))).toMatchObject({ open: false });
+    expect(store.apps.get(id)?.open).toBe(false);
+    expect(await json(await send('PATCH', `/api/apps/${id}`, { open: true }))).toMatchObject({ open: true });
+    expect(store.apps.get(id)?.open).toBe(true);
+  });
+
+  it('PATCH open must be true or false', async () => {
+    newApp('a1', tmp());
+    const res = await send('PATCH', '/api/apps/a1', { open: 'yes' });
+    expect(res.status).toBe(400);
+    expect((await json(res))['error']).toBe('"open" must be true or false.');
+    expect(store.apps.get('a1')?.open).toBe(true);
+  });
+
   it("PATCH sets, moves and clears an app's folderId; one naming no folder is a 400", async () => {
     newApp('a1', tmp());
     store.appFolders.create({ id: 'f1', name: 'Work' });

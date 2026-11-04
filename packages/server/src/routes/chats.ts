@@ -138,6 +138,11 @@ export function collectMessageTree(store: Store, chatId: string): CanonMessage[]
   return result;
 }
 
+/** Starting a chat in an app, or moving one into it, opens the app in the Code sidebar. Only a closed app is written. */
+function openApp(container: Container, app: App): void {
+  if (!app.open) container.store.apps.update(app.id, { open: true, updatedAt: Date.now() });
+}
+
 export function chatsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -192,6 +197,7 @@ export function chatsRoutes(container: Container): Hono {
       // A new chat starts with Auto on (Claude Code decides routine tool calls), unless the request says otherwise.
       autoMode: body.autoMode === undefined ? true : optionalBoolean(body.autoMode, 'autoMode', true),
     });
+    if (appRow) openApp(container, appRow);
     return c.json(chatView(container, created), 201);
   });
 
@@ -313,6 +319,7 @@ export function chatsRoutes(container: Container): Hono {
     if (!nonActivity) patch.updatedAt = Date.now();
 
     const updated = container.store.chats.update(id, patch);
+    if (movedTo) openApp(container, movedTo);
     // A chat that stops contributing, or changes project, drops its pending memory timer.
     if (patch.memoryExcluded === true || patch.projectId !== undefined) container.memory?.cancel(id);
     return c.json(chatView(container, updated));
