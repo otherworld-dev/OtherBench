@@ -91,6 +91,21 @@ export function mergeRow(
 }
 
 /**
+ * An issue tick's `through` (ISO time of the activity ticked through) only
+ * moves forward: of two, the later, compared as dates since the same moment can
+ * be written more than one way. A tie, or a time that doesn't parse, keeps `a`.
+ * The repo's write and sync's merge both use it, so neither a later write nor a
+ * peer's row can bring back activity already ticked off.
+ */
+export function laterThrough(a: string, b: string): string {
+  const at = Date.parse(a);
+  const bt = Date.parse(b);
+  if (Number.isNaN(bt)) return a;
+  if (Number.isNaN(at)) return b;
+  return bt > at ? b : a;
+}
+
+/**
  * A chat's fields, each with the columns it covers. Two machines editing
  * different fields of one chat (one renames it, the other pins it) both win.
  * `created_at` never changes; `updated_at` takes the later of the two.

@@ -490,7 +490,7 @@ describe('ChatList status', () => {
     useOtherBenchStore.setState({ chats: [chat] });
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('needs-you-row-done')).getByRole('button', { name: 'Nothing to do here' }));
-    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: expect.any(Number) });
+    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: true });
     await waitFor(() => expect(screen.queryByTestId('group-needs-you')).toBeNull());
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['done']);
   });
@@ -502,7 +502,7 @@ describe('ChatList status', () => {
     render(<ChatList />);
     expect(within(screen.getByTestId('chat-row-quiet')).queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
     await userEvent.setup().click(within(screen.getByTestId('chat-row-done')).getByRole('button', { name: 'Nothing to do here' }));
-    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: expect.any(Number) });
+    expect(api.chats.patch).toHaveBeenCalledWith('done', { dealtWithAt: true });
     await waitFor(() => expect(screen.queryByTestId('group-needs-you')).toBeNull());
     expect(within(screen.getByTestId('chat-row-done')).queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
   });

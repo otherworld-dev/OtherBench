@@ -43,7 +43,7 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
  * ticking it would hide that reply when it lands.
  */
 export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
-  const patch = (body: { dealtWithAt: number } | { archivedAt: number }, what: string): void => {
+  const patch = (body: { dealtWithAt: true } | { archivedAt: number }, what: string): void => {
     api.chats.patch(chat.chatId, body).catch((err: unknown) => console.error(`[otherbench-web] failed to ${what} chat ${chat.chatId}:`, err));
   };
   return (
@@ -66,7 +66,8 @@ export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
           aria-label={`Tick off ${chat.title}`}
           onClick={(e) => {
             e.stopPropagation();
-            patch({ dealtWithAt: Date.now() }, 'tick off');
+            // The server stamps the moment: this device's clock may be wrong, and the tick syncs to paired machines.
+            patch({ dealtWithAt: true }, 'tick off');
           }}
           className={ACTION}
         >

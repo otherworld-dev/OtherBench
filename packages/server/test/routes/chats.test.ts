@@ -1254,18 +1254,34 @@ describe('chats in projects', () => {
     expect(list.find((c) => c.id === empty)?.head).toBeNull();
   });
 
-  it('PATCH dealtWithAt ticks a chat off and back on without counting as activity, and refuses a non-number', async () => {
+  it("PATCH dealtWithAt: true ticks a chat off at the server's time, null puts it back, neither counting as activity", async () => {
     const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
     const updatedAt = container.store.chats.get(id)!.updatedAt;
 
-    const res = await patchChat(id, { dealtWithAt: 1234 });
+    const t0 = Date.now();
+    const res = await patchChat(id, { dealtWithAt: true });
     expect(res.status).toBe(200);
-    expect(await json(res)).toMatchObject({ dealtWithAt: 1234, updatedAt });
-    expect(container.store.chats.get(id)!.dealtWithAt).toBe(1234);
+    const stamped = (await json(res))['dealtWithAt'] as number;
+    expect(stamped).toBeGreaterThanOrEqual(t0);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
+    expect(container.store.chats.get(id)!).toMatchObject({ dealtWithAt: stamped, updatedAt });
     expect(await json(await patchChat(id, { dealtWithAt: null }))).toMatchObject({ dealtWithAt: null, updatedAt });
-    const bad = await patchChat(id, { dealtWithAt: 'now' });
+  });
+
+  it("PATCH dealtWithAt never stamps a tick-off before the chat's reply, so a reply from a machine running ahead is still settled", async () => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    const ahead = Date.now() + 3_600_000;
+    container.store.messages.create({ id: 'm-ahead', chatId: id, parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: ahead });
+    container.store.chats.update(id, { headMessageId: 'm-ahead' });
+    expect(await json(await patchChat(id, { dealtWithAt: true }))).toMatchObject({ dealtWithAt: ahead });
+  });
+
+  it.each([1234, 9_999_999_999_999, 'now', false])('PATCH dealtWithAt refuses %j: the browser never says when', async (value) => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    const bad = await patchChat(id, { dealtWithAt: value });
     expect(bad.status).toBe(400);
-    expect((await json(bad))['error']).toBe('"dealtWithAt" must be a finite number or null.');
+    expect((await json(bad))['error']).toBe('"dealtWithAt" must be true (ticked off now) or null.');
+    expect(container.store.chats.get(id)!.dealtWithAt ?? null).toBeNull();
   });
 
   it('refuses projectPinned on a chat with no project (after the patch), and a non-boolean, with 400', async () => {

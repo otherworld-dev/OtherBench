@@ -49,12 +49,13 @@ export function overviewRoutes(container: Container): Hono {
 
   app.post('/tick-older', async (c) => {
     const overview = service();
-    const body = (await c.req.json().catch(() => ({}))) as { before?: unknown };
-    if (typeof body.before !== 'number' || !Number.isFinite(body.before)) {
-      throw new HTTPException(400, { message: '"before" must be a finite number (milliseconds).' });
+    const body = (await c.req.json().catch(() => ({}))) as { olderThan?: unknown };
+    if (typeof body.olderThan !== 'number' || !Number.isFinite(body.olderThan) || body.olderThan < 0) {
+      throw new HTTPException(400, { message: '"olderThan" must be a number of milliseconds, 0 or more.' });
     }
-    // A future cut-off would tick chats whose latest reply is newer than the moment of ticking.
-    return c.json(overview.tickOlder(Math.min(body.before, Date.now())));
+    // The browser says how old, never when now is: its clock may be wrong, and a cut-off it worked out from that
+    // would tick off chats it wasn't asked to (or miss ones it was). The cut-off is this machine's now minus the span.
+    return c.json(overview.tickOlder(Date.now() - body.olderThan));
   });
 
   return app;

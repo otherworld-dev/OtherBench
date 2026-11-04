@@ -358,8 +358,8 @@ export type ChatPatchBody = Partial<{
   /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
   projectPinned: boolean;
   archivedAt: number | null;
-  /** Ticks the chat off the Overview until it needs him again (spec 2026-10-26-overview). */
-  dealtWithAt: number | null;
+  /** Ticks the chat off the Overview until it needs him again (spec 2026-10-26-overview): `true` is now, stamped by the server's clock; null puts it back. */
+  dealtWithAt: true | null;
   autoMode: boolean;
   /** The Claude account slug the chat is pinned to; null = Default (main, overflowing to the others). */
   claudeAccount: string | null;
@@ -666,7 +666,8 @@ export const api = {
     markDone: (id: string) => post<Overview>(`/overview/notifications/${encodeURIComponent(id)}/done`),
     markRead: (id: string) => post<Overview>(`/overview/notifications/${encodeURIComponent(id)}/read`),
     /** Chats only: notifications are marked done one at a time. */
-    tickOlder: (before: number) => post<{ chats: number }>('/overview/tick-older', { before }),
+    /** Ticks off chats whose reply is older than `olderThan` ms; the server works out the cut-off from its own clock. */
+    tickOlder: (olderThan: number) => post<{ chats: number }>('/overview/tick-older', { olderThan }),
   },
 
   /**

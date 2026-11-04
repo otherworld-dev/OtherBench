@@ -32,7 +32,7 @@ function TickOlder(): JSX.Element {
     if (!picked || busy) return;
     setBusy(true);
     api.overview
-      .tickOlder(Date.now() - picked.ms)
+      .tickOlder(picked.ms)
       .then((r) => {
         setResult(`Ticked off ${plural(r.chats, 'chat')}`);
         // The overview refreshes itself from the server events that follow.

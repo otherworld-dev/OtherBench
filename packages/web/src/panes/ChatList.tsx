@@ -1239,9 +1239,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     return chat.projectId ? pinnedProjectName(chat.projectId) : undefined;
   }
 
-  /** Ticks a chat off: nothing to do here until a newer reply lands. Never before the reply, whatever this device's clock says. */
+  /** Ticks a chat off: nothing to do here until a newer reply lands. The server stamps it, never before the reply, whatever this device's clock says. */
   function tickOff(chat: Chat): void {
-    void patchChat(chat, { dealtWithAt: Math.max(Date.now(), chat.head?.createdAt ?? 0) }, 'tick off the chat');
+    void patchChat(chat, { dealtWithAt: true }, 'tick off the chat');
   }
 
   /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */

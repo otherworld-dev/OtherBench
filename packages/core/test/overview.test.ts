@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  asksUser, buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, type OverviewInput,
+  asksUser, buildOverview, CHAT_NEED_WINDOW_MS, chatNeedsYou, deckSummary, isBotLogin, tickOffAt, type OverviewInput,
 } from '../src/domain/overview.js';
 import type { App, Chat } from '../src/ports/store.js';
 import type { DeckBoardView, DeckCardSummary } from '../src/types/nextcloud.js';
@@ -85,6 +85,12 @@ describe('chatNeedsYou', () => {
     expect(chatNeedsYou(open, { ...head('complete'), asks: true }, false, 0, true)).toBe(true);
     expect(chatNeedsYou({ ...open, dealtWithAt: Date.now() + 1000 }, { ...head('complete'), asks: true }, false, 0, true)).toBe(false);
     expect(chatNeedsYou(open, head('complete'), true, 0, true)).toBe(true);
+  });
+  it('tickOffAt is now, but never before the head, so a tick-off always settles the reply it was made on', () => {
+    expect(tickOffAt(500, head('complete'))).toBe(500);
+    expect(tickOffAt(50, head('complete'))).toBe(100);
+    expect(tickOffAt(50, null)).toBe(50);
+    expect(chatNeedsYou({ archivedAt: null, dealtWithAt: tickOffAt(50, head('complete')) }, head('complete'), false, 0)).toBe(false);
   });
   it('dealtWithAt after the head settles it, before does not', () => {
     expect(chatNeedsYou({ archivedAt: null, dealtWithAt: 150 }, head('complete'), false, 0)).toBe(false);
