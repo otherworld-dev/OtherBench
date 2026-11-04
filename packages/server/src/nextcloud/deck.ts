@@ -95,25 +95,31 @@ async function onBoard(client: NextcloudClient, boardId: number, cardId: number)
   return null;
 }
 
+/** `onBoard`, with a board that's gone or that Deck answers 403 for (deleted, no longer shared) as a miss. */
+async function onBoardIfVisible(client: NextcloudClient, boardId: number, cardId: number): Promise<Awaited<ReturnType<typeof onBoard>>> {
+  try {
+    return await onBoard(client, boardId, cardId);
+  } catch (e) {
+    if (e instanceof NextcloudError && e.code === 'nextcloud-not-found') return null;
+    throw e;
+  }
+}
+
 /**
  * Deck has no "card by id" route: try the preferred board (active, then
- * archived), then every other board. A preferred board that's gone (deleted,
- * or no longer shared) is a miss, not a failure, so an app linked to a stale
- * board can still open its cards.
+ * archived), then every other board. A board that's gone (deleted, or no
+ * longer shared) is a miss, not a failure, so an app linked to a stale board
+ * can still open its cards, and one board this account can't read doesn't
+ * stop the scan of the rest.
  */
 async function locate(client: NextcloudClient, cardId: number, preferBoardId?: number | null): Promise<Located> {
   if (preferBoardId != null) {
-    let hit: Awaited<ReturnType<typeof onBoard>> = null;
-    try {
-      hit = await onBoard(client, preferBoardId, cardId);
-    } catch (e) {
-      if (!(e instanceof NextcloudError) || e.code !== 'nextcloud-not-found') throw e;
-    }
+    const hit = await onBoardIfVisible(client, preferBoardId, cardId);
     if (hit) return { ...hit, boardTitle: null };
   }
   for (const board of await client.deckBoards()) {
     if (board.id === preferBoardId || (typeof board.deletedAt === 'number' && board.deletedAt > 0)) continue;
-    const hit = await onBoard(client, board.id, cardId);
+    const hit = await onBoardIfVisible(client, board.id, cardId);
     if (hit) return { ...hit, boardTitle: board.title };
   }
   throw new NextcloudError('nextcloud-not-found', `Deck card #${cardId} isn't on any board this account can see.`);

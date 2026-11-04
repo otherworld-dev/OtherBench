@@ -149,6 +149,32 @@ describe('findCard', () => {
     expect(await findCard(client, 300, 1)).toMatchObject({ id: 300, boardId: 2, boardTitle: 'Other', title: 'Elsewhere' });
   });
 
+  it("skips another board Deck answers 403 for while scanning, instead of giving up on the card", async () => {
+    const deck = 'https://nc/index.php/apps/deck/api/v1.0';
+    const reply = (status: number, body?: unknown) =>
+      new Response(body === undefined ? '' : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const routes: Record<string, () => Response> = {
+      [`${deck}/boards`]: () => reply(200, [{ id: 1, title: 'OtherBench' }, { id: 5, title: 'Unshared' }, { id: 2, title: 'Other' }]),
+      [`${deck}/boards/1/stacks`]: () => reply(200, []),
+      [`${deck}/boards/1/stacks/archived`]: () => reply(200, []),
+      [`${deck}/boards/5/stacks`]: () => reply(403),
+      [`${deck}/boards/5/stacks/archived`]: () => reply(403),
+      [`${deck}/boards/2/stacks`]: () => reply(200, [{ id: 20, title: 'Inbox', order: 0, cards: [{ id: 300, title: '#300 Elsewhere' }] }]),
+      [`${deck}/boards/2/stacks/20/cards/300`]: () => reply(200, { id: 300, title: '#300 Elsewhere', description: 'd' }),
+    };
+    const f = (async (url: string) => (routes[String(url)] ?? (() => reply(404)))()) as unknown as typeof fetch;
+    const client = httpNextcloudClient({ baseUrl: 'https://nc', user: 'adam', password: 'pw' }, f);
+    expect(await findCard(client, 300, 1)).toMatchObject({ id: 300, boardId: 2, boardTitle: 'Other' });
+    expect(await findCard(client, 300)).toMatchObject({ id: 300, boardId: 2 });
+    await rejectsWith(findCard(client, 999, 1), 'nextcloud-not-found');
+  });
+
+  it("still fails on a scanned board's error other than not-found", async () => {
+    const c = new FakeNextcloudClient(seed());
+    c.failOn = { call: 'deckStacks', error: new NextcloudError('nextcloud-unreachable', "Couldn't reach Nextcloud.") };
+    await rejectsWith(findCard(c, 300), 'nextcloud-unreachable');
+  });
+
   it('still fails on a preferred-board error other than not-found', async () => {
     const c = new FakeNextcloudClient(seed());
     c.fail = new NextcloudError('nextcloud-auth', 'Nextcloud rejected the username or app password.');
