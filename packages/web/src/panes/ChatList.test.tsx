@@ -112,11 +112,11 @@ function makeFolder(overrides: Partial<AppFolder> & { id: string }): AppFolder {
   return { name: overrides.id, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
-/** The chat ids shown in one sidebar group, top to bottom. */
+/** The chat ids shown in one sidebar group, top to bottom: its rows, or under Pinned the pinned copies (`pinned-row-`). */
 function rowIds(groupTestId: string): string[] {
   return within(screen.getByTestId(groupTestId))
-    .queryAllByTestId(/^chat-row-/)
-    .map((el) => el.getAttribute('data-testid')!.slice('chat-row-'.length));
+    .queryAllByTestId(/^(chat|pinned)-row-/)
+    .map((el) => el.getAttribute('data-testid')!.replace(/^(chat|pinned)-row-/, ''));
 }
 
 function headingOrder(): string[] {
@@ -193,7 +193,7 @@ describe('ChatList desktop integration', () => {
 });
 
 describe('ChatList groups', () => {
-  it('shows Pinned, then projects by sortOrder and name, then No project; pinned chats only under Pinned; archived nowhere', () => {
+  it('shows Pinned, then projects by sortOrder and name, then No project; a pinned chat in its project too, counted once; archived nowhere', () => {
     useOtherBenchStore.setState({
       projects: [makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 }), makeProject({ id: 'p-a', name: 'alpha', sortOrder: 1 }), makeProject({ id: 'p-z', name: 'Zed' })],
       chats: [
@@ -207,7 +207,7 @@ describe('ChatList groups', () => {
 
     expect(headingOrder()).toEqual(['p-z', 'p-a', 'p-b', NO_PROJECT_KEY]);
     expect(rowIds('group-pinned')).toEqual(['c2']);
-    expect(rowIds('group-p-b')).toEqual([]);
+    expect(rowIds('group-p-b')).toEqual(['c2']);
     expect(screen.getByTestId('group-count-p-b')).toHaveTextContent('1');
     expect(rowIds('group-p-a')).toEqual(['c1']);
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c3']);
@@ -228,8 +228,11 @@ describe('ChatList groups', () => {
     });
     render(<ChatList />);
 
-    expect(within(screen.getByTestId('chat-row-c1')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
+    expect(within(screen.getByTestId('pinned-row-c1')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
     expect(screen.getByRole('button', { name: /, in Alpha$/ })).toBeInTheDocument();
+    // Its row in its own project needs no name: the heading above says it.
+    expect(within(screen.getByTestId('chat-row-c1')).queryByTestId('row-project-name')).toBeNull();
+    expect(within(screen.getByTestId('pinned-row-c2')).queryByTestId('row-project-name')).toBeNull();
     expect(within(screen.getByTestId('chat-row-c2')).queryByTestId('row-project-name')).toBeNull();
     expect(within(screen.getByTestId('chat-row-c3')).queryByTestId('row-project-name')).toBeNull();
   });
@@ -582,23 +585,43 @@ describe('ChatList status', () => {
 });
 
 describe('ChatList pin button', () => {
-  it('pins from the row, moving the chat under Pinned, with no marker there', async () => {
-    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+  it('pins from the row, adding the chat under Pinned (no marker there) and keeping it in its group, marked', async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First', sortOrder: 2 }), makeChat({ id: 'c2', title: 'Second', sortOrder: 1 })] });
+    setGroupSort(NO_PROJECT_KEY, 'manual');
     render(<ChatList />);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1', 'c2']);
     await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
+    // Pinning sends no sortOrder, so the chat keeps its place in its group.
     expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: true });
     await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c1']));
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1', 'c2']);
     expect(within(screen.getByTestId('group-pinned')).queryByTestId('pin-marker')).toBeNull();
+    expect(within(screen.getByTestId('chat-row-c1')).getByTestId('pin-marker')).toBeInTheDocument();
     expect(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
   });
 
-  it('refocuses the moved row without scrolling the list to it', async () => {
+  it('keeps focus on the row it was pinned from, without scrolling the list', async () => {
     useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     render(<ChatList />);
     await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
     await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c1']));
     await waitFor(() => expect(focus).toHaveBeenLastCalledWith({ preventScroll: true }));
+    expect(screen.getByTestId('chat-row-c1').querySelector('[data-row-main]')).toHaveFocus();
+    focus.mockRestore();
+  });
+
+  it('unpinning from its row under Pinned takes only that row away; focus goes to its row in its group without scrolling', async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', title: 'First', pinned: true })] });
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Unpin chat' }));
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: false });
+    await waitFor(() => expect(screen.queryByTestId('group-pinned')).toBeNull());
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+    await waitFor(() => expect(screen.getByTestId('chat-row-c1').querySelector('[data-row-main]')).toHaveFocus());
+    expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
     focus.mockRestore();
   });
 
@@ -617,6 +640,92 @@ describe('ChatList pin button', () => {
     const row = screen.getByTestId('chat-row-c1');
     expect(within(row).queryByRole('button', { name: /pin chat/i })).toBeNull();
     expect(within(row).getByTestId('pin-marker')).toBeInTheDocument();
+  });
+});
+
+describe('ChatList pinned chat in two places', () => {
+  const mainOf = (testId: string): HTMLElement => screen.getByTestId(testId).querySelector<HTMLElement>('[data-row-main]')!;
+
+  function setup(over: Partial<ReturnType<typeof useOtherBenchStore.getState>> = {}) {
+    useOtherBenchStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'c1', title: 'First', projectId: 'p-a', pinned: true, sortOrder: 3 }),
+        makeChat({ id: 'c2', title: 'Second', pinned: true, sortOrder: 2 }),
+        makeChat({ id: 'c3', title: 'Third', projectId: 'p-a', sortOrder: 1 }),
+      ],
+      activeChatId: 'c1',
+      ...over,
+    });
+    render(<ChatList />);
+    return userEvent.setup();
+  }
+
+  it('marks the open chat on both rows, and shows what it is doing on both, counting it once in its project', () => {
+    setup({ appRunningTurns: { m1: 'c1' } });
+    expect(mainOf('pinned-row-c1')).toHaveAttribute('aria-current', 'true');
+    expect(mainOf('chat-row-c1')).toHaveAttribute('aria-current', 'true');
+    const word = screen.getByTestId('chat-status-c1').textContent;
+    expect(word).toBeTruthy();
+    expect(screen.getByTestId('pinned-status-c1')).toHaveTextContent(word!);
+    expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('2');
+    // A folded group's heading sums its chats' status: the pinned one once.
+    act(() => setGroupCollapsed('p-a', true));
+    expect(screen.getByTestId('group-status-p-a')).toHaveTextContent('1 replying');
+  });
+
+  it('opens the menu, and renames, on the row it was opened from only', async () => {
+    const user = setup();
+    await user.click(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Chat actions' }));
+    expect(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Chat actions' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat actions' })).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    expect(within(screen.getByTestId('pinned-row-c1')).getByRole('textbox', { name: 'Chat title' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('chat-row-c1')).queryByRole('textbox')).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(mainOf('pinned-row-c1')).toHaveFocus());
+
+    await user.click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat actions' }));
+    expect(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat actions' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Chat actions' })).toHaveAttribute('aria-expanded', 'false');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(mainOf('chat-row-c1')).toHaveFocus());
+  });
+
+  it('Tab passes through both rows of a pinned chat', async () => {
+    const user = setup();
+    screen.getByRole('searchbox', { name: 'Search chats' }).focus();
+    const visited: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      await user.tab();
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.hasAttribute('data-row-main')) visited.push(active.closest('li')!.getAttribute('data-testid')!);
+    }
+    expect(visited).toEqual(expect.arrayContaining(['pinned-row-c1', 'pinned-row-c2', 'chat-row-c1', 'chat-row-c2', 'chat-row-c3']));
+    expect(visited.indexOf('pinned-row-c1')).toBeLessThan(visited.indexOf('chat-row-c1'));
+  });
+
+  it('renders both rows without React key warnings, alongside a Needs you row', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setup({
+      chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a', pinned: true, head: { chatId: 'c1', role: 'assistant', status: 'complete', createdAt: Date.now() - 60_000 } })],
+      activeChatId: null,
+    });
+    expect(screen.getByTestId('needs-you-row-c1')).toBeInTheDocument();
+    expect(screen.getByTestId('pinned-row-c1')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-row-c1')).toBeInTheDocument();
+    expect(error.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    error.mockRestore();
+  });
+
+  it('archiving from the row under Pinned moves focus to the next row there', async () => {
+    const user = setup();
+    await user.click(within(screen.getByTestId('pinned-row-c1')).getByRole('button', { name: 'Chat actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(screen.queryByTestId('pinned-row-c1')).toBeNull());
+    expect(screen.queryByTestId('chat-row-c1')).toBeNull();
+    await waitFor(() => expect(mainOf('pinned-row-c2')).toHaveFocus());
   });
 });
 
@@ -713,16 +822,19 @@ describe('ChatList drag and drop', () => {
     expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
   });
 
-  it('a pinned chat dropped on a project joins it but stays under Pinned, and the project count goes up', async () => {
+  it('a pinned chat dragged from Pinned onto a project joins it and stays under Pinned; the project counts it once', async () => {
     useOtherBenchStore.setState({ chats: [makeChat({ id: 'c1', pinned: true })] });
     render(<ChatList />);
     expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('0');
 
+    fireEvent.dragStart(screen.getByTestId('pinned-row-c1').querySelector('[data-row-main]')!, { dataTransfer: dataTransfer('c1') });
     fireEvent.drop(screen.getByTestId('group-heading-p-a'), { dataTransfer: dataTransfer('c1') });
 
+    // No pinned: false, and no sortOrder: its place under Pinned stays as it was.
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectId: 'p-a' });
     await waitFor(() => expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('1'));
     expect(rowIds('group-pinned')).toEqual(['c1']);
-    expect(rowIds('group-p-a')).toEqual([]);
+    expect(rowIds('group-p-a')).toEqual(['c1']);
   });
 });
 
@@ -851,15 +963,17 @@ describe('ChatList chat menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Unpin from project' })).toBeInTheDocument();
   });
 
-  it('Pin moves the chat under Pinned and puts focus back on its row; the menu then offers Unpin', async () => {
+  it('Pin adds the chat under Pinned, keeps it in its group and puts focus back on the row it came from; the menu then offers Unpin', async () => {
     const user = setup();
     fireEvent.contextMenu(row('Second'));
     await user.click(screen.getByRole('menuitem', { name: 'Pin' }));
 
     expect(mockedPatch).toHaveBeenCalledWith('c2', { pinned: true });
     await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c2']));
-    await waitFor(() => expect(row('Second')).toHaveFocus());
-    fireEvent.contextMenu(row('Second'));
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c2']);
+    const groupRow = screen.getByTestId('chat-row-c2').querySelector<HTMLElement>('[data-row-main]')!;
+    await waitFor(() => expect(groupRow).toHaveFocus());
+    fireEvent.contextMenu(groupRow);
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
   });
 
@@ -1247,20 +1361,24 @@ describe('ChatList reordering (#823)', () => {
     // No project starts sorted by recent activity, where rows don't reorder.
     setGroupSort(NO_PROJECT_KEY, 'manual');
     useOtherBenchStore.setState({
-      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      // The pinned chat has a project of its own, so its row there stays out of the other groups' orders.
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' }), makeProject({ id: 'p-pin', name: 'Kept' })],
       chats: [
         makeChat({ id: 'a', sortOrder: 30 }),
         makeChat({ id: 'b', sortOrder: 20 }),
         makeChat({ id: 'c', sortOrder: 10 }),
         makeChat({ id: 'x', projectId: 'p-a', sortOrder: 5 }),
-        makeChat({ id: 'pin', pinned: true, sortOrder: 1 }),
+        makeChat({ id: 'pin', projectId: 'p-pin', pinned: true, sortOrder: 1 }),
       ],
     });
   });
 
-  /** Drags `chatId` onto the top or bottom half of row `targetId`. jsdom rows have no height, so the half is set via clientY against a stubbed rect. */
-  function dropOnRow(chatId: string, targetId: string, half: 'top' | 'bottom'): void {
-    const row = screen.getByTestId(`chat-row-${targetId}`);
+  /**
+   * Drags `chatId` onto the top or bottom half of row `targetId` (`pinned-row-` for its row under Pinned). jsdom rows
+   * have no height, so the half is set via clientY against a stubbed rect.
+   */
+  function dropOnRow(chatId: string, targetId: string, half: 'top' | 'bottom', prefix: 'chat-row-' | 'pinned-row-' = 'chat-row-'): void {
+    const row = screen.getByTestId(`${prefix}${targetId}`);
     row.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
     // jsdom has no DragEvent, so clientY has to be put on the event by hand.
     const at = (event: Event): Event => Object.defineProperty(event, 'clientY', { value: half === 'top' ? 105 : 115 });
@@ -1293,15 +1411,50 @@ describe('ChatList reordering (#823)', () => {
     await waitFor(() => expect(rowIds('group-p-a')).toEqual(['b', 'x']));
   });
 
-  it('dropping a chat among the pinned ones pins it, and dropping a pinned chat into a group unpins it', async () => {
+  it('dropping a chat among the pinned ones pins it and leaves it in its group too', async () => {
     render(<ChatList />);
-    dropOnRow('a', 'pin', 'bottom');
+    dropOnRow('a', 'pin', 'bottom', 'pinned-row-');
     expect(mockedPatch).toHaveBeenLastCalledWith('a', { sortOrder: 0, pinned: true });
     await waitFor(() => expect(rowIds('group-pinned')).toEqual(['pin', 'a']));
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['b', 'c', 'a']);
+  });
 
+  it("dropping a pinned chat among another group's rows files it there and keeps it pinned", async () => {
+    render(<ChatList />);
     dropOnRow('pin', 'b', 'top');
-    expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 21, pinned: false });
-    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['pin', 'b', 'c']));
+    expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 25, projectId: null });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['a', 'pin', 'b', 'c']));
+    expect(rowIds('group-pinned')).toEqual(['pin']);
+  });
+
+  it('a pinned chat reorders by its row in its group without being unpinned', async () => {
+    useOtherBenchStore.setState({ chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'k2', projectId: 'p-pin', sortOrder: 9 })] });
+    render(<ChatList />);
+    expect(rowIds('group-p-pin')).toEqual(['k2', 'pin']);
+    dropOnRow('pin', 'k2', 'top');
+    expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 10 });
+    await waitFor(() => expect(rowIds('group-p-pin')).toEqual(['pin', 'k2']));
+    expect(rowIds('group-pinned')).toEqual(['pin']);
+  });
+
+  it('Move up / Move down act on the section of the row the menu was opened from', async () => {
+    useOtherBenchStore.setState({ chats: useOtherBenchStore.getState().chats.map((c) => (c.id === 'a' ? { ...c, pinned: true } : c)) });
+    const user = userEvent.setup();
+    render(<ChatList />);
+    expect(rowIds('group-pinned')).toEqual(['a', 'pin']);
+
+    // Alone in its project: nowhere to go there.
+    fireEvent.contextMenu(screen.getByTestId('chat-row-pin').querySelector('[data-row-main]')!);
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+
+    // Second under Pinned: up, above the first, and focus stays on that row.
+    fireEvent.contextMenu(screen.getByTestId('pinned-row-pin').querySelector('[data-row-main]')!);
+    await user.click(screen.getByRole('menuitem', { name: 'Move up' }));
+    expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 31 });
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['pin', 'a']));
+    await waitFor(() => expect(screen.getByTestId('pinned-row-pin').querySelector('[data-row-main]')).toHaveFocus());
   });
 
   it("dropping a chat among a project's pinned chats pins it there, and dropping it back among the rest unpins it", async () => {
@@ -1686,9 +1839,9 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
   it("names a pinned chat's sub-project after its parent, and lists sub-projects indented in Move to project…", async () => {
     useOtherBenchStore.setState({ chats: [makeChat({ id: 'pin', projectId: 'p-d', pinned: true })] });
     render(<ChatList />);
-    expect(within(screen.getByTestId('chat-row-pin')).getByTestId('row-project-name')).toHaveTextContent('OtherBench / Desktop');
+    expect(within(screen.getByTestId('pinned-row-pin')).getByTestId('row-project-name')).toHaveTextContent('OtherBench / Desktop');
 
-    fireEvent.contextMenu(screen.getByTestId('chat-row-pin').querySelector('[data-row-main]')!);
+    fireEvent.contextMenu(screen.getByTestId('pinned-row-pin').querySelector('[data-row-main]')!);
     await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Move to project…' }));
     const items = screen.getAllByRole('menuitemradio');
     expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['OtherBench', 'Desktop', 'Sync', 'PhD', 'No project']);

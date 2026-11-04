@@ -71,12 +71,16 @@ function focusLater(selector: string, fallback?: string, options?: FocusOptions)
 /** The chat list itself: the stable place focus falls back to when the row it wanted is gone. */
 const LIST_SELECTOR = '[data-chat-list]';
 
-function chatRowSelector(chatId: string): string {
-  return `[data-testid="chat-row-${chatId}"] [data-row-main]`;
-}
+/**
+ * Which of a chat's rows: the one in its group, its copy under Pinned (a pinned chat stays in its group too, Deck
+ * d961), or its copy in the Needs you list. Each has its own test id prefix, so a selector finds the one meant.
+ */
+type RowKind = 'group' | 'pinned' | 'list';
 
-function needsYouRowSelector(chatId: string): string {
-  return `[data-testid="needs-you-row-${chatId}"] [data-row-main]`;
+const ROW_PREFIX: Record<RowKind, string> = { group: 'chat-row-', pinned: 'pinned-row-', list: 'needs-you-row-' };
+
+function rowSelector(chatId: string, kind: RowKind): string {
+  return `[data-testid="${ROW_PREFIX[kind]}${chatId}"] [data-row-main]`;
 }
 
 /** localStorage key: whether the "Show archived" section is open. Per device. */
@@ -112,8 +116,9 @@ function headingSelector(projectId: string): string {
 /**
  * Left pane (spec 2026-10-03-projects-design §3): search, then Pinned, each
  * project, and No project, with "+ New chat" and "+ New project" at the
- * bottom. Search matches chat titles here and message text through
- * `GET /api/search?scope=chats`, and the chips under it keep only chats with
+ * bottom. A pinned chat keeps its row in its group and gets a second one
+ * under Pinned until unpinned (Deck d961). Search matches chat titles here
+ * and message text through `GET /api/search?scope=chats`, and the chips under it keep only chats with
  * a status, or that run on one machine. Any of those filters every group to
  * the matching chats; groups with no match hide, and collapsed or capped
  * groups show in full, while one is active. A group shows its first
@@ -210,8 +215,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
-  // Whether the chat menu was opened from the Needs you list, for a chat with a row there as well as in its group.
-  const [menuInList, setMenuInList] = useState(false);
+  // Which row the chat menu was opened from, for a chat with a row under Pinned or in Needs you as well as in its group.
+  const [menuRow, setMenuRow] = useState<RowKind>('group');
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; position: { x: number; y: number } } | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
@@ -361,8 +366,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /**
    * Files a chat under a project (null = No project), at the top of that
-   * group. A pinned chat keeps its place under Pinned. A no-op when it's
-   * already there.
+   * group. A pinned chat keeps its sortOrder, so its place under Pinned, and
+   * shows in the group where that puts it. A no-op when it's already there.
    */
   async function moveChat(chatId: string, projectId: string | null): Promise<void> {
     const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
@@ -400,8 +405,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /**
    * Puts chat `chatId` in `section` just above `beforeId` (null = the bottom),
-   * filing, pinning or unpinning it to match the section (#823). Usually one
-   * PATCH; a renumbered section sends one per chat that changes.
+   * filing it, or pinning it in its project or not, to match the section
+   * (#823). Dropped under Pinned it is pinned; dropped in a group a pinned chat
+   * stays pinned, since it shows in its group as well (Deck d961) and only
+   * Unpin takes it out of Pinned. Usually one PATCH; a renumbered section
+   * sends one per chat that changes.
    */
   async function placeChat(chatId: string, section: Section, beforeId: string | null): Promise<void> {
     const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
@@ -410,7 +418,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const own = patches.find((p) => p.id === chatId);
     const body: ChatPatchBody = {
       ...(own ? { sortOrder: own.sortOrder } : {}),
-      ...(chat.pinned !== section.pinned ? { pinned: section.pinned } : {}),
+      ...(section.pinned && !chat.pinned ? { pinned: true } : {}),
       // Pinned in its project when dropped among that project's pinned chats, unpinned when dropped among the rest.
       ...(!section.pinned && chat.projectPinned !== section.projectPinned ? { projectPinned: section.projectPinned } : {}),
       ...(!section.pinned && chat.projectId !== section.projectId ? { projectId: section.projectId } : {}),
@@ -444,13 +452,14 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * The section the sidebar shows `chat` in, or null when it isn't shown in one: archived, or an app chat. Code mode
+   * The section the sidebar shows `chat`'s row in, or null when it isn't shown in one: archived, or an app chat. A
+   * pinned chat has two: Pinned for its row there (`kind` 'pinned'), else its group. Code mode
    * has no Pinned section and no ordering by hand (a pinned app chat leads its group), so an app chat is in none of
    * Chat mode's sections and its menu offers no Move up / Move down (spec 2026-10-20-code-tab-design, Goal 1).
    */
-  function sectionOf(chat: Chat): Section | null {
+  function sectionOf(chat: Chat, kind: RowKind = rowKindOf(chat.id)): Section | null {
     if (chat.archivedAt !== null || chat.appId !== null || codeMode) return null;
-    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
+    if (kind === 'pinned' && chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
     for (const group of allGroups(sidebar)) {
       const projectId = group.project?.id ?? null;
       const recent = group.sort === 'recent';
@@ -487,28 +496,37 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     }
   }
 
-  /** Whether a chat's menu and rename belong to its row in the Needs you list, rather than the one in its group. */
-  function onListRow(chatId: string): boolean {
-    return menuInList && needsYouIds.has(chatId);
+  /**
+   * Which of a chat's rows its menu and rename belong to: the one the menu was opened from while that row is still
+   * shown, else the one in its group.
+   */
+  function rowKindOf(chatId: string): RowKind {
+    if (menuRow === 'list' && needsYouIds.has(chatId)) return 'list';
+    if (menuRow === 'pinned' && !codeMode && sidebar.pinned.some((c) => c.id === chatId)) return 'pinned';
+    return 'group';
   }
 
-  /** The row to return focus to: the one the user was on, so focus doesn't scroll the sidebar to the chat's other row. */
-  function currentRowSelector(chatId: string): string {
-    return onListRow(chatId) ? needsYouRowSelector(chatId) : chatRowSelector(chatId);
+  /**
+   * The row to return focus to: the one the user was on (`kind`, by default the menu's), so focus doesn't scroll the
+   * sidebar to the chat's other row. From under Pinned, the row in its group once that one is gone (unpinned).
+   */
+  function currentRowSelector(chatId: string, kind: RowKind = rowKindOf(chatId)): string {
+    // Pinned sits above the groups, so a selector list finds the row under Pinned first while there is one.
+    return kind === 'pinned' ? `${rowSelector(chatId, 'pinned')}, ${rowSelector(chatId, 'group')}` : rowSelector(chatId, kind);
   }
 
   /**
    * The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. Within Needs you
-   * when the user was there, as a row in a group further down would scroll the sidebar away from where they were.
+   * or Pinned when the user was there, as a row in a group further down would scroll the sidebar away from where they were.
    */
   function neighbourSelector(chatId: string): string {
-    const prefix = onListRow(chatId) ? 'needs-you-row-' : 'chat-row-';
+    const kind = rowKindOf(chatId);
+    const prefix = ROW_PREFIX[kind];
     const rows = Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="${prefix}"]`));
     const i = rows.findIndex((el) => el.getAttribute('data-testid') === `${prefix}${chatId}`);
     const neighbour = i === -1 ? undefined : (rows[i + 1] ?? rows[i - 1]);
     const id = neighbour?.getAttribute('data-testid')?.slice(prefix.length);
-    if (!id) return LIST_SELECTOR;
-    return prefix === 'needs-you-row-' ? needsYouRowSelector(id) : chatRowSelector(id);
+    return id ? rowSelector(id, kind) : LIST_SELECTOR;
   }
 
   function openChatMenu(chatId: string, position: { x: number; y: number }, source: MenuSource): void {
@@ -530,15 +548,15 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * `preventScroll` for the row's own pin button: the row moves into or out
-   * of Pinned at the top, and following it there would lose the user's place
-   * when pinning several chats from far down the list.
+   * `row`: which row's pin button, when it was one (else the menu's row). `preventScroll` for the row's own pin
+   * button: unpinning from under Pinned sends focus to the chat's row in its group, and following it there would
+   * lose the user's place when unpinning several chats.
    */
-  async function setPinned(chat: Chat, pinned: boolean, preventScroll = false): Promise<void> {
+  async function setPinned(chat: Chat, pinned: boolean, preventScroll = false, row?: RowKind): Promise<void> {
     setError(null);
     try {
       await setChatPinned(chat.id, pinned);
-      focusLater(currentRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
+      focusLater(currentRowSelector(chat.id, row), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
     } catch (err) {
       console.error(`[otherbench-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
@@ -837,7 +855,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       else next.delete(key);
       return next;
     });
-    if (firstRevealedId) focusLater(chatRowSelector(firstRevealedId));
+    if (firstRevealedId) focusLater(rowSelector(firstRevealedId, 'group'));
   }
 
   /** The heading to focus once `projectId`'s is gone: the next one, else the previous one. */
@@ -1246,7 +1264,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */
   function renderRow(chat: Chat, section: Section | null, muted = section === null, listed = false): JSX.Element {
-    const current = listed === onListRow(chat.id);
+    const kind: RowKind = listed ? 'list' : section?.pinned ? 'pinned' : 'group';
+    // A chat can have up to three rows; its open menu and rename show on the one they came from.
+    const current = kind === rowKindOf(chat.id);
     return (
       <ChatRow
         key={chat.id}
@@ -1278,15 +1298,16 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         menuOpen={current && chatMenu?.chatId === chat.id}
         renaming={current && renamingChatId === chat.id}
         muted={muted}
-        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
+        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true, kind) : undefined}
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
         projectName={listed ? homeName(chat) : section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
         needsYou={listed}
+        pinnedCopy={kind === 'pinned'}
         onTick={queuedIds.has(chat.id) && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
         now={now}
         onOpenMenu={(position, source) => {
-          setMenuInList(listed);
+          setMenuRow(kind);
           openChatMenu(chat.id, position, source);
         }}
         onRename={(title) => void renameChat(chat, title)}
