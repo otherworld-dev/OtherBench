@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanonMessage, EngineMeta, Part } from '../src/types/messages.js';
-import { COMPACT_PREAMBLE, contextLineOf, contextPart, cutAtContextLine, isClearName, parseContextCommand } from '../src/domain/context-lines.js';
+import { COMPACT_PREAMBLE, commandNameOf, contextLineOf, contextPart, cutAtContextLine, isClearName, isCommandText, parseContextCommand } from '../src/domain/context-lines.js';
 
 let n = 0;
 function msg(id: string, role: 'user' | 'assistant', parts: Part[], extra: Partial<CanonMessage> = {}): CanonMessage {
@@ -33,6 +33,21 @@ describe('parseContextCommand', () => {
   });
   it('leaves everything else alone', () => {
     for (const t of ['/clearly', '/compactify', 'please /clear', '/newer', '/clear:x']) expect(parseContextCommand(t)).toBeNull();
+  });
+});
+
+describe('isCommandText', () => {
+  const review = { name: 'review', description: '', argumentHint: '', aliases: ['rv'] };
+  it('is /clear or /compact, or a listed command by name or alias in any case', () => {
+    for (const t of ['/clear', '/clear now', ' /compact focus', '/review', '/Review the diff', '/RV']) expect(isCommandText(t, [review])).toBe(true);
+  });
+  it('leaves other text alone, a leading path included', () => {
+    for (const t of ['/reviews', 'please /review', '/usr/bin is missing', 'review', '']) expect(isCommandText(t, [review])).toBe(false);
+    expect(isCommandText('/review', [])).toBe(false);
+  });
+  it('commandNameOf is the leading name, lower case', () => {
+    expect(commandNameOf('  /Review the diff')).toBe('review');
+    expect(commandNameOf('no command')).toBeNull();
   });
 });
 

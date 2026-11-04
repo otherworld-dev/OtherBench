@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { OWN_COMMANDS, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
 import { workspaceResolver } from '../workspace-view.js';
@@ -18,6 +19,19 @@ function withTimeout(list: Promise<CommandRow[]>, ms: number): Promise<CommandRo
     timer = setTimeout(() => reject(new Error(`No command list after ${ms} ms.`)), ms);
   });
   return Promise.race([list, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The commands chat `chatId`'s engine reports for `profile` (none for a
+ * profile that isn't Claude Code's). Rejects when it can't say within
+ * `COMMANDS_TIMEOUT_MS`.
+ */
+export async function engineCommands(container: Container, chatId: string, profile: ResolvedProfile): Promise<CommandRow[]> {
+  const chat = container.store.chats.get(chatId);
+  if (!chat || !container.engine.listCommands) return [];
+  const status = workspaceResolver(container)(chat.workspace);
+  const workspaceRoot = status.status === 'ok' ? status.root : null;
+  return withTimeout(container.engine.listCommands({ chatId, profile, workspaceRoot }), COMMANDS_TIMEOUT_MS);
 }
 
 /**
@@ -39,10 +53,7 @@ export function commandsRoutes(container: Container): Hono {
 
     const own = new Set(OWN_COMMANDS.map((row) => row.name));
     try {
-      const profile = await resolveProfile(container, profileId);
-      const status = workspaceResolver(container)(chat.workspace);
-      const workspaceRoot = status.status === 'ok' ? status.root : null;
-      const rows = container.engine.listCommands ? await withTimeout(container.engine.listCommands({ chatId, profile, workspaceRoot }), COMMANDS_TIMEOUT_MS) : [];
+      const rows = await engineCommands(container, chatId, await resolveProfile(container, profileId));
       return c.json({ commands: [...OWN_COMMANDS, ...rows.filter((row) => !own.has(row.name))] });
     } catch (err) {
       console.warn(`[otherbench-server] could not list chat ${chatId}'s commands:`, err instanceof Error ? err.message : err);
