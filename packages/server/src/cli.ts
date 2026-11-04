@@ -26,6 +26,7 @@ import {
 import { PasswordCommandError, runPasswordCommand } from './remote/password-command.js';
 import { parsePublicUrl } from './remote/public-url.js';
 import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
+import { PushService } from './push/service.js';
 import { expiryWarning, TlsFileWatcher } from './remote/tls.js';
 import { isServerOnlyEnvVar } from '@otherbench/core/domain/child-env.js';
 
@@ -401,6 +402,19 @@ export async function runServe(
     throw err;
   }
   const remote = signIn?.remote ?? null;
+  // Web Push for signed-in devices: only where remote access is on. Its VAPID key is made on first use and kept in the
+  // encrypted secret store.
+  const events = container.events;
+  const push =
+    remote && remote.publicOrigins[0]
+      ? new PushService({
+          store: container.store,
+          secrets: container.secrets,
+          subject: remote.publicOrigins[0],
+          isBusy: (chatId) => !!events && (events.runningTurns().some((t) => t.chatId === chatId) || events.backgroundChats().some((b) => b.chatId === chatId)),
+        })
+      : null;
+  const detachPush = push && events ? push.attach((fn) => events.subscribe(fn)) : null;
 
   const app = buildApp(container, {
     token: options.token,
@@ -409,6 +423,7 @@ export async function runServe(
     hostCheckPort: isLoopbackHost(options.host) || remote ? () => boundPort : undefined,
     oauthCallbackPort: () => boundPort,
     remote,
+    push,
     terminals: terminalsAllowed(mode, options.host),
   });
 
@@ -470,6 +485,7 @@ export async function runServe(
     closed = true;
     if (expiryTimer) clearInterval(expiryTimer);
     tlsWatcher?.stop();
+    detachPush?.();
     remote?.close();
     server.close();
     container.close();
