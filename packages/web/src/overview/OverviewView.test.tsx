@@ -233,13 +233,13 @@ describe('OverviewView tick-off', () => {
     }
   });
 
-  it('Tick off on a chat sets dealtWithAt; Archive sets archivedAt', () => {
+  it("Tick off on a chat asks the server to stamp dealtWithAt (never this device's clock); Archive sets archivedAt", () => {
     vi.spyOn(Date, 'now').mockReturnValue(1234);
     vi.mocked(api.chats.patch).mockResolvedValue({} as never);
     show(overview([tile('chats', { chats, notifications: null, deck: null })]));
     render(<OverviewView />);
     fireEvent.click(screen.getByRole('button', { name: 'Tick off One' }));
-    expect(api.chats.patch).toHaveBeenCalledWith('c1', { dealtWithAt: 1234 });
+    expect(api.chats.patch).toHaveBeenCalledWith('c1', { dealtWithAt: true });
     fireEvent.click(screen.getByRole('button', { name: 'Archive One' }));
     expect(api.chats.patch).toHaveBeenCalledWith('c1', { archivedAt: 1234 });
     expect(openChat).not.toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe('OverviewView tick-off', () => {
     expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Couldn't mark that done on GitHub.", tone: 'error' });
   });
 
-  it('Tick off older than… sends now minus the span after a confirm step, then says what it did', async () => {
+  it('Tick off older than… sends the span (the server works out the cut-off) after a confirm step, then says what it did', async () => {
     const now = 1_800_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
     vi.mocked(api.overview.tickOlder).mockResolvedValue({ chats: 12 });
@@ -287,11 +287,11 @@ describe('OverviewView tick-off', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     });
-    expect(api.overview.tickOlder).toHaveBeenCalledWith(now - 7 * 86_400_000);
+    expect(api.overview.tickOlder).toHaveBeenCalledWith(7 * 86_400_000);
     expect(screen.getByText('Ticked off 12 chats')).toBeInTheDocument();
   });
 
-  it('Everything sends now', async () => {
+  it('Everything sends a span of 0', async () => {
     const now = 1_800_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
     vi.mocked(api.overview.tickOlder).mockResolvedValue({ chats: 1 });
@@ -302,7 +302,7 @@ describe('OverviewView tick-off', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     });
-    expect(api.overview.tickOlder).toHaveBeenCalledWith(now);
+    expect(api.overview.tickOlder).toHaveBeenCalledWith(0);
     expect(screen.getByText('Ticked off 1 chat')).toBeInTheDocument();
   });
 });

@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@otherbench/core/domain/export.js';
 import { projectParentOf } from '@otherbench/core/domain/projects.js';
+import { tickOffAt } from '@otherbench/core/domain/overview.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
@@ -258,12 +259,14 @@ export function chatsRoutes(container: Container): Hono {
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
-    // Ticked off the Overview at this moment (or back on it): not chat activity, so updatedAt stays.
+    // Ticked off the Overview at this moment (or back on it): not chat activity, so updatedAt stays. The moment is
+    // this machine's (never the browser's, whose clock may be wrong, and the tick syncs to every paired machine), and
+    // never before the chat's reply, so the tick-off settles the reply it was made on.
     if (body.dealtWithAt !== undefined) {
-      if (body.dealtWithAt !== null && (typeof body.dealtWithAt !== 'number' || !Number.isFinite(body.dealtWithAt))) {
-        throw new HTTPException(400, { message: '"dealtWithAt" must be a finite number or null.' });
+      if (body.dealtWithAt !== null && body.dealtWithAt !== true) {
+        throw new HTTPException(400, { message: '"dealtWithAt" must be true (ticked off now) or null.' });
       }
-      patch.dealtWithAt = body.dealtWithAt;
+      patch.dealtWithAt = body.dealtWithAt === null ? null : tickOffAt(Date.now(), container.store.messages.heads(id)[0] ?? null);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
     if (body.planMode !== undefined) patch.planMode = optionalBoolean(body.planMode, 'planMode', false);

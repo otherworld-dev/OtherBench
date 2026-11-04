@@ -77,6 +77,14 @@ export function chatNeedsYou(
   return chat.dealtWithAt == null || chat.dealtWithAt < head.createdAt;
 }
 
+/**
+ * When a tick-off made at `now` (the server's clock, never a browser's) is stamped: now, but never before the reply
+ * it was made on, so it settles that reply even when the reply's own machine runs ahead of this one.
+ */
+export function tickOffAt(now: number, head: Pick<ChatHead, 'createdAt'> | null): number {
+  return Math.max(now, head?.createdAt ?? 0);
+}
+
 export interface OverviewInput {
   apps: App[]; chats: Chat[]; projects: { id: string; name: string }[];
   heads: ChatHead[]; waitingChatIds: ReadonlySet<string>; backgroundChatIds: ReadonlySet<string>;

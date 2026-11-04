@@ -130,23 +130,24 @@ describe('POST /api/overview/notifications/:id/done and /read', () => {
 });
 
 describe('POST /api/overview/tick-older', () => {
-  it('ticks what is older and returns the counts', async () => {
-    const before = Date.now() - 60_000;
-    const res = await send('POST', '/api/overview/tick-older', { before });
+  it("ticks what is older than the span by the server's clock, and returns the counts", async () => {
+    const t0 = Date.now();
+    const res = await send('POST', '/api/overview/tick-older', { olderThan: 60_000 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ chats: 2 });
-    expect(calls.older).toEqual([before]);
+    expect(calls.older).toHaveLength(1);
+    expect(calls.older[0]).toBeGreaterThanOrEqual(t0 - 60_000);
+    expect(calls.older[0]).toBeLessThanOrEqual(Date.now() - 60_000);
   });
 
-  it('clamps a future `before` to now', async () => {
+  it('olderThan 0 is everything up to now', async () => {
     const t0 = Date.now();
-    await send('POST', '/api/overview/tick-older', { before: t0 + 10 * 60_000 });
-    expect(calls.older).toHaveLength(1);
+    await send('POST', '/api/overview/tick-older', { olderThan: 0 });
     expect(calls.older[0]).toBeGreaterThanOrEqual(t0);
     expect(calls.older[0]).toBeLessThanOrEqual(Date.now());
   });
 
-  it.each([{}, { before: 'soon' }, { before: null }])('is 400 when the body is %j', async (body) => {
+  it.each([{}, { olderThan: 'soon' }, { olderThan: null }, { olderThan: -1 }, { before: 1_800_000_000_000 }])('is 400 when the body is %j: the browser never says when now is', async (body) => {
     const res = await send('POST', '/api/overview/tick-older', body);
     expect(res.status).toBe(400);
     expect(calls.older).toEqual([]);
@@ -160,7 +161,7 @@ describe('the peer listener', () => {
       const res = await api.request(path, {}, { peerNodeId: 'node-laptop' });
       expect(res.status, path).toBe(404);
     }
-    const post = await api.request('/overview/tick-older', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"before":1}' }, { peerNodeId: 'node-laptop' });
+    const post = await api.request('/overview/tick-older', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"olderThan":1}' }, { peerNodeId: 'node-laptop' });
     expect(post.status).toBe(404);
   });
 });
