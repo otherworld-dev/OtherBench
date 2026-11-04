@@ -14,12 +14,13 @@ function remPx(): number {
  * panel's width; double-click puts it back. `edge` is which side of the panel
  * it sits on: the sidebar's is on its right (dragging right widens it), Code
  * mode's right panel's is on its left (dragging left widens it). Drags and key
- * presses start from the width on screen, which the window share caps, so the
+ * presses start from the width on screen, which the window share (and for the
+ * Code panel, the room the sidebar and chat panes keep) caps, so the
  * edge moves straight away rather than after a dead zone. The pane Splitter
  * isn't reused because it works in shares of a split, not an absolute width.
  */
 export function PanelResizer({ width, edge, label }: { width: PanelWidth; edge: 'left' | 'right'; label: string }): JSX.Element {
-  const shown = (saved: number, px: number): number => Math.min(saved, (width.maxShare * window.innerWidth) / px);
+  const shown = (saved: number, px: number): number => Math.min(saved, width.shownMax(px));
   const now = shown(width.use(), remPx());
   const drag = useRef<{ startX: number; startWidth: number; px: number } | null>(null);
   // Moving the pointer towards the panel's outside widens it.

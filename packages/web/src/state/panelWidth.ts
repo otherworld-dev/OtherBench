@@ -4,7 +4,7 @@ import { useSyncExternalStore } from 'react';
  * A side panel's width in rem (so it follows the text size), remembered per
  * device in localStorage and handed to the layout as a CSS variable on the
  * document root, so a drag restyles one column instead of re-rendering the
- * app. The sidebar and Code mode's right panel each have one.
+ * app. The sidebar (sidebarWidth.ts) and Code mode's right panel (codePanelWidth.ts) each have one.
  */
 export interface PanelWidth {
   readonly min: number;
@@ -14,6 +14,11 @@ export interface PanelWidth {
   readonly defaultRem: number;
   /** `rem` clamped to the allowed range; anything that isn't a finite number is the default. */
   clamp(rem: number): number;
+  /**
+   * The most the panel can show right now, in rem at `remPx` pixels each: its share of the window, less what
+   * the rest of the layout keeps (`reservePx`). The layout's CSS applies the same cap; this is for drags.
+   */
+  shownMax(remPx: number): number;
   /** The width in rem right now. */
   get(): number;
   /** Sets the width (clamped). `save: false` is for live dragging; the drag's end saves. */
@@ -26,7 +31,16 @@ export interface PanelWidth {
   resetForTests(): void;
 }
 
-export function panelWidth(o: { key: string; cssVar: string; defaultRem: number; min: number; max: number; maxShare: number }): PanelWidth {
+export function panelWidth(o: {
+  key: string;
+  cssVar: string;
+  defaultRem: number;
+  min: number;
+  max: number;
+  maxShare: number;
+  /** Pixels of the window the rest of the layout keeps, at `remPx` pixels a rem. None if omitted. */
+  reservePx?: (remPx: number) => number;
+}): PanelWidth {
   let width: number | null = null;
   const listeners = new Set<() => void>();
   const clamp = (rem: number): number => (Number.isFinite(rem) ? Math.min(o.max, Math.max(o.min, rem)) : o.defaultRem);
@@ -56,6 +70,10 @@ export function panelWidth(o: { key: string; cssVar: string; defaultRem: number;
     maxShare: o.maxShare,
     defaultRem: o.defaultRem,
     clamp,
+    shownMax(remPx) {
+      const room = window.innerWidth - (o.reservePx?.(remPx) ?? 0);
+      return Math.max(0, Math.min(o.maxShare * window.innerWidth, room) / remPx);
+    },
     get,
     set(rem, save = true) {
       const next = clamp(rem);
@@ -79,9 +97,3 @@ export function panelWidth(o: { key: string; cssVar: string; defaultRem: number;
     },
   };
 }
-
-/** localStorage key: Code mode's right panel width in rem (spec 2026-10-21-code-terminal-design). Per device. */
-export const CODE_PANEL_WIDTH_STORAGE_KEY = 'otherbench.codePanelWidth';
-
-/** Code mode's right panel (Issues, Files, Chat, Terminal): 24rem to start, 18rem at least, at most 70% of the window. */
-export const codePanelWidth = panelWidth({ key: CODE_PANEL_WIDTH_STORAGE_KEY, cssVar: '--code-panel-w', defaultRem: 24, min: 18, max: 120, maxShare: 0.7 });

@@ -1,11 +1,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { codePanelWidth, CODE_PANEL_WIDTH_STORAGE_KEY } from '../state/panelWidth.js';
+import { codePanelWidth, CODE_PANEL_WIDTH_STORAGE_KEY } from '../state/codePanelWidth.js';
+import { resetSidebarWidthForTests } from '../state/sidebarWidth.js';
 import { PanelResizer } from './PanelResizer.js';
 
 beforeEach(() => {
   window.localStorage.clear();
   codePanelWidth.resetForTests();
+  resetSidebarWidthForTests();
   document.documentElement.style.fontSize = '16px';
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
 });
@@ -51,11 +53,22 @@ describe('PanelResizer on the left edge (the Code panel)', () => {
   });
 
   it('works from the width on screen when the 70% cap applies', () => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 }); // cap: 560px = 35rem
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 }); // cap: 1400px = 87.5rem
     codePanelWidth.set(100);
     render(<PanelResizer width={codePanelWidth} edge="left" label="Resize code panel" />);
-    expect(handle()).toHaveAttribute('aria-valuenow', '35');
+    expect(handle()).toHaveAttribute('aria-valuenow', '87.5');
     fireEvent.keyDown(handle(), { key: 'ArrowRight' });
-    expect(codePanelWidth.get()).toBe(34);
+    expect(codePanelWidth.get()).toBe(86.5);
+  });
+
+  it('works from the width on screen when the sidebar and the chat area cap it', () => {
+    // 1200 - 260px sidebar - 320px chat area = 620px = 38.75rem, under 70% (840px).
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1200 });
+    codePanelWidth.set(100);
+    render(<PanelResizer width={codePanelWidth} edge="left" label="Resize code panel" />);
+    expect(handle()).toHaveAttribute('aria-valuenow', '38.75');
+    fireEvent.pointerDown(handle(), { button: 0, clientX: 500, pointerId: 1 });
+    fireEvent.pointerMove(handle(), { clientX: 516, pointerId: 1 }); // +16px = -1rem
+    expect(codePanelWidth.get()).toBe(37.75);
   });
 });
