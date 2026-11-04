@@ -236,7 +236,7 @@ describe('resolveAttachmentsRoots', () => {
   // how the reported 28 stray `otherbench-attachments-*` directories accumulated
   // in the first place).
   const createdTempRoots: string[] = [];
-  function trackMemoryRoots(roots: { writeRoot: string; isTemporary: boolean }): typeof roots {
+  function trackMemoryRoots<T extends { writeRoot: string; isTemporary: boolean }>(roots: T): T {
     if (roots.isTemporary) createdTempRoots.push(roots.writeRoot);
     return roots;
   }
