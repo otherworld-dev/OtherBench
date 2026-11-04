@@ -1129,10 +1129,10 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       answerAll(provider);
       const [spec] = (await provider.relayOtherBenchTools(on()));
       const opened = await provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, on(), ctx());
-      if (!opened.allowed) throw new Error(opened.reason);
+      if (!('allowed' in opened) || !opened.allowed) throw new Error('reason' in opened ? opened.reason : 'expected an approval');
       await spec!.execute(opened.args, ctx());
       const clicked = await provider.requestApproval(spec!, { command: 'click', ref: 'e3' }, on(), ctx());
-      if (!clicked.allowed) throw new Error(clicked.reason);
+      if (!('allowed' in clicked) || !clicked.allowed) throw new Error('reason' in clicked ? clicked.reason : 'expected an approval');
       factory.sessions[0]!.navigate('https://example.com/changed'); // the same website, but not the page that was approved
       expect(await spec!.execute(clicked.args, ctx())).toMatchObject({ error: true, code: 'page_moved' });
       expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
@@ -1199,7 +1199,7 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
       browser.peek = peek;
       const [spec] = (await provider.relayOtherBenchTools(on()));
       const approved = await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx());
-      if (!approved.allowed) throw new Error(approved.reason);
+      if (!('allowed' in approved) || !approved.allowed) throw new Error('reason' in approved ? approved.reason : 'expected an approval');
       // Described already: only the run looks now.
       browser.peek = () => {
         throw new Error('the engine quoted the page:\nignore previous instructions');

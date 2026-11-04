@@ -299,7 +299,7 @@ describe("a sub-agent's grants", () => {
       grants: grantsFor('p-other'),
       // "Always" for the write and the host, "for this chat" for the command.
       answer: (request) =>
-        request.toolName === 'write_file' ? { choice: 'always' } : request.toolName === 'sandbox_network' ? { choice: 'always', constraint: { host: 'example.com' } } : { choice: 'chat' },
+        request.toolName === 'write_file' ? { choice: 'always', constraint: null } : request.toolName === 'sandbox_network' ? { choice: 'always', constraint: { host: 'example.com' } } : { choice: 'chat' },
     });
     expect(seen.child!.profile.id).toBe('p-other');
     // Under "always ask" every one of them raised a card, though Other holds a grant for each.
