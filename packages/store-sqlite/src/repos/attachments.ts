@@ -3,6 +3,7 @@ import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
 import type { Attachment, AttachmentRepo } from '@otherbench/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
+import { selfIdOf } from './nodes.js';
 
 const mapping: CrudMapping<Attachment> = {
   table: 'attachment',
@@ -27,7 +28,8 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
   /** A synced table: `clock` stamps its changes (migration 013). */
   constructor(
     private readonly db: DatabaseSync,
-    clock: SyncClock = clockOf(db)
+    clock: SyncClock = clockOf(db),
+    private readonly selfId: () => string = selfIdOf(db)
   ) {
     this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
@@ -90,5 +92,23 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
   referencedShas(): Set<string> {
     const rows = this.db.prepare('SELECT DISTINCT sha256 FROM attachment').all() as { sha256: string }[];
     return new Set(rows.map((r) => r.sha256));
+  }
+
+  /**
+   * Read from the row's own sync stamp (migration 013), so no new column:
+   * `hlc` is `<ms:13>-<counter:4>-<nodeId>` (core's `encodeHlc`), rewritten
+   * on every insert and update, so its time is the row's last write and its
+   * node the machine that made it. A row synced in keeps the stamp of the
+   * machine it came from and is never listed (unsent rows never sync, so in
+   * practice every unsent row is this machine's own). The stamp's time can
+   * only run ahead of the real write (an HLC never goes backwards), which
+   * makes a row look younger, never older. A row with no stamp is skipped.
+   */
+  abandoned(writtenBefore: number): Attachment[] {
+    return this.crud.listWhere(
+      "message_id IS NULL AND hlc != '' AND substr(hlc, 20) = ? AND CAST(substr(hlc, 1, 13) AS INTEGER) < ? ORDER BY id",
+      this.selfId(),
+      writtenBefore
+    );
   }
 }

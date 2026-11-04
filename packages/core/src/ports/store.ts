@@ -585,6 +585,15 @@ export interface AttachmentRepo {
    * see `@otherbench/store-sqlite/blob-gc.js`'s `sweepOrphanedBlobs`.
    */
   referencedShas(): Set<string>;
+  /**
+   * Unsent attachments (`messageId === null`) last written by THIS machine
+   * before `writtenBefore` (ms since the epoch): the candidates for the
+   * abandoned-attachment sweep (`@otherbench/store-sqlite/blob-gc.js`'s
+   * `sweepAbandonedAttachments`). Age is the row's last write, not its
+   * upload, so any change to it starts the clock again. A row last written
+   * by another machine is never listed.
+   */
+  abandoned(writtenBefore: number): Attachment[];
 }
 
 /**

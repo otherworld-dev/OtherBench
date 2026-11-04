@@ -1052,8 +1052,12 @@ class InMemorySettingsRepo implements SettingsRepo {
 
 class InMemoryAttachmentRepo implements AttachmentRepo {
   private readonly repo = new InMemoryCrudRepo<Attachment>();
+  /** When each row was last written, for `abandoned` (every row here is this machine's). */
+  private readonly writtenAt = new Map<string, number>();
   create(a: Attachment): Attachment {
-    return this.repo.create(a);
+    const created = this.repo.create(a);
+    this.writtenAt.set(a.id, Date.now());
+    return created;
   }
   get(id: string): Attachment | null {
     return this.repo.get(id);
@@ -1067,16 +1071,22 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
     if (current && patch.messageId !== undefined && patch.messageId !== current.messageId && current.messageId !== null) {
       throw new Error(`Attachment "${id}" was already sent with message "${current.messageId}".`);
     }
-    return this.repo.update(id, patch);
+    const updated = this.repo.update(id, patch);
+    this.writtenAt.set(id, Date.now());
+    return updated;
   }
   delete(id: string): void {
     this.repo.delete(id);
+    this.writtenAt.delete(id);
   }
   isReferenced(sha256: string): boolean {
     return this.repo.list().some((a) => a.sha256 === sha256);
   }
   referencedShas(): Set<string> {
     return new Set(this.repo.list().map((a) => a.sha256));
+  }
+  abandoned(writtenBefore: number): Attachment[] {
+    return this.repo.list().filter((a) => a.messageId === null && (this.writtenAt.get(a.id) ?? Infinity) < writtenBefore);
   }
 }
 

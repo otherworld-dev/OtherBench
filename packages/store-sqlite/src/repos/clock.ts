@@ -16,9 +16,10 @@ export interface SyncClock {
   markDelete(hlc?: string): void;
 }
 
-export function clockOf(db: DatabaseSync, selfId: () => string = selfIdOf(db)): SyncClock {
+/** `now`: the wall clock the stamps are read from (tests pass a fixed one). */
+export function clockOf(db: DatabaseSync, selfId: () => string = selfIdOf(db), now: () => number = Date.now): SyncClock {
   let hlc: Hlc | null = null;
-  const clock = (): Hlc => (hlc ??= new Hlc(selfId()));
+  const clock = (): Hlc => (hlc ??= new Hlc(selfId(), now));
   const setDelete = db.prepare("UPDATE sync_state SET value = ? WHERE key = 'delete_hlc'");
   return {
     stamp: () => clock().tick(),
