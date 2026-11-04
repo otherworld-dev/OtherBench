@@ -5,6 +5,7 @@ import {
   formatInZone,
   isValidTimeZone,
   nextRunAt,
+  nextRuns,
   parseRule,
   runChatTitle,
   scheduledPromptText,
@@ -90,18 +91,102 @@ describe('nextRunAt', () => {
   });
 });
 
+describe('nextRunAt for every N hours', () => {
+  const runs = (rule: ScheduleRule, tz: string, after: string, count: number): string[] => nextRuns(rule, tz, at(after), count).map(iso);
+
+  it('steps from the start time and starts again from it each day', () => {
+    const rule: ScheduleRule = { cadence: 'hourly', time: '08:00', everyHours: 3 };
+    expect(runs(rule, 'UTC', '2026-10-12T19:30:00Z', 3)).toEqual(['2026-10-12T20:00:00.000Z', '2026-10-12T23:00:00.000Z', '2026-10-13T08:00:00.000Z']);
+    // 22:00 + 5 h is the next day, so it runs once a day.
+    expect(runs({ cadence: 'hourly', time: '22:00', everyHours: 5 }, 'UTC', '2026-10-12T00:00:00Z', 2)).toEqual(['2026-10-12T22:00:00.000Z', '2026-10-13T22:00:00.000Z']);
+  });
+
+  it('keeps to its weekdays', () => {
+    const rule: ScheduleRule = { cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [1, 2, 3, 4, 5] };
+    // Friday 16 October 20:30: the day's last slot has gone, so Monday 08:00.
+    expect(runs(rule, 'UTC', '2026-10-16T20:30:00Z', 2)).toEqual(['2026-10-19T08:00:00.000Z', '2026-10-19T12:00:00.000Z']);
+  });
+
+  it('runs a slot in the spring gap once, moved forward, as a daily schedule does', () => {
+    // London, 29 March 2026: 01:30 doesn't exist and becomes 02:30 BST, the same instant as the 02:30 slot.
+    const rule: ScheduleRule = { cadence: 'hourly', time: '00:30', everyHours: 1 };
+    expect(runs(rule, LONDON, '2026-03-29T00:00:00Z', 3)).toEqual(['2026-03-29T00:30:00.000Z', '2026-03-29T01:30:00.000Z', '2026-03-29T02:30:00.000Z']);
+  });
+
+  it('runs a slot in the autumn fold once, at the first time, as a daily schedule does', () => {
+    // London, 25 October 2026: 01:30 happens twice; the run is at 01:30 BST and the next slot is 02:30 GMT.
+    const rule: ScheduleRule = { cadence: 'hourly', time: '00:30', everyHours: 1 };
+    expect(runs(rule, LONDON, '2026-10-24T23:00:00Z', 3)).toEqual(['2026-10-24T23:30:00.000Z', '2026-10-25T00:30:00.000Z', '2026-10-25T02:30:00.000Z']);
+  });
+});
+
+describe('nextRunAt for a cron rule', () => {
+  const cron = (text: string): ScheduleRule => ({ cadence: 'cron', cron: text });
+  const runs = (text: string, tz: string, after: string, count: number): string[] => nextRuns(cron(text), tz, at(after), count).map(iso);
+
+  it('runs weekday mornings in the zone, across the October clock change', () => {
+    expect(runs('0 9 * * 1-5', LONDON, '2026-10-22T12:00:00Z', 3)).toEqual(['2026-10-23T08:00:00.000Z', '2026-10-26T09:00:00.000Z', '2026-10-27T09:00:00.000Z']);
+  });
+
+  it('runs either the date or the weekday when both are restricted', () => {
+    // 1 October 2026 is a Thursday.
+    expect(runs('0 9 1 * 1', 'UTC', '2026-10-01T00:00:00Z', 3)).toEqual(['2026-10-01T09:00:00.000Z', '2026-10-05T09:00:00.000Z', '2026-10-12T09:00:00.000Z']);
+  });
+
+  it('skips months without the day, and finds 29 February years away', () => {
+    expect(runs('0 9 31 * *', LONDON, '2026-02-01T00:00:00Z', 2)).toEqual(['2026-03-31T08:00:00.000Z', '2026-05-31T08:00:00.000Z']);
+    expect(runs('0 0 29 2 *', 'UTC', '2026-01-01T00:00:00Z', 1)).toEqual(['2028-02-29T00:00:00.000Z']);
+    expect(runs('0 0 29 2 *', 'UTC', '2096-03-01T00:00:00Z', 1)).toEqual(['2104-02-29T00:00:00.000Z']);
+    expect(runs('0 12 28-31 * *', 'UTC', '2026-02-27T00:00:00Z', 3)).toEqual(['2026-02-28T12:00:00.000Z', '2026-03-28T12:00:00.000Z', '2026-03-29T12:00:00.000Z']);
+  });
+
+  it('runs a slot in the spring gap once, moved forward, as a daily schedule does', () => {
+    expect(runs('30 1 * * *', LONDON, '2026-03-28T12:00:00Z', 2)).toEqual(['2026-03-29T01:30:00.000Z', '2026-03-30T00:30:00.000Z']);
+    // 01:00 and 02:00 BST are one instant, as are 01:30 and 02:30: four slots, two runs.
+    expect(runs('*/30 1-2 29 3 *', LONDON, '2026-03-29T00:00:00Z', 3)).toEqual(['2026-03-29T01:00:00.000Z', '2026-03-29T01:30:00.000Z', '2027-03-29T00:00:00.000Z']);
+  });
+
+  it('runs a slot in the autumn fold once, at the first time, as a daily schedule does', () => {
+    expect(runs('30 1 * * *', LONDON, '2026-10-24T12:00:00Z', 2)).toEqual(['2026-10-25T00:30:00.000Z', '2026-10-26T01:30:00.000Z']);
+    expect(runs('30 1 * * *', 'America/New_York', '2026-10-31T12:00:00Z', 2)).toEqual(['2026-11-01T05:30:00.000Z', '2026-11-02T06:30:00.000Z']);
+  });
+
+  it('runs every minute, and the shortcuts', () => {
+    expect(runs('* * * * *', LONDON, '2026-10-12T08:00:30Z', 3)).toEqual(['2026-10-12T08:01:00.000Z', '2026-10-12T08:02:00.000Z', '2026-10-12T08:03:00.000Z']);
+    expect(runs('* * * * *', LONDON, '2026-03-29T00:58:00Z', 3)).toEqual(['2026-03-29T00:59:00.000Z', '2026-03-29T01:00:00.000Z', '2026-03-29T01:01:00.000Z']);
+    expect(runs('@hourly', 'UTC', '2026-10-12T08:00:00Z', 2)).toEqual(['2026-10-12T09:00:00.000Z', '2026-10-12T10:00:00.000Z']);
+    expect(runs('@weekly', 'UTC', '2026-10-12T08:00:00Z', 1)).toEqual(['2026-10-18T00:00:00.000Z']);
+  });
+});
+
 describe('parseRule', () => {
   it('accepts each cadence and sorts and deduplicates weekdays', () => {
     expect(parseRule({ cadence: 'daily', time: '00:00' })).toEqual({ cadence: 'daily', time: '00:00' });
     expect(parseRule({ cadence: 'weekly', time: '09:00', weekdays: [5, 1, 1, 3] })).toEqual({ cadence: 'weekly', time: '09:00', weekdays: [1, 3, 5] });
     expect(parseRule({ cadence: 'monthly', time: '23:59', monthDay: 31 })).toEqual({ cadence: 'monthly', time: '23:59', monthDay: 31 });
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 3 })).toEqual({ cadence: 'hourly', time: '08:00', everyHours: 3 });
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 23, weekdays: [5, 1, 1] })).toEqual({ cadence: 'hourly', time: '08:00', everyHours: 23, weekdays: [1, 5] });
+    expect(parseRule({ cadence: 'cron', cron: '  0  9 * *   1-5 ' })).toEqual({ cadence: 'cron', cron: '0 9 * * 1-5' });
+    expect(parseRule({ cadence: 'cron', cron: '@Daily', time: 'ignored' })).toEqual({ cadence: 'cron', cron: '@daily' });
+  });
+
+  it('names the bad field of the hourly and cron rules', () => {
+    expect(parseRule({ cadence: 'hourly', time: '08:00' })).toBe('"rule.everyHours" must be a whole number from 1 to 23.');
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 24 })).toBe('"rule.everyHours" must be a whole number from 1 to 23.');
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 0 })).toBe('"rule.everyHours" must be a whole number from 1 to 23.');
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 2.5 })).toBe('"rule.everyHours" must be a whole number from 1 to 23.');
+    expect(parseRule({ cadence: 'hourly', time: '08:00', everyHours: 2, weekdays: [] })).toBe('"rule.weekdays" must be a non-empty list of days, 0 (Sunday) to 6 (Saturday).');
+    expect(parseRule({ cadence: 'hourly', time: '8', everyHours: 2 })).toBe('"rule.time" must be HH:MM, from 00:00 to 23:59.');
+    expect(parseRule({ cadence: 'cron' })).toBe('"rule.cron" must be a cron rule, such as "0 9 * * 1-5".');
+    expect(parseRule({ cadence: 'cron', cron: '0 9 * *' })).toBe('"rule.cron": A cron rule has five fields (minute, hour, day of month, month, day of week); this has 4.');
+    expect(parseRule({ cadence: 'cron', cron: '0 0 30 2 *' })).toBe('"rule.cron": It never runs: none of those months has any of those days.');
   });
 
   it('names the bad field', () => {
     expect(parseRule(null)).toBe('"rule" must be an object.');
     expect(parseRule({ cadence: 'daily', time: '24:00' })).toBe('"rule.time" must be HH:MM, from 00:00 to 23:59.');
     expect(parseRule({ cadence: 'daily', time: '9:00' })).toBe('"rule.time" must be HH:MM, from 00:00 to 23:59.');
-    expect(parseRule({ cadence: 'hourly', time: '09:00' })).toBe('"rule.cadence" must be "daily", "weekly" or "monthly".');
+    expect(parseRule({ cadence: 'yearly', time: '09:00' })).toBe('"rule.cadence" must be "daily", "weekly", "monthly", "hourly" or "cron".');
     expect(parseRule({ cadence: 'weekly', time: '09:00', weekdays: [] })).toBe('"rule.weekdays" must be a non-empty list of days, 0 (Sunday) to 6 (Saturday).');
     expect(parseRule({ cadence: 'weekly', time: '09:00', weekdays: [7] })).toBe('"rule.weekdays" must be a non-empty list of days, 0 (Sunday) to 6 (Saturday).');
     expect(parseRule({ cadence: 'monthly', time: '09:00', monthDay: 0 })).toBe('"rule.monthDay" must be a whole number from 1 to 31.');
@@ -128,6 +213,12 @@ describe('describeRule', () => {
     expect(describeRule({ cadence: 'monthly', time: '09:00', monthDay: 1 })).toBe('Monthly on the 1st at 09:00');
     expect(describeRule({ cadence: 'monthly', time: '09:00', monthDay: 22 })).toBe('Monthly on the 22nd at 09:00');
     expect(describeRule({ cadence: 'monthly', time: '09:00', monthDay: 31 })).toBe("Monthly on the 31st (or the month's last day) at 09:00");
+    expect(describeRule({ cadence: 'hourly', time: '08:00', everyHours: 3 })).toBe('Every 3 hours from 08:00 to 23:00');
+    expect(describeRule({ cadence: 'hourly', time: '09:30', everyHours: 1, weekdays: [1, 2, 3, 4, 5] })).toBe('Every hour from 09:30 to 23:30 on weekdays');
+    expect(describeRule({ cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [1, 3] })).toBe('Every 4 hours from 08:00 to 20:00 on Mon and Wed');
+    expect(describeRule({ cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [0, 1, 2, 3, 4, 5, 6] })).toBe('Every 4 hours from 08:00 to 20:00');
+    expect(describeRule({ cadence: 'hourly', time: '22:00', everyHours: 5 })).toBe('Every 5 hours from 22:00, once a day');
+    expect(describeRule({ cadence: 'cron', cron: '0 9 * * 1-5' })).toBe('Cron rule 0 9 * * 1-5');
   });
 });
 
