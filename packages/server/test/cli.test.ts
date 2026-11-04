@@ -283,6 +283,26 @@ describe('runServe desktop mode', () => {
     expect((await app.request('/api/computer/status', { headers: { Authorization: 'Bearer tok' } })).status).toBe(200);
   });
 
+  it('deletes OTHERBENCH_SECRETS_PASSPHRASE from the environment once read, and hands it to the container instead', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    const env: NodeJS.ProcessEnv = { OTHERBENCH_SECRETS_PASSPHRASE: 'pass', PATH: '/bin' };
+
+    await runServe(['--port', '0'], { ...deps, ...io }, env);
+
+    expect(env).toEqual({ PATH: '/bin' });
+    expect(deps.createContainer.mock.calls[0]![0]).toMatchObject({ secretsPassphrase: 'pass' });
+  });
+
+  it('passes no secrets passphrase to the container when none is set', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+
+    await runServe(['--port', '0'], { ...deps, ...io }, { PATH: '/bin' });
+
+    expect(deps.createContainer.mock.calls[0]![0]).toMatchObject({ secretsPassphrase: null });
+  });
+
   it('passes the env token, the CORS origins and a loopback Host check through to createApp', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();

@@ -232,6 +232,8 @@ export function withoutOwnPorts(ports: readonly number[], own: readonly (number 
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
+  /** `OTHERBENCH_SECRETS_PASSPHRASE` as cli.ts read it before scrubbing the environment; unset or null uses the key file. */
+  secretsPassphrase?: string | null;
   /** The port OtherBench's API listens on, when known (0 = any free port): never one the model's browser may reach. */
   apiPort?: number;
   /** The peer listener's port (default 4748; 0 = any free port). */
@@ -277,7 +279,9 @@ async function pathExists(path: string): Promise<boolean> {
  * derives its AES-256-GCM key from.
  *
  * `OTHERBENCH_SECRETS_PASSPHRASE` wins if set -- an operator or the desktop shell
- * can supply and manage it explicitly. Otherwise a random 256-bit passphrase
+ * can supply and manage it explicitly. cli.ts reads it and deletes it from the
+ * environment before anything is started (core/domain/child-env.ts), so it
+ * arrives here as `given`, never from `process.env`. Otherwise a random 256-bit passphrase
  * is generated once and persisted next to the secrets file
  * (`<secretsPath>.key`, mode 0600 *on POSIX*; Node's `mode` option is a
  * documented no-op on Windows, whose ACL model `fs.chmod`/`fs.writeFile`'s
@@ -302,9 +306,8 @@ async function pathExists(path: string): Promise<boolean> {
  * backup/copy leakage where the key file is left behind by accident; it is
  * not a defense against local filesystem access.
  */
-export async function resolveSecretsPassphrase(secretsPath: string): Promise<string> {
-  const envPassphrase = process.env['OTHERBENCH_SECRETS_PASSPHRASE'];
-  if (envPassphrase) return envPassphrase;
+export async function resolveSecretsPassphrase(secretsPath: string, given?: string | null): Promise<string> {
+  if (given) return given;
 
   const keyPath = `${secretsPath}.key`;
   try {
@@ -399,7 +402,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     );
   }
 
-  const passphrase = await resolveSecretsPassphrase(options.secretsPath);
+  const passphrase = await resolveSecretsPassphrase(options.secretsPath, options.secretsPassphrase);
   const secrets = createSecretStore(options.secretsPath, passphrase);
 
   // Per-database attachment roots (task 32 fix round 1, Critical #2):

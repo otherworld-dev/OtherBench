@@ -80,6 +80,8 @@ export interface ServeOptions {
   host: string;
   dbPath: string;
   token: string | null;
+  /** `OTHERBENCH_SECRETS_PASSPHRASE`, read here so the environment can drop it before anything is started. */
+  secretsPassphrase: string | null;
   /** Desktop handshake: print `{"port":N}` as the only stdout line, exit when stdin closes. */
   announce: boolean;
   /**
@@ -154,6 +156,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     host: typeof values['host'] === 'string' ? values['host'] : DEFAULT_HOST,
     dbPath,
     token: typeof values['token'] === 'string' ? values['token'] : envToken ? envToken : null,
+    secretsPassphrase: env['OTHERBENCH_SECRETS_PASSPHRASE'] || null,
     announce: values['announce'] === true,
     desktopRpc: values['desktop-rpc'] === true,
     corsOrigins: Array.isArray(corsOrigins) ? corsOrigins.filter((o): o is string => typeof o === 'string') : [],
@@ -279,6 +282,7 @@ export interface ServeDeps {
   createContainer: (opts: {
     dbPath: string;
     secretsPath: string;
+    secretsPassphrase?: string | null;
     apiPort?: number;
     peerPort?: number;
     peerHosts?: string[];
@@ -353,9 +357,10 @@ export async function runServe(
 
   const options = parseServeArgs(argv, env);
   adoptForDefault(options.dbPath, adopt);
-  // The token is in `options` now. Nothing this server starts (a shell command, Claude Code, an MCP server, the
-  // sandbox's wsl.exe, the model's browser, a worker) may inherit it: on the desktop server it is the real barrier
-  // against anything else on the machine driving the API. Every spawn also leaves it out (core/domain/child-env.ts).
+  // The token and the secrets passphrase are in `options` now. Nothing this server starts (a shell command, Claude
+  // Code, an MCP server, the sandbox's wsl.exe, the model's browser, a worker) may inherit them: on the desktop server
+  // the token is the real barrier against anything else on the machine driving the API, and the passphrase unlocks
+  // every stored API key. Every spawn also leaves them out (core/domain/child-env.ts).
   for (const name of Object.keys(env)) if (isServerOnlyEnvVar(name)) delete env[name];
   const mode = assertServeSecurity(options);
   const secretsPath = defaultSecretsPath(options.dbPath);
@@ -380,6 +385,7 @@ export async function runServe(
   const container = await buildContainer({
     dbPath: options.dbPath,
     secretsPath,
+    secretsPassphrase: options.secretsPassphrase,
     apiPort: options.port,
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
