@@ -1,18 +1,22 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
-  return { ...actual, api: { auth: { status: vi.fn(), login: vi.fn(), logout: vi.fn(), logoutAll: vi.fn(), changePassword: vi.fn() } } };
+  return { ...actual, api: { auth: { status: vi.fn(), login: vi.fn(), logout: vi.fn(), logoutAll: vi.fn(), changePassword: vi.fn(), sessions: vi.fn(), endSession: vi.fn() } } };
 });
 
-import { api } from '../../state/api.js';
+import { api, ApiError, type SignedInDevice } from '../../state/api.js';
 import { useAuthStore } from '../../state/auth.js';
 import { RemoteAccessPanel } from './RemoteAccessPanel.js';
 
 const FP = 'AB:CD:EF';
 
+const PHONE: SignedInDevice = { id: 'p1', deviceLabel: 'Chrome on Android', address: '192.0.2.10', createdAt: Date.UTC(2026, 9, 12, 9, 0), lastSeenAt: Date.UTC(2026, 9, 13, 7, 30), expiresAt: Date.UTC(2026, 10, 11), remember: true, current: false };
+const LAPTOP: SignedInDevice = { id: 'l1', deviceLabel: 'Firefox on Windows', address: '192.0.2.11', createdAt: Date.UTC(2026, 9, 12, 20, 0), lastSeenAt: Date.UTC(2026, 9, 13, 7, 59), expiresAt: Date.UTC(2026, 9, 13, 8, 0), remember: false, current: true };
+
 beforeEach(() => {
+  vi.mocked(api.auth.sessions).mockResolvedValue({ sessions: [LAPTOP, PHONE] });
   useAuthStore.setState({
     ...useAuthStore.getInitialState(),
     status: 'ready',
@@ -59,5 +63,48 @@ describe('RemoteAccessPanel', () => {
 
     await vi.waitFor(() => expect(useAuthStore.getState().status).toBe('signed-out'));
     expect(api.auth.logoutAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists the signed-in devices, marking this one', async () => {
+    render(<RemoteAccessPanel />);
+
+    const list = await screen.findByRole('list', { name: 'Signed-in devices' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Firefox on Windows');
+    expect(rows[0]).toHaveTextContent('This device');
+    expect(rows[0]).toHaveTextContent('192.0.2.11');
+    expect(rows[1]).toHaveTextContent('Chrome on Android');
+    expect(rows[1]).not.toHaveTextContent('This device');
+    expect(rows[1]).toHaveTextContent(/Signed in .* · Last seen /);
+  });
+
+  it('signs another device out and lists again', async () => {
+    vi.mocked(api.auth.endSession).mockResolvedValueOnce(undefined);
+    render(<RemoteAccessPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out Chrome on Android' }));
+
+    await vi.waitFor(() => expect(api.auth.sessions).toHaveBeenCalledTimes(2));
+    expect(api.auth.endSession).toHaveBeenCalledWith('p1');
+    expect(useAuthStore.getState().status).toBe('ready');
+  });
+
+  it('takes "already signed out" as done', async () => {
+    vi.mocked(api.auth.endSession).mockRejectedValueOnce(new ApiError(404, 'That device is already signed out.'));
+    render(<RemoteAccessPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out Chrome on Android' }));
+
+    await vi.waitFor(() => expect(api.auth.sessions).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it("signs this device out with the ordinary Sign out", async () => {
+    vi.mocked(api.auth.logout).mockResolvedValueOnce(undefined);
+    render(<RemoteAccessPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out Firefox on Windows (this device)' }));
+
+    await vi.waitFor(() => expect(useAuthStore.getState().status).toBe('signed-out'));
+    expect(api.auth.logout).toHaveBeenCalledTimes(1);
+    expect(api.auth.endSession).not.toHaveBeenCalled();
   });
 });
