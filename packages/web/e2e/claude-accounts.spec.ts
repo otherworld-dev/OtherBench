@@ -89,7 +89,8 @@ test('add an account, pin a chat to it, and follow a switch toast', async ({ pag
 
   // The thread is tinted and the header badge shows.
   await expect(thread).toHaveAttribute('data-account', 'spare');
-  await expect(thread.getByLabel('Claude account')).toBeVisible();
+  // The header's badge, not the composer's picker of the same name.
+  await expect(thread.getByRole('region', { name: 'Conversation' }).getByLabel('Claude account')).toHaveText('Spare');
   await expect(section.getByLabel('Switch automatically')).not.toBeChecked();
 
   // A forged switch event for the other chat toasts, and the toast opens that chat.
