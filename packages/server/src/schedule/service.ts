@@ -182,7 +182,11 @@ export class ScheduleService {
     const schedule = this.store.schedules.get(id);
     if (!schedule) throw new Error(`Schedule "${id}" not found.`);
     if (this.isRunning(id)) throw new ScheduleBusyError('running', 'This schedule is already running. Wait for it to finish, or stop it.');
-    if (schedule.target.kind === 'chat' && this.chatInUse(schedule.target.chatId)) {
+    const inUse = schedule.target.kind === 'chat' ? this.chatInUse(schedule.target.chatId) : null;
+    if (inUse === 'notes') {
+      throw new ScheduleBusyError('busy', 'Messages you sent in this chat are still waiting to go out. Try again when they have.');
+    }
+    if (inUse === 'reply') {
       throw new ScheduleBusyError('busy', 'A reply is being written in this chat. Try again when it has finished.');
     }
     if (this.runningCount() >= this.limits.maxConcurrent) {
@@ -232,11 +236,15 @@ export class ScheduleService {
    * last matters: `turn-started` (what `isChatBusy` sees) only fires once a
    * run's `startTurn` has resolved, so two schedules due together on one chat
    * would otherwise both start off the same parent.
+   *
+   * Says which: `notes` only when no reply is on its way, so Run now can
+   * say what it is really waiting for. Null when the chat is free.
    */
-  private chatInUse(chatId: string): boolean {
-    if (this.isChatBusy(chatId) || this.hasWaitingNotes(chatId)) return true;
-    if ([...this.starting.values()].includes(chatId)) return true;
-    return [...this.active.values()].some((r) => r.chatId === chatId);
+  private chatInUse(chatId: string): 'reply' | 'notes' | null {
+    if (this.isChatBusy(chatId)) return 'reply';
+    if ([...this.starting.values()].includes(chatId)) return 'reply';
+    if ([...this.active.values()].some((r) => r.chatId === chatId)) return 'reply';
+    return this.hasWaitingNotes(chatId) ? 'notes' : null;
   }
 
   private triggerFor(now: number, due: number): ScheduleTrigger {

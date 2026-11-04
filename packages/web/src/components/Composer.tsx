@@ -13,6 +13,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
 import { useChatCommands } from '../state/useChatCommands.js';
 import { parseContextCommand, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
@@ -21,8 +22,6 @@ import { useUnsentText } from '../state/unsent.js';
 /** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
 type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
 
-/** Said when a command is sent while a reply runs (the server's own refusal says the same). */
-const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before sending a command.';
 /** Said above the box when a message sent while a reply ran comes back into it. */
 const NOTE_RETURNED = "Not sent: the reply ended before it was read. It's back in the box.";
 
@@ -242,6 +241,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       ...taken.flatMap((n) => n.attachments).filter((a) => !prev.some((p) => p.id === a.attachmentId)).map((a) => ({ id: a.attachmentId, filename: a.filename, mime: a.mime })),
     ]);
     if (taken.some((n) => !n.takenBack)) setNoteReturned(true);
+    // Taken back: the button that did it goes with its note, so the cursor comes here rather than to the page.
+    if (taken.some((n) => n.takenBack)) {
+      // Only when text was added: an unchanged box wouldn't use up the caret move until the next keystroke.
+      if (taken.some((n) => n.text.trim().length > 0)) caretTo.current = 'end';
+      textareaRef.current?.focus();
+    }
   }, [returnedCount, chat.id]);
 
   // Text handed to this chat's box from outside (an issue's "Start a chat on

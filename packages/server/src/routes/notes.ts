@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import type { NoteAttachment } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
 import { requireNonEmptyString } from '../validation.js';
-import { contextCommandOf, getChatOrThrow, parseProfileIds, workspaceRefusal } from './turns.js';
+import { contextCommandOf, getChatOrThrow, isPlainObject, parseProfileIds, workspaceRefusal } from './turns.js';
 
 interface NoteBody {
   text?: unknown;
@@ -12,13 +13,6 @@ interface NoteBody {
   parentId?: unknown;
   profileIds?: unknown;
   clientId?: unknown;
-}
-
-/** Refused when a /clear or /compact is sent while a reply is running. */
-export const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before sending a command.';
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The message a note follows: a message of this chat, or null for none. */
