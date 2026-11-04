@@ -34,12 +34,14 @@ async function newChat(request: APIRequestContext, profileId: string): Promise<s
   return ((await res.json()) as { id: string }).id;
 }
 
-async function fillEditor(page: Page, name: string, prompt: string): Promise<void> {
+async function fillEditor(page: Page, name: string, prompt: string, timeLimit?: string): Promise<void> {
   const dialog = page.getByRole('dialog', { name: 'New schedule' });
   await dialog.getByLabel('Name').fill(name);
   await dialog.getByLabel('Prompt').fill(prompt);
   await dialog.getByLabel('Repeats').selectOption('daily');
-  await dialog.getByLabel('Time').fill(laterTime());
+  await dialog.getByLabel('Time', { exact: true }).fill(laterTime());
+  await expect(dialog.getByLabel('Time limit')).toHaveValue('30');
+  if (timeLimit) await dialog.getByLabel('Time limit').selectOption({ label: timeLimit });
   await dialog.getByRole('button', { name: 'Save' }).click();
   await expect(dialog).toHaveCount(0);
 }
@@ -66,7 +68,8 @@ test("a chat schedule: made from the chat's menu, run by hand, its reply in the 
   await page.goto('/');
   await page.getByTestId(`chat-row-${chatId}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Schedule…' }).click();
-  await fillEditor(page, name, 'hello');
+  await fillEditor(page, name, 'hello', '1 hour');
+  await expect(row(page, name)).toContainText('Time limit 1 hour');
   await expect(row(page, name).getByTestId('schedule-next')).toContainText('Next run:');
   await expect(row(page, name).getByTestId('schedule-next')).not.toContainText('Paused');
 
@@ -76,6 +79,7 @@ test("a chat schedule: made from the chat's menu, run by hand, its reply in the 
   const asked = page.locator('article[data-role="user"]').last();
   await expect(asked).toContainText(`Run by hand from schedule "${name}"`);
   await expect(asked).toContainText('Nobody is watching this run');
+  await expect(asked).toContainText('It is stopped if it is still going after 1 hour.');
   await expect(asked).toContainText('hello');
   await expect(page.locator('article[data-role="assistant"] .markdown-body').last()).toContainText('mock reply');
 });
