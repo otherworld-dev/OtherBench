@@ -93,6 +93,31 @@ describe('TerminalManager', () => {
     expect(info.name).toBe('bash');
   });
 
+  it('waits for shells still being looked for', async () => {
+    let found: (s: ShellOption[]) => void = () => {};
+    const lookup = new Promise<ShellOption[]>((r) => (found = r));
+    const { manager, ptys } = setup({ shells: () => lookup });
+    const infos = manager.shellInfos();
+    const created = manager.create('a1', 'E:\\repo', SIZE);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ptys).toHaveLength(0);
+    found(SHELLS);
+    expect((await infos).map((s) => s.id)).toEqual(['pwsh', 'git-bash']);
+    expect((await created).shellId).toBe('pwsh');
+  });
+
+  it('starts nothing when the server closes while the shells are looked for', async () => {
+    let found: (s: ShellOption[]) => void = () => {};
+    const lookup = new Promise<ShellOption[]>((r) => (found = r));
+    const { manager, ptys } = setup({ shells: () => lookup });
+    const created = manager.create('a1', 'E:\\repo', SIZE);
+    await new Promise((r) => setTimeout(r, 0));
+    await manager.closeAll();
+    found(SHELLS);
+    await expect(created).rejects.toMatchObject({ code: 'terminal-unavailable' });
+    expect(ptys).toHaveLength(0);
+  });
+
   it('unknown shell id is refused', async () => {
     const { manager } = setup();
     await expect(manager.create('a1', 'E:\\repo', { ...SIZE, shellId: 'C:\\evil.exe' })).rejects.toMatchObject({ code: 'unknown-shell' });

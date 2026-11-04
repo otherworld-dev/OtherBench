@@ -43,7 +43,8 @@ export interface TerminalListener {
 export interface TerminalManagerOptions {
   /** The PTY, loaded once on first use; null when it can't load on this machine. */
   loadSpawn: () => Promise<PtySpawn | null>;
-  shells: () => ShellOption[];
+  /** The shells found here; may be a promise (looking for them runs `where` on Windows), which the caller caches. */
+  shells: () => ShellOption[] | Promise<ShellOption[]>;
   emit: (e: AppEvent) => void;
   /** Ends a process and everything it started (kill-tree.ts). */
   killTree: (pid: number) => Promise<void>;
@@ -114,8 +115,8 @@ export class TerminalManager {
     return (await this.loadSpawn()) !== null;
   }
 
-  shellInfos(): ShellInfo[] {
-    return this.opts.shells().map(({ id, label, default: isDefault }) => ({ id, label, default: isDefault }));
+  async shellInfos(): Promise<ShellInfo[]> {
+    return (await this.opts.shells()).map(({ id, label, default: isDefault }) => ({ id, label, default: isDefault }));
   }
 
   list(appId: string): TerminalInfo[] {
@@ -194,7 +195,8 @@ export class TerminalManager {
   async create(appId: string, cwd: string, opts: { shellId?: string; cols: number; rows: number }): Promise<TerminalInfo> {
     const spawn = this.closed ? null : await this.loadSpawn();
     if (!spawn || this.closed) throw new TerminalError('terminal-unavailable', "Terminals can't run on this machine.");
-    const shells = this.opts.shells();
+    const shells = await this.opts.shells();
+    if (this.closed) throw new TerminalError('terminal-unavailable', "Terminals can't run on this machine.");
     const shell = opts.shellId === undefined ? (shells.find((s) => s.default) ?? shells[0]) : shells.find((s) => s.id === opts.shellId);
     if (!shell) throw new TerminalError('unknown-shell', opts.shellId === undefined ? 'No shell was found on this machine.' : `There's no shell "${opts.shellId}" on this machine.`);
     if (this.list(appId).length >= this.perApp) throw new TerminalError('terminal-limit', `An app can have at most ${this.perApp} terminals. Close one first.`);
