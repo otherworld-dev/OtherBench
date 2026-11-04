@@ -60,11 +60,15 @@ export class SqliteStore implements Store {
   readonly audit: AuditRepo;
   readonly schedules: ScheduleRepo;
 
-  constructor(private readonly db: DatabaseSync) {
+  /** `options.now`: the wall clock row stamps are read from, `Date.now` unless a test fixes it. */
+  constructor(
+    private readonly db: DatabaseSync,
+    options: { now?: () => number } = {}
+  ) {
     this.nodes = new SqliteNodeRepo(db);
     const selfId = () => this.nodes.selfId();
     // One clock for every synced table, so stamps are ordered across them.
-    const clock = clockOf(db, selfId);
+    const clock = clockOf(db, selfId, options.now);
     this.sync = new SqliteSyncRepo(db, selfId, clock);
     this.locations = new SqliteLocationRepo(db, clock);
     this.peers = new SqlitePeerRepo(db);
@@ -82,7 +86,7 @@ export class SqliteStore implements Store {
     this.settings = new SqliteSettingsRepo(db);
     this.messages = new SqliteMessageRepo(db, selfId, clock);
     this.artifacts = new SqliteArtifactRepo(db, clock);
-    this.attachments = new SqliteAttachmentRepo(db, clock);
+    this.attachments = new SqliteAttachmentRepo(db, clock, selfId);
     this.usage = new SqliteUsageRepo(db, clock);
     this.mcpServers = new SqliteMcpServerRepo(db);
     this.grants = new SqliteGrantRepo(db);

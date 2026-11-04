@@ -1,6 +1,6 @@
 import { lstat, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Store } from '@otherbench/core/ports/store.js';
+import type { Attachment, Store } from '@otherbench/core/ports/store.js';
 import type { BlobStore } from './blob-store.js';
 
 /** A well-formed blob filename: a lowercase 64-hex sha256 digest, nothing else. */
@@ -11,6 +11,20 @@ const SHARD_HEX = /^[0-9a-f]{2}$/;
 const TMP_FILE_RE = /^[0-9a-f]{64}\.tmp-[0-9a-f]+$/;
 /** How old a `.tmp-*` file must be before the sweep treats it as crash debris rather than a write in progress. Generous on purpose -- an upload's own put()/extractAttachmentText()/create() sequence is milliseconds, never remotely close to this. */
 const STALE_TMP_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * How long an unsent attachment (`messageId === null`) is kept after its row
+ * last changed before `sweepAbandonedAttachments` deletes it: 30 days.
+ *
+ * Long on purpose. The web composer has no draft store of its own -- its text
+ * lives in React state and is gone on a reload -- but it shows every unsent
+ * attachment on the server as a chip when a chat opens (`Composer.tsx`), so
+ * the server row IS the draft's attachment, with no lifetime of its own. A
+ * draft can't be told apart from an abandoned upload, then, except by age,
+ * and the grace period has to sit well past any draft someone is still
+ * working on: a file attached and left for a month is taken as abandoned.
+ */
+export const ABANDONED_ATTACHMENT_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Pinning (Important #3, task 32 fix round 1): closes the race between
@@ -241,6 +255,55 @@ export async function sweepOrphanedBlobs(store: Store, blobStore: BlobStore): Pr
     console.error('[otherbench] blob sweep failed:', err);
   }
   return result;
+}
+
+export interface AbandonedSweepOptions {
+  /** The current time (ms since the epoch): the caller's clock, so tests are deterministic. */
+  now: number;
+  /** Defaults to `ABANDONED_ATTACHMENT_GRACE_MS`. */
+  graceMs?: number;
+  /** True for an attachment that must stay although unsent: one on a note waiting to be sent (`NotesService.heldAttachmentIds`). */
+  isHeld?: (attachment: Attachment) => boolean;
+}
+
+export interface AbandonedSweepResult {
+  /** Attachment rows deleted. */
+  removed: number;
+}
+
+/**
+ * Deletes abandoned unsent attachments: rows with no message, last written
+ * by this machine more than `graceMs` ago (`AttachmentRepo.abandoned`), and
+ * not held by the caller. Each row goes exactly as `DELETE /attachments/:id`
+ * removes one -- the row first, then `gcBlobIfOrphaned` for its sha256, so a
+ * blob another row still references (upload dedupes by content) or an
+ * upload of the same bytes has pinned stays.
+ *
+ * The rows are listed and deleted in one synchronous pass with no `await`
+ * in between, so a send can't bind one of them between the check and the
+ * delete (`node:sqlite` is synchronous and so is binding). The blob GC
+ * after it is async and re-checks on its own.
+ *
+ * Only this machine's rows (see `abandoned`): unsent attachments never
+ * sync (`SqliteSyncRepo` offers and accepts a file only bound to a message),
+ * so a paired machine can't be about to send one of these; and a row that
+ * came from another machine is left alone whatever its state. The delete is
+ * stamped and tombstoned like any other, so a paired machine that does
+ * hold the id (only possible for a file that was sent and whose message
+ * was later deleted) drops its copy too.
+ */
+export async function sweepAbandonedAttachments(store: Store, blobStore: BlobStore, options: AbandonedSweepOptions): Promise<AbandonedSweepResult> {
+  const cutoff = options.now - (options.graceMs ?? ABANDONED_ATTACHMENT_GRACE_MS);
+  const shas = new Set<string>();
+  let removed = 0;
+  for (const attachment of store.attachments.abandoned(cutoff)) {
+    if (options.isHeld?.(attachment)) continue;
+    store.attachments.delete(attachment.id);
+    shas.add(attachment.sha256);
+    removed++;
+  }
+  for (const sha256 of shas) await gcBlobIfOrphaned(store, blobStore, sha256);
+  return { removed };
 }
 
 function isEnoentError(err: unknown): boolean {
