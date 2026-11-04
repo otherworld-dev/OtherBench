@@ -807,6 +807,18 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     focusLater(headingSelector(app.id), next);
   }
 
+  /** Keep in sidebar, on a closed app the sidebar shows only for a live chat or a search: it opens the app again. */
+  async function keepApp(app: App): Promise<void> {
+    setError(null);
+    try {
+      await setAppOpen(app.id, true);
+    } catch (err) {
+      console.error(`[otherbench-web] failed to keep app ${app.id} in the sidebar:`, err);
+      setError(errorText(err, "Couldn't keep the app in the sidebar"));
+    }
+    focusLater(headingSelector(app.id), LIST_SELECTOR);
+  }
+
   /** The close toast's Undo. Says so in a toast of its own if it fails: the sidebar's error line may be long gone. */
   async function reopenApp(appId: string, name: string): Promise<void> {
     try {
@@ -1464,6 +1476,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               rename: () => setRenamingAppId(menuApp.id),
               edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
               close: () => void closeApp(menuApp),
+              keep: () => void keepApp(menuApp),
               requestDelete: () => setDeletingAppId(menuApp.id),
             },
             menuApp.open

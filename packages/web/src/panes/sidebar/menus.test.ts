@@ -63,7 +63,7 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
 });
 
 describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
-  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), close: vi.fn(), requestDelete: vi.fn() });
+  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), close: vi.fn(), keep: vi.fn(), requestDelete: vi.fn() });
 
   it('the app menu has Close app and no Move up / Move to folder…, each item calling its handler', () => {
     const h = appHandlers();
@@ -75,10 +75,16 @@ describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
     expect(h.edit).toHaveBeenCalled();
     expect(h.close).toHaveBeenCalled();
     expect(h.requestDelete).toHaveBeenCalled();
+    expect(h.keep).not.toHaveBeenCalled();
   });
 
-  it('a closed app (shown because a chat is live, or found by a search) has no Close app', () => {
-    expect(appMenuItems(appHandlers(), false).map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Delete…']);
+  it('a closed app (shown because a chat is live, or found by a search) has Keep in sidebar where Close app was', () => {
+    const h = appHandlers();
+    const items = appMenuItems(h, false);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Keep in sidebar', 'Delete…']);
+    items[2]!.onSelect!();
+    expect(h.keep).toHaveBeenCalled();
+    expect(h.close).not.toHaveBeenCalled();
   });
 });
 

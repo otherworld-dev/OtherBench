@@ -2250,9 +2250,37 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByTestId('group-note-A')).toBeNull();
       expect(within(screen.getByTestId('group-heading-B')).queryByRole('button', { name: 'Close Beta' })).toBeNull();
       expect(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'Close Alpha' })).toBeInTheDocument();
-      // Nor is there a Close app in its menu: it is closed already.
+      // Nor is there a Close app in its menu: it is closed already, so Keep in sidebar takes its place.
       await user.click(within(screen.getByTestId('group-heading-B')).getByRole('button', { name: 'App actions' }));
-      expect(within(screen.getByRole('menu', { name: 'App actions' })).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Delete…']);
+      expect(within(screen.getByRole('menu', { name: 'App actions' })).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Keep in sidebar', 'Delete…']);
+    });
+
+    it("Keep in sidebar on a closed app's menu opens it: its note and the reason it shows go, the × comes", async () => {
+      const user = setup({
+        mode: 'code',
+        apps: [alpha, closed(beta)],
+        chats: [makeChat({ id: 'cb', title: 'Beta chat', appId: 'B' })],
+        appRunningTurns: { m1: 'cb' },
+      });
+      expect(screen.getByTestId('group-note-B')).toHaveTextContent('Shown because a chat is running');
+      await user.click(within(screen.getByTestId('group-heading-B')).getByRole('button', { name: 'App actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Keep in sidebar' }));
+      expect(mockedAppPatch).toHaveBeenCalledWith('B', { open: true });
+      await waitFor(() => expect(useOtherBenchStore.getState().apps.find((a) => a.id === 'B')!.open).toBe(true));
+      expect(screen.queryByTestId('group-note-B')).toBeNull();
+      expect(within(screen.getByTestId('group-heading-B')).getByRole('button', { name: 'Close Beta' })).toBeInTheDocument();
+      // Once the chat stops it stays: it is open now.
+      act(() => useOtherBenchStore.setState({ appRunningTurns: {} }));
+      expect(headingOrder()).toEqual(['A', 'B']);
+    });
+
+    it('a Keep in sidebar that fails says so and leaves the app closed', async () => {
+      mockedAppPatch.mockRejectedValue(new Error('offline'));
+      const user = setup({ mode: 'code', apps: [alpha, closed(beta)], chats: [makeChat({ id: 'cb', title: 'Beta chat', appId: 'B' })], appRunningTurns: { m1: 'cb' } });
+      await user.click(within(screen.getByTestId('group-heading-B')).getByRole('button', { name: 'App actions' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Keep in sidebar' }));
+      expect(await screen.findByText(/Couldn't keep the app in the sidebar/)).toBeInTheDocument();
+      expect(useOtherBenchStore.getState().apps.find((a) => a.id === 'B')!.open).toBe(false);
     });
 
     it('a closed app whose chat is only your-turn stays hidden', () => {

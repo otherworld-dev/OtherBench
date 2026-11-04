@@ -131,20 +131,22 @@ export interface AppMenuHandlers {
   edit(): void;
   /** Closes the app: it leaves the sidebar and stays on the All apps page (plan 2026-11-04-open-apps). */
   close(): void;
+  /** Keeps a closed app in the sidebar (`open: true`), as the app home's Keep in sidebar does. */
+  keep(): void;
   requestDelete(): void;
 }
 
 /**
  * An app heading's ⋯ menu in the Code sidebar (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit,
- * close, delete. Close app only while the app is `open`: a closed one shows only because a chat is live or a search
- * found it. Ordering and filing happen on the All apps page now (plan 2026-11-04-open-apps), so there is no Move up,
+ * close or keep, delete. Close app while the app is `open`; a closed one (shown only because a chat is live or a
+ * search found it) has Keep in sidebar in its place. Ordering and filing happen on the All apps page now (plan 2026-11-04-open-apps), so there is no Move up,
  * Move down or Move to folder… here: in a flat, filtered list they would move apps among ones the user can't see.
  */
 export function appMenuItems(h: AppMenuHandlers, open = true): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'edit', label: 'Edit…', onSelect: h.edit },
-    ...(open ? [{ id: 'close', label: 'Close app', onSelect: h.close }] : []),
+    open ? { id: 'close', label: 'Close app', onSelect: h.close } : { id: 'keep', label: 'Keep in sidebar', onSelect: h.keep },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
   ];
 }
