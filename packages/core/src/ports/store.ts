@@ -509,6 +509,10 @@ export interface MessageRepo {
    * brought up to date, or closed at startup. Throws when the id does not exist.
    */
   reviseParts(id: string, parts: Part[]): void;
+  /**
+   * Also records when the message stopped being written (`ChatHead.finishedAt`): now for any status but
+   * `streaming`, cleared for `streaming` (a retry). Throws when the id does not exist.
+   */
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void;
   /** Messages with every word of `query` in their text, best match first; `offset` skips that many, to page through. */
   searchText(query: string, limit: number, offset?: number): { messageId: string; chatId: string; snippet: string }[];
