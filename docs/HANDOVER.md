@@ -215,6 +215,35 @@ of work landed after that plan closed out:
   layout and panes are stored per device (`state/panes.ts`); a narrow window
   shows only the focused pane. Threads are `<section>`s inside the grid's
   one `<main>`.
+- **Long chats and find in a chat.** A thread draws only its last
+  `THREAD_WINDOW` (40) messages and draws more as the reader nears the top,
+  with a "Show earlier messages" button; the outline draws back to a prompt
+  before going to it (`panes/Thread.tsx`). A user message over 40 lines or
+  4,000 characters is folded with "Show all". `MarkdownBody` is memoised, so
+  its props stay primitive. Because the rest isn't drawn, the browser's own
+  Ctrl+F can't find it, so Ctrl+F (Cmd+F on a Mac) with the focus in a chat
+  opens that chat's find bar instead: a match count, Enter and Shift+Enter
+  for next and previous, Esc to close. The thread's `<section>` takes the
+  focus when its text is clicked (`tabIndex={-1}`), so a click in the chat is
+  enough; anywhere else (the sidebar, the viewer, Settings) Ctrl+F stays the
+  browser's. With panes side by side it finds in the one with the focus. It
+  searches every message on the chat's path in the store, which holds the
+  whole chat (`GET /chats/:id/messages`), so there is no server route: a
+  user message's text as typed and a reply's text parts as rendered, without
+  their Markdown, never tool calls, tool results, reasoning or cards
+  (`lib/chatFind.ts`). It starts at the first match from the top of the view
+  and wraps, as a browser's does. Going to a match draws back to it as the
+  outline does, opens a folded user message if the match is past the fold,
+  scrolls to it and highlights it with a CSS Custom Highlight over a Range
+  (`lib/findInDom.ts`, `::highlight(chat-find)` in index.css), so no
+  message's elements change. Not searched: the replies of a compare turn
+  still waiting at the end of the chat for one to be kept, other branches,
+  and a helper's text inside its card. A reply's Markdown is stripped line
+  by line rather than parsed (`markdownText`): micromark took about 2ms a
+  reply, the better part of a second on the first key in a long chat. Where
+  the page shows a reply's text differently from the stripped text, the
+  match is still found and scrolled to, but its highlight can land on
+  another match in the same message, or the last one there.
 - **Export** (#820). A chat's menu has Export… > Markdown (the conversation
   as shown: the head's branch, kept compare replies only) or JSON (every
   message on every branch, usage rows and attachment references, never

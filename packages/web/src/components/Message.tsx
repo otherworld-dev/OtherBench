@@ -324,21 +324,34 @@ function ToolResultBlock({ name, result, isError, scope }: { name: string; resul
 const USER_TEXT_LINES = 40;
 const USER_TEXT_CHARS = 4000;
 
+/** The start a long user message is folded to, or null when it's short enough to show whole. */
+export function userTextPreview(text: string): string | null {
+  const lines = text.split('\n');
+  if (lines.length <= USER_TEXT_LINES && text.length <= USER_TEXT_CHARS) return null;
+  return lines.slice(0, USER_TEXT_LINES).join('\n').slice(0, USER_TEXT_CHARS);
+}
+
 /**
  * A user message's plain text, folded when it's long. A pasted log of 2,500 lines laid out at 60,000px and froze the
  * window for over 100ms each time its chat opened; its start says what it is, and the rest is a click away.
+ * `reveal` opens it (find going to a match in the folded part), and it stays open after, as if Show all was clicked.
  */
-function UserText({ text }: { text: string }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const lines = text.split('\n');
-  const long = lines.length > USER_TEXT_LINES || text.length > USER_TEXT_CHARS;
-  if (!long) return <>{text}</>;
-  const size = lines.length > USER_TEXT_LINES ? `${lines.length.toLocaleString()} lines` : `${text.length.toLocaleString()} characters`;
+function UserText({ text, reveal }: { text: string; reveal: boolean }): JSX.Element {
+  const [open, setOpen] = useState(reveal);
+  const [revealed, setRevealed] = useState(reveal);
+  if (reveal !== revealed) {
+    setRevealed(reveal);
+    if (reveal) setOpen(true);
+  }
+  const preview = userTextPreview(text);
+  if (preview === null) return <>{text}</>;
+  const lines = text.split('\n').length;
+  const size = lines > USER_TEXT_LINES ? `${lines.toLocaleString()} lines` : `${text.length.toLocaleString()} characters`;
   return (
     <>
-      {open ? text : lines.slice(0, USER_TEXT_LINES).join('\n').slice(0, USER_TEXT_CHARS)}
+      {open ? text : preview}
       {!open && '…'}
-      <span className="mt-1 block">
+      <span data-find-skip="" className="mt-1 block">
         <button type="button" onClick={() => setOpen(!open)} className="btn px-2 py-0.5 text-xs">
           {open ? 'Show less' : `Show all (${size})`}
         </button>
@@ -796,6 +809,8 @@ export interface MessageProps {
     /** The original was a compare turn's prompt: the edit goes to ONE profile. */
     compareNote?: boolean;
   };
+  /** Unfolds a long user message: find in the chat is going to a match in its folded part. */
+  showAllText?: boolean;
 }
 
 /**
@@ -820,6 +835,7 @@ export function Message({
   actionsDisabled = false,
   editing,
   framed = false,
+  showAllText = false,
 }: MessageProps): JSX.Element {
   const line = contextLineOf(message);
   if (line) {
@@ -894,9 +910,10 @@ export function Message({
       {isUser && editing ? (
         <MessageEditor message={message} editing={editing} />
       ) : (
-      <div className={isUser ? 'whitespace-pre-wrap text-sm [overflow-wrap:anywhere]' : ''}>
+      // The message's text, which find in the chat searches (lib/findInDom.ts): all of it for a user, the top-level text blocks of a reply.
+      <div data-message-body="" className={isUser ? 'whitespace-pre-wrap text-sm [overflow-wrap:anywhere]' : ''}>
         {isUser
-          ? <UserText text={message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')} />
+          ? <UserText text={message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')} reveal={showAllText} />
           : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', ...(progressByCall ? { progress: progressByCall } : {}), askingTools: new Set(pendingAsks.flatMap((a) => (a.kind === 'generation' ? [a.toolName] : []))), scope: { chatId: message.chatId, messageId: message.id } })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>

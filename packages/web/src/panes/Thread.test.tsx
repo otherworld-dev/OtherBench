@@ -1281,3 +1281,186 @@ describe('Thread in a long chat', () => {
     expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('msg-m2'));
   });
 });
+
+describe('Find in a chat', () => {
+  let registry: Map<string, { ranges: Range[] }>;
+  beforeEach(() => {
+    reset();
+    registry = new Map();
+    vi.stubGlobal('CSS', { highlights: registry });
+    vi.stubGlobal(
+      'Highlight',
+      class {
+        ranges: Range[];
+        constructor(...ranges: Range[]) {
+          this.ranges = ranges;
+        }
+      }
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  /** A chat of `n` messages, user and reply in turn; `text(i)` is message i's text. */
+  function chatOf(n: number, text: (i: number) => string, chatId = 'chat-1'): void {
+    const chain = Array.from({ length: n }, (_, i) =>
+      makeMessage(`${chatId}-m${i}`, chatId, {
+        parentId: i === 0 ? null : `${chatId}-m${i - 1}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        parts: [{ type: 'text', text: text(i) }],
+        createdAt: i,
+      })
+    );
+    useOtherBenchStore.setState((s) => ({ chats: [...s.chats, makeChat({ id: chatId, title: `Title ${chatId}`, headMessageId: `${chatId}-m${n - 1}` })] }));
+    useOtherBenchStore.getState().loadMessages(chatId, chain, null);
+  }
+  const drawn = (): string[] => Array.from(screen.getByTestId('thread-scroll').querySelectorAll('[id^="msg-"]')).map((el) => el.id.slice(4));
+  const highlighted = (): string[] => (registry.get('chat-find')?.ranges ?? []).map((r) => r.toString());
+  const findBox = (): HTMLElement => screen.getByRole('textbox', { name: 'Find in this chat' });
+  const ctrlF = (target: Element): boolean => fireEvent.keyDown(target, { key: 'f', code: 'KeyF', ctrlKey: true });
+
+  it('opens on Ctrl+F in the chat, and closes on Escape without stopping a running reply', async () => {
+    chatOf(4, (i) => `message ${i}`);
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    await user.click(within(screen.getByTestId('thread-scroll')).getByText('message 3'));
+    await user.keyboard('{Control>}f{/Control}');
+    expect(findBox()).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Find in this chat' })).toBeNull();
+    expect(vi.mocked(api.turns.cancel)).not.toHaveBeenCalled();
+  });
+
+  it('opens from the message box too', async () => {
+    chatOf(2, (i) => `message ${i}`);
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    await user.click(screen.getByRole('textbox', { name: /message/i }));
+    await user.keyboard('{Control>}f{/Control}');
+    expect(findBox()).toHaveFocus();
+  });
+
+  it('leaves Ctrl+F to the browser outside a chat', () => {
+    chatOf(2, (i) => `message ${i}`);
+    render(
+      <>
+        <button type="button">Elsewhere</button>
+        <ThreadForChat chatId="chat-1" />
+      </>
+    );
+    // fireEvent returns false when the default was prevented.
+    expect(ctrlF(screen.getByRole('button', { name: 'Elsewhere' }))).toBe(true);
+    expect(screen.queryByRole('textbox', { name: 'Find in this chat' })).toBeNull();
+    expect(ctrlF(screen.getByTestId('thread-scroll'))).toBe(false);
+    expect(findBox()).toBeInTheDocument();
+  });
+
+  it('finds a message that is not drawn, draws back to it and highlights the match', async () => {
+    chatOf(100, (i) => (i === 2 ? 'the Zebracorn is here' : `message ${i}`));
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(drawn()).not.toContain('chat-1-m2');
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'zebracorn');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 1');
+    expect(drawn()).toContain('chat-1-m2');
+    expect(highlighted()).toEqual(['Zebracorn']);
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.getElementById('msg-chat-1-m2'));
+  });
+
+  it('steps through the matches with Enter and Shift+Enter, wrapping round', async () => {
+    chatOf(6, (i) => (i % 2 === 0 ? `needle ${i}` : `reply ${i}`));
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'needle');
+    const count = screen.getByRole('status', { name: 'Matches' });
+    expect(count).toHaveTextContent('1 of 3');
+    expect(highlighted()).toEqual(['needle']);
+    await user.keyboard('{Enter}');
+    expect(count).toHaveTextContent('2 of 3');
+    await user.keyboard('{Enter}{Enter}');
+    expect(count).toHaveTextContent('1 of 3');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(count).toHaveTextContent('3 of 3');
+    await user.click(screen.getByRole('button', { name: 'Previous match' }));
+    expect(count).toHaveTextContent('2 of 3');
+    await user.click(screen.getByRole('button', { name: 'Next match' }));
+    expect(count).toHaveTextContent('3 of 3');
+    expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.getElementById('msg-chat-1-m4'));
+  });
+
+  it("says so when nothing matches, and searches a reply's text, not its tool calls", async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'a1' })] });
+    useOtherBenchStore.getState().loadMessages(
+      'chat-1',
+      [
+        makeMessage('u1', 'chat-1', { parts: [{ type: 'text', text: 'read it' }] }),
+        variantMessage('a1', 'u1', {
+          parts: [
+            { type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'secret-needle.txt' } },
+            { type: 'tool-result', id: 't1', name: 'read_file', result: '{"needle": 1}', isError: false },
+            { type: 'text', text: 'Done, **all** read.' },
+          ],
+        }),
+      ],
+      null
+    );
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'needle');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('No matches');
+    expect(highlighted()).toEqual([]);
+    await user.clear(findBox());
+    await user.type(findBox(), 'all read');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 1');
+    expect(highlighted()).toEqual(['all read']);
+  });
+
+  it('unfolds a long user message to show a match in its folded part', async () => {
+    const long = [...Array.from({ length: 60 }, (_, i) => `line ${i}`), 'the hidden marmoset'].join('\n');
+    chatOf(4, (i) => (i === 0 ? long : `message ${i}`));
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByTestId('thread-scroll')).not.toHaveTextContent('marmoset');
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'marmoset');
+    expect(screen.getByTestId('thread-scroll')).toHaveTextContent('hidden marmoset');
+    expect(highlighted()).toEqual(['marmoset']);
+  });
+
+  it('clears the highlight when it closes', async () => {
+    chatOf(2, (i) => `message ${i}`);
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'message 1');
+    expect(highlighted()).toEqual(['message 1']);
+    await user.click(screen.getByRole('button', { name: 'Close find' }));
+    expect(highlighted()).toEqual([]);
+    expect(screen.queryByRole('textbox', { name: 'Find in this chat' })).toBeNull();
+  });
+
+  it('finds in the focused pane only, when two chats are side by side', async () => {
+    chatOf(2, (i) => `left ${i}`, 'chat-a');
+    chatOf(2, (i) => `right ${i}`, 'chat-b');
+    const user = userEvent.setup();
+    render(
+      <>
+        <ThreadForChat chatId="chat-a" />
+        <ThreadForChat chatId="chat-b" />
+      </>
+    );
+    const right = screen.getByRole('region', { name: 'Title chat-b' });
+    await user.click(within(within(right).getByTestId('thread-scroll')).getByText('right 1'));
+    await user.keyboard('{Control>}f{/Control}');
+    expect(within(right).getByRole('textbox', { name: 'Find in this chat' })).toHaveFocus();
+    expect(within(screen.getByRole('region', { name: 'Title chat-a' })).queryByRole('textbox', { name: 'Find in this chat' })).toBeNull();
+    await user.keyboard('right');
+    expect(within(right).getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 2');
+  });
+});
