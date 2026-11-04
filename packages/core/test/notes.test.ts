@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { notePart, notesToParts } from '../src/domain/notes.js';
+import { COMMAND_MID_REPLY, notePart, notesToParts } from '../src/domain/notes.js';
 import type { ReplyNote } from '../src/types/notes.js';
 
 function note(over: Partial<ReplyNote> & { id: string }): ReplyNote {
@@ -29,5 +29,11 @@ describe('notePart', () => {
   it('copies id, text and attachments', () => {
     const attachments = [{ attachmentId: 'att1', mime: 'image/png', filename: 'a.png' }];
     expect(notePart(note({ id: 'n1', text: 'stop', attachments }))).toEqual({ type: 'user-note', noteId: 'n1', text: 'stop', attachments });
+  });
+});
+
+describe('COMMAND_MID_REPLY', () => {
+  it('is the copy the server refuses with and the box shows', () => {
+    expect(COMMAND_MID_REPLY).toBe('Wait for the reply to finish, or stop it, before sending a command.');
   });
 });

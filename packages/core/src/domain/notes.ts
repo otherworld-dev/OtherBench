@@ -1,6 +1,9 @@
 import type { Part, UserNotePart } from '../types/messages.js';
 import type { ReplyNote } from '../types/notes.js';
 
+/** Refused when /clear, /compact or another command is sent while a reply runs: the server's refusal and the box's message. */
+export const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before sending a command.';
+
 /** Notes as the parts of one user message: their texts joined in order (left out when all are empty), then each attachment. */
 export function notesToParts(notes: ReplyNote[]): Part[] {
   const parts: Part[] = [];

@@ -13,6 +13,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
 import { useChatCommands } from '../state/useChatCommands.js';
 import { parseContextCommand, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
@@ -21,8 +22,6 @@ import { useUnsentText } from '../state/unsent.js';
 /** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
 type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
 
-/** Said when a command is sent while a reply runs (the server's own refusal says the same). */
-const COMMAND_MID_REPLY = 'Wait for the reply to finish, or stop it, before sending a command.';
 /** Said above the box when a message sent while a reply ran comes back into it. */
 const NOTE_RETURNED = "Not sent: the reply ended before it was read. It's back in the box.";
 

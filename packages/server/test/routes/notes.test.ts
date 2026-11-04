@@ -3,11 +3,11 @@ import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
+import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { NotesService } from '../../src/notes/service.js';
 import { resolveProfile } from '../../src/profile-resolution.js';
-import { COMMAND_MID_REPLY } from '../../src/routes/notes.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 import { startTurn } from '../../src/turn-start.js';
 
@@ -181,7 +181,6 @@ describe('POST /api/chats/:id/notes', () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({ kind: 'command', error: COMMAND_MID_REPLY });
     }
-    expect(COMMAND_MID_REPLY).toBe('Wait for the reply to finish, or stop it, before sending a command.');
     expect(container.notes!.hasWaiting('chat-1')).toBe(false);
   });
 
