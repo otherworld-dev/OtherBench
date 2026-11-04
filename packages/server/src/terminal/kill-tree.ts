@@ -20,6 +20,8 @@ export interface KillTreeDeps {
 /** How long a hung-up process gets to exit before SIGKILL. */
 const HANGUP_GRACE_MS = 1000;
 const HANGUP_POLL_MS = 50;
+/** More than this from one terminal means the listing is wrong, and nothing but the shell is signalled. */
+const MAX_TARGETS = 500;
 
 const realDeps: KillTreeDeps = {
   platform: process.platform,
@@ -42,7 +44,7 @@ const realDeps: KillTreeDeps = {
  */
 export function killTree(pid: number, deps: Partial<KillTreeDeps> = {}): Promise<void> {
   const d: KillTreeDeps = { ...realDeps, ...deps };
-  if (!Number.isInteger(pid) || pid <= 0) return Promise.resolve();
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === d.self) return Promise.resolve();
   if (d.platform === 'win32') {
     const taskkill = join(process.env['SystemRoot'] || 'C:\\Windows', 'System32', 'taskkill.exe');
     return d.run(taskkill, ['/PID', String(pid), '/T', '/F']).then(() => undefined);
@@ -62,25 +64,20 @@ async function hangUpSession(pid: number, d: KillTreeDeps): Promise<void> {
   const pgrep = d.tool('pgrep');
   const ps = d.tool('ps');
   const [session, table] = await Promise.all([pgrep ? d.run(pgrep, ['-s', String(pid)]) : '', ps ? d.run(ps, ['-A', '-o', 'pid=,ppid=']) : '']);
-  const targets = new Set<number>([pid]);
-  for (const line of session.split('\n')) targets.add(Number(line.trim()));
+  const parentOf = new Map<number, number>();
   const children = new Map<number, number[]>();
   for (const line of table.split('\n')) {
-    const [child, parent] = line.trim().split(/\s+/).map(Number);
-    if (child === undefined || parent === undefined || !Number.isInteger(child) || !Number.isInteger(parent)) continue;
+    const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (!m) continue;
+    const [child, parent] = [Number(m[1]), Number(m[2])];
+    parentOf.set(child, parent);
     children.set(parent, [...(children.get(parent) ?? []), child]);
   }
-  const queue = [...targets];
-  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
-    for (const child of children.get(next) ?? []) {
-      if (!targets.has(child)) {
-        targets.add(child);
-        queue.push(child);
-      }
-    }
-  }
-  const pids = [...targets].filter((p) => Number.isInteger(p) && p > 1 && p !== d.self);
-
+  // This server and everything above it are never a target, nor is anything that isn't a real process id (pgrep's
+  // trailing newline once made a 0 here, and walking from 0 reaches init and so every process on the machine).
+  const protectedPids = new Set<number>([d.self]);
+  for (let p = parentOf.get(d.self); p !== undefined && !protectedPids.has(p); p = parentOf.get(p)) protectedPids.add(p);
+  const eligible = (p: number): boolean => Number.isSafeInteger(p) && p > 1 && !protectedPids.has(p);
   const send = (target: number, signal: NodeJS.Signals | 0): boolean => {
     try {
       d.kill(target, signal);
@@ -89,6 +86,32 @@ async function hangUpSession(pid: number, d: KillTreeDeps): Promise<void> {
       return false; // not there (any more)
     }
   };
+  if (!eligible(pid)) return;
+
+  const targets = new Set<number>([pid]);
+  for (const line of session.split('\n')) {
+    const text = line.trim();
+    if (/^\d+$/.test(text) && eligible(Number(text))) targets.add(Number(text));
+  }
+  // Children that left the session, through their parent links; only ever walked from a target.
+  const queue = [...targets];
+  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+    for (const child of children.get(next) ?? []) {
+      if (eligible(child) && !targets.has(child)) {
+        targets.add(child);
+        queue.push(child);
+      }
+    }
+  }
+  const pids = [...targets];
+  if (pids.length > MAX_TARGETS) {
+    // One terminal doesn't run this many: the listing is wrong somehow, so only the shell and its own group go.
+    console.warn(`[otherbench-server] closing a terminal found ${pids.length} processes to end; ending only its shell (${pid})`);
+    send(-pid, 'SIGKILL');
+    send(pid, 'SIGKILL');
+    return;
+  }
+
   for (const p of pids) {
     send(p, 'SIGHUP');
     send(p, 'SIGCONT');

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { killTree, type KillTreeDeps } from '../../src/terminal/kill-tree.js';
 
 /**
@@ -14,7 +14,7 @@ interface FakeProcess {
   ignores?: NodeJS.Signals[];
 }
 
-function posixMachine(processes: FakeProcess[], opts: { noPgrep?: boolean } = {}) {
+function posixMachine(processes: FakeProcess[], opts: { noPgrep?: boolean; pgrep?: string } = {}) {
   const table = new Map(processes.map((p) => [p.pid, p]));
   const sent: [number, NodeJS.Signals | 0][] = [];
   const deps: KillTreeDeps = {
@@ -23,7 +23,7 @@ function posixMachine(processes: FakeProcess[], opts: { noPgrep?: boolean } = {}
     run: async (file, args) => {
       if (file === '/usr/bin/pgrep') {
         expect(args[0]).toBe('-s');
-        return [...table.values()].filter((p) => p.sid === Number(args[1])).map((p) => `${p.pid}\n`).join('');
+        return opts.pgrep ?? [...table.values()].filter((p) => p.sid === Number(args[1])).map((p) => `${p.pid}\n`).join('');
       }
       if (file === '/usr/bin/ps') return [...table.values()].map((p) => `  ${p.pid}  ${p.ppid}\n`).join('');
       throw new Error(`unexpected ${file}`);
@@ -112,6 +112,53 @@ describe('killTree on Linux and macOS', () => {
     await killTree(0, m.deps);
     await killTree(-5, m.deps);
     expect(m.sent.some(([pid]) => pid === 0 || pid === -5 || pid === 5)).toBe(false);
+  });
+
+  // A real machine: init and kthreadd are children of 0, and pgrep's answer ends in a newline (or is empty). A blank
+  // line once read as pid 0, and walking from 0 reached every process.
+  describe('never strays outside the terminal', () => {
+    const machine = (): FakeProcess[] => [
+      { pid: 1, ppid: 0, sid: 1 },
+      { pid: 2, ppid: 0, sid: 0 },
+      { pid: 700, ppid: 1, sid: 700 }, // someone else's, a child of init
+      { pid: 990, ppid: 1, sid: 990 }, // what started the server
+      { pid: 1000, ppid: 990, sid: 990 }, // the server
+      { pid: 500, ppid: 1000, sid: 500 }, // the shell
+      { pid: 510, ppid: 500, sid: 500 },
+    ];
+    const strays = (sent: [number, NodeJS.Signals | 0][]) => sent.filter(([pid]) => [0, 1, 2, 700, 990, 1000, -1, -2].includes(pid));
+
+    it.each([
+      ['a trailing newline', '500\n510\n'],
+      ['blank lines', '\n500\n\n510\n\n'],
+      ['an empty answer', ''],
+      ['a newline alone', '\n'],
+      ['junk, 0, 1 and the server', ' 0\n1\n1000\n990\nabc\n-1\n500\n'],
+    ])('with %s from pgrep', async (_name, pgrep) => {
+      const m = posixMachine(machine(), { pgrep });
+      await killTree(500, m.deps);
+      expect(strays(m.sent)).toEqual([]);
+      expect(m.table.has(500) && m.table.has(510)).toBe(false);
+      expect([...m.table.keys()].sort((a, b) => a - b)).toEqual([1, 2, 700, 990, 1000]);
+    });
+
+    it('refuses to start from 0, 1, init, the server or what started it', async () => {
+      for (const pid of [0, 1, 990, 1000]) {
+        const m = posixMachine(machine());
+        await killTree(pid, m.deps);
+        expect(m.sent).toEqual([]);
+      }
+    });
+
+    it('signals only the shell when the listing finds an implausible number', async () => {
+      const crowd = Array.from({ length: 600 }, (_, i) => ({ pid: 2000 + i, ppid: 500, sid: 500 }));
+      const m = posixMachine([...machine(), ...crowd]);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await killTree(500, m.deps);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+      expect(new Set(m.sent.map(([pid]) => pid))).toEqual(new Set([500, -500]));
+    });
   });
 
   it("doesn't wait when everything went on the hangup", async () => {
