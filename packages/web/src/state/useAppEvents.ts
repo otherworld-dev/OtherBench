@@ -3,6 +3,7 @@ import type { AppEvent, AppEventsHello } from '@otherbench/core/types/events.js'
 import { focusedWindow, isDesktop, onDesktopEvent, showNotification } from '../desktop/bridge.js';
 import { windowForMode } from '../desktop/windows.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
+import { showBrowserScheduledNotification } from '../lib/browserNotify.js';
 import { api } from './api.js';
 import { emitAppEvent } from './appEventListeners.js';
 import { refreshFeatures } from './features.js';
@@ -77,6 +78,11 @@ function windowOfChat(chatId: string | null): 'main' | 'code' {
   return chat ? windowForMode(modeOfChat(chat), undocked, 'main') : 'main';
 }
 
+/** A clicked notification's chat, if it is still here. */
+function openNotifiedChat(chatId: string): void {
+  if (useOtherBenchStore.getState().chats.some((c) => c.id === chatId)) useOtherBenchStore.getState().setActiveChatId(chatId);
+}
+
 export function useAppEvents(): void {
   useEffect(() => {
     const { applyAppHello, applyAppEvent } = useOtherBenchStore.getState();
@@ -92,6 +98,8 @@ export function useAppEvents(): void {
           prefs: loadNotifyPrefs,
         })
       : null;
+    // In a plain browser, scheduled runs can raise browser notifications instead (lib/browserNotify.ts, opt-in).
+    const browser = !isDesktop();
     const client = new SseClient<AppEventsHello, AppEvent>({
       url: api.eventsUrl(),
       readHello: (payload) => payload as AppEventsHello,
@@ -110,6 +118,14 @@ export function useAppEvents(): void {
         if (event.type === 'settings-changed') refreshFeatures();
         if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[otherbench-web] failed to show a notification:', err));
+        if (browser) {
+          try {
+            showBrowserScheduledNotification(event, openNotifiedChat);
+          } catch (err) {
+            // Some browsers (Chrome on Android) only notify through a service worker, which this page doesn't have.
+            console.error('[otherbench-web] failed to show a browser notification:', err);
+          }
+        }
       },
     });
     client.connect();
@@ -120,7 +136,7 @@ export function useAppEvents(): void {
     if (notifier) {
       void onDesktopEvent('tray-open', () => {
         const chatId = notifier.takeLastChat();
-        if (chatId && useOtherBenchStore.getState().chats.some((c) => c.id === chatId)) useOtherBenchStore.getState().setActiveChatId(chatId);
+        if (chatId) openNotifiedChat(chatId);
       }).then((off) => {
         if (disposed) off();
         else offTray = off;
