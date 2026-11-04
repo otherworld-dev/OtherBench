@@ -822,6 +822,23 @@ Ollama instance.
   A filesystem-level GC failure (locked file, permissions) is logged and
   swallowed — it never fails the request or the boot — but a programming
   error is not swallowed and surfaces as a 500.
+- **Abandoned unsent attachments are collected after 30 days.** An unsent
+  attachment whose row hasn't changed for `ABANDONED_ATTACHMENT_GRACE_MS`
+  (30 days) is deleted with its blob by `sweepAbandonedAttachments`
+  (`blob-gc.ts`): the row first, then `gcBlobIfOrphaned`, exactly as
+  `DELETE /attachments/:id` does it, so a blob another row shares or an
+  upload has pinned stays. It runs at startup (before the orphan sweep) and
+  every 24 hours while the server runs (`server/src/attachment-sweep.ts`, an
+  unref'd timer stopped by `close()`); one on a note waiting to be sent is
+  skipped. Age is read from the row's own sync stamp (`hlc`, its last
+  write), so there's no migration, and only rows last written by this
+  machine are swept. Unsent attachments never sync, so a paired machine
+  can't be about to send one. The period is long because the composer has
+  no draft store: its text is lost on a reload, but it shows every unsent
+  attachment on the server as a chip when a chat opens, so the row is the
+  draft's attachment and age is the only way to tell an abandoned one. A
+  chip left untouched for 30 days goes; sending it after that fails as an
+  unknown attachment.
 - **`storagePath` no longer appears in any `Attachment` API response.**
   `toPublicAttachment()` strips it before every `c.json()` call in that
   route; it's still used internally (loading the blob to serve `/content`),
@@ -2207,13 +2224,14 @@ this on startup.
   upload can ultimately hold, but does not stop the bytes from being
   buffered in full before the size is verified; a true streaming
   implementation would enforce the limit while reading, not after.
-- **Abandoned unsent attachments are never collected.** An uploaded
-  attachment that's never sent (`messageId` stays `null`) and never
-  explicitly deleted keeps its blob alive indefinitely — the GC only runs on
-  an explicit delete, a chat/profile/connection cascade, or the startup
-  sweep, none of which fire just because time has passed. Uploading a file
-  and abandoning the chat without sending or removing it leaks that blob
-  until someone deletes it by hand.
+- **Abandoned unsent attachments are kept for 30 days, and a few never go.**
+  The sweep (see Attachments above) deletes an unsent attachment 30 days
+  after its row last changed, so a file abandoned in a chat holds its disk
+  space for that long. It never touches a row last written by another
+  machine either. Unsent attachments don't sync, so today no such row can
+  be unsent; if one ever is (a synced message deleted on its own, which
+  sets `message_id` to null and leaves the row), it stays until its chat is
+  deleted.
 - **Blobs in the legacy shared `attachments/` directory are never
   garbage-collected.** `BlobStore`'s `legacyRoot` is read-only by design (see
   Attachments above) — the sweep only ever touches the per-database write
@@ -2578,6 +2596,6 @@ The natural next steps, roughly in order of value:
 1. Try two physical machines: pair the PC and the laptop over the LAN (allow the firewall prompt on Private networks only), then over the VPN. `docs/desktop-checklist.md` has the steps.
 2. Tasks 40-41: installers and a bundled Node runtime, so the app doesn't need this checkout.
 3. The tray's machine status line, and the small v2 UI gaps under What is NOT built.
-4. Abandoned unsent attachments and the legacy shared blob directory are the two remaining places disk usage can grow without bound (see Known gaps above).
+4. The legacy shared blob directory is the one remaining place disk usage can grow without bound; abandoned unsent attachments are now collected after 30 days (see Known gaps above).
 5. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
 6. Computer use: go through its section of `docs/desktop-checklist.md` on the PC before switching it on for real use.
