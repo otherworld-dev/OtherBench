@@ -23,7 +23,7 @@ describe('starting on a database from an older build', () => {
     const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
     container.close();
 
-    // The version the older build left: not SCHEMA_VERSION - 1 while a number is reserved for another branch.
+    // The version the older build left: the highest one below SCHEMA_VERSION, which needn't be SCHEMA_VERSION - 1.
     const previous = Math.max(...MIGRATIONS.filter((m) => m.version < SCHEMA_VERSION).map((m) => m.version));
     const copy = `${dbPath}.before-schema-${previous}`;
     expect(existsSync(copy)).toBe(true);

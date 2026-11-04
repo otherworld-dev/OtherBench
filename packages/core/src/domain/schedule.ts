@@ -18,7 +18,7 @@ export const SCHEDULE_CHECK_MAX_MS = 30_000;
 
 /**
  * A run's time limit (`Schedule.timeLimitMinutes`) when none is chosen, and
- * every schedule's from before the limit could be set (migration 039): the
+ * every schedule's from before the limit could be set (migration 038): the
  * fixed limit all runs had until then. Long enough for a report or a triage
  * run, Claude Code's included; short enough that a run stuck in auto mode
  * doesn't spend all night, and one of the two run slots with it.
