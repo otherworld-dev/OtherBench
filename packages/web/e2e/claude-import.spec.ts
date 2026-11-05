@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL, COWORK_SESSION } from '../playwright.config.js';
 
 /**
@@ -16,6 +16,19 @@ const chatId = randomUUID();
 const projectId = randomUUID();
 /** A session only in the copy of another machine's Cowork folder. */
 const LAPTOP_SESSION = 'local_e2e_laptop';
+
+/**
+ * Opens a chat from the sidebar. Imported chats keep claude.ai's dates, so with
+ * the other specs' newer chats about they can sit past a group's "Show N more".
+ */
+async function openChat(page: Page, title: string): Promise<void> {
+  const row = page.locator('[data-testid^="chat-row-"]', { hasText: title });
+  await expect(async () => {
+    if ((await row.count()) === 0) await page.getByRole('button', { name: /^Show \d+ more$/ }).first().click({ timeout: 1000 });
+    await expect(row).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await row.click();
+}
 
 test.beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'otherbench-e2e-claude-export-'));
@@ -84,13 +97,13 @@ test('imports a claude.ai export from Settings > Import', async ({ page, request
   await page.getByRole('button', { name: 'Close settings' }).click();
   // The project the import made is in the sidebar without a reload.
   await expect(page.getByRole('navigation', { name: 'Chats' }).getByText(`Garden ${tag}`)).toBeVisible();
-  await page.locator('[data-testid^="chat-row-"]', { hasText: `Imported ${tag}` }).click();
+  await openChat(page, `Imported ${tag}`);
   const thread = page.getByTestId('thread-scroll');
   await expect(thread.getByText(`question ${tag}`)).toBeVisible();
   await expect(thread.getByText(`answer ${tag}`)).toBeVisible();
   await expect(thread.getByText('claude.ai', { exact: true })).toBeVisible();
 
-  await page.locator('[data-testid^="chat-row-"]', { hasText: COWORK_SESSION.title }).click();
+  await openChat(page, COWORK_SESSION.title);
   await expect(thread.getByText('cowork answer')).toBeVisible();
   await expect(thread.getByText('claude-opus-4-7', { exact: true })).toBeVisible();
 });
@@ -139,7 +152,7 @@ test("a second import adds claude.ai's new messages to a chat carried on here as
   await page.getByRole('button', { name: 'Close settings' }).click();
 
   // Carried on here...
-  await page.locator('[data-testid^="chat-row-"]', { hasText: `Carried ${tag}` }).click();
+  await openChat(page, `Carried ${tag}`);
   const textbox = page.getByRole('textbox', { name: /message/i });
   await textbox.fill(`mine ${tag}`);
   await textbox.press('Enter');
@@ -161,7 +174,7 @@ test("a second import adds claude.ai's new messages to a chat carried on here as
   await page.getByRole('button', { name: 'Close settings' }).click();
 
   // The chat is still on the user's branch, with claude.ai's beside it to switch to.
-  await page.locator('[data-testid^="chat-row-"]', { hasText: `Carried ${tag}` }).click();
+  await openChat(page, `Carried ${tag}`);
   await expect(thread.getByText(`mine ${tag}`)).toBeVisible();
   await expect(thread.getByText(`later ${tag}`, { exact: true })).toHaveCount(0);
   await thread.getByRole('button', { name: 'Previous branch' }).click();
@@ -208,6 +221,6 @@ test("imports another machine's Cowork sessions from a copy of its Cowork folder
   await expect(page.getByTestId('import-report')).toContainText('Imported 2 Cowork sessions');
 
   await page.getByRole('button', { name: 'Close settings' }).click();
-  await page.locator('[data-testid^="chat-row-"]', { hasText: `Laptop ${tag}` }).click();
+  await openChat(page, `Laptop ${tag}`);
   await expect(page.getByTestId('thread-scroll').getByText(`laptop answer ${tag}`)).toBeVisible();
 });
