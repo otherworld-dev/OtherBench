@@ -1394,6 +1394,97 @@ describe('Find in a chat', () => {
     expect(vi.mocked(Element.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.getElementById('msg-chat-1-m2'));
   });
 
+  it('draws only the messages round a match far back, not everything from it to the end', async () => {
+    chatOf(200, (i) => (i === 2 || i === 100 ? `the Zebracorn ${i}` : `message ${i}`));
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'zebracorn');
+    const count = screen.getByRole('status', { name: 'Matches' });
+    expect(count).toHaveTextContent('1 of 2');
+    expect(drawn()).toContain('chat-1-m2');
+    expect(drawn()).toHaveLength(THREAD_WINDOW);
+    expect(drawn()).not.toContain('chat-1-m199');
+    expect(highlighted()).toEqual(['Zebracorn']);
+    expect(screen.getByRole('button', { name: /Show later messages \(158 more\)/ })).toBeInTheDocument();
+
+    // The next match is far on: the window moves to it, still not drawing the rest.
+    await user.keyboard('{Enter}');
+    expect(count).toHaveTextContent('2 of 2');
+    expect(drawn()).toContain('chat-1-m100');
+    expect(drawn()).toHaveLength(THREAD_WINDOW);
+    expect(highlighted()).toEqual(['Zebracorn']);
+
+    // Show later draws on; Jump to latest goes back to the end of the chat, drawn as it was when the chat opened.
+    await user.click(screen.getByRole('button', { name: /Show later messages/ }));
+    expect(drawn()).toHaveLength(2 * THREAD_WINDOW);
+    await user.click(screen.getByRole('button', { name: 'Jump to latest' }));
+    expect(drawn()).toHaveLength(THREAD_WINDOW);
+    expect(drawn().at(-1)).toBe('chat-1-m199');
+    expect(screen.queryByRole('button', { name: /Show later messages/ })).toBeNull();
+    // 200 messages in jsdom take a while to set up when the whole suite runs at once.
+  }, 20_000);
+
+  it('grows the drawn messages back to a match just before them', async () => {
+    chatOf(60, (i) => (i === 10 ? 'the Zebracorn' : `message ${i}`));
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'zebracorn');
+    expect(drawn()).toHaveLength(50);
+    expect(drawn().at(-1)).toBe('chat-1-m59');
+    expect(screen.queryByRole('button', { name: /Show later messages/ })).toBeNull();
+  });
+
+  it('searches only the branch on show, not the others', async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'a2' })] });
+    useOtherBenchStore.getState().loadMessages(
+      'chat-1',
+      [
+        makeMessage('u1', 'chat-1', { parts: [{ type: 'text', text: 'ask' }] }),
+        variantMessage('a1', 'u1', { parts: [{ type: 'text', text: 'the old needle' }], createdAt: 1 }),
+        variantMessage('a2', 'u1', {
+          parts: [{ type: 'text', text: 'a new reply' }],
+          producedBy: { profileId: 'p', profileName: 'P', connectionId: 'c1', modelId: 'm', regenerated: true },
+          createdAt: 2,
+        }),
+      ],
+      null
+    );
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'needle');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('No matches');
+    await user.clear(findBox());
+    await user.type(findBox(), 'new reply');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 1');
+  });
+
+  it('searches the reply on show in a compare turn waiting at the end, and only that one', async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })] });
+    useOtherBenchStore.getState().loadMessages(
+      'chat-1',
+      [
+        makeMessage('u1', 'chat-1', { parts: [{ type: 'text', text: 'compare these' }] }),
+        variantMessage('va', 'u1', { parts: [{ type: 'text', text: 'alpha needle' }], createdAt: 1 }),
+        variantMessage('vb', 'u1', { parts: [{ type: 'text', text: 'beta needle and needle' }], createdAt: 2 }),
+      ],
+      null
+    );
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+    ctrlF(screen.getByTestId('thread-scroll'));
+    await user.type(findBox(), 'needle');
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 1');
+    expect(highlighted()).toEqual(['needle']);
+    await user.click(screen.getByTestId('variant-tab-vb'));
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('2 matches');
+    await user.click(screen.getByRole('button', { name: 'Next match' }));
+    expect(screen.getByRole('status', { name: 'Matches' })).toHaveTextContent('1 of 2');
+    expect(highlighted()).toEqual(['needle']);
+  });
+
   it('steps through the matches with Enter and Shift+Enter, wrapping round', async () => {
     chatOf(6, (i) => (i % 2 === 0 ? `needle ${i}` : `reply ${i}`));
     const user = userEvent.setup();

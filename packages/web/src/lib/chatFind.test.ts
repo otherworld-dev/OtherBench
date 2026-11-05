@@ -121,6 +121,24 @@ describe('findMatches', () => {
   it('finds nothing for an empty query', () => {
     expect(findMatches(chat, '')).toEqual([]);
   });
+
+  it('finds inside a long paste, past where the thread folds it, with its offset', () => {
+    const paste = `${'a log line\n'.repeat(3000)}the hidden marmoset`;
+    const [match] = findMatches([msg('u1', 'user', [text(paste)])], 'marmoset');
+    expect(match).toMatchObject({ messageId: 'u1', index: 0, occurrence: 0, start: paste.indexOf('marmoset') });
+  });
+
+  it('is quick enough on every key in a 600-message chat with 170k-character pastes', () => {
+    const paste = 'a pasted log line with some words in it, 0123456789\n'.repeat(3300);
+    const long = Array.from({ length: 600 }, (_, i) =>
+      i % 200 === 0 ? msg(`m${i}`, 'user', [text(paste)]) : msg(`m${i}`, i % 2 ? 'assistant' : 'user', [text(`Some **reply** text number ${i}, with a [link](https://x.y).`)])
+    );
+    findMatches(long, 'warm the text cache');
+    const started = performance.now();
+    for (const query of ['w', 'wo', 'wor', 'word', 'words']) findMatches(long, query);
+    // "w" alone matches about 30,000 times in the pastes; typing a word has to stay well under a frame or two a key.
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });
 
 describe('firstMatchFrom', () => {
