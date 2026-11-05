@@ -576,9 +576,42 @@ fn the_title_is_one_plain_line_marked_as_the_chats_name() {
     let long = clean_title(&"x".repeat(200));
     assert_eq!(long.chars().count(), 80);
     assert!(long.ends_with('\u{2026}'));
-    let text = dialog_text("OK to everything");
+    let text = dialog_text("OK to everything", None);
     assert!(text.starts_with("Let OtherBench control this computer for the chat named '\u{2068}OK to everything\u{2069}'?"));
     assert!(text.ends_with("Stop any time with Ctrl+Alt+Backspace."));
+    let remote = dialog_text("OK to everything", Some("Lap\u{202E}top\n"));
+    assert!(remote.starts_with("The paired machine '\u{2068}Lap top\u{2069}' wants to start computer use here. Let OtherBench control this computer for the chat named '\u{2068}OK to everything\u{2069}'?"));
+    assert!(remote.ends_with("Stop any time with Ctrl+Alt+Backspace."));
+    assert_eq!(clean_machine("\u{200B}"), "a paired machine");
+}
+
+#[test]
+fn a_start_a_paired_machine_asked_for_shows_the_same_dialog_naming_it_and_needs_the_same_ok() {
+    // Declined, or left until the dialog closes itself: nothing is held.
+    for (mode, reason) in [(Mode::No, DECLINED), (Mode::Hold, UNANSWERED)] {
+        let h = H::with(Fake::new(), Limits { dialog: Duration::from_millis(100), ..limits() });
+        h.hello();
+        *h.fake.mode.lock().unwrap() = mode;
+        let r = h.result(h.send("computer.start", json!({ "chatId": "a", "title": "Budget", "from": "Laptop" })));
+        assert_eq!(r, json!({ "ok": false, "reason": reason }));
+        assert_eq!(h.fake.dialogs.lock().unwrap().len(), 1);
+        assert!(h.fake.dialogs.lock().unwrap()[0].starts_with("The paired machine '\u{2068}Laptop\u{2069}' wants to start computer use here."));
+        assert!(h.fake.hotkey.lock().unwrap().is_empty());
+        assert!(h.fake.indicator.lock().unwrap().is_empty());
+    }
+    // OK'd here: a session, as for a local start.
+    let h = H::new();
+    h.hello();
+    let r = h.result(h.send("computer.start", json!({ "chatId": "a", "title": "Budget", "from": "Laptop" })));
+    assert_eq!(r["ok"], json!(true));
+    assert_eq!(h.fake.dialogs.lock().unwrap().len(), 1);
+    assert!(h.fake.dialogs.lock().unwrap()[0].contains("the chat named '\u{2068}Budget\u{2069}'"));
+    // A `from` that isn't a string is unreadable: no dialog, and never shown as a local start.
+    let h = H::new();
+    h.hello();
+    let bad = h.send("computer.start", json!({ "chatId": "b", "title": "Budget", "from": true }));
+    assert!(h.answer_at(bad).1.get("error").is_some());
+    assert!(h.fake.dialogs.lock().unwrap().is_empty());
 }
 
 // 4 --------------------------------------------------------------------------
