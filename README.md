@@ -413,10 +413,16 @@ add one by hand via `POST /api/models`) and create a profile against a real
 ## Tests
 
 ```sh
-npx vitest run              # unit + integration, 953 pass, 3 skipped as of this writing
+npm test                    # unit + integration (vitest, every package)
 npm run typecheck
 cd packages/web && npx playwright test   # e2e, requires npm run build first
 ```
+
+Tests import the other workspace packages from their TypeScript source
+(`vitest.workspace.ts`), so a change to core is seen by the server's tests
+without a rebuild. The server's worker-thread tests (Office files, the Claude
+import reader) still run `packages/server/dist`: run `npx tsc -b` first.
+Judge a run by its exit code and the `Errors` line, not only the counts.
 
 ## More
 
