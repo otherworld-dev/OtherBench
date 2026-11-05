@@ -19,6 +19,7 @@ import type { CanonMessage, Part } from '../types/messages.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 
 // ---------------------------------------------------------------------------
@@ -950,6 +951,57 @@ export function runStoreContract(
 
         expect(store.chats.get('chat-a')).toMatchObject({ projectId: null, memoryCursor: null });
         expect(store.chats.get('chat-b')!.memoryCursor).toBe('msg-b');
+      });
+    });
+
+    describe('appNotes', () => {
+      beforeEach(() => {
+        store.apps.create({ id: 'app-a', name: 'A' });
+        store.apps.create({ id: 'app-b', name: 'B' });
+      });
+
+      it('get is null until the first save; save keeps the notes and returns them', () => {
+        expect(store.appNotes.get('app-a')).toBeNull();
+        const saved = store.appNotes.save('app-a', '## Build\n- one', 'chat-x', 1000);
+        expect(saved).toEqual({ appId: 'app-a', body: '## Build\n- one', updatedAt: 1000, sourceChatId: 'chat-x', mirroredAt: null });
+        expect(store.appNotes.get('app-a')).toEqual(saved);
+        expect(store.appNotes.get('app-b')).toBeNull();
+        expect(store.appNotes.list().map((n) => n.appId)).toEqual(['app-a']);
+      });
+
+      it('refuses notes for an app that does not exist', () => {
+        expect(() => store.appNotes.save('no-such-app', 'x', null, 1)).toThrow();
+      });
+
+      it('records a mirror, and a later save keeps it', () => {
+        store.appNotes.save('app-a', 'one', null, 1000);
+        store.appNotes.markMirrored('app-a', 1000);
+        expect(store.appNotes.get('app-a')!.mirroredAt).toBe(1000);
+        store.appNotes.save('app-a', 'two', null, 2000);
+        expect(store.appNotes.get('app-a')).toMatchObject({ body: 'two', updatedAt: 2000, mirroredAt: 1000 });
+      });
+
+      it('every save adds a version, newest first, and keeps only the newest ones', () => {
+        store.appNotes.save('app-a', 'first', null, 1000);
+        store.appNotes.save('app-a', 'second', 'chat-x', 2000);
+        store.appNotes.save('app-b', 'other', null, 1500);
+        const versions = store.appNotes.versions('app-a');
+        expect(versions.map((v) => [v.appId, v.body, v.createdAt, v.sourceChatId])).toEqual([
+          ['app-a', 'second', 2000, 'chat-x'],
+          ['app-a', 'first', 1000, null],
+        ]);
+        expect(store.appNotes.version(versions[1]!.id)).toEqual(versions[1]);
+        expect(store.appNotes.version('nope')).toBeNull();
+        for (let i = 0; i < APP_NOTES_VERSIONS_KEPT + 3; i++) store.appNotes.save('app-a', `body ${i}`, null, 5000);
+        expect(store.appNotes.versions('app-a')).toHaveLength(APP_NOTES_VERSIONS_KEPT);
+        expect(store.appNotes.versions('app-a')[0]!.body).toBe(`body ${APP_NOTES_VERSIONS_KEPT + 2}`);
+      });
+
+      it('goes with its app', () => {
+        store.appNotes.save('app-a', 'one', null, 1000);
+        store.apps.delete('app-a');
+        expect(store.appNotes.get('app-a')).toBeNull();
+        expect(store.appNotes.versions('app-a')).toEqual([]);
       });
     });
 

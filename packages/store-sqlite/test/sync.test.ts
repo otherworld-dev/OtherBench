@@ -455,6 +455,32 @@ describe('sync (Task 50)', () => {
     expect(b.store.globalMemory.versions()).toHaveLength(1);
   });
 
+  it("app notes travel with their app; the mirror time and the history stay home, and a bad row is refused", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    a.store.apps.create({ id: 'app1', name: 'One' });
+    a.store.appNotes.save('app1', '## Build\n- x', null, 1000);
+    a.store.appNotes.markMirrored('app1', 1000);
+    s.both();
+
+    expect(b.store.appNotes.get('app1')).toEqual({ appId: 'app1', body: '## Build\n- x', updatedAt: 1000, sourceChatId: null, mirroredAt: null });
+    expect(b.store.appNotes.versions('app1')).toEqual([]);
+
+    b.store.appNotes.markMirrored('app1', 1000);
+    b.store.appNotes.save('app1', '## Build\n- y', 'c', 2000);
+    s.both();
+    expect(a.store.appNotes.get('app1')).toMatchObject({ body: '## Build\n- y', updatedAt: 2000, mirroredAt: 1000 });
+
+    const bad = { tbl: 'app_notes', id: 'app1', op: 'upsert', hlc: '9999999999999-0000-z', row: { app_id: 'app1', body: 'x'.repeat(12_001), updated_at: 3000, source_chat_id: null } } as ChangeRow;
+    b.store.sync.apply([bad]);
+    expect(b.store.appNotes.get('app1')!.body).toBe('## Build\n- y');
+
+    a.store.apps.delete('app1');
+    s.both();
+    expect(b.store.appNotes.get('app1')).toBeNull();
+  });
+
   it("artifacts and their versions travel, and a version can arrive before the reply it's tied to", () => {
     const a = node('a');
     const b = node('b');

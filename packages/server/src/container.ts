@@ -48,6 +48,7 @@ import { GlobalMemoryService } from './memory/global.js';
 import { MemoryServices } from './memory/index.js';
 import { ProjectMemoryService } from './memory/service.js';
 import { MemoryQueue } from './memory/shared.js';
+import { AppNotesService } from './app-notes/service.js';
 import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
@@ -117,6 +118,8 @@ export interface Container {
    * can build a Container without one.
    */
   memory?: MemoryServices;
+  /** App notes (spec 2026-11-05-app-notes-design): filing facts and the Collectives copy. Optional like `memory`, for hand-built test containers. */
+  appNotes?: AppNotesService;
   /**
    * Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): runs due
    * schedules unattended. Always set by `createContainer`; optional so route
@@ -627,6 +630,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const memoryDeps = { store, engine, resolveProfile: (id: string) => resolveProfile({ store, secrets }, id), queue: memoryQueue };
   const memory = new MemoryServices(new ProjectMemoryService(memoryDeps), new GlobalMemoryService(memoryDeps));
   memory.attach(turnRunner);
+  const appNotes = new AppNotesService({ store, engine, resolveProfile: memoryDeps.resolveProfile, nextcloud: () => nextcloudOrThrow(container) });
   // Imported project docs and claude.ai's memory files sit beside this database, like its attachments.
   const importRoot = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-import-${process.pid}-${randomBytes(4).toString('hex')}`) : `${options.dbPath}.imported`;
   // Cowork sessions are read where Claude Desktop keeps them on this machine. OTHERBENCH_COWORK_ROOT points
@@ -723,6 +727,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     claudeScratchRoot,
     blobStore,
     memory,
+    appNotes,
     claudeImport,
     terminals,
     close: () => {
@@ -734,6 +739,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
+      appNotes.dispose();
       // Before the engine and store go: stops the schedule timer and its reply listeners.
       container.schedules?.dispose();
       // Before the store goes: stops the Overview's check timer.
@@ -789,6 +795,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // Never let the memory sweep stop the server starting.
     console.warn('[otherbench-server] project memory startup sweep failed:', err);
   }
+  // App notes that didn't reach Collectives (Nextcloud was down, say): now, then every 10 minutes.
+  appNotes.start();
   // Notes sent while a reply runs: told whenever a reply ends, after the stream registry and app events have heard it.
   const notesService = new NotesService({
     store,

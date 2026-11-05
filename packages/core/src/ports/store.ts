@@ -434,6 +434,50 @@ export interface ProjectMemoryRepo {
   version(id: string): ProjectMemoryVersion | null;
 }
 
+// --- app notes ----------------------------------------------------------------------
+
+/**
+ * An app's notes (spec 2026-11-05-app-notes-design): the user's standing facts
+ * about it, under headings, kept by the user only (typed with `#`, a model's
+ * offer the user saved, or an edit). `mirroredAt` is this machine's last good
+ * write of them to Collectives (null: never); it doesn't sync.
+ */
+export interface AppNotes {
+  appId: string;
+  body: string;
+  updatedAt: number;
+  /** The chat a fact came from, null for an edit or a restore. */
+  sourceChatId: string | null;
+  mirroredAt: number | null;
+}
+
+/** One saved version of an app's notes; every save adds one. Kept on this machine only. */
+export interface AppNotesVersion {
+  id: string;
+  appId: string;
+  body: string;
+  createdAt: number;
+  sourceChatId: string | null;
+}
+
+export interface AppNotesRepo {
+  /** The app's notes, or null if they were never saved. */
+  get(appId: string): AppNotes | null;
+  /** Every app's notes (for the Collectives retry). */
+  list(): AppNotes[];
+  /**
+   * Replaces the app's notes, records a version, and prunes versions beyond
+   * the newest `APP_NOTES_VERSIONS_KEPT`. `at` defaults to now. Throws for an
+   * app that doesn't exist.
+   */
+  save(appId: string, body: string, sourceChatId: string | null, at?: number): AppNotes;
+  /** Records a good write to Collectives of the notes saved at `at` (their `updatedAt`). Never syncs. */
+  markMirrored(appId: string, at: number): void;
+  /** The app's versions, newest first. */
+  versions(appId: string): AppNotesVersion[];
+  version(id: string): AppNotesVersion | null;
+}
+
 // --- global memory -----------------------------------------------------------------
 
 /**
@@ -1213,6 +1257,7 @@ export interface Store {
   mediaWorkflows: MediaWorkflowRepo;
   projectMemory: ProjectMemoryRepo;
   globalMemory: GlobalMemoryRepo;
+  appNotes: AppNotesRepo;
   settings: SettingsRepo;
   messages: MessageRepo;
   artifacts: ArtifactRepo;

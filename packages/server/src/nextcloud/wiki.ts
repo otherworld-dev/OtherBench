@@ -116,3 +116,25 @@ export async function wikiPage(client: NextcloudClient, collective: string, page
     url: pageUrl(client, collective, [...chain, ...below].map((p) => p.title)),
   };
 }
+
+/**
+ * Writes `text` as the page at `pagePath` (from the landing page down, by title, case-insensitive),
+ * making any page on the way that isn't there (nc.py wiki put). The page's url.
+ */
+export async function writeWikiPage(client: NextcloudClient, collective: string, pagePath: string, text: string): Promise<string> {
+  const found = (await client.collectives()).find((c) => c.name.toLowerCase() === collective.trim().toLowerCase());
+  if (!found) throw notFound('The collective');
+  const pages = await client.collectivePages(found.id);
+  const landing = landingPage(pages);
+  if (!landing) throw notFound('The landing page');
+  const titles: string[] = [];
+  let parent = landing;
+  for (const seg of pagePath.split('/').map((s) => s.trim()).filter(Boolean)) {
+    const next = pages.find((p) => p.parentId === parent.id && p.title.toLowerCase() === seg.toLowerCase()) ?? (await client.collectiveCreatePage(found.id, parent.id, seg));
+    titles.push(next.title);
+    parent = next;
+  }
+  if (parent.id === landing.id) throw notFound('The wiki page');
+  await client.pageWrite(parent, text);
+  return pageUrl(client, found.name, titles);
+}

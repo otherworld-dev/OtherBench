@@ -15,6 +15,7 @@ export const SYNC_TABLES = [
   'project',
   'app_folder',
   'app',
+  'app_notes',
   'issue_tick',
   'project_memory',
   'global_memory',

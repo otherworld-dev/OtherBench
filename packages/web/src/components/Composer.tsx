@@ -18,6 +18,8 @@ import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
 import { useUnsentText } from '../state/unsent.js';
+import { factFromMessage } from '@otherbench/core/domain/app-notes.js';
+import { useAppNotesStore } from '../state/appNotes.js';
 
 /** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
 type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
@@ -135,6 +137,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>(() => (chat.profileId ? [chat.profileId] : []));
   const [attachments, setAttachments] = useState<ChipAttachment[]>([]);
+  // A one-line `# fact` in an app chat: saved to the app's notes on send rather than sent (see saveNoteFact).
+  const noteFact = chat.appId && attachments.length === 0 ? factFromMessage(text) : null;
   const [dragOver, setDragOver] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -145,6 +149,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [accountError, setAccountError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const setAppNotesView = useAppNotesStore((s) => s.setView);
+  const addFactCard = useAppNotesStore((s) => s.addCard);
+  const appName = useOtherBenchStore((s) => (chat.appId ? (s.apps.find((a) => a.id === chat.appId)?.name ?? null) : null));
   const [noteReturned, setNoteReturned] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
   const [planSaving, setPlanSaving] = useState(false);
@@ -471,6 +478,11 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
 
   async function handleSend(): Promise<void> {
     const trimmed = text.trim();
+    // In an app chat, a one-line `# fact` goes to the app's notes, never to the model (spec 2026-11-05-app-notes-design).
+    if (noteFact !== null && !sending) {
+      await saveNoteFact(noteFact);
+      return;
+    }
     if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
     // The same rules as the Send button, which Enter reaches without. A
     // Claude Code chat with no folder is a clean chat and may send.
@@ -504,6 +516,25 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       setSendError(
         err instanceof ApiError ? (err.kind === 'command' ? err.message : `Couldn't send: ${err.message}`) : "Couldn't send the message. Please try again."
       );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  /** Files `fact` in the app's notes and shows its card in this chat; the box empties once it's saved. */
+  async function saveNoteFact(fact: string): Promise<void> {
+    if (!chat.appId) return;
+    const appId = chat.appId;
+    setSending(true);
+    setSendError(null);
+    try {
+      const saved = await api.appNotes.addFact(appId, { text: fact, chatId: chat.id });
+      setAppNotesView(appId, saved);
+      addFactCard(chat.id, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, appId, fact: saved.fact, state: 'saved' });
+      setText('');
+      textareaRef.current?.focus();
+    } catch (err) {
+      setSendError(`Couldn't save it to the notes: ${err instanceof ApiError ? err.message : 'please try again.'}`);
     } finally {
       setSending(false);
     }
@@ -706,6 +737,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {accountError}
         </div>
+      )}
+
+      {noteFact !== null && (
+        <p role="status" data-testid="composer-note-hint" className="mb-1.5 text-xs text-[var(--text-muted)]">
+          Enter saves this to {appName ? `${appName}'s` : "the app's"} notes. It isn't sent to the model.
+        </p>
       )}
 
       {sendError && (

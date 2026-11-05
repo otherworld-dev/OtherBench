@@ -50,7 +50,7 @@ export const CODE_PANEL_TAB_STORAGE_KEY = 'otherbench.codePanelTab';
 export function loadCodePanelTab(): CodePanelTab {
   try {
     const raw = window.localStorage.getItem(CODE_PANEL_TAB_STORAGE_KEY);
-    return raw === 'deck' || raw === 'wiki' || raw === 'links' || raw === 'files' || raw === 'chat' || raw === 'terminal' ? raw : 'issues';
+    return raw === 'deck' || raw === 'wiki' || raw === 'links' || raw === 'notes' || raw === 'files' || raw === 'chat' || raw === 'terminal' ? raw : 'issues';
   } catch {
     return 'issues';
   }

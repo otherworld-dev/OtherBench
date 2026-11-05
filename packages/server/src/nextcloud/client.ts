@@ -87,6 +87,10 @@ export interface NextcloudClient {
   collectives(): Promise<RawCollective[]>;
   collectivePages(collectiveId: number): Promise<RawPage[]>;
   pageText(page: RawPage): Promise<string>;
+  /** Makes a page titled `title` under `parentId`; the new page. */
+  collectiveCreatePage(collectiveId: number, parentId: number, title: string): Promise<RawPage>;
+  /** Replaces a page's markdown. */
+  pageWrite(page: RawPage, text: string): Promise<void>;
   bookmarks(tag: string): Promise<RawBookmark[]>;
   bookmarkCreate(fields: BookmarkFields): Promise<RawBookmark>;
   bookmarkUpdate(id: number, fields: BookmarkFields): Promise<RawBookmark>;
@@ -143,6 +147,15 @@ export function httpNextcloudClient(config: NextcloudConfig, fetchImpl: typeof f
   const deck = `${baseUrl}/index.php/apps/deck/api/v1.0`;
   const coll = `${baseUrl}/ocs/v2.php/apps/collectives/api/v1.0`;
   const bm = `${baseUrl}/index.php/apps/bookmarks/public/rest/v2`;
+
+  /** A page's markdown file over WebDAV: its collective's folder, its own folder, its file (nc.py coll_webdav_url). */
+  function pageDavUrl(page: RawPage): string {
+    const rel = [page.collectivePath, page.filePath, page.fileName || 'Readme.md']
+      .map((p) => (p ?? '').replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean)
+      .join('/');
+    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(config.user)}/${rel.split('/').map(encodeURIComponent).join('/')}`;
+  }
 
   async function call(method: string, url: string, opts: CallOpts): Promise<unknown> {
     const headers: Record<string, string> = {
@@ -266,12 +279,13 @@ export function httpNextcloudClient(config: NextcloudConfig, fetchImpl: typeof f
       return asArray<RawPage>(ocsPick(await call('GET', `${coll}/collectives/${id}/pages`, { parse: 'json' }), 'pages'));
     },
     async pageText(page) {
-      const rel = [page.collectivePath, page.filePath, page.fileName || 'Readme.md']
-        .map((p) => (p ?? '').replace(/^\/+|\/+$/g, ''))
-        .filter(Boolean)
-        .join('/');
-      const url = `${baseUrl}/remote.php/dav/files/${encodeURIComponent(config.user)}/${rel.split('/').map(encodeURIComponent).join('/')}`;
-      return (await call('GET', url, { parse: 'text', headers: { Accept: '*/*' } })) as string;
+      return (await call('GET', pageDavUrl(page), { parse: 'text', headers: { Accept: '*/*' } })) as string;
+    },
+    async collectiveCreatePage(id, parentId, title) {
+      return ocsPick(await call('POST', `${coll}/collectives/${id}/pages/${parentId}`, { json: { title }, parse: 'json' }), 'page') as RawPage;
+    },
+    async pageWrite(page, text) {
+      await call('PUT', pageDavUrl(page), { body: text, parse: 'none', headers: { 'Content-Type': 'text/markdown; charset=utf-8' } });
     },
 
     async bookmarks(tag) {

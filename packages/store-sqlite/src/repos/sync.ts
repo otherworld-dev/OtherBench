@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@otherbench/core/domain/artifacts.js';
 import { parseLiveSpec } from '@otherbench/core/domain/live-artifacts.js';
 import { APP_FOLDER_NAME_MAX } from '@otherbench/core/domain/apps.js';
+import { APP_NOTES_MAX_CHARS } from '@otherbench/core/domain/app-notes.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
 import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, laterThrough, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
@@ -22,6 +23,7 @@ const LOCAL_COLUMNS: Partial<Record<SyncTable, string[]>> = {
   connection: ['status', 'status_message', 'checked_at', 'sync_secret'],
   attachment: ['storage_path'],
   message: ['search_text'],
+  app_notes: ['mirrored_at'],
 };
 const STAMP_COLUMNS = ['hlc', 'field_hlc'];
 
@@ -43,6 +45,7 @@ const KEYS: Partial<Record<SyncTable, string[]>> = {
   location_path: ['location_id', 'node_id'],
   project_memory: ['project_id'],
   global_memory: ['key'],
+  app_notes: ['app_id'],
 };
 function keyColumns(tbl: SyncTable): string[] {
   return KEYS[tbl] ?? ['id'];
@@ -57,6 +60,11 @@ function keyWhere(tbl: SyncTable): string {
 function rowKey(tbl: SyncTable, row: SyncRow): string | null {
   const parts = keyColumns(tbl).map((c) => row[c]);
   return parts.every((p) => typeof p === 'string' && p.length > 0) ? (parts as string[]).join(':') : null;
+}
+
+/** An app notes row as OtherBench saves one: a body within the cap and a whole-number time. */
+function appNotesRowOk(row: SyncRow): boolean {
+  return typeof row['body'] === 'string' && row['body'].length <= APP_NOTES_MAX_CHARS && Number.isSafeInteger(row['updated_at']) && (row['source_chat_id'] == null || typeof row['source_chat_id'] === 'string');
 }
 
 /** A folder row as the app makes one: a name of 1-100 characters after trimming, and an integer position. */
@@ -379,6 +387,8 @@ export class SqliteSyncRepo implements SyncRepo {
         return true;
       case 'project_memory':
         return this.exists('project', row['project_id']);
+      case 'app_notes':
+        return this.exists('app', row['app_id']);
       case 'global_memory':
         // Only the two rows OtherBench writes; anything else would fail the table's CHECK.
         return row['key'] === 'about' || row['key'] === 'note';
@@ -458,6 +468,8 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'app' && row['folder_id'] != null && typeof row['folder_id'] !== 'string') return false;
     // `open` is a 0/1 flag (migration 040); a peer still on schema 39 cannot send rows (the schema version gates sync), but a missing one is tolerated.
     if (u.tbl === 'app' && row['open'] !== undefined && row['open'] !== 0 && row['open'] !== 1) return false;
+    // App notes reach every app chat's prompt: only what OtherBench itself could have saved.
+    if (u.tbl === 'app_notes' && !appNotesRowOk(row)) return false;
     if (u.tbl === 'issue_tick') {
       if (!issueTickRowOk(row)) return false;
       if (local) return this.mergeIssueTick(row, local, u.hlc);

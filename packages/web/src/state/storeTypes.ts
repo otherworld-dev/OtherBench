@@ -47,7 +47,7 @@ export type ReturnedNote = ReplyNote & { takenBack?: true };
  * The Code mode right panel's tabs (spec 2026-10-20-code-tab-design: Issues, Files, and Chat holding the Inspector;
  * spec 2026-10-21-code-terminal-design: Terminal).
  */
-export type CodePanelTab = 'issues' | 'deck' | 'wiki' | 'links' | 'files' | 'chat' | 'terminal';
+export type CodePanelTab = 'issues' | 'deck' | 'wiki' | 'links' | 'notes' | 'files' | 'chat' | 'terminal';
 /** Where one Deck view is: the column it lists (null: open on Doing) and the card it has open, if any. */
 export interface DeckView {
   stackId: number | 'archived' | null;

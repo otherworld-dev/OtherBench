@@ -14,6 +14,9 @@ import { useNow } from '../lib/useNow.js';
 import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { IssuesTab } from './IssuesTab.js';
+import { hasAppNotesContent } from '@otherbench/core/domain/app-notes.js';
+import { MarkdownBody } from '../components/MarkdownBody.js';
+import { useAppNotes } from '../state/appNotes.js';
 import { NO_GITHUB_REPO } from './CodeError.js';
 
 const HEADING = 'label-caps mb-1.5 text-[var(--text-muted)]';
@@ -133,6 +136,7 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
           submitLabel="Start"
         />
         <AppChats app={app} />
+        <AppNotesCard app={app} />
         {github && (
           <section data-testid="app-home-issues" aria-label="Open issues" className="min-w-0">
             <h3 className={HEADING}>Issues</h3>
@@ -142,6 +146,37 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The app's notes at a glance (spec 2026-11-05-app-notes-design): the facts
+ * every chat on it starts with, and a way to the Notes tab to change them.
+ */
+function AppNotesCard({ app }: { app: App }): JSX.Element {
+  const { view, loadFailed } = useAppNotes(app.id, true);
+  const setCodePanelTab = useOtherBenchStore((s) => s.setCodePanelTab);
+  const body = view?.notes.body ?? '';
+  return (
+    <section data-testid="app-home-notes" aria-label="Notes" className="min-w-0">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <h3 className="label-caps min-w-0 flex-1 text-[var(--text-muted)]">Notes</h3>
+        <button type="button" onClick={() => setCodePanelTab('notes')} className="btn shrink-0 px-2 py-0.5 text-xs">
+          Open all notes
+        </button>
+      </div>
+      {!view ? (
+        <p className={EMPTY}>{loadFailed ? "Couldn't load the notes." : 'Loading…'}</p>
+      ) : hasAppNotesContent(body) ? (
+        <div className="max-h-80 overflow-y-auto rounded border border-[var(--border)] px-3 py-2 text-sm">
+          <MarkdownBody text={body} />
+        </div>
+      ) : (
+        <p className={EMPTY}>
+          No notes yet. Type <code>#</code> and a fact in a chat on {app.name} to add one.
+        </p>
+      )}
+    </section>
   );
 }
 

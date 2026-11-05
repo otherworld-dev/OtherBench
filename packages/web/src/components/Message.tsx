@@ -20,6 +20,8 @@ import { GeneratedMedia, GenerationFailure, generationFailure, GenerationProgres
 import { BrowserHandoverCard } from './BrowserHandoverCard.js';
 import { GenerationCard } from './GenerationCard.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { TextWithNoteOffers } from './AppNoteCards.js';
+import { hasNoteOffer } from '@otherbench/core/domain/app-notes.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
 import { SubagentCard, subagentDisplayStatus } from './SubagentCard.js';
@@ -364,6 +366,8 @@ function UserText({ text, reveal }: { text: string; reveal: boolean }): JSX.Elem
 function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element | null {
   switch (part.type) {
     case 'text':
+      // A model's offer of a fact for the app's notes shows as a Save card (spec 2026-11-05-app-notes-design).
+      if (hasNoteOffer(part.text)) return <TextWithNoteOffers key={key} text={part.text} chatId={scope.chatId} />;
       return <MarkdownBody key={key} text={part.text} deckLinks copySections />;
     case 'reasoning':
       return <ReasoningBlock key={key} text={part.text} />;

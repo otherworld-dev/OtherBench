@@ -20,7 +20,7 @@ import { ExecutableMissingError } from './process.js';
  * reading still finds the message and no other route's response changes.
  */
 export type CodeRouteErrorCode =
-  | GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode | NextcloudErrorCode | FeatureOffCode;
+  | GitErrorCode | GhErrorCode | 'not-on-this-machine' | 'no-github-repo' | TerminalErrorCode | NextcloudErrorCode | FeatureOffCode | 'notes-full';
 
 export class CodeRouteError extends HTTPException {
   constructor(
