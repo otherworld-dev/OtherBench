@@ -50,7 +50,7 @@ import { MemoryQueue } from './memory/shared.js';
 import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
-import { forwardedApi, PeerOrigins, peerComputerOffReason, RemoteRuns } from './peer/forward.js';
+import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns } from './peer/forward.js';
 import { handleBackground } from './background.js';
 import { closeEngineChatsThatAreGone, followChatSettings } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
@@ -167,8 +167,8 @@ export interface Container {
   nextcloud?: (config: NextcloudConfig) => NextcloudClient;
   /** Replies and approvals running on paired machines, for the calls this machine forwards (Task 52). */
   remoteRuns?: RemoteRuns;
-  /** Which paired machine asked for each reply running here that one asked for (computer use's start check). */
-  peerOrigins?: PeerOrigins;
+  /** The chats a paired machine has put input into that may still reach a reply (computer use's start check). */
+  peerInfluence?: PeerInfluence;
   /**
    * Paired machines and the peer listener (v2 plan, Tasks 46-47). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -487,20 +487,24 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // to them, so it hears the ends the server makes itself too. The sessions
   // also take the desktop driver's word that the shell started over
   // (`onReset`), which the fake has no need to give.
-  // The replies paired machines asked for here; a reply's entry goes when it finishes.
-  const peerOrigins = new PeerOrigins();
+  // The chats paired machines have put input into; a chat's mark goes once nothing that input could reach is left.
+  // `container` is assigned below, before any event can arrive.
+  const peerInfluence = new PeerInfluence();
   events.subscribe((e) => {
-    if (e.type === 'turn-finished') peerOrigins.finished(e.messageId);
+    // After the event's other listeners (the notes service gives back or sends its notes on the same finish).
+    if (e.type === 'turn-finished' || e.type === 'background-tasks') setTimeout(() => peerInfluence.settleIfIdle(e.chatId, (id) => chatIsIdle(container, id)), 0);
   });
   const computer = computerDriver
     ? new ComputerSessions(computerDriver, {
         emit: (e) => events.emit(e),
         cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
         chatExists: (chatId) => store.chats.get(chatId) !== null,
-        // A start made by a reply a paired machine asked for is that machine's: refused unless this machine lets
-        // paired machines start computer use, and named on the session (the banner) when it does.
+        // A start in a chat a paired machine has put input into (while that input may still reach its replies) is that
+        // machine's: refused unless this machine lets paired machines start computer use, and named on the session
+        // (the banner) when it does.
         startCheck: (chatId) => {
-          const nodeId = peerOrigins.askedFrom(events.runningTurns().filter((t) => t.chatId === chatId).map((t) => t.messageId));
+          peerInfluence.settleIfIdle(chatId, (id) => chatIsIdle(container, id));
+          const nodeId = peerInfluence.of(chatId);
           if (nodeId === null) return { from: null };
           const from = store.peers.get(nodeId)?.name ?? 'a paired machine';
           if (!store.settings.get().peerComputerControl) return { refuse: peerComputerOffReason(store.nodes.self().name, from) };
@@ -691,7 +695,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     secrets,
     peers,
     remoteRuns: new RemoteRuns(),
-    peerOrigins,
+    peerInfluence,
     engine,
     claudeAccounts: accounts,
     claudeLogin,

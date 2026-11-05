@@ -886,6 +886,86 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     expect(audit.every((a) => a.decidedOnNode === laptop.id)).toBe(true);
   });
 
+  describe("the laptop's input into a reply the PC started", () => {
+    /** A slow reply the PC started itself in its own chat: nothing the laptop asked for. */
+    async function localReply(pc: Machine, laptop: Machine, chatId: string, profileId: string): Promise<{ replyId: string; userId: string }> {
+      await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+      const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+      const body = (await res.json()) as { assistantMessageIds: string[]; userMessageId: string };
+      await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+      return { replyId: body.assistantMessageIds[0]!, userId: body.userMessageId };
+    }
+    const note = (laptop: Machine, chatId: string, profileId: string, userId: string) =>
+      laptop.api('POST', `/api/chats/${chatId}/notes`, { text: 'now use the computer', clientId: `n-${Math.random()}`, parentId: userId, profileIds: [profileId] });
+
+    it("with the PC not letting paired machines in, a note (a steer mid-reply) can't get computer use started for that reply", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
+      // Before the laptop says anything the reply is the PC's own.
+      expect(pc.container.peerInfluence!.of(chatId)).toBeNull();
+
+      expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
+      expect(pc.container.peerInfluence!.of(chatId)).toBe(laptop.id);
+      // What the computer tool does when the model, steered by the note, first uses the computer.
+      const refused = await pc.container.computer!.ensureSession(chatId, 'Held');
+      expect(refused).toMatchObject({ ok: false });
+      expect((refused as { reason: string }).reason).toContain("so Laptop can't");
+      expect(driver.hasSession(chatId)).toBe(false);
+      pc.container.turnRunner.cancel(replyId);
+    });
+
+    it('with the PC letting paired machines in, the same note gets it started, named as the laptop\'s', async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
+      expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
+      expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
+      expect(pc.container.events!.computerSessions()).toEqual([{ chatId, startedFrom: 'Laptop' }]);
+      pc.container.turnRunner.cancel(replyId);
+    });
+
+    it("other steers count too: a head change and an answer to the reply's question, and a card it can't place is refused", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId } = await localReply(pc, laptop, chatId, profileId);
+
+      // A question the PC's reply asked: the laptop's answer (whatever becomes of it) marks the chat first.
+      pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: replyId, requestId: 'ask-1', toolName: 'ask_user', kind: 'question' });
+      await onPc(laptop, pc, 'POST', '/api/asks/ask-1/answer', { answers: {} });
+      expect(pc.container.peerInfluence!.of(chatId)).toBe(laptop.id);
+      expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: false });
+
+      // A card or message this machine can't place in a chat is refused outright while the setting is off.
+      for (const path of ['/api/approvals/nobody-knows/resolve', '/api/asks/nobody-knows/answer', '/api/messages/no-such-message/retry']) {
+        const res = await onPc(laptop, pc, 'POST', path, { choice: 'once' });
+        expect(res.status, path).toBe(403);
+        expect(res.body, path).toMatchObject({ kind: 'peer_computer_off' });
+      }
+      pc.container.turnRunner.cancel(replyId);
+    });
+
+    it("the mark goes once nothing the laptop's input could reach is left, and the PC's own next start is its own", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
+      expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
+      pc.container.turnRunner.cancel(replyId);
+      // The note comes back (its reply was stopped) rather than starting a turn; once nothing runs or waits, unmarked.
+      await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+      await expect.poll(() => pc.container.peerInfluence!.of(chatId)).toBeNull();
+
+      // A head change from the laptop in a quiet chat marks it only while the call runs.
+      expect((await laptop.api('POST', `/api/chats/${chatId}/head`, { messageId: userId })).status).toBeLessThan(500);
+      expect(pc.container.peerInfluence!.of(chatId)).toBeNull();
+      expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
+      expect(pc.container.events!.computerSessions()).toEqual([{ chatId }]);
+    });
+  });
+
   it('a chat controlling no paired machine is stopped here as before', async () => {
     const { laptop, chatId } = await setup();
     expect((await laptop.api('POST', `/api/chats/${chatId}/computer/stop`)).status).toBe(204);
