@@ -30,8 +30,8 @@ export class AppEventBus {
   private readonly pending = new Map<string, PendingApprovalSummary>();
   /** Replies being written, by message id. */
   private readonly running = new Map<string, string>();
-  /** Chats controlling this computer, each with its last action's summary once it has acted. */
-  private readonly computer = new Map<string, string | undefined>();
+  /** Chats controlling this computer, each with its last action's summary once it has acted, and the machine it was started from. */
+  private readonly computer = new Map<string, { lastAction?: string; startedFrom?: string }>();
   /** Chats with background tasks running, by how many. */
   private readonly background = new Map<string, number>();
 
@@ -50,8 +50,12 @@ export class AppEventBus {
       this.running.delete(e.messageId);
       for (const [id, p] of this.pending) if (p.messageId === e.messageId) this.pending.delete(id);
     } else if (e.type === 'computer-session') {
-      if (e.active) this.computer.set(e.chatId, e.lastAction ?? this.computer.get(e.chatId));
-      else this.computer.delete(e.chatId);
+      if (e.active) {
+        const before = this.computer.get(e.chatId);
+        const lastAction = e.lastAction ?? before?.lastAction;
+        const startedFrom = e.startedFrom ?? before?.startedFrom;
+        this.computer.set(e.chatId, { ...(lastAction === undefined ? {} : { lastAction }), ...(startedFrom === undefined ? {} : { startedFrom }) });
+      } else this.computer.delete(e.chatId);
     } else if (e.type === 'background-tasks') {
       if (e.count > 0) this.background.set(e.chatId, e.count);
       else this.background.delete(e.chatId);
@@ -85,7 +89,7 @@ export class AppEventBus {
 
   /** Chats controlling this computer, with their last action. */
   computerSessions(): ComputerSessionSummary[] {
-    return [...this.computer].map(([chatId, lastAction]) => (lastAction === undefined ? { chatId } : { chatId, lastAction }));
+    return [...this.computer].map(([chatId, session]) => ({ chatId, ...session }));
   }
 
   /** Chats with background tasks running. */

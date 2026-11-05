@@ -7,6 +7,7 @@ import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
 import { createApp } from '../../src/app.js';
 import { handleBackground } from '../../src/background.js';
 import { createContainer, type Container } from '../../src/container.js';
+import { PeerError } from '../../src/peer/service.js';
 import type { StreamTimings } from '../../src/stream/sse.js';
 import { freezableProxy } from './helpers.js';
 
@@ -606,9 +607,10 @@ describe("the chat's Stop reaches the machine running its reply", () => {
     expect(await res.json()).toMatchObject({ kind: 'peer_unreachable', nodeId: pc.id });
   });
 
-  it("while the PC is under computer control, the laptop's chat Stop still passes there and a message does not", async () => {
+  it("while the PC is under computer control and doesn't let paired machines in, the laptop's chat Stop still passes there and a message does not", async () => {
     const driver = new FakeComputerDriver();
     const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    pc.container.store.settings.update({ peerComputerControl: false });
     const replyId = await replyOnPc(pc, laptop, chatId, profileId);
     await pc.container.computer!.ensureSession(chatId, 'Held');
     expect(pc.container.computer!.mayBeInControl()).toBe(true);
@@ -649,5 +651,244 @@ describe("the chat's Stop reaches the machine running its reply", () => {
     const res = await laptop.container.peers!.client.request({ addresses: target.addresses, fingerprint: target.fingerprint }, { method: 'POST', path: `/api/chats/${chatId}/stop`, token: 'not-the-token' });
     expect(res.status).toBe(401);
     expect(pc.container.store.messages.get(replyId)?.status).toBe('streaming');
+  });
+});
+
+describe('computer use on a paired machine: the laptop sees and stops the session, and starts and approves it while the PC lets it', () => {
+  type Peers = { peers: { nodeId: string; computerSessions?: { chatId: string; lastAction?: string }[] }[] };
+  const sessionsOn = (laptop: Machine, pc: Machine) => async (): Promise<{ chatId: string; lastAction?: string }[]> => {
+    const overview = (await (await laptop.api('GET', '/api/peers')).json()) as Peers;
+    return overview.peers.find((p) => p.nodeId === pc.id)?.computerSessions ?? [];
+  };
+  /** A call straight to the PC's peer listener, as the laptop makes them (its pinned certificate and token). */
+  const onPc = (laptop: Machine, pc: Machine, method: string, path: string, body?: unknown) =>
+    laptop.container.peers!.call(pc.id, { method, path, ...(body === undefined ? {} : { body }) });
+
+  it("tells the laptop which chat controls the PC and its last action, and the laptop's banner Stop ends it there", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    expect(await sessionsOn(laptop, pc)()).toEqual([]);
+
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+    pc.container.events!.emit({ type: 'computer-session', chatId, active: true, lastAction: 'left click at 10, 20' });
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId, lastAction: 'left click at 10, 20' }]);
+    // Not this machine's own session: the laptop's own banner state and its desktop-only gate are untouched.
+    expect(laptop.container.events!.computerSessions()).toEqual([]);
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/computer/stop`);
+    expect(res.status).toBe(204);
+    expect(pc.container.computer!.holder()).toBeNull();
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([]);
+  });
+
+  it("the PC's Stop also cancels the chat's reply there, as its own banner does", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    const started = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await started.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+
+    expect((await laptop.api('POST', `/api/chats/${chatId}/computer/stop`)).status).toBe(204);
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+  });
+
+  it('stops a session the PC still holds for a chat since moved to run on the laptop', async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: laptop.id, workspace: null })).status).toBe(200);
+    pc.container.store.chats.update(chatId, { runsOn: laptop.id });
+
+    expect((await laptop.api('POST', `/api/chats/${chatId}/computer/stop`)).status).toBe(204);
+    expect(pc.container.computer!.holder()).toBeNull();
+  });
+
+  it('the PC refuses a stop for a chat that holds no session there, and ends nothing', async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+
+    // No session at all.
+    const none = await onPc(laptop, pc, 'POST', `/api/chats/${chatId}/computer/stop`);
+    expect(none.status).toBe(404);
+    expect(none.body).toMatchObject({ kind: 'no_session' });
+
+    // Another chat holds it: a stop naming this one leaves that session alone.
+    const other = (await (await pc.api('POST', '/api/chats', { profileId })).json()) as { id: string };
+    await pc.container.computer!.ensureSession(other.id, 'Other');
+    expect((await onPc(laptop, pc, 'POST', `/api/chats/${chatId}/computer/stop`)).status).toBe(404);
+    expect(pc.container.computer!.holder()).toBe(other.id);
+    expect((await onPc(laptop, pc, 'POST', '/api/chats/no-such-chat/computer/stop')).status).toBe(404);
+    expect(pc.container.computer!.holder()).toBe(other.id);
+  });
+
+  it("reads nothing new over the listener, and with the PC not letting paired machines in, can neither start computer use nor answer its cards", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId } = await setup(undefined, driver);
+    pc.container.store.settings.update({ peerComputerControl: false });
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+
+    // No route says whether this machine offers computer use or reads its screen; the start is refused.
+    expect((await onPc(laptop, pc, 'POST', `/api/chats/${chatId}/computer/start`)).status).toBe(403);
+    for (const [method, path] of [
+      ['GET', `/api/chats/${chatId}/computer`],
+      ['GET', `/api/chats/${chatId}/computer/start`],
+      ['GET', '/api/computer/status'],
+    ] as const) {
+      expect((await onPc(laptop, pc, method, path)).status, `${method} ${path}`).toBe(404);
+    }
+    // Nor grants, the audit trail, MCP health, the machine list or the app-wide event stream: none of them is
+    // readable over the listener, which is why their events are not sent to paired machines either.
+    for (const path of [`/api/chats/${chatId}/grants`, `/api/chats/${chatId}/audit`, '/api/mcp-servers', '/api/events', '/api/peers']) {
+      expect((await onPc(laptop, pc, 'GET', path)).status, path).toBe(404);
+    }
+    expect(pc.container.computer!.holder()).toBeNull();
+
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    pc.container.events!.emit({ type: 'approval-requested', chatId, messageId: 'm1', requestId: 'r1', toolName: 'computer' });
+    // While the PC is under control, an answer from the laptop is refused before it reaches the card, and so is
+    // anything else that isn't a Stop.
+    const answer = await onPc(laptop, pc, 'POST', '/api/approvals/r1/resolve', { choice: 'once' });
+    expect(answer.status).toBe(403);
+    expect(answer.body).toMatchObject({ kind: 'desktop_only' });
+    expect((await onPc(laptop, pc, 'POST', `/api/chats/${chatId}/computer/start`)).status).toBe(403);
+    expect(pc.container.computer!.holder()).toBe(chatId);
+  });
+
+  it("the laptop says the PC is unreachable when its Stop can't get there", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+    const peers = laptop.container.peers!;
+    const call = peers.call.bind(peers);
+    vi.spyOn(peers, 'call').mockImplementation(async (nodeId, req, limits) => {
+      if (req.path.endsWith('/computer/stop')) throw new PeerError("PC isn't reachable.", 503);
+      return call(nodeId, req, limits);
+    });
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/computer/stop`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ kind: 'peer_unreachable', nodeId: pc.id });
+    expect(pc.container.computer!.holder()).toBe(chatId);
+  });
+
+  /** The chat's profile on the PC uses the computer (as switched on there by hand). */
+  const computerProfile = (pc: Machine, profileId: string): void => {
+    const profile = pc.container.store.profiles.get(profileId)!;
+    pc.container.store.profiles.update(profileId, { toolPolicy: { ...profile.toolPolicy, computer: true } });
+  };
+
+  it("the laptop starts computer use on the PC: the PC's own start runs, the session is named as the laptop's, and the laptop sees it", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    computerProfile(pc, profileId);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
+    expect(res.status).toBe(202);
+    await expect.poll(() => pc.container.computer!.holder()).toBe(chatId);
+    expect(driver.hasSession(chatId)).toBe(true);
+    // The PC's banner says where it was started from.
+    expect(pc.container.events!.computerSessions()).toEqual([{ chatId, startedFrom: 'Laptop' }]);
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+  });
+
+  it("refuses the laptop's start when the PC doesn't let paired machines, when the chat's profile doesn't use the computer, and when computer use is off there", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+
+    const noProfile = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
+    expect(noProfile.status).toBe(409);
+    expect(await noProfile.json()).toMatchObject({ kind: 'computer_off_for_profile' });
+
+    computerProfile(pc, profileId);
+    pc.container.store.settings.update({ peerComputerControl: false });
+    const off = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
+    expect(off.status).toBe(403);
+    const said = (await off.json()) as { kind: string; error: string };
+    expect(said.kind).toBe('peer_computer_off');
+    expect(said.error).toContain("PC doesn't let paired machines start or approve computer use, so Laptop can't");
+    expect(pc.container.computer!.holder()).toBeNull();
+    expect(driver.hasSession(chatId)).toBe(false);
+  });
+
+  it('refuses a start on a PC where computer use is switched off, and switches nothing on', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    computerProfile(pc, profileId);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    const res = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ kind: 'computer_off', error: 'Computer use is switched off on PC. It can only be switched on there, in the desktop app.' });
+    expect(pc.container.computer).toBeUndefined();
+  });
+
+  it("a reply the laptop sent that starts computer use on the PC is refused while the PC doesn't let paired machines, and named as the laptop's when it does", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    expect(res.status).toBe(202);
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await expect.poll(() => pc.container.events!.runningTurns().map((t) => t.messageId)).toContain(replyId);
+
+    // What the computer tool does when the model first uses it in that reply.
+    pc.container.store.settings.update({ peerComputerControl: false });
+    const refused = await pc.container.computer!.ensureSession(chatId, 'Held');
+    expect(refused).toMatchObject({ ok: false });
+    expect((refused as { reason: string }).reason).toContain("doesn't let paired machines start or approve computer use, so Laptop can't");
+    expect(driver.hasSession(chatId)).toBe(false);
+
+    pc.container.store.settings.update({ peerComputerControl: true });
+    expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
+    expect(pc.container.events!.computerSessions()).toEqual([{ chatId, startedFrom: 'Laptop' }]);
+    pc.container.turnRunner.cancel(replyId);
+  });
+
+  it("a reply started on the PC itself starts computer use as the PC's own, whatever the setting", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, chatId, profileId } = await setup(undefined, driver);
+    pc.container.store.settings.update({ peerComputerControl: false });
+    const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
+    expect(pc.container.events!.computerSessions()).toEqual([{ chatId }]);
+    pc.container.turnRunner.cancel(replyId);
+  });
+
+  it("while the PC is under control and lets paired machines in, the laptop's message runs and its answer to the card is the PC's audit, naming the laptop", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    await pc.container.computer!.ensureSession(chatId, 'Held');
+    expect(pc.container.computer!.mayBeInControl()).toBe(true);
+
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const sent = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'read it #tool note.txt' }], profileIds: [profileId] });
+    expect(sent.status).toBe(202);
+    const replyId = ((await sent.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await readStream(stream, async (e) => {
+      if (e.data.type === 'approval-request' && e.data.request) {
+        expect((await laptop.api('POST', `/api/approvals/${e.data.request.id}/resolve`, { choice: 'once' })).status).toBe(200);
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'complete';
+    });
+    const audit = pc.container.store.audit.list(chatId);
+    expect(audit.length).toBeGreaterThan(0);
+    expect(audit.every((a) => a.decidedOnNode === laptop.id)).toBe(true);
+  });
+
+  it('a chat controlling no paired machine is stopped here as before', async () => {
+    const { laptop, chatId } = await setup();
+    expect((await laptop.api('POST', `/api/chats/${chatId}/computer/stop`)).status).toBe(204);
+    expect((await laptop.api('POST', '/api/chats/no-such-chat/computer/stop')).status).toBe(404);
   });
 });
