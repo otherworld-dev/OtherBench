@@ -456,7 +456,7 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'app_folder' && !appFolderRowOk(row)) return false;
     // `folder_id` is not a foreign key (migration 032) and is never checked against the folders here: rows arrive in no fixed order.
     if (u.tbl === 'app' && row['folder_id'] != null && typeof row['folder_id'] !== 'string') return false;
-    // `open` is a 0/1 flag (migration 037); a peer still on schema 36 cannot send rows (the schema version gates sync), but a missing one is tolerated.
+    // `open` is a 0/1 flag (migration 039); a peer still on schema 38 cannot send rows (the schema version gates sync), but a missing one is tolerated.
     if (u.tbl === 'app' && row['open'] !== undefined && row['open'] !== 0 && row['open'] !== 1) return false;
     if (u.tbl === 'issue_tick') {
       if (!issueTickRowOk(row)) return false;
