@@ -491,6 +491,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // `container` is assigned below, before any event can arrive.
   const peerInfluence = new PeerInfluence();
   events.subscribe((e) => {
+    // A reply started while the chat is marked is remembered, so a turn its agent later starts by itself inherits it.
+    if (e.type === 'turn-started') peerInfluence.started(e.chatId, e.messageIds);
     // After the event's other listeners (the notes service gives back or sends its notes on the same finish).
     if (e.type === 'turn-finished' || e.type === 'background-tasks') setTimeout(() => peerInfluence.settleIfIdle(e.chatId, (id) => chatIsIdle(container, id)), 0);
   });

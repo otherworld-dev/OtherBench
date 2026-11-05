@@ -1167,7 +1167,15 @@ or question, a withdrawn note, the start itself) marks the chat it names
 as that machine's *before* it is handled (`PeerInfluence`,
 `forwardedApi`), and the mark stays while anything that input could reach
 is still to come: a reply running in the chat (so whatever it spawns,
-sub-agents included), a background task, or a note not yet delivered. Every
+sub-agents included), a background task, or a note not yet delivered. It
+fails closed: a mark is dropped only once nothing holds it and the chat is
+idle. Each peer write holds it until that write has been handled, counted,
+so two overlapping writes keep it until both are done. Every reply running
+or started while the chat is marked is remembered, and a turn Claude Code
+starts by itself after one of those (a background task reported back,
+possibly after the chat had gone quiet) marks the chat again and holds the
+mark from the moment it is asked for, before anything is awaited, until it
+is running or declined (`PeerInfluence.inherit`, `background.ts`). Every
 computer-use start goes through `ComputerSessions.ensureSession`, whose
 `startCheck` treats a start in a marked chat as the paired machine's:
 refused while the setting is off, named on the banner while it is on. A

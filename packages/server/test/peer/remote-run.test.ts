@@ -947,6 +947,52 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
       pc.container.turnRunner.cancel(replyId);
     });
 
+    /** A turn Claude Code asks to start by itself after `afterMessageId` (a background task reported back): its run tries to start computer use. */
+    function selfStart(pc: Machine, chatId: string, profileId: string, afterMessageId: string): Promise<{ ok: boolean; reason?: string }> {
+      return new Promise((resolve, reject) => {
+        handleBackground(pc.container, {
+          type: 'self-start',
+          start: {
+            chatId, afterMessageId, profileId, notice: 'Carried on after the helper reported back.', unattended: false,
+            // eslint-disable-next-line require-yield -- the turn only tries to start computer use, as its first tool call would.
+            run: async function* () {
+              resolve((await pc.container.computer!.ensureSession(chatId, 'Held')) as { ok: boolean; reason?: string });
+            },
+            decline: () => reject(new Error('the self-started turn was declined')),
+          },
+        });
+      });
+    }
+
+    it("with the PC not letting paired machines in, a turn the agent starts by itself after a reply the laptop's note reached is still the laptop's, after the chat went quiet in between", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
+      expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
+      pc.container.turnRunner.cancel(replyId);
+      await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+      // The background task ended and the chat went quiet: the mark is gone...
+      await expect.poll(() => pc.container.peerInfluence!.of(chatId)).toBeNull();
+      // ...but the turn the agent carries that reply on with is marked again before it runs.
+      const answer = await selfStart(pc, chatId, profileId, replyId);
+      expect(answer.ok).toBe(false);
+      expect(answer.reason).toContain("so Laptop can't");
+      expect(driver.hasSession(chatId)).toBe(false);
+    });
+
+    it("a turn the agent starts by itself after the PC's own reply, with no input from the laptop, starts computer use as the PC's", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId } = await localReply(pc, laptop, chatId, profileId);
+      pc.container.turnRunner.cancel(replyId);
+      await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+      const answer = await selfStart(pc, chatId, profileId, replyId);
+      expect(answer.ok).toBe(true);
+      expect(pc.container.events!.computerSessions()).toEqual([{ chatId }]);
+    });
+
     it("the mark goes once nothing the laptop's input could reach is left, and the PC's own next start is its own", async () => {
       const driver = new FakeComputerDriver();
       const { pc, laptop, chatId, profileId } = await setup(undefined, driver);

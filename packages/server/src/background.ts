@@ -2,6 +2,7 @@ import { applySubagentEvent } from '@otherbench/core/domain/parts.js';
 import type { EngineBackgroundEvent } from '@otherbench/core/ports/chat-engine.js';
 import type { Container } from './container.js';
 import { resolveProfile } from './profile-resolution.js';
+import { chatIsIdle } from './peer/forward.js';
 import { startSelfStartedTurn } from './turn-start.js';
 
 type HelperEvent = Extract<EngineBackgroundEvent, { type: 'helper-event' }>;
@@ -71,23 +72,37 @@ export function handleBackground(container: Container, event: EngineBackgroundEv
     }
     case 'self-start': {
       const { start } = event;
+      // Carrying on a reply a paired machine's input reached is that machine's for computer use, from now (before
+      // anything is awaited) until the turn is running or declined; the reply's own mark then holds it.
+      const influence = container.peerInfluence;
+      const release = influence?.inherit(start.chatId, start.afterMessageId) ?? (() => {});
+      const settle = (): void => {
+        release();
+        influence?.settleIfIdle(start.chatId, (id) => chatIsIdle(container, id));
+      };
       // Notes the user sent mid-reply, which Claude Code ran after the reply ended.
       if (start.noteIds) {
         if (!container.notes) {
           start.decline();
+          settle();
           return;
         }
-        void container.notes.followOn(start).catch((err: unknown) => {
-          console.error(`[otherbench-server] could not run the notes Claude Code carried on with in chat ${start.chatId}:`, err);
-          start.decline();
-        });
+        void container.notes
+          .followOn(start)
+          .catch((err: unknown) => {
+            console.error(`[otherbench-server] could not run the notes Claude Code carried on with in chat ${start.chatId}:`, err);
+            start.decline();
+          })
+          .finally(settle);
         return;
       }
       const deps = { ...container, resolveProfile: (id: string) => resolveProfile({ store: container.store, secrets: container.secrets }, id) };
-      void startSelfStartedTurn(deps, start).catch((err: unknown) => {
-        console.error(`[otherbench-server] could not run a reply Claude Code started by itself in chat ${start.chatId}:`, err);
-        start.decline();
-      });
+      void startSelfStartedTurn(deps, start)
+        .catch((err: unknown) => {
+          console.error(`[otherbench-server] could not run a reply Claude Code started by itself in chat ${start.chatId}:`, err);
+          start.decline();
+        })
+        .finally(settle);
       return;
     }
     case 'notes-dropped':

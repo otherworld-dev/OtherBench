@@ -79,21 +79,52 @@ export class RemoteRuns {
   }
 }
 
+/** How many influenced replies are remembered for a later self-started turn to inherit from: far more than run at once. */
+const MAX_INFLUENCED_REPLIES = 5000;
+
 /**
  * The chats a paired machine has put input into over the peer listener (a turn, a note or steer, a regenerate or
- * retry, a head change, an answer to a card or question), by the machine that last did. A chat stays marked while
- * anything that input could reach is still to come: a reply running in it (and so whatever that reply spawns,
- * sub-agents included), a background task, or a note not yet delivered. Only once it has none of those is the mark
- * dropped (`settleIfIdle`). Every computer-use start for a marked chat is that machine's (`startCheck`): refused
- * while this machine doesn't let paired machines start computer use, and named on the session when it does. Kept per
- * chat rather than per reply because a note or an answer goes into a reply this machine started, and a held note can
- * become a reply of its own later.
+ * retry, a head change, an answer to a card or question), by the machine that last did. Every computer-use start for
+ * a marked chat is that machine's (`startCheck`): refused while this machine doesn't let paired machines start
+ * computer use, and named on the session when it does. Kept per chat rather than per reply because a note or an
+ * answer goes into a reply this machine started, and a held note can become a reply of its own later.
+ *
+ * It fails closed. A mark is dropped only by `settleIfIdle`, and only when nothing holds it and the chat is idle (no
+ * reply running, so nothing it spawned either, sub-agents included; no background task; no note waiting). Holds are
+ * counted: each peer write holds the mark from before it is handled until it has been (so two overlapping writes
+ * keep it until both are done), and so does a turn the agent starts by itself after a reply the input reached, from
+ * the moment it is asked for until it is running (`inherit`). Every reply running in a marked chat, and every reply
+ * started while it is marked, is remembered, so a self-started turn that carries one on is marked again even after
+ * the chat went quiet in between (a background task ended before the agent carried on).
  */
 export class PeerInfluence {
   private readonly byChat = new Map<string, string>();
+  private readonly holds = new Map<string, number>();
+  private readonly replies = new Map<string, string>();
 
-  touch(chatId: string, nodeId: string): void {
+  /** Marks the chat as `nodeId`'s, with the replies running in it now, and holds the mark until the release is called. */
+  touch(chatId: string, nodeId: string, runningReplies: readonly string[] = []): () => void {
     this.byChat.set(chatId, nodeId);
+    for (const id of runningReplies) this.remember(id, nodeId);
+    return this.hold(chatId);
+  }
+
+  /** Replies started in a chat: remembered as the marking machine's while the chat is marked. */
+  started(chatId: string, messageIds: readonly string[]): void {
+    const nodeId = this.byChat.get(chatId);
+    if (nodeId !== undefined) for (const id of messageIds) this.remember(id, nodeId);
+  }
+
+  /**
+   * A turn the agent asked to start by itself after reply `afterMessageId`: when the chat is marked, or that reply was
+   * reached by a paired machine's input, the chat is marked (again) as that machine's and held until the release,
+   * which the caller makes once the turn is running or has been declined. A no-op release otherwise.
+   */
+  inherit(chatId: string, afterMessageId: string): () => void {
+    const nodeId = this.byChat.get(chatId) ?? this.replies.get(afterMessageId);
+    if (nodeId === undefined) return () => {};
+    this.byChat.set(chatId, nodeId);
+    return this.hold(chatId);
   }
 
   /** The paired machine whose input may reach the chat's replies now, or null when none. */
@@ -101,9 +132,27 @@ export class PeerInfluence {
     return this.byChat.get(chatId) ?? null;
   }
 
-  /** Drops the chat's mark when nothing its input could reach is left (`idle`). */
+  /** Drops the chat's mark when nothing holds it and nothing its input could reach is left (`idle`). */
   settleIfIdle(chatId: string, idle: (chatId: string) => boolean): void {
-    if (this.byChat.has(chatId) && idle(chatId)) this.byChat.delete(chatId);
+    if (this.byChat.has(chatId) && (this.holds.get(chatId) ?? 0) === 0 && idle(chatId)) this.byChat.delete(chatId);
+  }
+
+  private hold(chatId: string): () => void {
+    this.holds.set(chatId, (this.holds.get(chatId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.holds.get(chatId) ?? 1) - 1;
+      if (left > 0) this.holds.set(chatId, left);
+      else this.holds.delete(chatId);
+    };
+  }
+
+  private remember(messageId: string, nodeId: string): void {
+    this.replies.delete(messageId);
+    this.replies.set(messageId, nodeId);
+    if (this.replies.size > MAX_INFLUENCED_REPLIES) this.replies.delete(this.replies.keys().next().value!);
   }
 }
 
@@ -722,11 +771,14 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
       }
       return next();
     }
-    influence.touch(chatId, c.env.peerNodeId);
+    const running = container.events?.runningTurns().filter((t) => t.chatId === chatId).map((t) => t.messageId) ?? [];
+    const release = influence.touch(chatId, c.env.peerNodeId, running);
     try {
       await next();
     } finally {
-      // Nothing came of it that its input could still reach (a head change, a note to a chat gone quiet): unmarked.
+      // Nothing came of it that its input could still reach (a head change, a note to a chat gone quiet), and no
+      // other write of a paired machine to the chat is still being handled: unmarked.
+      release();
       influence.settleIfIdle(chatId, (id) => chatIsIdle(container, id));
     }
   });
