@@ -7,12 +7,15 @@ import { ApiError, api } from '../../state/api.js';
  * never synced). On: a paired machine can ask to start computer use here (this machine's own start dialog asks the
  * person here, naming that machine), send messages and answer its cards while it is in control, so it can drive this
  * computer's mouse and keyboard. Off: it can still see a session here and Stop it. Only this machine's desktop app
- * may turn it on (the server refuses anything else); anywhere that reaches Settings may turn it off, so outside the
+ * may turn it on, and only once the person presses OK in the native question the desktop app then shows (the server
+ * asks the shell; this page can't answer it); anywhere that reaches Settings may turn it off, so outside the
  * desktop app the box is only enabled while it is on. Neither switches computer use itself on.
  */
 export function PeerComputerControl(): JSX.Element {
   const [on, setOn] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
+  /** Turning it on waits for the person to answer OtherBench's own question on this computer. */
+  const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const here = isDesktop();
 
@@ -29,6 +32,7 @@ export function PeerComputerControl(): JSX.Element {
 
   async function change(value: boolean): Promise<void> {
     setSaving(true);
+    setAsking(value);
     setError(null);
     try {
       setOn((await api.settings.patch({ peerComputerControl: value })).peerComputerControl === true);
@@ -36,6 +40,7 @@ export function PeerComputerControl(): JSX.Element {
       setError(err instanceof ApiError ? err.message : "Couldn't save that. Please try again.");
     } finally {
       setSaving(false);
+      setAsking(false);
     }
   }
 
@@ -60,6 +65,11 @@ export function PeerComputerControl(): JSX.Element {
           </span>
         </span>
       </label>
+      {asking && (
+        <p data-testid="peer-computer-control-asking" className="text-xs text-[var(--warn)]">
+          OtherBench is asking you to confirm this in a window on this computer. It only turns on if you press OK there.
+        </p>
+      )}
       {!here && (
         <p data-testid="peer-computer-control-desktop-only" className="text-xs text-[var(--warn)]">
           {on === true
