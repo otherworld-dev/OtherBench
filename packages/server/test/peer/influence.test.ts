@@ -52,6 +52,33 @@ describe('PeerInfluence', () => {
     }
   });
 
+  it('never forgets an influenced reply to make room: many later ones leave an early one marked', () => {
+    const influence = new PeerInfluence();
+    influence.touch('c1', 'node-laptop', ['early'])();
+    influence.settleIfIdle('c1', idle);
+    // Far past the 5000 an earlier version kept, in other chats.
+    for (let i = 0; i < 12_000; i++) {
+      const release = influence.touch(`flood-${i % 50}`, 'node-laptop', [`r-${i}`]);
+      release();
+      influence.settleIfIdle(`flood-${i % 50}`, idle);
+    }
+    influence.inherit('c1', 'early');
+    expect(influence.of('c1')).toBe('node-laptop');
+  });
+
+  it('forgets a chat that is gone, and only that chat', () => {
+    const influence = new PeerInfluence();
+    influence.touch('gone', 'node-laptop', ['g1'])();
+    influence.touch('kept', 'node-laptop', ['k1'])();
+    influence.forgetChat('gone');
+    expect(influence.of('gone')).toBeNull();
+    influence.inherit('gone', 'g1')();
+    expect(influence.of('gone')).toBeNull();
+    influence.settleIfIdle('kept', idle);
+    influence.inherit('kept', 'k1');
+    expect(influence.of('kept')).toBe('node-laptop');
+  });
+
   it("leaves a self-started turn after this machine's own reply unmarked", () => {
     const influence = new PeerInfluence();
     influence.started('c1', ['own']);

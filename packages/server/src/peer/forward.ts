@@ -79,9 +79,6 @@ export class RemoteRuns {
   }
 }
 
-/** How many influenced replies are remembered for a later self-started turn to inherit from: far more than run at once. */
-const MAX_INFLUENCED_REPLIES = 5000;
-
 /**
  * The chats a paired machine has put input into over the peer listener (a turn, a note or steer, a regenerate or
  * retry, a head change, an answer to a card or question), by the machine that last did. Every computer-use start for
@@ -95,24 +92,29 @@ const MAX_INFLUENCED_REPLIES = 5000;
  * keep it until both are done), and so does a turn the agent starts by itself after a reply the input reached, from
  * the moment it is asked for until it is running (`inherit`). Every reply running in a marked chat, and every reply
  * started while it is marked, is remembered, so a self-started turn that carries one on is marked again even after
- * the chat went quiet in between (a background task ended before the agent carried on).
+ * the chat went quiet in between (a background task ended before the agent carried on). Nothing is ever evicted
+ * from that memory: a reply is forgotten only with its chat (`forgetChat`, on `chat-deleted`), so a paired machine
+ * can't wash a mark out by making many replies. It lives in memory, not on the message row, and that is enough: a
+ * self-started turn comes from a Claude Code process this server started, and those end with it, so after a restart
+ * no turn can carry on a reply from before it except one a person (or a paired machine, marked anew) sends.
  */
 export class PeerInfluence {
   private readonly byChat = new Map<string, string>();
   private readonly holds = new Map<string, number>();
-  private readonly replies = new Map<string, string>();
+  /** Replies a paired machine's input reached, with that machine and the reply's chat. */
+  private readonly replies = new Map<string, { nodeId: string; chatId: string }>();
 
   /** Marks the chat as `nodeId`'s, with the replies running in it now, and holds the mark until the release is called. */
   touch(chatId: string, nodeId: string, runningReplies: readonly string[] = []): () => void {
     this.byChat.set(chatId, nodeId);
-    for (const id of runningReplies) this.remember(id, nodeId);
+    for (const id of runningReplies) this.replies.set(id, { nodeId, chatId });
     return this.hold(chatId);
   }
 
   /** Replies started in a chat: remembered as the marking machine's while the chat is marked. */
   started(chatId: string, messageIds: readonly string[]): void {
     const nodeId = this.byChat.get(chatId);
-    if (nodeId !== undefined) for (const id of messageIds) this.remember(id, nodeId);
+    if (nodeId !== undefined) for (const id of messageIds) this.replies.set(id, { nodeId, chatId });
   }
 
   /**
@@ -121,7 +123,7 @@ export class PeerInfluence {
    * which the caller makes once the turn is running or has been declined. A no-op release otherwise.
    */
   inherit(chatId: string, afterMessageId: string): () => void {
-    const nodeId = this.byChat.get(chatId) ?? this.replies.get(afterMessageId);
+    const nodeId = this.byChat.get(chatId) ?? this.replies.get(afterMessageId)?.nodeId;
     if (nodeId === undefined) return () => {};
     this.byChat.set(chatId, nodeId);
     return this.hold(chatId);
@@ -149,10 +151,10 @@ export class PeerInfluence {
     };
   }
 
-  private remember(messageId: string, nodeId: string): void {
-    this.replies.delete(messageId);
-    this.replies.set(messageId, nodeId);
-    if (this.replies.size > MAX_INFLUENCED_REPLIES) this.replies.delete(this.replies.keys().next().value!);
+  /** The chat is gone, so none of its replies can be carried on: they, and its mark, are forgotten. */
+  forgetChat(chatId: string): void {
+    for (const [id, reply] of this.replies) if (reply.chatId === chatId) this.replies.delete(id);
+    if ((this.holds.get(chatId) ?? 0) === 0) this.byChat.delete(chatId);
   }
 }
 

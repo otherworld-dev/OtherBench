@@ -493,6 +493,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   events.subscribe((e) => {
     // A reply started while the chat is marked is remembered, so a turn its agent later starts by itself inherits it.
     if (e.type === 'turn-started') peerInfluence.started(e.chatId, e.messageIds);
+    // Only a chat that is gone forgets its replies' marks: nothing can carry them on any more.
+    if (e.type === 'chat-deleted') peerInfluence.forgetChat(e.chatId);
     // After the event's other listeners (the notes service gives back or sends its notes on the same finish).
     if (e.type === 'turn-finished' || e.type === 'background-tasks') setTimeout(() => peerInfluence.settleIfIdle(e.chatId, (id) => chatIsIdle(container, id)), 0);
   });

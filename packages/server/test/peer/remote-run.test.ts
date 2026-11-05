@@ -981,6 +981,23 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
       expect(driver.hasSession(chatId)).toBe(false);
     });
 
+    it("an early reply the laptop's note reached stays the laptop's however many replies come after it, so its self-started turn can't get computer use", async () => {
+      const driver = new FakeComputerDriver();
+      const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: false });
+      const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
+      expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
+      pc.container.turnRunner.cancel(replyId);
+      await expect.poll(() => pc.container.peerInfluence!.of(chatId)).toBeNull();
+      // A flood of other influenced replies, far past what an earlier version kept.
+      const influence = pc.container.peerInfluence!;
+      for (let i = 0; i < 6000; i++) influence.touch(`other-${i % 20}`, laptop.id, [`flood-${i}`])();
+
+      const answer = await selfStart(pc, chatId, profileId, replyId);
+      expect(answer.ok).toBe(false);
+      expect(answer.reason).toContain("so Laptop can't");
+    });
+
     it("a turn the agent starts by itself after the PC's own reply, with no input from the laptop, starts computer use as the PC's", async () => {
       const driver = new FakeComputerDriver();
       const { pc, laptop, chatId, profileId } = await setup(undefined, driver);

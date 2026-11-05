@@ -1175,7 +1175,13 @@ or started while the chat is marked is remembered, and a turn Claude Code
 starts by itself after one of those (a background task reported back,
 possibly after the chat had gone quiet) marks the chat again and holds the
 mark from the moment it is asked for, before anything is awaited, until it
-is running or declined (`PeerInfluence.inherit`, `background.ts`). Every
+is running or declined (`PeerInfluence.inherit`, `background.ts`). That
+memory of influenced replies is never trimmed to make room (only a deleted
+chat's replies are forgotten), so a flood of replies can't wash a mark out.
+It is kept in memory, not on the message row: a self-started turn comes
+from a Claude Code process this server started, and those end with it, so
+after a restart nothing can carry on a reply from before it except a turn a
+person or a paired machine (marked anew) sends. Every
 computer-use start goes through `ComputerSessions.ensureSession`, whose
 `startCheck` treats a start in a marked chat as the paired machine's:
 refused while the setting is off, named on the banner while it is on. A
