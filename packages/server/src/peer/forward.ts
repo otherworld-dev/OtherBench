@@ -739,9 +739,9 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
  * running, steering, stopping and watching a chat that runs here, answering
  * its approvals, questions and plans, stopping a reply still running here
  * in a chat moved elsewhere, stopping a computer-use session held here,
- * and, while this machine lets it (`peerComputerControl`), starting one
- * here (its own start dialog still asks). Nothing else -- no settings, no folder browsing, no attaching
- * files by path. The approving machine is the caller's authenticated
+ * and, while this machine lets it (`peerComputerControl`, off until turned on in this machine's desktop app),
+ * asking to start one here (its own start dialog asks the person here, naming the paired machine). Nothing else --
+ * no settings (so the setting can't be turned on from there), no folder browsing, no attaching files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
 export interface ForwardedEnv {
@@ -754,8 +754,9 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
 
   // While computer use may be in control of this machine, a paired machine changes nothing here (no answer,
   // no message): that machine's UI could be open in a browser the model is using. Only Stops pass. Unless this
-  // machine lets paired machines start and approve computer use (Settings → Machines, on by default): then the
-  // paired machine is trusted to drive it, cards and messages included, and that risk is the setting's to take.
+  // machine lets paired machines start and approve computer use (Settings → Machines, off by default): then the
+  // paired machine is trusted to drive it, cards and messages included, and that risk is the setting's to take. It is
+  // off by default and only turned on here, in the desktop app (routes/settings.ts).
   const desktopOnly = changesOnlyFromTheDesktopApp(container.computer, []);
   app.use('*', async (c, next) => (container.store.settings.get().peerComputerControl ? next() : desktopOnly(c, next)));
 
@@ -816,8 +817,9 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
    * this machine lets paired machines (`peerComputerControl`), only when computer use is on here (a start never
    * switches it on: no driver, or the shell said it's off, is refused) and only for a chat whose profile uses the
    * computer. The start is this machine's own (`ComputerSessions.ensureSession`), so its native start dialog asks the
-   * person here, as for any start; it waits on that, so this answers 202 at once and the session shows on the
-   * paired machine once it has started (its activity). The session is named as started from the paired machine.
+   * person here, as for any start, and says which paired machine asked; it waits on that, so this answers 202 at once
+   * and the session shows on the paired machine once it has started (its activity). Declined or left unanswered, no
+   * session starts. The session is named as started from the paired machine.
    */
   app.post('/chats/:id/computer/start', async (c) => {
     const chat = container.store.chats.get(c.req.param('id'));

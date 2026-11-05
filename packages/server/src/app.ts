@@ -160,7 +160,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // nothing there. The status route is always there so the web can say why there's no Terminal tab.
   authed.route('/', terminalStatusRoutes(container, options.terminals === true));
   if (options.terminals === true) authed.route('/', terminalsRoutes(container));
-  authed.route('/settings', settingsRoutes(container));
+  authed.route('/settings', settingsRoutes(container, options.corsOrigins ?? []));
   // This machine's Nextcloud (Deck, Wiki and Links tabs): never on the peer listener (forwardedApi).
   authed.route('/nextcloud', nextcloudRoutes(container));
   authed.route('/locations', locationsRoutes(container));

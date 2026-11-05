@@ -3,7 +3,7 @@ import { actionSummary, expectationOf, parseAction } from '@otherbench/core/doma
 import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
-import type { ComputerAction, ComputerAnswer, ComputerExpectation, ComputerStopReason } from '@otherbench/core/ports/computer.js';
+import type { ComputerAction, ComputerAnswer, ComputerExpectation, ComputerStartOptions, ComputerStopReason } from '@otherbench/core/ports/computer.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { FAKE_COMPUTER_APP, FakeComputerDriver, fakeComputerTarget } from '@otherbench/core/testing/fake-computer.js';
@@ -55,10 +55,10 @@ class DialogDriver extends FakeComputerDriver {
   dialogUp = false;
   private readonly waiting: (() => void)[] = [];
 
-  override async ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+  override async ensureSession(chatId: string, chatTitle: string, start?: ComputerStartOptions): Promise<ComputerAnswer> {
     this.asked.push(chatId);
     if (this.dialogUp) await new Promise<void>((resolve) => this.waiting.push(resolve));
-    return super.ensureSession(chatId, chatTitle);
+    return super.ensureSession(chatId, chatTitle, start);
   }
 
   /** The person answers every dialog that is up (with `startAnswer`). */
@@ -106,6 +106,44 @@ describe('ComputerSessions', () => {
       { type: 'computer-session', chatId: 'c1', active: true, lastAction: 'press ctrl+s' },
     ]);
     expect(sessions.activeChat()).toBe('c1');
+  });
+
+  it("names the paired machine a new start was asked from in the dialog, which still has to be answered here; a local start's dialog names none", async () => {
+    const driver = new DialogDriver();
+    const events: AppEvent[] = [];
+    let marked: string | null = null;
+    const sessions = new ComputerSessions(driver, { emit: (e) => events.push(e), cancelChat: () => {}, startCheck: () => ({ from: marked }) });
+    // Declined at the dialog: nothing started, nothing announced.
+    driver.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
+    expect(await sessions.ensureSession('c1', 'Budget', { from: 'Laptop' })).toEqual(driver.startAnswer);
+    expect(sessions.holder()).toBeNull();
+    expect(events).toEqual([]);
+    // Accepted: started, and named as the laptop's.
+    driver.startAnswer = { ok: true };
+    driver.dialogUp = true;
+    const asked = sessions.ensureSession('c1', 'Budget', { from: 'Laptop' });
+    await tick();
+    // Nothing is in control until the person here answers.
+    expect(sessions.activeChat()).toBeNull();
+    driver.answer();
+    expect(await asked).toEqual({ ok: true });
+    driver.dialogUp = false;
+    expect(events).toEqual([{ type: 'computer-session', chatId: 'c1', active: true, startedFrom: 'Laptop' }]);
+    // The session going on asks the driver again, as any call does, with nothing to name: no new dialog comes of it.
+    await sessions.ensureSession('c1', 'Budget');
+    await sessions.stop('c1');
+    // A start in a chat a paired machine's input reached (startCheck) names it too; a local start names none.
+    marked = 'PC two';
+    await sessions.ensureSession('c2', 'Other');
+    await sessions.stop('c2');
+    marked = null;
+    await sessions.ensureSession('c3', 'Mine');
+    expect(driver.started).toEqual([
+      { chatId: 'c1', chatTitle: 'Budget', from: 'Laptop' },
+      { chatId: 'c1', chatTitle: 'Budget', from: 'Laptop' },
+      { chatId: 'c2', chatTitle: 'Other', from: 'PC two' },
+      { chatId: 'c3', chatTitle: 'Mine' },
+    ]);
   });
 
   it('refuses a second chat while one is in control, without asking the shell', async () => {

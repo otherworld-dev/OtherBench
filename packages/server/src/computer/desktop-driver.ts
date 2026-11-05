@@ -8,6 +8,7 @@ import type {
   ComputerExpectation,
   ComputerRefusal,
   ComputerScreenshot,
+  ComputerStartOptions,
   ComputerStopReason,
   ComputerTarget,
 } from '@otherbench/core/ports/computer.js';
@@ -46,6 +47,8 @@ const MAX_REASON = 300;
 const MAX_CHAT_ID = 128;
 /** The longest title sent with `computer.start`, in code points, an ellipsis included. */
 export const MAX_DIALOG_TITLE = 80;
+/** The longest paired machine's name sent with `computer.start`, in code points, an ellipsis included. */
+export const MAX_DIALOG_MACHINE = 64;
 
 export const DESKTOP_NOT_AVAILABLE_REASON = "Computer use isn't available in the desktop app right now.";
 export const DESKTOP_GONE_REASON = 'The desktop app went away.';
@@ -175,6 +178,13 @@ function dialogTitle(title: unknown): string {
   const whole = cardLine(title, Number.POSITIVE_INFINITY);
   if (whole === '') return 'this chat';
   return Array.from(whole).length <= MAX_DIALOG_TITLE ? whole : cardLine(whole, MAX_DIALOG_TITLE - 1);
+}
+
+/** A paired machine's name for the native dialog: one clean line of at most `MAX_DIALOG_MACHINE` code points ("a paired machine" when nothing is left of it); null for a local start. */
+function dialogMachine(name: string | undefined): string | null {
+  if (name === undefined) return null;
+  const line = cardLine(name, MAX_DIALOG_MACHINE - 1);
+  return line === '' ? 'a paired machine' : line;
 }
 
 /** A chat id that is safe to send, hand on and log: one short clean line (no lone surrogate, no hidden or control character), exactly as given. */
@@ -342,7 +352,7 @@ export class DesktopComputerDriver implements ComputerDriver {
     }
   }
 
-  ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+  ensureSession(chatId: string, chatTitle: string, options: ComputerStartOptions = {}): Promise<ComputerAnswer> {
     // A chat id that is not one clean line is never sent: nothing can have been started for it.
     if (!isChatId(chatId)) return Promise.resolve(refusal(DESKTOP_BAD_CHAT_REASON));
     // One start per chat with the shell at a time: whoever asks meanwhile gets its answer.
@@ -351,7 +361,7 @@ export class DesktopComputerDriver implements ComputerDriver {
     const off = this.unusable();
     if (off !== null) return Promise.resolve(refusal(off));
     if (!this.tracked(chatId) && this.sessions.size + this.starts.size + this.doubtful.size >= MAX_TRACKED_CHATS) return Promise.resolve(refusal(TOO_MANY_REASON));
-    const start: Promise<ComputerAnswer> = this.start(chatId, chatTitle).finally(() => {
+    const start: Promise<ComputerAnswer> = this.start(chatId, chatTitle, dialogMachine(options.from)).finally(() => {
       if (this.starts.get(chatId) === start) this.starts.delete(chatId);
     });
     this.starts.set(chatId, start);
@@ -709,7 +719,8 @@ export class DesktopComputerDriver implements ComputerDriver {
     }
   }
 
-  private async start(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+  /** `from`: the paired machine that asked, for the dialog to name (the person here still answers it); null for a local start. */
+  private async start(chatId: string, chatTitle: string, from: string | null): Promise<ComputerAnswer> {
     // Nothing is started while the shell may still hold something this side asked it to end.
     const pending = [...this.doubtful];
     if (pending.length > 0) {
@@ -736,7 +747,7 @@ export class DesktopComputerDriver implements ComputerDriver {
     try {
       answer = await this.channel.call(
         'computer.start',
-        { chatId, title: dialogTitle(chatTitle) },
+        { chatId, title: dialogTitle(chatTitle), ...(from === null ? {} : { from }) },
         // Given up on at the limit, its place freed; only a note is kept, so that an answer that still comes is seen.
         { timeoutMs: this.startTimeoutMs, late: { forMs: this.startLateMs, answer: (late) => this.lateStart(chatId, late) } }
       );

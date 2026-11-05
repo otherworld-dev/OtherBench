@@ -7,6 +7,7 @@ import type {
   ComputerExpectation,
   ComputerRefusal,
   ComputerScreenshot,
+  ComputerStartOptions,
   ComputerStopReason,
   ComputerTarget,
 } from '@otherbench/core/ports/computer.js';
@@ -52,15 +53,11 @@ export interface ComputerSessionsDeps {
   /**
    * Asked before a new session is started for a chat (not for one already in control): whether a paired machine
    * asked for it (a reply it sent is running in the chat), and if so whether this machine lets paired machines start
-   * computer use. `refuse` is what the model is told instead; `from` names the machine on the session's events (the
-   * banner). Without it every start counts as this machine's own.
+   * computer use. `refuse` is what the model is told instead; `from` names the machine in the native start dialog
+   * (which still asks the person here) and on the session's events (the banner). Without it every start counts as
+   * this machine's own.
    */
   startCheck?: (chatId: string) => { refuse: string } | { from: string | null };
-}
-
-/** What a start may say beside the chat: the paired machine that asked for it, by name (the remote start route). */
-export interface ComputerStartOptions {
-  from?: string;
 }
 
 export interface ComputerSessionsOptions {
@@ -477,7 +474,8 @@ export class ComputerSessions implements ComputerDriver {
     }
     let answer: ComputerAnswer;
     try {
-      answer = await this.driver.ensureSession(chatId, chatTitle);
+      // A new session asked for from a paired machine: the native dialog says which, and still needs the person here.
+      answer = this.active !== chatId && start.from !== null ? await this.driver.ensureSession(chatId, chatTitle, { from: start.from }) : await this.driver.ensureSession(chatId, chatTitle);
     } catch (err) {
       if (this.starting === start) this.starting = null;
       // Whether a session came of it is unknown. This server keeps none, and tells the driver to end one if it has.

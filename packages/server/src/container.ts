@@ -504,8 +504,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
         chatExists: (chatId) => store.chats.get(chatId) !== null,
         // A start in a chat a paired machine has put input into (while that input may still reach its replies) is that
-        // machine's: refused unless this machine lets paired machines start computer use, and named on the session
-        // (the banner) when it does.
+        // machine's: refused unless this machine lets paired machines start computer use, and named in the native start
+        // dialog (which still asks the person here) and on the session (the banner) when it does.
         startCheck: (chatId) => {
           peerInfluence.settleIfIdle(chatId, (id) => chatIsIdle(container, id));
           const nodeId = peerInfluence.of(chatId);

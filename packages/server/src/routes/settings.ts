@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { mayChangePeerComputerControl, PEER_COMPUTER_CONTROL_HOST_ONLY_REASON } from '@otherbench/core/domain/settings.js';
 import type { AppSettings, Store } from '@otherbench/core/ports/store.js';
+import { fromTheDesktopApp } from '../computer/desktop-only.js';
 import type { Container } from '../container.js';
 import { optionalNullableString } from '../validation.js';
 
@@ -21,9 +23,11 @@ export function clearMemoryProfile(store: Store, profileId: string): void {
 /**
  * `GET/PATCH /api/settings`: app-wide settings (spec 2026-10-03-project-memory-design §4), GitHub and Nextcloud on or
  * off (`features.ts`), and whether paired machines may start and approve computer use here (`peerComputerControl`).
- * Not on the peer listener: only this machine's own UI changes them.
+ * Not on the peer listener: only this machine's own UI changes them. `peerComputerControl` is turned on only from
+ * this machine's desktop app's window (`desktopOrigins`, the shell's `--cors-origin`s, as the desktop-only gate);
+ * a browser tab or a signed-in phone may only turn it off.
  */
-export function settingsRoutes(container: Container): Hono {
+export function settingsRoutes(container: Container, desktopOrigins: readonly string[] = []): Hono {
   const app = new Hono();
 
   app.get('/', (c) => c.json(container.store.settings.get()));
@@ -53,6 +57,9 @@ export function settingsRoutes(container: Container): Hono {
       patch.peerComputerControl = body.peerComputerControl;
     }
     const before = container.store.settings.get();
+    if (patch.peerComputerControl !== undefined && !mayChangePeerComputerControl(before.peerComputerControl, patch.peerComputerControl, fromTheDesktopApp(c.req.header('Origin'), desktopOrigins))) {
+      return c.json({ error: PEER_COMPUTER_CONTROL_HOST_ONLY_REASON, kind: 'desktop_app_only' }, 403);
+    }
     const after = container.store.settings.update(patch);
     if (before.peerComputerControl !== after.peerComputerControl && !FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });
