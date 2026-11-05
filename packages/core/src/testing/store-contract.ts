@@ -1084,6 +1084,15 @@ export function runStoreContract(
         store.settings.update({ memoryProfileId: null });
         expect(store.settings.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
       });
+      it('reads "Let paired machines start and approve computer use" as off until it is set, and other changes never write it', () => {
+        expect(store.settings.get().peerComputerControl).toBe(false);
+        // A database whose other settings were changed (as an install from before the default changed has) still reads it off.
+        store.settings.update({ githubEnabled: false, memoryProfileId: null });
+        expect(store.settings.get().peerComputerControl).toBe(false);
+        expect(store.settings.update({ peerComputerControl: true }).peerComputerControl).toBe(true);
+        expect(store.settings.update({ peerComputerControl: false }).peerComputerControl).toBe(false);
+        store.settings.update({ githubEnabled: true });
+      });
       it('keeps machine-local values beside the settings, out of get(), and refuses a settings key', () => {
         expect(store.settings.getValue('sandbox')).toBeNull();
         store.settings.setValue('sandbox', { state: 'ready', packages: ['ffmpeg'] });

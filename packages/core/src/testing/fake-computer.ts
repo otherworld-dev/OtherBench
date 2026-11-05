@@ -5,6 +5,7 @@ import type {
   ComputerExpectation,
   ComputerRefusal,
   ComputerScreenshot,
+  ComputerStartOptions,
   ComputerStopReason,
   ComputerTarget,
 } from '../ports/computer.js';
@@ -113,7 +114,8 @@ export class FakeComputerDriver implements ComputerDriver {
   midAction: ((held: readonly string[]) => void) | null = null;
   /** The shell's own global shortcuts (`reservedKeys`); `null` for a shell that has not reported any list. */
   reserved: string[] | null = [];
-  readonly started: { chatId: string; chatTitle: string }[] = [];
+  /** Every start that would show the native dialog; `from` is the paired machine the dialog names, for a start asked from one. */
+  readonly started: { chatId: string; chatTitle: string; from?: string }[] = [];
   readonly ended: string[] = [];
   /** Actions carried out. */
   readonly actions: Acted[] = [];
@@ -128,9 +130,9 @@ export class FakeComputerDriver implements ComputerDriver {
     return this.isAvailable;
   }
 
-  async ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+  async ensureSession(chatId: string, chatTitle: string, start: ComputerStartOptions = {}): Promise<ComputerAnswer> {
     if (this.sessions.has(chatId)) return { ok: true };
-    this.started.push({ chatId, chatTitle });
+    this.started.push({ chatId, chatTitle, ...(start.from === undefined ? {} : { from: start.from }) });
     if (!this.startAnswer.ok) return this.startAnswer;
     this.sessions.add(chatId);
     return { ok: true };
