@@ -284,6 +284,23 @@ export class FakeNextcloudClient implements NextcloudClient {
     return p.text ?? '';
   }
 
+  async collectiveCreatePage(collectiveId: number, parentId: number, title: string): Promise<RawPage> {
+    this.record('collectiveCreatePage', [collectiveId, parentId, title]);
+    if (!this.data.collectives.some((c) => c.id === collectiveId)) throw notFound();
+    const id = Math.max(0, ...this.data.pages.map((p) => p.id)) + 1;
+    const page: FakePage = { id, title, parentId, collectiveId, fileName: `${title}.md`, text: '' };
+    this.data.pages.push(page);
+    const { text: _text, ...raw } = page;
+    return clone(raw);
+  }
+
+  async pageWrite(page: RawPage, text: string): Promise<void> {
+    this.record('pageWrite', [page.id], text);
+    const p = this.data.pages.find((x) => x.id === page.id);
+    if (!p) throw notFound();
+    p.text = text;
+  }
+
   // Bookmarks
 
   async bookmarks(tag: string): Promise<RawBookmark[]> {

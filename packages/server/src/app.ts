@@ -9,6 +9,7 @@ import type { RemoteAccess } from './remote/index.js';
 import type { PushService } from './push/service.js';
 import { pushRoutes } from './routes/push.js';
 import { appNextcloudRoutes } from './routes/app-nextcloud.js';
+import { appNotesRoutes } from './routes/app-notes.js';
 import { appFoldersRoutes } from './routes/app-folders.js';
 import { appsRoutes } from './routes/apps.js';
 import { desktopRoutes } from './routes/desktop.js';
@@ -151,6 +152,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // An app's Deck, wiki and links: same prefix, other paths; mounted first, authed only like the rest.
   authed.route('/desktop', desktopRoutes(container));
   authed.route('/apps', appNextcloudRoutes(container));
+  authed.route('/apps', appNotesRoutes(container));
   authed.route('/apps', appsRoutes(container));
   authed.route('/app-folders', appFoldersRoutes(container));
   // What needs the user across every app: this machine's own, never on the peer listener (forwardedApi).
