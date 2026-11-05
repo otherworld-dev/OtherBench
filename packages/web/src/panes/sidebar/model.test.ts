@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { ChatStatus } from '../../state/chatStatus.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, appChats, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, liveApps, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -12,7 +13,7 @@ function project(id: string, name: string, sortOrder = 0): Project {
 }
 
 function app(id: string, name: string, sortOrder = 0, folderId: string | null = null): App {
-  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId, open: true, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 function folder(id: string, name: string, sortOrder = 0): AppFolder {
@@ -127,53 +128,59 @@ describe('buildCodeSidebar', () => {
   });
 });
 
-describe('buildCodeSidebar with app folders', () => {
+describe('buildCodeSidebar with open and live apps', () => {
   const folders = [folder('f2', 'Work', 1), folder('f1', 'Play', 0)];
-  const apps = [app('a', 'Alpha', 0, 'f1'), app('b', 'Beta', 1, 'f1'), app('c', 'Gamma', 0, 'f2'), app('t', 'Top', 0), app('lost', 'Lost', 1, 'gone')];
+  const closed = (a: App): App => ({ ...a, open: false });
+  const apps = [app('a', 'Alpha', 0, 'f1'), closed(app('b', 'Beta', 1, 'f1')), app('c', 'Gamma', 0, 'f2'), app('t', 'Top', 0), closed(app('u', 'Under', 1)), app('lost', 'Lost', 1, 'gone')];
 
-  it('lists folders in order, each with its apps in sortOrder, then unfiled apps, then Unknown app', () => {
+  it('lists only open apps, in All apps order', () => {
     const model = buildCodeSidebar([chat('x', { appId: 'ghost' })], apps, folders, null);
-    expect(model.folders.map((f) => [f.key, f.folder.id, f.total])).toEqual([[folderKey('f1'), 'f1', 2], [folderKey('f2'), 'f2', 1]]);
-    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
-    expect(model.groups.map((g) => g.key)).toEqual(['t', 'lost', UNKNOWN_APP_KEY]);
+    expect(model.groups.map((g) => g.key)).toEqual(['a', 'c', 't', 'lost', UNKNOWN_APP_KEY]);
+    expect(model).not.toHaveProperty('folders');
   });
 
-  it('puts an app whose folder is not loaded at the top level, and shows an empty folder', () => {
-    const model = buildCodeSidebar([], [app('lost', 'Lost', 0, 'gone')], [folder('e', 'Empty')], null);
-    expect(model.groups.map((g) => g.key)).toEqual(['lost']);
-    expect(model.folders.map((f) => [f.folder.id, f.groups.length, f.total])).toEqual([['e', 0, 0]]);
+  it('includes a closed app with a live chat, marked', () => {
+    const live = new Map<string, 'card' | 'running'>([['b', 'card'], ['a', 'running']]);
+    const model = buildCodeSidebar([], apps, folders, null, live);
+    expect(model.groups.map((g) => [g.key, g.shownBecause])).toEqual([['a', null], ['b', 'card'], ['c', null], ['t', null], ['lost', null]]);
   });
 
-  it('while searching, a folder whose name matches shows all its apps, chats unfiltered', () => {
-    const chats = [chat('hit', { appId: 'a' }), chat('miss', { appId: 'a' }), chat('bchat', { appId: 'b' })];
-    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'play');
-    expect(model.folders.map((f) => f.folder.id)).toEqual(['f1']);
-    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
-    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit', 'miss']);
-    expect(ids(model.folders[0]!.groups[1]!.chats)).toEqual(['bchat']);
-    expect(model.groups).toEqual([]);
+  it('searching includes closed apps and has no folders', () => {
+    const chats = [chat('hit', { appId: 'b' }), chat('miss', { appId: 'a' })];
+    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), new Map([['b', 'card']]));
+    expect(model.groups.map((g) => [g.key, g.shownBecause])).toEqual([['b', null]]);
+    expect(model).not.toHaveProperty('folders');
   });
 
-  it('while searching, a folder-name hit still obeys the status and machine chips', () => {
-    const chats = [chat('hit', { appId: 'a' }), chat('miss', { appId: 'a' }), chat('bchat', { appId: 'b' })];
-    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'play', new Set(['hit', 'bchat']));
-    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a', 'b']);
-    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit']);
-    expect(ids(model.folders[0]!.groups[1]!.chats)).toEqual(['bchat']);
+  it('the Unknown app group still trails', () => {
+    const model = buildCodeSidebar([chat('x', { appId: 'ghost' })], apps, folders, null);
+    expect(model.groups.at(-1)!.key).toBe(UNKNOWN_APP_KEY);
   });
+});
 
-  it('while searching, an app match inside a folder shows that folder with just that app; folders with no match drop', () => {
-    const chats = [chat('hit', { appId: 'a' }), chat('bchat', { appId: 'b' }), chat('cchat', { appId: 'c' })];
-    const model = buildCodeSidebar(chats, apps, folders, new Set(['hit']), 'hit');
-    expect(model.folders.map((f) => f.folder.id)).toEqual(['f1']);
-    expect(model.folders[0]!.groups.map((g) => g.key)).toEqual(['a']);
-    expect(ids(model.folders[0]!.groups[0]!.chats)).toEqual(['hit']);
-    expect(model.folders[0]!.total).toBe(2);
+describe('appChats', () => {
+  it("lists an app's unarchived chats as its sidebar group does, pinned first, open or closed", () => {
+    const chats = [
+      chat('low', { appId: 'b', sortOrder: 1 }),
+      chat('high', { appId: 'b', sortOrder: 5 }),
+      chat('pin', { appId: 'b', pinned: true, sortOrder: 0 }),
+      chat('arch', { appId: 'b', archivedAt: 3 }),
+      chat('other', { appId: 'a' }),
+      chat('plain'),
+    ];
+    expect(ids(appChats(chats, 'b'))).toEqual(['pin', 'high', 'low']);
+    const open = buildCodeSidebar(chats, [app('b', 'Beta')], [], null);
+    expect(ids(appChats(chats, 'b'))).toEqual(ids(open.groups[0]!.chats));
+    expect(appChats(chats, 'nobody')).toEqual([]);
   });
+});
 
-  it('while searching, an empty folder whose name matches still shows', () => {
-    const model = buildCodeSidebar([], apps, [...folders, folder('e', 'Games')], new Set(), 'games');
-    expect(model.folders.map((f) => [f.folder.id, f.groups.length])).toEqual([['e', 0]]);
+describe('liveApps', () => {
+  it('lets a card beat running in the same app, and ignores archived chats and plain chats', () => {
+    const chats = [chat('r', { appId: 'A' }), chat('c', { appId: 'A' }), chat('old', { appId: 'B', archivedAt: 3 }), chat('plain'), chat('r2', { appId: 'C' })];
+    const status: Record<string, ChatStatus> = { r: 'working', c: 'approve', old: 'approve', plain: 'approve', r2: 'background' };
+    const out = liveApps(chats, (c) => status[c.id] ?? null);
+    expect([...out.entries()].sort()).toEqual([['A', 'card'], ['C', 'running']]);
   });
 });
 

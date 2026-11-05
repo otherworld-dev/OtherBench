@@ -15,6 +15,7 @@ import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import { toast } from '../lib/toasts.js';
 import { parseViewTab } from '../viewer/items.js';
+import { ALL_APPS_TAB_ID, isAllAppsTab } from './allAppsTab.js';
 import { appTabId, parseAppTab } from './appTab.js';
 import { loadMode, modeOfChat, saveMode, type Mode } from './mode.js';
 import { openIn, showWindow } from '../desktop/bridge.js';
@@ -253,6 +254,8 @@ export interface OtherBenchState {
   setUndocked(views: DockView[]): void;
   /** Shows the app's home (`appTabId`) in the focused pane in Code mode, switching to Code mode first. Not as a tab. */
   openAppHome(appId: string): void;
+  /** Shows the All apps page (`ALL_APPS_TAB_ID`) in the focused pane in Code mode, as `openAppHome` shows an app's home. */
+  openAllApps(): void;
   /** The Code mode right panel's tab. Remembered per browser. */
   codePanelTab: CodePanelTab;
   setCodePanelTab(tab: CodePanelTab): void;
@@ -533,7 +536,7 @@ type ModeView = Pick<OtherBenchState, 'mode' | 'paneState' | 'otherPaneState' | 
  */
 function modeOfTab(id: string | null, chats: Chat[]): Mode | null {
   if (id === null) return null;
-  if (parseAppTab(id) !== null) return 'code';
+  if (parseAppTab(id) !== null || isAllAppsTab(id)) return 'code';
   if (parseProjectTab(id) !== null) return 'chat';
   const chatId = parseViewTab(id)?.chatId ?? id;
   const chat = chats.find((c) => c.id === chatId);
@@ -1188,6 +1191,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), appTabId(appId))) };
     });
     toastIfNoRoom(get().paneState, appTabId(appId));
+  },
+  openAllApps: () => {
+    if (sentElsewhere('code', { kind: 'all-apps' })) return;
+    set((state) => {
+      const view = inMode(state, 'code');
+      return { ...view, overviewOpen: false, ...withPanes(showChat(synced(view), ALL_APPS_TAB_ID)) };
+    });
+    toastIfNoRoom(get().paneState, ALL_APPS_TAB_ID);
   },
   codePanelTab: loadCodePanelTab(),
   setCodePanelTab: (tab) => set({ codePanelTab: tab }),

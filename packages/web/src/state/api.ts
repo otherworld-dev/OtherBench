@@ -335,7 +335,7 @@ export interface CreateAppBody {
 }
 
 /** `PATCH /api/apps/:id`: any of these. The folder can't be cleared; a new one moves every chat in the app with it. */
-export type PatchAppBody = Partial<CreateAppBody>;
+export type PatchAppBody = Partial<CreateAppBody> & { open?: boolean };
 
 /** `GET /api/apps/detect-repo`: `isRepo` only for a repo's top level; its GitHub `origin`, when it has one. */
 export interface DetectRepoResult {

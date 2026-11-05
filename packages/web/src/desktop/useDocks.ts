@@ -21,6 +21,9 @@ function open(request: OpenRequest): void {
     case 'home':
       state.openAppHome(request.appId);
       return;
+    case 'all-apps':
+      state.openAllApps();
+      return;
     case 'app':
       openApp(request.appId);
       return;

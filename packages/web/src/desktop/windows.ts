@@ -80,6 +80,7 @@ export type OpenRequest =
   | { kind: 'chat'; chatId: string }
   | { kind: 'tab'; chatId: string }
   | { kind: 'home'; appId: string }
+  | { kind: 'all-apps' }
   | { kind: 'app'; appId: string }
   | { kind: 'issue'; appId: string; n: number; state: IssueState }
   | { kind: 'card'; appId: string; cardId: number };
@@ -98,6 +99,8 @@ export function parseOpenRequest(value: unknown): OpenRequest | null {
     case 'home':
     case 'app':
       return str(r.appId) ? { kind: r.kind, appId: r.appId } : null;
+    case 'all-apps':
+      return { kind: 'all-apps' };
     case 'issue':
       return str(r.appId) && int(r.n) && (r.state === 'open' || r.state === 'closed') ? { kind: 'issue', appId: r.appId, n: r.n, state: r.state } : null;
     case 'card':

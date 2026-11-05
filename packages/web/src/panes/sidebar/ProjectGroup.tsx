@@ -63,10 +63,14 @@ export interface ProjectGroupProps {
   renameMaxLength?: number;
   /** The name's hover text when it opens a page. */
   openTitle?: string;
-  /** What `count` counts: chats, or an app folder's apps (Code mode). */
-  countNoun?: 'chat' | 'app';
-  /** Shown under the heading when `empty`. */
-  emptyText?: string;
+  /**
+   * An open app (Code mode): a × that closes it, shown in place of the count while the heading is hovered or has
+   * focus (plan 2026-11-04-open-apps). `closeLabel` is its name and hover text.
+   */
+  onClose?: () => void;
+  closeLabel?: string;
+  /** A faint line under the heading, folded or not: why a closed app shows anyway. */
+  note?: string;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -78,15 +82,15 @@ function carriesProject(e: DragEvent): boolean {
 }
 
 /**
- * A collapsible sidebar group (a project, or No project; in Code mode an app folder, an app, or Unknown app) whose
+ * A collapsible sidebar group (a project, or No project; in Code mode an app, or Unknown app) whose
  * heading is also a drop target for chat rows.
  */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, statusSummary, onOpen, active = false } = props;
   const { menuLabel = 'Project actions', reorder, renameLabel = 'Project name', renameMaxLength = PROJECT_NAME_MAX, openTitle = 'Open the project page' } = props;
-  const { countNoun = 'chat', emptyText = 'No chats yet' } = props;
-  const counted = count === 1 ? countNoun : `${countNoun}s`;
+  const { onClose, closeLabel = `Close ${name}`, note } = props;
+  const counted = count === 1 ? 'chat' : 'chats';
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -129,7 +133,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           e.preventDefault();
           onDropChat(chatId);
         }}
-        className={`flex items-center gap-0.5 rounded ${dropActive ? 'bg-[var(--bg-sunken)] ring-2 ring-[var(--accent)]' : ''} ${
+        className={`group/heading flex items-center gap-0.5 rounded ${dropActive ? 'bg-[var(--bg-sunken)] ring-2 ring-[var(--accent)]' : ''} ${
           reorder?.indicator === 'before' ? 'shadow-[inset_0_2px_0_var(--accent)]' : reorder?.indicator === 'after' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''
         }`}
       >
@@ -201,13 +205,30 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
                   {statusSummary}
                 </span>
               )}
-              <span className="font-normal tabular-nums" title={`${count} ${counted}`} data-testid={`group-count-${groupKey}`}>
+              <span
+                className={`font-normal tabular-nums ${onClose ? 'group-hover/heading:hidden group-focus-within/heading:hidden' : ''}`}
+                title={`${count} ${counted}`}
+                data-testid={`group-count-${groupKey}`}
+              >
                 {count}
               </span>
             </span>
             <span className="sr-only"> {counted}</span>
           </button>
           </h3>
+          {onClose && (
+            // Beside the heading's button, not in it (a button can't hold one); hidden until the heading is hovered or
+            // focused, so tabbing onto the name reveals it as the next stop.
+            <button
+              type="button"
+              aria-label={closeLabel}
+              title={closeLabel}
+              onClick={onClose}
+              className="hidden shrink-0 rounded px-1.5 py-0.5 text-sm leading-none text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] group-hover/heading:flex group-focus-within/heading:flex"
+            >
+              ×
+            </button>
+          )}
           </>
         )}
         {onNewChat && (
@@ -241,9 +262,14 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           </button>
         )}
       </div>
+      {note && (
+        <p data-testid={`group-note-${groupKey}`} className="pr-2 pb-0.5 pl-6 text-[11px] text-[var(--text-faint)]">
+          {note}
+        </p>
+      )}
       {!collapsed &&
         (empty ? (
-          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">{emptyText}</p>
+          <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>
         ) : (
           // The guide line sits under the heading's chevron, marking the chats as the group's.
           <ul id={listId} className="ml-3 border-l border-[var(--border)] pl-1">

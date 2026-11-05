@@ -11,8 +11,8 @@ import { clockOf, type SyncClock } from './clock.js';
 function appMapping(selfId: () => string): CrudMapping<App> {
   return {
     table: 'app',
-    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'github_repo', 'linked_project_id', 'default_profile_id', 'deck_board_id', 'wiki_collective', 'wiki_page_path', 'bookmark_tag', 'folder_id', 'sort_order', 'created_at', 'updated_at'],
-    toRow: (a) => [a.id, a.name, ...workspaceToRow(a.workspace), a.githubRepo, a.linkedProjectId, a.defaultProfileId, a.deckBoardId, a.wikiCollective, a.wikiPagePath, a.bookmarkTag, a.folderId, a.sortOrder, a.createdAt, a.updatedAt],
+    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'github_repo', 'linked_project_id', 'default_profile_id', 'deck_board_id', 'wiki_collective', 'wiki_page_path', 'bookmark_tag', 'folder_id', 'open', 'sort_order', 'created_at', 'updated_at'],
+    toRow: (a) => [a.id, a.name, ...workspaceToRow(a.workspace), a.githubRepo, a.linkedProjectId, a.defaultProfileId, a.deckBoardId, a.wikiCollective, a.wikiPagePath, a.bookmarkTag, a.folderId, a.open ? 1 : 0, a.sortOrder, a.createdAt, a.updatedAt],
     fromRow: (row) => ({
       id: row.id as string,
       name: row.name as string,
@@ -25,6 +25,7 @@ function appMapping(selfId: () => string): CrudMapping<App> {
       wikiPagePath: (row.wiki_page_path as string | null) ?? null,
       bookmarkTag: (row.bookmark_tag as string | null) ?? null,
       folderId: (row.folder_id as string | null) ?? null,
+      open: row.open === 1,
       sortOrder: row.sort_order as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,
@@ -64,6 +65,7 @@ export class SqliteAppRepo implements AppRepo {
       wikiPagePath: a.wikiPagePath ?? null,
       bookmarkTag: a.bookmarkTag ?? null,
       folderId: a.folderId ?? null,
+      open: a.open ?? true,
       sortOrder: a.sortOrder ?? 0,
       createdAt: a.createdAt ?? now,
       updatedAt: a.updatedAt ?? now,

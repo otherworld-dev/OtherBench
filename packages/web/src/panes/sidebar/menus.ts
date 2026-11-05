@@ -129,22 +129,60 @@ export interface AppMenuHandlers {
   rename(): void;
   /** Opens the app form on this app. */
   edit(): void;
-  /** Moves the app one place up (-1) or down (+1) among its siblings in the Code sidebar. */
+  /** Closes the app: it leaves the sidebar and stays on the All apps page (plan 2026-11-04-open-apps). */
+  close(): void;
+  /** Keeps a closed app in the sidebar (`open: true`), as the app home's Keep in sidebar does. */
+  keep(): void;
+  requestDelete(): void;
+}
+
+/**
+ * An app heading's ⋯ menu in the Code sidebar (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit,
+ * close or keep, delete. Close app while the app is `open`; a closed one (shown only because a chat is live or a
+ * search found it) has Keep in sidebar in its place. Ordering and filing happen on the All apps page now (plan 2026-11-04-open-apps), so there is no Move up,
+ * Move down or Move to folder… here: in a flat, filtered list they would move apps among ones the user can't see.
+ */
+export function appMenuItems(h: AppMenuHandlers, open = true): MenuItem[] {
+  return [
+    { id: 'rename', label: 'Rename', onSelect: h.rename },
+    { id: 'edit', label: 'Edit…', onSelect: h.edit },
+    open ? { id: 'close', label: 'Close app', onSelect: h.close } : { id: 'keep', label: 'Keep in sidebar', onSelect: h.keep },
+    { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
+  ];
+}
+
+export interface AppCardMenuHandlers {
+  /** Opens the app (it joins the sidebar) and shows its home, as a click on the card does. */
+  open(): void;
+  /** Closes the app: it leaves the sidebar and stays on the All apps page. */
+  close(): void;
+  rename(): void;
+  /** Opens the app form on this app. */
+  edit(): void;
+  /** Moves the app one place up (-1) or down (+1) within its section. */
   move(dir: -1 | 1): void;
-  /** Files the app last in a folder, or (null) at the top level. */
+  /** Files the app last in a folder, or (null) in Unfiled. */
   moveToFolder(folderId: string | null): void;
   requestDelete(): void;
 }
 
 /**
- * An app heading's ⋯ menu in Code mode (spec 2026-10-20-code-tab-design, "Creating an app"): rename, edit, move, delete.
- * `index` and `count`: the app's place among its siblings (its folder's apps, or the top level), for Move up / Move down.
- *
- * `folders` (in sidebar order) adds "Move to folder…" after Edit… (plan 2026-10-25-app-folders): No folder, then each
- * folder, with `folderId` (the app's loaded folder, or null) checked. Left out while there are no folders.
+ * An app card's ⋯ menu on the All apps page (spec 2026-11-04-open-apps-design, "Menus"): Open, Close app (only while
+ * `open`), Rename, Edit…, Move to folder…, Move up, Move down, Delete…. `index` and `count`: the app's place in its
+ * section, for Move up / Move down. `folders` (in page order) adds "Move to folder…": No folder, then each folder,
+ * with `folderId` (the app's loaded folder, or null) checked; left out while there are no folders.
  */
-export function appMenuItems(index: number, count: number, h: AppMenuHandlers, folders: AppFolder[] = [], folderId: string | null = null): MenuItem[] {
+export function appCardMenuItems(
+  index: number,
+  count: number,
+  h: AppCardMenuHandlers,
+  folders: AppFolder[],
+  folderId: string | null,
+  open: boolean
+): MenuItem[] {
   return [
+    { id: 'open', label: 'Open', onSelect: h.open },
+    ...(open ? [{ id: 'close', label: 'Close app', onSelect: h.close }] : []),
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'edit', label: 'Edit…', onSelect: h.edit },
     ...(folders.length === 0
@@ -172,7 +210,7 @@ export interface FolderMenuHandlers {
   requestDelete(): void;
 }
 
-/** An app folder heading's ⋯ menu in Code mode (plan 2026-10-25-app-folders). `index` of `count`: its place among the folders. */
+/** A folder section's ⋯ menu on the All apps page (plan 2026-10-25-app-folders). `index` of `count`: its place among the folders. */
 export function folderMenuItems(index: number, count: number, h: FolderMenuHandlers): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },

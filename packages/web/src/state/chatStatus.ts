@@ -55,6 +55,15 @@ export function isOnCard(status: ChatStatus | null): boolean {
   return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn';
 }
 
+/** Why an app counts as live: a chat stopped on a card, or one still running (working, or on a paired machine). */
+export type LiveReason = 'card' | 'running';
+
+/** What keeps a closed app in the Code sidebar: its chat is on a card, or running; null for a chat that is idle or just needs a look. */
+export function isLive(status: ChatStatus | null): LiveReason | null {
+  if (isOnCard(status)) return 'card';
+  return status === 'working' || status === 'background' ? 'running' : null;
+}
+
 /**
  * The Needs you list: the chats needing the user, as a queue, so working down it reaches every chat. Oldest first by
  * when each came to need them (`needsYouSince`): when its reply stopped or its card started waiting, so one that stops

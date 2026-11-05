@@ -5,9 +5,10 @@ import { StartBox } from '../components/StartBox.js';
 import { StatusWord } from '../components/StatusWord.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
-import { buildCodeSidebar } from '../panes/sidebar/model.js';
+import { appChats } from '../panes/sidebar/model.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
+import { setAppOpen } from './appOpen.js';
 import { useFeatures } from '../state/features.js';
 import { useNow } from '../lib/useNow.js';
 import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
@@ -54,6 +55,23 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
   const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
   const setOverlayOpen = useOtherBenchStore((s) => s.setInspectorOverlayOpen);
   const github = useFeatures((s) => s.github);
+  const openAllApps = useOtherBenchStore((s) => s.openAllApps);
+  const folderName = useOtherBenchStore((s) => s.appFolders.find((f) => f.id === app.folderId)?.name ?? 'Unfiled');
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [toggling, setToggling] = useState(false);
+  async function toggleOpen(): Promise<void> {
+    if (toggling) return;
+    setToggling(true);
+    setOpenError(null);
+    try {
+      await setAppOpen(app.id, !app.open);
+    } catch (err) {
+      console.error(`[otherbench-web] failed to ${app.open ? 'close' : 'keep'} app ${app.id}:`, err);
+      setOpenError(err instanceof ApiError ? err.message : "Couldn't change the app. Please try again.");
+    } finally {
+      setToggling(false);
+    }
+  }
   const linked = app.linkedProjectId === null ? null : (projectDisplayNameById(projects, app.linkedProjectId) ?? (projectsLoaded ? 'Missing project' : 'Loading…'));
   // One column, top down: what the app is, a box to start from, its chats, then its issues at full width.
   return (
@@ -61,6 +79,17 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
       <div className="mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
+            <nav aria-label="Breadcrumb" className="mb-1 flex flex-wrap items-baseline gap-x-1.5 text-xs text-[var(--text-muted)]">
+              <button type="button" onClick={() => openAllApps()} className="hover:underline">
+                All apps
+              </button>
+              <span aria-hidden="true">/</span>
+              <span>{folderName}</span>
+              <span aria-hidden="true">/</span>
+              <span aria-current="page" className="text-[var(--text)]">
+                {app.name}
+              </span>
+            </nav>
             <h2 className="truncate text-lg font-medium">{app.name}</h2>
             {/* The details on one line, each its own item so a long folder wraps without pushing the rest off. */}
             <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-[var(--text-muted)]">
@@ -89,7 +118,15 @@ function AppHomeBody({ app }: { app: App }): JSX.Element {
           <button type="button" onClick={() => openAppPage({ mode: 'edit', appId: app.id })} className="btn shrink-0 px-2.5 py-1">
             Edit…
           </button>
+          <button type="button" disabled={toggling} onClick={() => void toggleOpen()} className="btn shrink-0 px-2.5 py-1">
+            {app.open ? 'Close app' : 'Keep in sidebar'}
+          </button>
         </div>
+        {openError && (
+          <p role="alert" className="text-sm text-[var(--danger)]">
+            {openError}
+          </p>
+        )}
         <StartBox
           target={{ pendingKey: `app:${app.id}`, name: app.name, tabId: appTabId(app.id), owns: (c) => c.appId === app.id, create: { appId: app.id } }}
           placeholder="What do you want to work on?"
@@ -152,17 +189,11 @@ function NewChat({ app }: { app: App }): JSX.Element {
 
 function AppChats({ app }: { app: App }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
-  const apps = useOtherBenchStore((s) => s.apps);
-  const appFolders = useOtherBenchStore((s) => s.appFolders);
   const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const activity = useChatActivity();
   const now = useNow(60_000);
-  // The Code sidebar's own grouping, so the page and the sidebar always agree on order.
-  const listed = useMemo(() => {
-    const model = buildCodeSidebar(chats, apps, appFolders, null);
-    const groups = [...model.groups, ...model.folders.flatMap((f) => f.groups)];
-    return groups.find((g) => g.app?.id === app.id)?.chats ?? [];
-  }, [chats, apps, appFolders, app.id]);
+  // In its sidebar group's order, so the page and the sidebar agree; listed whether the app is open or closed.
+  const listed = useMemo(() => appChats(chats, app.id), [chats, app.id]);
 
   return (
     <section data-testid="app-home-chats" aria-label="Chats" className="min-w-0">

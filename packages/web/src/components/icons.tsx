@@ -45,6 +45,18 @@ export function FolderPlusIcon({ className }: IconProps): JSX.Element {
   );
 }
 
+/** Four tiles: the All apps page (plan 2026-11-04-open-apps). */
+export function AppsIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <rect x="2" y="2" width="5" height="5" rx="1" />
+      <rect x="9" y="2" width="5" height="5" rx="1" />
+      <rect x="2" y="9" width="5" height="5" rx="1" />
+      <rect x="9" y="9" width="5" height="5" rx="1" />
+    </Svg>
+  );
+}
+
 /** Three lines: opens the sidebar drawer on a phone. */
 export function MenuIcon({ className }: IconProps): JSX.Element {
   return (

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { ALL_APPS_TAB_ID } from '../state/allAppsTab.js';
 import { appTabId } from '../state/appTab.js';
 import { projectTabId } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -194,11 +195,18 @@ describe('TabBar (#824)', () => {
     useOtherBenchStore.setState({ mode: 'code', paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
     const { rerender } = render(<TabBar narrow={false} />);
     expect(screen.getAllByRole('tab', { name: /Loading…/ })).toHaveLength(2);
-    useOtherBenchStore.getState().setApps([{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
+    useOtherBenchStore.getState().setApps([{ id: 'a1', name: 'OtherBench', workspace: null, githubRepo: null, linkedProjectId: null, defaultProfileId: null, deckBoardId: null, wikiCollective: null, wikiPagePath: null, bookmarkTag: null, folderId: null, open: true, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
     useOtherBenchStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [appTabId('a1'), appTabId('gone')], panes: [appTabId('a1')] }, activeChatId: appTabId('a1') });
     rerender(<TabBar narrow={false} />);
     expect(screen.getByRole('tab', { name: /OtherBench/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Missing app/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close tab OtherBench' })).toHaveAttribute('title', 'Close tab (the app stays in the sidebar)');
+  });
+
+  it('labels the All apps tab "All apps" (plan 2026-11-04-open-apps)', () => {
+    useOtherBenchStore.setState({ mode: 'code', paneState: { ...DEFAULT_PANE_STATE, tabs: [ALL_APPS_TAB_ID], panes: [ALL_APPS_TAB_ID] }, activeChatId: ALL_APPS_TAB_ID });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: /All apps/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close tab All apps' })).toHaveAttribute('title', 'Close tab (All apps stays in the sidebar)');
   });
 });

@@ -52,6 +52,7 @@ interface AppBody {
   defaultProfileId?: unknown;
   sortOrder?: unknown;
   folderId?: unknown;
+  open?: unknown;
 }
 
 /** Trimmed, 1 to APP_NAME_MAX characters, as a project's name. */
@@ -136,6 +137,12 @@ function optionalFolderId(container: Container, value: unknown): string | null |
   if (parsed === undefined || parsed === null) return parsed;
   if (!container.store.appFolders.get(parsed)) throw new HTTPException(400, { message: '"folderId" names no folder.' });
   return parsed;
+}
+
+function optionalOpen(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new HTTPException(400, { message: '"open" must be true or false.' });
+  return value;
 }
 
 function optionalSortOrder(value: unknown): number | undefined {
@@ -327,6 +334,8 @@ export function appsRoutes(container: Container): Hono {
     if (folderId !== undefined) patch.folderId = folderId;
     const sortOrder = optionalSortOrder(body.sortOrder);
     if (sortOrder !== undefined) patch.sortOrder = sortOrder;
+    const open = optionalOpen(body.open);
+    if (open !== undefined) patch.open = open;
     patch.updatedAt = Date.now();
 
     const repoChanged = patch.githubRepo !== undefined && patch.githubRepo !== current.githubRepo;

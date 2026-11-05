@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { CHAT_NEED_WINDOW_MS } from '@otherbench/core/domain/overview.js';
-import { chatStatus, groupStatusSummary, isNeedsYou, needsYouChats, shownChatIds, useChatActivity, type ChatActivity } from './chatStatus.js';
+import { chatStatus, groupStatusSummary, isLive, isNeedsYou, needsYouChats, shownChatIds, useChatActivity, type ChatActivity } from './chatStatus.js';
 import type { PeersOverview } from './api.js';
 import { useOtherBenchStore } from './store.js';
 import { DEFAULT_PANE_STATE, type PaneState } from './panes.js';
@@ -139,5 +139,17 @@ describe('groupStatusSummary', () => {
     expect(groupStatusSummary(['working', null, 'background', 'working'])).toBe('2 replying · 1 in background');
     expect(groupStatusSummary(['your-turn', 'approve'])).toBe('');
     expect(groupStatusSummary([null])).toBe('');
+  });
+});
+
+describe('isLive', () => {
+  it('is card for a chat on a card, running for working and background, null otherwise', () => {
+    expect(isLive('approve')).toBe('card');
+    expect(isLive('waiting')).toBe('card');
+    expect(isLive('working')).toBe('running');
+    expect(isLive('background')).toBe('running');
+    expect(isLive('your-turn')).toBeNull();
+    expect(isLive('failed')).toBeNull();
+    expect(isLive(null)).toBeNull();
   });
 });

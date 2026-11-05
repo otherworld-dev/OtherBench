@@ -38,6 +38,7 @@ import { MIGRATION_036_MESSAGE_FINISHED_AT } from './036-message-finished-at.js'
 import { MIGRATION_037_REMOTE_SESSIONS } from './037-remote-sessions.js';
 import { MIGRATION_038_SCHEDULE_TIME_LIMIT } from './038-schedule-time-limit.js';
 import { MIGRATION_039_PUSH_SUBSCRIPTIONS } from './039-push-subscriptions.js';
+import { MIGRATION_040_APP_OPEN } from './040-app-open.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -82,6 +83,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_037_REMOTE_SESSIONS,
   MIGRATION_038_SCHEDULE_TIME_LIMIT,
   MIGRATION_039_PUSH_SUBSCRIPTIONS,
+  MIGRATION_040_APP_OPEN,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
