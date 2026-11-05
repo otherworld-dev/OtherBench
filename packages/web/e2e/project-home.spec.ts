@@ -28,7 +28,7 @@ test("a project's page in a narrow split pane never scrolls sideways, even with 
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: 'Chats' });
   await nav.getByRole('group', { name: projectName }).getByRole('button', { name: new RegExp(`^${projectName}`) }).click();
-  await page.getByRole('button', { name: /layout/i }).first().click();
+  await page.getByRole('button', { name: /^Layout:/ }).click();
   await page.getByRole('menuitemradio', { name: 'Two side by side' }).click();
 
   const home = page.getByTestId('project-home');
