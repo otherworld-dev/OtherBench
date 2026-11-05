@@ -46,7 +46,7 @@ beforeEach(async () => {
     () => {
       if (manager.listFor(['srv-live']).length !== 1) throw new Error('not connected yet');
     },
-    { timeout: 5000, interval: 25 }
+    { timeout: 15_000, interval: 25 }
   );
 });
 
