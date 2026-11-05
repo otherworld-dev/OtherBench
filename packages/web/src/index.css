@@ -505,3 +505,61 @@ body {
     animation: none !important;
   }
 }
+
+/*
+ * Phone layout (App.tsx sets data-phone below 640px, a phone held upright).
+ * Unlayered, so it beats the utilities at the call sites without touching
+ * them: the desktop layout is unchanged. Thumb-sized targets (44px, Apple's
+ * and WCAG's size) on what a phone is used for: the sidebar drawer, the
+ * cards that wait on the user, the composer and Settings. Inputs at 16px, or
+ * iOS zooms the page on focus. Nothing may be wider than the screen.
+ */
+[data-phone] {
+  height: 100dvh;
+  overflow-x: hidden;
+}
+[data-phone] [data-testid="sidebar-drawer"] button,
+[data-phone] [data-testid^="approval-prompt-"] button,
+[data-phone] [data-testid^="ask-card-"] button,
+[data-phone] [data-testid="settings-view"] button,
+[data-phone] [data-testid="composer-dropzone"] button {
+  min-height: 2.75rem;
+}
+[data-phone] [data-testid="sidebar-drawer"] [data-row-main] {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+[data-phone] textarea,
+[data-phone] input:not([type="checkbox"], [type="radio"], [type="range"]),
+[data-phone] select {
+  font-size: 16px;
+}
+[data-phone] [data-testid="settings-view"] [role="tablist"] {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: none;
+}
+[data-phone] [data-testid="settings-view"] [role="tablist"] > button {
+  flex-shrink: 0;
+}
+[data-phone] [data-testid="settings-view"] {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+[data-phone] .markdown-body pre,
+[data-phone] .markdown-body table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+[data-phone] [data-testid="composer-dropzone"] {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+/* Settings' list-and-editor panels (Connections, Profiles, ...) stack: the list above, the editor below it. */
+[data-phone] [data-testid="settings-view"] .max-w-5xl.flex {
+  flex-direction: column;
+}
+[data-phone] [data-testid="settings-view"] .max-w-5xl.flex > * {
+  width: 100%;
+  min-width: 0;
+}

@@ -45,6 +45,15 @@ export function FolderPlusIcon({ className }: IconProps): JSX.Element {
   );
 }
 
+/** Three lines: opens the sidebar drawer on a phone. */
+export function MenuIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <path d="M2 4h12M2 8h12M2 12h12" />
+    </Svg>
+  );
+}
+
 export function GearIcon({ className }: IconProps): JSX.Element {
   return (
     <Svg className={className}>
