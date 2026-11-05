@@ -160,7 +160,21 @@ test('(e) the login page and Sign out work on a phone-sized screen', async ({ pa
   expect(box && box.x >= 0 && box.x + box.width <= 390).toBeTruthy();
 
   await signIn(page);
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  // Signed in, Settings → Notifications offers this device push, with the server's key ready.
+  await page.getByRole('button', { name: 'Open the sidebar' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('tab', { name: 'Notifications' }).click();
+  const notify = page.getByRole('checkbox', { name: 'Notify this device' });
+  await expect(notify).toBeVisible();
+  await expect(notify).toBeEnabled();
+  await expect(notify).not.toBeChecked();
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  // On a phone the sidebar, and Sign out at its foot, is a drawer opened from the bar at the top.
+  await page.getByRole('button', { name: 'Open the sidebar' }).click();
+  const signOut = page.getByRole('button', { name: 'Sign out' });
+  const out = await signOut.boundingBox();
+  expect(out && out.x >= 0 && out.x + out.width <= 390 && out.y + out.height <= 844).toBeTruthy();
+  await signOut.click();
   await expect(page.getByLabel('Password')).toBeVisible();
 });
 
