@@ -5,6 +5,7 @@ import type { CanonMessage } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
+import { appNotesPrompt, emptyAppNotesBody } from './app-notes.js';
 import { projectDisplayName, projectInstructionsPrompt, projectParentOf } from './projects.js';
 import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { RECALL_GUIDANCE } from './recall.js';
@@ -235,6 +236,19 @@ export class TurnPromptBuilder {
     const block = blocks.length === 0 ? null : blocks.join('\n\n');
     this.projectBlocks.set(chat.id, { block, at: now, saves });
     return block;
+  }
+
+  /**
+   * The profile with the chat's app notes appended to its system prompt (spec
+   * 2026-11-05-app-notes-design, "Chats"), after project memory, with how to
+   * offer a fact. Only an app chat gets it. Read fresh each turn: only the
+   * user changes the notes, so a fact saved mid-chat reaches the next turn.
+   */
+  withAppNotes(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
+    const app = chat?.appId ? this.store.apps.get(chat.appId) : null;
+    if (!app) return profile;
+    const block = appNotesPrompt(app.name, this.store.appNotes.get(app.id)?.body ?? emptyAppNotesBody());
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
   /**

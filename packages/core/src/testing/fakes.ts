@@ -61,6 +61,9 @@ import type {
   Project,
   ProjectMemory,
   ProjectMemoryRepo,
+  AppNotes,
+  AppNotesRepo,
+  AppNotesVersion,
   ProjectMemoryVersion,
   GlobalMemory,
   GlobalMemoryRepo,
@@ -95,6 +98,7 @@ import type { MediaWorkflow } from '../domain/media-workflows.js';
 import { compareApps, compareAppFolders } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 import { laterThrough } from '../domain/sync.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
@@ -923,7 +927,8 @@ class InMemoryAppRepo implements AppRepo {
   constructor(
     private readonly chats: ChatRepo,
     private readonly issueTicks: IssueTickRepo,
-    private readonly selfNodeId: string
+    private readonly selfNodeId: string,
+    private readonly onDelete: (appId: string) => void = () => {}
   ) {}
   create(a: NewApp): App {
     const now = Date.now();
@@ -966,6 +971,7 @@ class InMemoryAppRepo implements AppRepo {
       if (chat.appId === id) this.chats.update(chat.id, { appId: null });
     }
     this.issueTicks.deleteForApp(id);
+    this.onDelete(id);
     this.repo.delete(id);
   }
 }
@@ -1020,6 +1026,54 @@ function newestFirst<T extends { createdAt: number }>(versions: T[]): T[] {
     .map((v, order) => ({ v, order }))
     .sort((a, b) => b.v.createdAt - a.v.createdAt || b.order - a.order)
     .map(({ v }) => v);
+}
+
+class InMemoryAppNotesRepo implements AppNotesRepo {
+  private readonly notes = new Map<string, AppNotes>();
+  /** Every app's versions, oldest save first. */
+  private all: AppNotesVersion[] = [];
+
+  constructor(private readonly appExists: (appId: string) => boolean) {}
+
+  get(appId: string): AppNotes | null {
+    const note = this.notes.get(appId);
+    return note ? structuredClone(note) : null;
+  }
+
+  list(): AppNotes[] {
+    return [...this.notes.values()].map((n) => structuredClone(n));
+  }
+
+  save(appId: string, body: string, sourceChatId: string | null, at: number = Date.now()): AppNotes {
+    // Mirrors app_notes.app_id's foreign key.
+    if (!this.appExists(appId)) throw new Error(`app_notes: no app ${appId}`);
+    const note: AppNotes = { appId, body, updatedAt: at, sourceChatId, mirroredAt: this.notes.get(appId)?.mirroredAt ?? null };
+    this.notes.set(appId, note);
+    this.all.push({ id: randomUUID(), appId, body, createdAt: at, sourceChatId });
+    const keep = new Set(newestFirst(this.all.filter((v) => v.appId === appId)).slice(0, APP_NOTES_VERSIONS_KEPT).map((v) => v.id));
+    this.all = this.all.filter((v) => v.appId !== appId || keep.has(v.id));
+    return structuredClone(note);
+  }
+
+  markMirrored(appId: string, at: number): void {
+    const note = this.notes.get(appId);
+    if (note) note.mirroredAt = at;
+  }
+
+  versions(appId: string): AppNotesVersion[] {
+    return newestFirst(this.all.filter((v) => v.appId === appId)).map((v) => structuredClone(v));
+  }
+
+  version(id: string): AppNotesVersion | null {
+    const found = this.all.find((v) => v.id === id);
+    return found ? structuredClone(found) : null;
+  }
+
+  /** Called by `InMemoryAppRepo.delete`. */
+  removeApp(appId: string): void {
+    this.notes.delete(appId);
+    this.all = this.all.filter((v) => v.appId !== appId);
+  }
 }
 
 class InMemoryProjectMemoryRepo implements ProjectMemoryRepo {
@@ -1623,6 +1677,7 @@ export class InMemoryStore implements Store {
   readonly projects: ProjectRepo;
   readonly apps: AppRepo;
   readonly appFolders: AppFolderRepo;
+  readonly appNotes: AppNotesRepo;
   readonly issueTicks: IssueTickRepo = new InMemoryIssueTickRepo();
   readonly mediaWorkflows: MediaWorkflowRepo = new InMemoryMediaWorkflowRepo();
   readonly profiles: ProfileRepo;
@@ -1664,7 +1719,9 @@ export class InMemoryStore implements Store {
       selfNodeId
     );
     this.projects = projects;
-    const apps = new InMemoryAppRepo(this.chats, this.issueTicks, selfNodeId);
+    const appNotes = new InMemoryAppNotesRepo((id) => this.apps.get(id) !== null);
+    this.appNotes = appNotes;
+    const apps = new InMemoryAppRepo(this.chats, this.issueTicks, selfNodeId, (id) => appNotes.removeApp(id));
     this.apps = apps;
     this.appFolders = new InMemoryAppFolderRepo(apps);
     this.locations = new InMemoryLocationRepo((id) => {

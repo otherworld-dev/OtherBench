@@ -563,7 +563,7 @@ export class TurnRunner {
       const canRecall = tools.some((t) => t.source === 'recall');
       const prompts = this.prompts;
       const requestProfile = prompts.withRecall(
-        prompts.withArtifacts(prompts.withTools(prompts.withSandbox(prompts.withFolders(prompts.withProjectMemory(prompts.withProjectInstructions(prompts.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), workspaceRoot, folders), tools), tools),
+        prompts.withArtifacts(prompts.withTools(prompts.withSandbox(prompts.withFolders(prompts.withAppNotes(prompts.withProjectMemory(prompts.withProjectInstructions(prompts.withGlobalMemory(profile, chat, canRecall), chat), chat), chat), folders), workspaceRoot, folders), tools), tools),
         canRecall
       );
       // Other machines' folder paths in tool calls and results, as they are
