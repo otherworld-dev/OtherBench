@@ -64,27 +64,27 @@ describe('CodePanel', () => {
     expect(useOtherBenchStore.getState().codePanelTab).toBe('chat');
   });
 
-  it('shows Deck, Wiki and Links in order', () => {
+  it('shows Deck, Wiki, Links and Notes in order', () => {
     focus('c1');
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Deck', 'Wiki', 'Links', 'Notes', 'Files', 'Chat']);
   });
 
   it('leaves out Issues while GitHub is off, and a saved Issues tab shows Files', () => {
     useFeatures.setState({ github: false });
     focus('c1');
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Deck', 'Wiki', 'Links', 'Files', 'Chat']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Deck', 'Wiki', 'Links', 'Notes', 'Files', 'Chat']);
     expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByTestId('issues-stub')).toBeNull();
   });
 
-  it('leaves out Deck, Wiki and Links while Nextcloud is off, and a saved Deck tab shows Files', () => {
+  it('leaves out Deck, Wiki and Links while Nextcloud is off (Notes stays), and a saved Deck tab shows Files', () => {
     useFeatures.setState({ nextcloud: false });
     useOtherBenchStore.setState({ codePanelTab: 'deck' });
     focus('c1');
     render(<CodePanel collapsed={false} onToggleCollapsed={() => {}} />);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Files', 'Chat']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Issues', 'Notes', 'Files', 'Chat']);
     expect(screen.getByTestId('files-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('deck-stub')).toBeNull();
   });

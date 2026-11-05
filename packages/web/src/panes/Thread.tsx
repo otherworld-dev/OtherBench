@@ -15,6 +15,7 @@ import { BackgroundHelpers } from '../components/BackgroundHelpers.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
 import { Message, userTextPreview } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
+import { FactCards } from '../components/AppNoteCards.js';
 import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
 import { escapeStopsReply } from '../lib/escapeStopsReply.js';
@@ -741,6 +742,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                 )}
 
                 <WaitingNotes chatId={chat.id} />
+                <FactCards chatId={chat.id} />
               </div>
             </div>
             {showJump && (

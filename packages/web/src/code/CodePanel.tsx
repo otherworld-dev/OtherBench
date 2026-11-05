@@ -7,6 +7,7 @@ import { DeckTab } from './DeckTab.js';
 import { FilesTab } from './FilesTab.js';
 import { IssuesTab } from './IssuesTab.js';
 import { LinksTab } from './LinksTab.js';
+import { NotesTab } from './NotesTab.js';
 import { panelApp, viewOwner } from './panelOwner.js';
 import { useTerminalStatus } from './terminal/status.js';
 import { TerminalTab } from './terminal/TerminalTab.js';
@@ -18,6 +19,7 @@ const BASE_TABS: { id: CodePanelTab; label: string }[] = [
   { id: 'deck', label: 'Deck' },
   { id: 'wiki', label: 'Wiki' },
   { id: 'links', label: 'Links' },
+  { id: 'notes', label: 'Notes' },
   { id: 'files', label: 'Files' },
   { id: 'chat', label: 'Chat' },
 ];
@@ -145,6 +147,8 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
           <WikiTab key={issuesOwner} app={app} owner={issuesOwner} />
         ) : tab === 'links' ? (
           <LinksTab key={app.id} app={app} />
+        ) : tab === 'notes' ? (
+          <NotesTab key={app.id} app={app} />
         ) : (
           <FilesTab key={app.id} app={app} chatId={chat?.appId === app.id ? chat.id : null} />
         )}

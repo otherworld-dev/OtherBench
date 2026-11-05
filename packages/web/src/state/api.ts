@@ -1,10 +1,11 @@
-import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, AppNotesVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import type { FeatureOffCode, GhErrorCode, GitErrorCode, GitStatus, IssueDetail, IssueSummary, PullRequestDetail } from '@otherbench/core/types/code.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@otherbench/core/domain/memory.js';
+import type { AppNotesVersionSummary, AppNotesView, FactSaved, PlacedFact } from '@otherbench/core/domain/app-notes.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
 import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '@otherbench/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
@@ -894,6 +895,23 @@ export const api = {
       /** Saves that version's body as a new user version. */
       restore: (versionId: string) => post<GlobalMemoryView>(`/memory/global/versions/${versionId}/restore`),
     },
+  },
+
+  /** An app's notes (spec 2026-11-05-app-notes-design). */
+  appNotes: {
+    get: (appId: string) => request<AppNotesView>(`/apps/${appId}/notes`),
+    /** The whole page; at most 12,000 characters. */
+    save: (appId: string, body: string) => put<AppNotesView>(`/apps/${appId}/notes`, { body }),
+    /** Files a fact (typed with # or a model's offer); the server's model picks its heading and the line it replaces. */
+    addFact: (appId: string, body: { text: string; section?: string | null; chatId?: string | null }) => post<FactSaved>(`/apps/${appId}/notes/facts`, body),
+    editFact: (appId: string, line: string, text: string) => post<AppNotesView>(`/apps/${appId}/notes/facts/edit`, { line, text }),
+    moveFact: (appId: string, line: string, section: string) => post<AppNotesView>(`/apps/${appId}/notes/facts/move`, { line, section }),
+    /** Takes a filed fact back out and puts back the line it replaced. */
+    undoFact: (appId: string, fact: PlacedFact) => post<AppNotesView>(`/apps/${appId}/notes/facts/undo`, { line: fact.line, section: fact.section, replaced: fact.replaced }),
+    /** Newest first. */
+    versions: (appId: string) => request<AppNotesVersionSummary[]>(`/apps/${appId}/notes/versions`),
+    version: (appId: string, versionId: string) => request<AppNotesVersion>(`/apps/${appId}/notes/versions/${versionId}`),
+    restore: (appId: string, versionId: string) => post<AppNotesView>(`/apps/${appId}/notes/versions/${versionId}/restore`),
   },
 
   /** Named places each machine keeps at its own path (v2 spec §6). */

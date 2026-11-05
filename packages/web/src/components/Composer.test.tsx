@@ -22,6 +22,7 @@ vi.mock('../state/api.js', () => ({
     },
     chats: { patch: vi.fn(), stop: vi.fn(async () => ({ stopped: [] })), commands: vi.fn(async () => ({ commands: [...OWN_COMMANDS] })) },
     notes: { send: vi.fn(), withdraw: vi.fn() },
+    appNotes: { addFact: vi.fn() },
     claude: { planUsage: vi.fn(async () => ({ usage: null })), accounts: { list: vi.fn(async () => ({ accounts: [] })) } },
     attachments: {
       upload: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('../state/api.js', () => ({
 }));
 
 import { api, ApiError } from '../state/api.js';
+import { useAppNotesStore } from '../state/appNotes.js';
 
 const mockedCreate = vi.mocked(api.turns.create);
 const mockedCancel = vi.mocked(api.turns.cancel);
@@ -1616,5 +1618,55 @@ describe('Composer focus', () => {
     render(<Composer chat={makeChat()} />);
     act(() => window.dispatchEvent(new Event('focus')));
     expect(box()).not.toHaveFocus();
+  });
+});
+
+describe('Composer: # in an app chat', () => {
+  beforeEach(() => {
+    reset();
+    useOtherBenchStore.getState().setProfiles([makeProfile()]);
+    useAppNotesStore.setState({ views: {}, failed: {}, cards: {} });
+    vi.mocked(api.appNotes.addFact).mockReset();
+  });
+  afterEach(() => cleanup());
+
+  const saved = {
+    notes: { appId: 'app-1', body: '## Build\n- uses vm-build-02\n', updatedAt: 2, sourceChatId: 'chat-1', mirroredAt: null },
+    mirror: { state: 'pending' as const },
+    fact: { body: '## Build\n- uses vm-build-02\n', section: 'Build', line: '- uses vm-build-02', replaced: null, added: true },
+  };
+
+  it('saves a one-line # message to the notes instead of sending it, and shows its card', async () => {
+    vi.mocked(api.appNotes.addFact).mockResolvedValue(saved);
+    render(<Composer chat={makeChat({ appId: 'app-1' })} />);
+    const box = screen.getByRole('textbox', { name: /message/i });
+    fireEvent.change(box, { target: { value: '# uses vm-build-02' } });
+    expect(screen.getByTestId('composer-note-hint')).toHaveTextContent("isn't sent to the model");
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(api.appNotes.addFact).toHaveBeenCalledWith('app-1', { text: 'uses vm-build-02', chatId: 'chat-1' }));
+    expect(mockedCreate).not.toHaveBeenCalled();
+    await waitFor(() => expect(box).toHaveValue(''));
+    expect(useAppNotesStore.getState().cards['chat-1']).toEqual([expect.objectContaining({ appId: 'app-1', fact: saved.fact, state: 'saved' })]);
+    expect(useAppNotesStore.getState().views['app-1']).toEqual(saved);
+  });
+
+  it('keeps the text and says why when the save fails', async () => {
+    vi.mocked(api.appNotes.addFact).mockRejectedValue(new ApiError(409, 'Notes are full.'));
+    render(<Composer chat={makeChat({ appId: 'app-1' })} />);
+    const box = screen.getByRole('textbox', { name: /message/i });
+    fireEvent.change(box, { target: { value: '# x' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save it to the notes: Notes are full.");
+    expect(box).toHaveValue('# x');
+  });
+
+  it('sends a # message as usual outside an app, and a markdown heading in one', async () => {
+    render(<Composer chat={makeChat()} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /message/i }), { target: { value: '# hello' } });
+    expect(screen.queryByTestId('composer-note-hint')).toBeNull();
+    cleanup();
+    render(<Composer chat={makeChat({ appId: 'app-1' })} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /message/i }), { target: { value: '## Heading' } });
+    expect(screen.queryByTestId('composer-note-hint')).toBeNull();
   });
 });
