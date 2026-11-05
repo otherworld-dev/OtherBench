@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { exportFilename } from '@otherbench/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import { setAppOpen } from '../code/appOpen.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-import { AppsIcon, DockIcon, FolderPlusIcon, PinIcon, PopOutIcon } from '../components/icons.js';
+import { FolderPlusIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
-import { dock, onDesktopEvent, undock } from '../desktop/bridge.js';
-import { inDesktopApp, windowForMode, type DockView } from '../desktop/windows.js';
 import { saveFile } from '../lib/saveFile.js';
 import { toast } from '../lib/toasts.js';
 import { useNow } from '../lib/useNow.js';
@@ -17,14 +15,17 @@ import { ALL_APPS_TAB_ID } from '../state/allAppsTab.js';
 import { appTabId } from '../state/appTab.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { chatStatus, groupStatusSummary, isOnCard, needsYouChats, useChatActivity, type ChatStatus } from '../state/chatStatus.js';
-import { modeOfChat, type Mode } from '../state/mode.js';
+import { modeOfChat } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { schedulesDeletedLine, useScheduleCount } from '../views/schedules/useScheduleCount.js';
 import { OverviewJumpList } from '../overview/OverviewJumpList.js';
-import { selectOverviewTotal, useOtherBenchStore, WINDOW_ROLE } from '../state/store.js';
-import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
+import { useOtherBenchStore } from '../state/store.js';
+import { AllAppsEntry } from './sidebar/AllAppsEntry.js';
+import { ChatFilters } from './sidebar/ChatFilters.js';
+import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
+import { focusLater, headingSelector, LIST_SELECTOR, neighbourHeadingSelector, ROW_PREFIX, rowSelector, type RowKind } from './sidebar/focus.js';
 import { appMenuItems, chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
   AGE_BUCKET_LABELS,
@@ -40,55 +41,21 @@ import {
   placeChatPatches,
   placeProjectPatches,
   projectSiblings,
-  titleMatches,
   type CodeSidebarGroup,
   type SidebarGroup,
 } from './sidebar/model.js';
+import { ModeSwitch } from './sidebar/ModeSwitch.js';
+import { PinDropZone } from './sidebar/PinDropZone.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
+import { useShowArchived } from './sidebar/showArchived.js';
+import { useSidebarSearch } from './sidebar/useSidebarSearch.js';
+import { useTrayNewChat } from './sidebar/useTrayNewChat.js';
+
+export { SHOW_ARCHIVED_STORAGE_KEY } from './sidebar/showArchived.js';
 
 /** A sidebar error line: the server's own message when there is one. */
 function errorText(err: unknown, action: string): string {
   return err instanceof ApiError ? `${action}: ${err.message}` : `${action} -- please try again.`;
-}
-
-/**
- * Focuses `selector` once React has committed (a moved row re-mounts under
- * its new group), unless focus has meanwhile gone into a menu, a dialog or a
- * text field -- another action took it on purpose.
- */
-function focusLater(selector: string, fallback?: string, options?: FocusOptions): void {
-  setTimeout(() => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && active.closest('[role="menu"], [role="alertdialog"], input, select, textarea')) return;
-    const target = document.querySelector<HTMLElement>(selector) ?? (fallback ? document.querySelector<HTMLElement>(fallback) : null);
-    target?.focus(options);
-  }, 0);
-}
-
-/** The chat list itself: the stable place focus falls back to when the row it wanted is gone. */
-const LIST_SELECTOR = '[data-chat-list]';
-
-/**
- * Which of a chat's rows: the one in its group, its copy under Pinned (a pinned chat stays in its group too, Deck
- * d961), or its copy in the Needs you list. Each has its own test id prefix, so a selector finds the one meant.
- */
-type RowKind = 'group' | 'pinned' | 'list';
-
-const ROW_PREFIX: Record<RowKind, string> = { group: 'chat-row-', pinned: 'pinned-row-', list: 'needs-you-row-' };
-
-function rowSelector(chatId: string, kind: RowKind): string {
-  return `[data-testid="${ROW_PREFIX[kind]}${chatId}"] [data-row-main]`;
-}
-
-/** localStorage key: whether the "Show archived" section is open. Per device. */
-export const SHOW_ARCHIVED_STORAGE_KEY = 'otherbench.showArchived';
-
-function loadShowArchived(): boolean {
-  try {
-    return window.localStorage.getItem(SHOW_ARCHIVED_STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
 }
 
 /** A list of chats as the sidebar shows them: Pinned, a project's own pinned chats, or the rest of one project's group (null = No project). */
@@ -99,15 +66,6 @@ interface Section {
   projectId: string | null;
   /** In a group sorted by recent activity: its order isn't the user's to change. */
   recent: boolean;
-}
-
-/** A filter chip under the search box, on or off. */
-function chipClass(on: boolean): string {
-  return `chip px-2 py-0.5 text-xs ${on ? 'chip-on' : ''}`;
-}
-
-function headingSelector(projectId: string): string {
-  return `[data-testid="group-heading-${projectId}"] [data-heading-main]`;
 }
 
 /**
@@ -164,11 +122,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const apps = useOtherBenchStore((s) => s.apps);
   const appFolders = useOtherBenchStore((s) => s.appFolders);
   const mode = useOtherBenchStore((s) => s.mode);
-  const setMode = useOtherBenchStore((s) => s.setMode);
   const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
-  const setOverviewOpen = useOtherBenchStore((s) => s.setOverviewOpen);
-  const overviewTotal = useOtherBenchStore(selectOverviewTotal);
-  const undocked = useOtherBenchStore((s) => s.undocked);
   const openAppHome = useOtherBenchStore((s) => s.openAppHome);
   const openAllApps = useOtherBenchStore((s) => s.openAllApps);
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
@@ -180,13 +134,13 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const now = useNow(60_000);
   const activity = useChatActivity();
 
-  const [query, setQuery] = useState('');
-  /** The server's message-text hits for the query; a previous query's stay until the new answer, so rows don't blink while typing. */
-  const [searchChatIds, setSearchChatIds] = useState<ReadonlySet<string> | null>(null);
-  const searchSeq = useRef(0);
-  const [statusOnly, setStatusOnly] = useState(false);
-  /** The Machine chip: only chats that run on this node id; null = any. */
-  const [machine, setMachine] = useState<string | null>(null);
+  const { query, runSearch, trimmedQuery, statusOnly, setStatusOnly, machineFilter, setMachine, searching, matches } = useSidebarSearch(
+    chats,
+    machines,
+    activeChatId,
+    activity,
+    now
+  );
   /** Groups opened past their cap with "Show N more", this session only. */
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [noProjectMenu, setNoProjectMenu] = useState<{ x: number; y: number } | null>(null);
@@ -209,35 +163,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; position: { x: number; y: number } } | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
-  const [showArchived, setShowArchived] = useState(loadShowArchived);
+  const [showArchived, toggleArchived] = useShowArchived();
   const [appMenu, setAppMenu] = useState<{ appId: string; position: { x: number; y: number } } | null>(null);
   const [renamingAppId, setRenamingAppId] = useState<string | null>(null);
   const [deletingAppId, setDeletingAppId] = useState<string | null>(null);
 
-  const trimmedQuery = query.trim();
-  // A chip left on for a machine since unpaired would hide everything, with no chip shown to turn it off.
-  const machineFilter = machines?.peers.length ? machine : null;
-  const searching = trimmedQuery !== '' || statusOnly || machineFilter !== null;
-  // The chats the status and machine chips allow (null with neither on); the open chat is never hidden by them:
-  // a new chat runs here.
-  const chipMatches = useMemo(() => {
-    if (!statusOnly && machineFilter === null) return null;
-    return new Set(
-      chats
-        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, activity, now) !== null)
-        .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
-        .map((c) => c.id)
-    );
-  }, [chats, statusOnly, machineFilter, activeChatId, activity, now]);
-  const matches = useMemo(() => {
-    if (!searching) return null;
-    return new Set(
-      chats
-        .filter((c) => trimmedQuery === '' || titleMatches(c.title, trimmedQuery) || searchChatIds?.has(c.id) === true)
-        .filter((c) => chipMatches === null || chipMatches.has(c.id))
-        .map((c) => c.id)
-    );
-  }, [searching, chats, trimmedQuery, searchChatIds, chipMatches]);
   // While searching every chat stays in its group, so a result is found where it lives.
   // In the order each chat came to need the user, as the server recorded it, so a reload keeps it (`needsYouChats`).
   const queue = useMemo(() => needsYouChats(chats, activity, now), [chats, activity, now]);
@@ -277,23 +207,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     setChatMenu(null);
     focusLater(LIST_SELECTOR);
   }, [menuChatGone]);
-
-  async function runSearch(q: string): Promise<void> {
-    setQuery(q);
-    const seq = ++searchSeq.current;
-    if (q.trim().length === 0) {
-      setSearchChatIds(null);
-      return;
-    }
-    try {
-      const results = await api.searchChats(q);
-      // A newer keystroke, or clearing the box, supersedes this response.
-      if (seq !== searchSeq.current) return;
-      setSearchChatIds(new Set(results.map((r) => r.chatId)));
-    } catch (err) {
-      console.error('[otherbench-web] search failed:', err);
-    }
-  }
 
   /**
    * A new chat in a project, an app (Code mode), or neither. `into` names the
@@ -684,15 +597,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     if (firstRevealedId) focusLater(rowSelector(firstRevealedId, 'group'));
   }
 
-  /** The heading to focus once `projectId`'s is gone: the next one, else the previous one. */
-  function neighbourHeadingSelector(projectId: string): string {
-    const heads = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="group-heading-"]'));
-    const i = heads.findIndex((el) => el.getAttribute('data-testid') === `group-heading-${projectId}`);
-    const neighbour = i === -1 ? undefined : (heads[i + 1] ?? heads[i - 1]);
-    const key = neighbour?.getAttribute('data-testid')?.slice('group-heading-'.length);
-    return key ? headingSelector(key) : LIST_SELECTOR;
-  }
-
   /** Rejects on failure, which keeps the confirmation dialog open with the message. */
   async function deleteProject(projectId: string): Promise<void> {
     const next = neighbourHeadingSelector(projectId);
@@ -829,33 +733,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     }
   }
 
-  // The tray menu's "New chat" does exactly what the button does. The ref
-  // keeps the one subscription pointed at the latest `createChat`, which
-  // closes over the current profiles.
-  const createChatRef = useRef(createChat);
-  createChatRef.current = createChat;
-  useEffect(() => {
-    let off: (() => void) | null = null;
-    let disposed = false;
-    void onDesktopEvent('tray-new-chat', () => void createChatRef.current()).then((unlisten) => {
-      if (disposed) unlisten();
-      else off = unlisten;
-    });
-    return () => {
-      disposed = true;
-      off?.();
-    };
-  }, []);
-
-  function toggleArchived(): void {
-    const next = !showArchived;
-    setShowArchived(next);
-    try {
-      window.localStorage.setItem(SHOW_ARCHIVED_STORAGE_KEY, String(next));
-    } catch {
-      // storage blocked or full -- the toggle still applies for this session.
-    }
-  }
+  useTrayNewChat(createChat);
 
   function statusOf(chat: Chat): ChatStatus | null {
     return chatStatus(chat, activity, now);
@@ -1096,108 +974,17 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     );
   }
 
-  // Undocked windows (desktop/windows.ts): a mode or the Overview in a window of its own is marked so,
-  // and choosing it brings that window forward (the store's setMode and setOverviewOpen do).
-  const modeElsewhere = (m: Mode): boolean => windowForMode(m, undocked, WINDOW_ROLE) !== WINDOW_ROLE;
-  const overviewElsewhere = undocked.includes('overview');
-  const elsewhereMark = <PopOutIcon className="h-3 w-3 shrink-0 opacity-70" />;
-  // What the button beside the switch does with what is showing: the Overview or Code mode out to a
-  // window of its own, or, in the Code window, Code back into the main one. Chat mode stays in the main window.
-  const dockAction: { view: DockView; out: boolean; label: string } | null = !inDesktopApp()
-    ? null
-    : overviewOpen
-      ? { view: 'overview', out: true, label: 'Open the Overview in its own window' }
-      : WINDOW_ROLE === 'code'
-        ? { view: 'code', out: false, label: 'Put Code back in the main window' }
-        : mode === 'code'
-          ? { view: 'code', out: true, label: 'Open Code in its own window' }
-          : null;
-
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
-        <div className="mb-2 flex items-stretch gap-1">
-          <div role="group" aria-label="Mode" data-testid="mode-switch" className="grid min-w-0 flex-1 grid-cols-[minmax(3rem,1fr)_minmax(3rem,1fr)_minmax(0,auto)] gap-0.5 rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] p-0.5">
-            {(['chat', 'code'] as const satisfies readonly Mode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={mode === m && !overviewOpen && !modeElsewhere(m)}
-                onClick={() => setMode(m)}
-                title={modeElsewhere(m) ? `${m === 'chat' ? 'Chat' : 'Code'} is in its own window` : undefined}
-                className={`flex min-w-0 items-center justify-center gap-1 overflow-hidden rounded-[3px] px-2 py-1 text-xs ${
-                  mode === m && !overviewOpen && !modeElsewhere(m) ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                }`}
-              >
-                <span className="truncate">{m === 'chat' ? 'Chat' : 'Code'}</span>
-                {modeElsewhere(m) && elsewhereMark}
-              </button>
-            ))}
-            <button
-              type="button"
-              aria-pressed={overviewOpen}
-              onClick={() => setOverviewOpen(true)}
-              title={overviewElsewhere ? 'The Overview is in its own window' : undefined}
-              className={`flex min-w-0 items-center justify-center gap-1 overflow-hidden rounded-[3px] px-2 py-1 text-xs ${
-                overviewOpen ? 'bg-[var(--bg-raised)] font-medium text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-              }`}
-            >
-              <span className="truncate">Overview</span>
-              {overviewTotal > 0 && (
-                <span data-testid="overview-count" className="shrink-0 rounded-full bg-[var(--accent)] px-1.5 text-[0.65rem] tabular-nums text-[var(--bg)]">
-                  {overviewTotal}
-                </span>
-              )}
-              {overviewElsewhere && elsewhereMark}
-            </button>
-          </div>
-          {dockAction && (
-            <button
-              type="button"
-              data-testid="dock-toggle"
-              aria-label={dockAction.label}
-              title={dockAction.label}
-              onClick={() => {
-                (dockAction.out ? undock(dockAction.view) : dock(dockAction.view)).catch((err: unknown) =>
-                  console.error(`[otherbench-web] failed to ${dockAction.out ? 'undock' : 'dock'} ${dockAction.view}:`, err),
-                );
-              }}
-              className="btn shrink-0 px-1.5"
-            >
-              {dockAction.out ? <PopOutIcon /> : <DockIcon />}
-            </button>
-          )}
-        </div>
+        <ModeSwitch />
         {!codeMode && draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
-          <div
-            data-testid="pinned-drop-zone"
-            data-drop-active={pinZoneActive ? 'true' : undefined}
-            onDragOver={(e) => {
-              if (!Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME)) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              if (!pinZoneActive) setPinZoneActive(true);
-            }}
-            onDragLeave={(e) => {
-              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-              setPinZoneActive(false);
-            }}
-            onDrop={(e) => {
-              const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
-              setPinZoneActive(false);
-              setDraggingChatId(null);
-              if (!chatId) return;
-              e.preventDefault();
-              void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null, recent: false }, null);
-            }}
-            // Same box as the search field it stands in for, so nothing below it moves.
-            className={`flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
-              pinZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
-            }`}
-          >
-            <PinIcon />
-            Drop here to pin
-          </div>
+          <PinDropZone
+            active={pinZoneActive}
+            onActiveChange={setPinZoneActive}
+            onDragFinished={() => setDraggingChatId(null)}
+            onPin={(chatId) => void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null, recent: false }, null)}
+          />
         ) : (
           <input
             type="search"
@@ -1208,27 +995,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
             className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
           />
         )}
-        <div className="mt-1.5 flex flex-wrap items-center gap-1" data-testid="chat-filters">
-          <button type="button" aria-pressed={statusOnly} onClick={() => setStatusOnly((on) => !on)} className={chipClass(statusOnly)}>
-            Needs you / working
-          </button>
-          {machines && machines.peers.length > 0 && (
-            <select
-              aria-label="Machine"
-              value={machineFilter ?? ''}
-              onChange={(e) => setMachine(e.target.value === '' ? null : e.target.value)}
-              className={`${chipClass(machineFilter !== null)} bg-[var(--bg-raised)]`}
-            >
-              <option value="">Any machine</option>
-              <option value={machines.self.id}>{machines.self.name} (this machine)</option>
-              {machines.peers.map((p) => (
-                <option key={p.nodeId} value={p.nodeId}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
+        <ChatFilters statusOnly={statusOnly} setStatusOnly={setStatusOnly} machines={machines} machineFilter={machineFilter} setMachine={setMachine} />
       </div>
 
       {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
@@ -1239,30 +1006,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           <OverviewJumpList />
         ) : (
           <>
-          {codeMode && (
-            <button
-              type="button"
-              data-testid="all-apps-entry"
-              aria-current={activeChatId === ALL_APPS_TAB_ID ? 'page' : undefined}
-              onClick={openAllApps}
-              className={`mb-1.5 flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm ${
-                activeChatId === ALL_APPS_TAB_ID
-                  ? 'bg-[var(--bg)] text-[var(--text)] shadow-[inset_2px_0_0_var(--accent)]'
-                  : 'text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]'
-              }`}
-            >
-              <AppsIcon className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">All apps</span>
-              {/* Read as "All apps 3 apps", not a bare number, as a group heading's count is. The spaces sit between the
-                  spans (a flex row draws none) so the name keeps them. */}
-              {' '}
-              <span data-testid="all-apps-count" className="shrink-0 text-xs tabular-nums text-[var(--text-faint)]" title={`${apps.length} ${apps.length === 1 ? 'app' : 'apps'}`}>
-                {apps.length}
-              </span>
-              {' '}
-              <span className="sr-only">{apps.length === 1 ? 'app' : 'apps'}</span>
-            </button>
-          )}
+          {codeMode && <AllAppsEntry active={activeChatId === ALL_APPS_TAB_ID} count={apps.length} onOpen={openAllApps} />}
 
           {needsYou.length > 0 && (
             <div className="mb-1.5" data-testid="group-needs-you">

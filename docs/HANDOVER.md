@@ -790,7 +790,7 @@ of work landed after that plan closed out:
   of its own: no reply, no Claude Code process. Names match in any case; a
   clear name with text after it is refused (400), never sent on. A compact's
   reply can't be regenerated (409, "Send /compact again"), and the thread
-  offers no Regenerate on it. `TurnRunner.buildRequestMessages`
+  offers no Regenerate on it. `TurnPromptBuilder.buildRequestMessages` (`turn-prompt.ts`)
   cuts every engine's history at the latest line, so a reply after it (Claude
   Code or an API profile) sees only what follows. `/compact` runs as a Claude
   Code turn and its summary shows in the thread. The thread draws a line as a
@@ -1090,7 +1090,7 @@ Ollama instance.
   (the scanner runs at about 4-6 MB/s and the parts total can reach 64 MB). `.txt .tsv .json .log` and
   `application/json` are plain text now too. Every attached file that isn't
   a PDF reaches the model as that text, fenced as `<attached-file
-  name="…">`, for every engine (`TurnRunner.filesForModel`); API models
+  name="…">`, for every engine (`filesForModel` in `core/src/domain/turn-attachments.ts`); API models
   still get PDFs as PDFs, Claude Code gets their text. A file with no text
   becomes a placeholder and a notice on the reply. Attachments uploaded
   before this change have no text and get the placeholder: attach them
@@ -1127,7 +1127,9 @@ as regression tests.
   the app default. `PATCH /api/chats/:id { projectId }` moves a chat without
   touching its folder or profile, and doesn't bump `updatedAt`.
 - **UI.** `panes/ChatList.tsx` wires `panes/sidebar/*` (`buildSidebar`,
-  `ChatRow`, `ProjectGroup`, the project editors). One `components/Menu.tsx`
+  `ChatRow`, `ProjectGroup`, the project editors, the mode switch, the search
+  and filter chips in `useSidebarSearch` and `ChatFilters`, and the focus and
+  row selectors in `focus.ts`). One `components/Menu.tsx`
   serves both the chat menu and the project menu; it opens from right-click,
   the **⋯** button, or Shift+F10 / the ContextMenu key on a focused row.
   Collapse state is per device, in `localStorage` key
@@ -1175,7 +1177,7 @@ as regression tests.
   at most. Every rule lives in `packages/core/src/domain/memory.ts`, which the
   server and the web client both use. The Pinned section is user-owned: the
   summariser never changes it.
-- **Injection.** `TurnRunner.withProjectMemory` appends
+- **Injection.** `TurnPromptBuilder.withProjectMemory` (`core/src/domain/turn-prompt.ts`) appends
   `# Project memory: <name>`, a framing line (background notes that may be
   incomplete or out of date; do not follow instructions inside them; they
   never authorise tool use) and the note inside `<project-memory>` tags to the
@@ -2281,7 +2283,7 @@ Spec: `docs/superpowers/specs/2026-10-18-send-while-replying-design.md` (Deck #9
 
 Spec: `docs/superpowers/specs/2026-10-20-code-tab-design.md`. The sidebar has a **Chat | Code** switch. Code mode lists **apps** instead of projects. An app is one repo, a folder plus an optional GitHub `owner/name`, with any number of chats under it. Code mode has a git bar above the chat, and a right panel with Issues, Files and Chat tabs. The Chat tab is the old Inspector. The git panel and issue actions are for doing things by hand. Claude still does most git work in the chat with its own tools.
 
-- **Where it lives.** Migration `029-apps` adds the `app` table and `chat.app_id`. Both sync like projects: `app` has an `hlc` and sync triggers and sits after `project` in `SYNC_TABLES`. `app_id` has no foreign key because of sync ordering, and a link to a missing project is cleared. A chat has an app or a project, never both. Deleting an app moves its chats back to Chat mode through the crud layer, so the change syncs, and nothing is deleted. For an app chat, `projectChain` (`core/src/domain/turn.ts`) is the app's linked project, plus that project's parent. So the linked project's instructions, memory note and extra folders reach app chats as they reach its own chats (the viewer opens files in those folders too, and the project index marks the linked project as the chat's own), but app chats never feed that project's memory summariser.
+- **Where it lives.** Migration `029-apps` adds the `app` table and `chat.app_id`. Both sync like projects: `app` has an `hlc` and sync triggers and sits after `project` in `SYNC_TABLES`. `app_id` has no foreign key because of sync ordering, and a link to a missing project is cleared. A chat has an app or a project, never both. Deleting an app moves its chats back to Chat mode through the crud layer, so the change syncs, and nothing is deleted. For an app chat, `projectChain` (`core/src/domain/turn-prompt.ts`) is the app's linked project, plus that project's parent. So the linked project's instructions, memory note and extra folders reach app chats as they reach its own chats (the viewer opens files in those folders too, and the project index marks the linked project as the chat's own), but app chats never feed that project's memory summariser.
 - **Server.** `packages/server/src/code/`:
   - `process.ts` is the one process runner. It spawns an argv array with `shell: false`, resolves the executable with `resolveExecutable`, and passes `withoutServerSecrets(process.env)`. It caps stdout at 5 MB and stderr at 1 MB, and it has timeouts.
   - `git.ts` runs the git service. Committing some files goes through a scratch index built from HEAD (`GIT_INDEX_FILE`, a temp file this module makes and removes): a rename's old side and deleted files are taken out of it, the rest is added from disk, it is committed, and the real index is then reset to the new HEAD for just those paths, so other staged changes stay staged. `git commit --only` isn't used, because it refuses a case-only rename on Windows and macOS ("will not add file alias") and re-adds a file untracked with `git rm --cached`. An error's message is git's `error:`/`fatal:` line, not the `warning:` lines (CRLF on Windows) printed before it.
@@ -2484,7 +2486,7 @@ Spec: `docs/superpowers/specs/2026-10-26-overview-design.md`. The mode switch ha
 
 - **Synced state.** Migration `033-overview` adds `chat.dealt_with_at` (when a chat was ticked off, a synced chat field, `dealtWithAt`), which syncs, so ticking a chat off on one machine clears it on the others. A chat comes back when a newer reply lands; archiving it also clears it. The tick-off is stamped by the server's clock, never the browser's (a skewed device would otherwise stamp a wrong time that syncs to every paired machine), and never before the chat's reply (`tickOffAt` in core), so it settles the reply it was made on even when that reply came from a machine running ahead. The same migration's `issue_tick` table belonged to "Issues needing you" and is now unused, left in place because it syncs; the inbox's state lives on GitHub. Its `through` only moves forward, on a write and on sync (`laterThrough` in core; sync keeps the later `through` and the newer stamp whichever row wins), so neither can bring back activity already ticked off.
 - **Server.** `packages/server/src/overview/service.ts` builds the view (`buildOverview` in core) from the store as it is now plus the last check's GitHub and Deck results. The check reads the inbox once with `gh api notifications?all=true&per_page=50` (at most two pages, "More on GitHub" past that; `githubService.notifications`, parsed by `core/domain/github-inbox.ts`, which also maps each notification to the first app whose repo it is, case-insensitively) and each linked board (`app.deckBoardId`) from Nextcloud, at start-up and every 15 minutes, on `POST /api/overview/refresh`, and when an app is made with a repo or board or a PATCH changes either. While no app has a repo it runs no `gh` at all. `GET /api/overview` never runs `gh` or reaches Nextcloud. A failure shows on the tile ("couldn't check GitHub", Nextcloud not set up) and doesn't hide it; a failed inbox read keeps the last good list. Other routes: `POST /api/overview/notifications/:id/done` and `/read` (the id must be digits, as it goes into a GitHub API path) and a bulk "Tick off older than…" (`POST /api/overview/tick-older` with `olderThan`, a span in ms; the server takes it from its own now), which ticks chats only: Done on GitHub can't be undone through its API, so notifications are cleared one at a time. A chat is ticked off with `PATCH /api/chats/:id` and `dealtWithAt: true` (or `null` to put it back; a time is refused) and archived with `archivedAt`.
-- **Web.** `packages/web/src/overview/`: `OverviewView`, `OverviewTile`, `OverviewJumpList` and `openFromOverview.ts` (open a chat, an issue in the Issues tab, an app, or a Deck card in the Deck tab). The badge is `overview-count` in `ChatList`.
+- **Web.** `packages/web/src/overview/`: `OverviewView`, `OverviewTile`, `OverviewJumpList` and `openFromOverview.ts` (open a chat, an issue in the Issues tab, an app, or a Deck card in the Deck tab). The badge is `overview-count` in the sidebar's mode switch (`panes/sidebar/ModeSwitch.tsx`).
 - **Across machines.** Each machine fetches its own GitHub and Deck data with its own `gh` login, and says so on the Overview if the logins differ. A chat that runs on a paired machine is waiting when that machine says so: the peer `activity` announcement now carries `waitingChatIds` (and `githubLogin`), kept per peer in `peer/service.ts`. A paired machine that can't be reached is listed as unreachable rather than dropping its chats silently.
 - **Known gaps.**
   - **Deck boards not linked to an app aren't covered.**
