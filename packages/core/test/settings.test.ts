@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_APP_SETTINGS, mayChangePeerComputerControl } from '../src/domain/settings.js';
+import { DEFAULT_APP_SETTINGS, mayChangePeerComputerControl, peerComputerControlNeedsHostConfirm } from '../src/domain/settings.js';
 
 describe('peerComputerControl', () => {
   it('is off by default', () => {
     expect(DEFAULT_APP_SETTINGS.peerComputerControl).toBe(false);
+  });
+
+  it("needs the person here to confirm it only when it's being turned on", () => {
+    expect(peerComputerControlNeedsHostConfirm(false, true)).toBe(true);
+    expect(peerComputerControlNeedsHostConfirm(true, true)).toBe(false);
+    expect(peerComputerControlNeedsHostConfirm(true, false)).toBe(false);
+    expect(peerComputerControlNeedsHostConfirm(false, false)).toBe(false);
   });
 
   it('is turned on only from the desktop app, and turned off or left as it is from anywhere', () => {
