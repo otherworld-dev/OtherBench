@@ -1,10 +1,10 @@
 import { useEffect, useState, type JSX } from 'react';
 import { CodePanel } from './code/CodePanel.js';
 import { Toaster } from './components/Toaster.js';
-import { ChartIcon, ClockIcon, DockIcon, GearIcon, SignOutIcon } from './components/icons.js';
+import { ChartIcon, ClockIcon, DockIcon, GearIcon, MenuIcon, SignOutIcon } from './components/icons.js';
 import { dock, isIndicatorView, isQuickView } from './desktop/bridge.js';
 import { useDocks } from './desktop/useDocks.js';
-import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
+import { NARROW_BREAKPOINT, PHONE_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
 import { PaneGrid } from './panes/PaneGrid.js';
@@ -15,7 +15,7 @@ import { useTerminalShortcuts } from './code/terminal/useTerminalShortcuts.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useAuthStore } from './state/auth.js';
-import { useOtherBenchStore, WINDOW_ROLE } from './state/store.js';
+import { selectOverviewTotal, useOtherBenchStore, WINDOW_ROLE } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
@@ -26,6 +26,7 @@ import { useAppEvents } from './state/useAppEvents.js';
 import { OverviewView } from './overview/OverviewView.js';
 import { useOverview } from './overview/useOverview.js';
 import { useMarkRead } from './state/useMarkRead.js';
+import { usePush } from './state/usePush.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { AppView } from './views/AppView.js';
 import { IndicatorView } from './views/IndicatorView.js';
@@ -154,6 +155,9 @@ function MainApp(): JSX.Element {
   const signOut = useAuthStore((s) => s.signOut);
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
+  // A phone held upright: the sidebar is a drawer over the chat, opened from the bar at the top (PhoneBar).
+  const isPhone = useMediaQuery(PHONE_BREAKPOINT);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
   // preference): whether the narrow-mode overlay is currently open. In the
   // store so each pane's header can open it; ephemeral, and starts closed
@@ -183,6 +187,12 @@ function MainApp(): JSX.Element {
   usePaneShortcuts(isNarrow);
   useTerminalShortcuts();
   useMarkRead(isNarrow);
+  usePush(loaded, signedInRemotely);
+
+  // The drawer gets out of the way once something is chosen in it: a chat, the Overview, or a page of its own.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [activeChatId, overviewOpen, projectPage, appPage, schedulesPage, settingsViewOpen, usageViewOpen, isPhone]);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
@@ -192,8 +202,9 @@ function MainApp(): JSX.Element {
       className="grid h-screen grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
       // --sidebar-w comes from state/sidebarWidth.ts; never more than 40% of the window (SIDEBAR_WIDTH_MAX_SHARE),
       // whatever was saved on a bigger screen.
-      style={{ gridTemplateColumns: 'min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)' }}
+      style={{ gridTemplateColumns: isPhone ? 'minmax(0, 1fr)' : 'min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)' }}
       data-narrow={isNarrow || undefined}
+      data-phone={isPhone || undefined}
     >
       <Toaster />
       {unreachable && (
@@ -215,7 +226,22 @@ function MainApp(): JSX.Element {
         </div>
       )}
 
-      <div className="relative row-start-2 h-full min-h-0 min-w-0">
+      {/* On a phone the sidebar is a drawer: out of the grid, over the chat, behind a backdrop that closes it. */}
+      {isPhone && drawerOpen && (
+        <button type="button" aria-label="Close the sidebar" data-testid="drawer-backdrop" onClick={() => setDrawerOpen(false)} className="fixed inset-0 z-20 bg-black/40" />
+      )}
+      <div
+        className={
+          isPhone
+            ? `fixed inset-y-0 left-0 z-20 w-[min(20rem,85vw)] bg-[var(--bg-raised)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-xl ${drawerOpen ? '' : 'hidden'}`
+            : 'relative row-start-2 h-full min-h-0 min-w-0'
+        }
+        data-testid={isPhone ? 'sidebar-drawer' : undefined}
+        role={isPhone ? 'dialog' : undefined}
+        aria-label={isPhone ? 'Chats' : undefined}
+        // Tapping a chat closes the drawer, the open one included (its id doesn't change then).
+        onClick={isPhone ? (e) => (e.target as Element).closest('[data-row-main]') && setDrawerOpen(false) : undefined}
+      >
         {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
         <ChatList
           wrapFooter={signedInRemotely}
@@ -238,11 +264,12 @@ function MainApp(): JSX.Element {
             </>
           }
         />
-        <SidebarResizer />
+        {!isPhone && <SidebarResizer />}
       </div>
 
       <div className="relative row-start-2 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
         <div className="flex h-full min-h-0 min-w-0 flex-col">
+          {isPhone && <PhoneBar onOpenDrawer={() => setDrawerOpen(true)} />}
           {overviewOpen ? (
             <OverviewView />
           ) : (
@@ -315,6 +342,39 @@ function MainApp(): JSX.Element {
         <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
       )}
       {appPage && <AppView key={appPage.mode === 'edit' ? appPage.appId : 'new'} page={appPage} onClose={closeAppPage} />}
+    </div>
+  );
+}
+
+/**
+ * The top of the screen on a phone: the button that opens the sidebar drawer, what is showing, and how many things
+ * need the user (the Overview's count, as on the mode switch), which opens the drawer too, as the Needs you list
+ * heads it.
+ */
+function PhoneBar({ onOpenDrawer }: { onOpenDrawer: () => void }): JSX.Element {
+  const chats = useOtherBenchStore((s) => s.chats);
+  const activeChatId = useOtherBenchStore((s) => s.activeChatId);
+  const overviewOpen = useOtherBenchStore((s) => s.overviewOpen);
+  const needsYou = useOtherBenchStore(selectOverviewTotal);
+  // A chat shows its own title in its header just below, so the bar names only what has none.
+  const title = overviewOpen ? 'Overview' : chats.some((c) => c.id === activeChatId) ? '' : 'OtherBench';
+  return (
+    <div data-testid="phone-bar" className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 pt-[max(0.25rem,env(safe-area-inset-top))]">
+      <button type="button" onClick={onOpenDrawer} aria-label="Open the sidebar" title="Chats" className="btn flex size-11 shrink-0 items-center justify-center">
+        <MenuIcon className="size-5" />
+      </button>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+      {needsYou > 0 && (
+        <button
+          type="button"
+          onClick={onOpenDrawer}
+          data-testid="phone-needs-you"
+          aria-label={`${needsYou} waiting for you`}
+          className="flex h-11 shrink-0 items-center rounded-full px-2"
+        >
+          <span className="rounded-full bg-[var(--accent)] px-2 text-xs tabular-nums text-[var(--bg)]">{needsYou}</span>
+        </button>
+      )}
     </div>
   );
 }
