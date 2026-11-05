@@ -633,6 +633,93 @@ of work landed after that plan closed out:
     logged once and the old certificate stays in use until the files change
     again. Settings shows the new expiry. `--tls auto` still makes its
     certificate only at start.
+  - **Web Push** ("Notify this device", migration 040, 2026-11-05). Sign-in
+    mode only: `cli.ts` makes a `PushService` (`server/src/push/service.ts`)
+    beside `remote`; in open and token modes `GET /api/push` says it isn't
+    available and its writes 404. Settings → Notifications has the toggle
+    (`web/src/views/settings/PushSection.tsx`), shown only in sign-in mode,
+    with Approvals, questions and plans / Replies finished / Scheduled runs
+    each on or off, and *Send a test*.
+    - **What is pushed.** The service hears the app events the desktop
+      notifier does (`web/src/desktop/notify.ts`) and pushes the same things:
+      a card waiting (tool approval, question, plan, generation prompt,
+      browser handover), a reply finished or failed, a scheduled run ended or
+      not started. Once per request, message or run; a scheduled run's own
+      reply isn't pushed twice; a self-started reply's end waits 3 s and is
+      skipped while the chat is still busy; nothing for an archived chat. The
+      payload is `{title, body, chatId, kind, tag}`: the chat's title (or the
+      schedule's name) and a fixed phrase for the kind ("Approval needed",
+      "Waiting for your answer", "Reply finished", "Scheduled run failed",
+      ...). Never message text, tool names, tool arguments or a run's error
+      detail. One tag (and `Topic`) per chat, so a newer push replaces an
+      older one. A chat on a paired machine isn't pushed from here (its
+      cards aren't announced app-wide here either).
+    - **Subscriptions** (`push_subscription`, `store-sqlite/src/repos/push-subscriptions.ts`).
+      One per remote session, keyed by its id, with `ON DELETE CASCADE` from
+      `remote_session`: signing a device out from the list, its own Sign
+      out, *Sign out everywhere*, a password change and expiry all delete it
+      (core's in-memory fake does the same). An endpoint subscribed again
+      under a new session moves to it. Local: no sync triggers, not in
+      `SYNC_TABLES`. A push service answering 404 or 410 deletes the row.
+      `/api/push` (`server/src/routes/push.ts`, behind the gate) works only on
+      the caller's own session from its cookie; the bearer token has no
+      device (409). Writes are under `/api`, so the cross-site write check
+      covers them. The migration is numbered 040 because 038 and 039 are held
+      for other branches (`migrations.test.ts` allows just those two gaps).
+      `runMigrations` only applies numbers above the database's own, so a
+      database that reaches 040 first would never get 038 or 039: merge
+      those before this reaches a real database, or renumber this one past
+      them.
+    - **Crypto, no dependency** (`server/src/push/web-push.ts`). VAPID
+      (RFC 8292) is an ES256 JWT signed with `node:crypto` (`aud` the
+      endpoint's origin, `exp` 12 h, `sub` the first public URL). The payload
+      is RFC 8291 aes128gcm, one record, at most 3,993 bytes of plaintext.
+      `test/push/web-push.test.ts` checks it byte for byte against RFC 8291's
+      Appendix A and verifies the JWT. The key pair is made on first use and
+      kept in the encrypted secret store as `push.vapid`; if it is ever
+      unreadable a new one is made and every subscription is dropped, as old
+      ones can't be pushed to.
+    - **Endpoints** (`server/src/push/endpoint.ts`). The browser names the
+      URL the server then POSTs to, so it is held like any outbound URL a
+      client names: https, no credentials, at most 2,048 characters, and not
+      this machine or a private network by spelling when saved (IP literals
+      through core's `isPublicAddress`, names through `isLocalNetworkName`).
+      When sent, the request's own `lookup` refuses a name if any address it
+      resolves to isn't public, so DNS rebinding can't reach a private
+      address. No redirects are followed; a 15 s timeout. The log names the
+      push service's host only, never the endpoint (it is a capability URL).
+    - **Not pushing what's on screen.** While the page is showing it posts
+      `POST /api/push/active {visible: true}` every 30 s (and `false` when
+      hidden; `web/src/lib/push.ts`, `reportPresence`), and a device that
+      said so in the last 45 s is skipped.
+    - **The browser side.** `web/public/sw.js` only shows pushes and handles
+      taps: it caches nothing and has no fetch handler. A tap focuses an open
+      OtherBench window and posts it the chat id, or opens `/?chat=<id>`,
+      which `state/usePush.ts` opens once the chats have loaded. It also
+      resubscribes on `pushsubscriptionchange`. `index.html` links a web
+      manifest (`display: standalone`) so iOS can add OtherBench to the Home
+      Screen, the only place iOS delivers Web Push; in Safari's own tabs the
+      toggle says to do that first.
+    - Tests: `server/test/push/` (`web-push`, `endpoint`, `service`),
+      `server/test/remote/push-routes.test.ts` (a signed-out, logged-out,
+      signed-out-everywhere or expired device's subscription is gone; private
+      and plain-http endpoints refused), `store-sqlite/test/repos/push-subscriptions.test.ts`,
+      `web/src/lib/push.test.ts`, `web/src/views/settings/PushSection.test.tsx`.
+  - **Phone layout** (2026-11-05). Below 640 px (`PHONE_BREAKPOINT`,
+    `App.tsx` sets `data-phone`) the sidebar is a drawer over the chat,
+    opened from a bar at the top that also shows the Overview's count; it
+    closes when a chat (the open one too), the Overview or a page is chosen,
+    or on the backdrop. The thread and composer take the full width. The
+    rest is unlayered CSS keyed on `[data-phone]` at the end of `index.css`,
+    so desktop is untouched and ChatList.tsx isn't changed: 44 px targets in
+    the drawer, on approval and question cards, in the composer and in
+    Settings; 16 px inputs (iOS zooms the page on a smaller one); Settings'
+    tabs scroll sideways in their strip and its list-and-editor panels stack;
+    safe-area insets. `web/e2e/phone.spec.ts` runs at 390x844 with touch:
+    open a chat from the drawer, answer an approval card, find the chat in
+    Needs you, open Settings, checking at each step that the page can't
+    scroll sideways, that no element runs past the edge outside a sideways
+    scroller, and that a full-page screenshot is 390 px wide.
 
 - **`/clear` and `/compact` in Claude Code chats.** A command is a user message
   with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
@@ -2395,11 +2482,26 @@ this on startup.
   and the main thread, until the worker is stopped. `planClaudeImport` and
   the preview's checks against the database still run on the main thread
   after the read.
-- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
-  no Web Push for approvals, and no phone layout work beyond the sidebar
-  footer wrapping so Sign out stays reachable (the spec's §7 lists the other
-  gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
-  on real devices. Sessions now survive a restart and Settings lists the
+- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys.
+  iOS and Android trust of the hand-made CA is checked only on real devices.
+  **Web Push and the phone layout have not run on a real phone.** Not
+  checked by hand yet: delivery through Apple's, Google's and Mozilla's push
+  services (a browser only subscribes over https with a certificate it
+  trusts, so the CA must be installed and trusted first); on iOS 16.4+,
+  adding OtherBench to the Home Screen, opening it from there, allowing
+  notifications and getting a push with the app closed (the manifest's icon
+  is the SVG favicon, which iOS may not use for the Home Screen: a PNG
+  `apple-touch-icon` is still to make); a tap opening the right chat both
+  with OtherBench open and closed; Android Chrome showing the
+  notification; and the layout on a real 390 px screen (safe areas, the
+  keyboard over the composer). Nothing is pushed for a chat on a paired
+  machine. A device that sets "Notify this device" and then has its site
+  data cleared keeps its row until the push service answers 410. The
+  presence report is per session, not per tab, so one hidden tab on a
+  device can clear "showing" while another tab still shows. Phone layout:
+  Code mode, the Code panel overlay, the Inspector overlay and the viewer
+  were not reworked for 390 px (they open, at the narrow-window layout);
+  the Overview's rows and the chat header's buttons are smaller than 44 px. Sessions now survive a restart and Settings lists the
   signed-in devices (see *Sessions* under Remote access), but the list shows
   the address a device signed in from, not the one it was last seen at, and
   signing one device out doesn't forget its remembered-device cookie (that
