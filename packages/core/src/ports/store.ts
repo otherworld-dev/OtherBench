@@ -477,6 +477,13 @@ export interface AppSettings {
   githubEnabled: boolean;
   /** False turns Nextcloud off on this machine: no Deck, Wiki or Links, and the server never calls Nextcloud. */
   nextcloudEnabled: boolean;
+  /**
+   * "Let paired machines start and approve computer use" (Settings, Machines), on by default. On: a paired machine
+   * may start a computer-use session here (this machine's own start dialog still asks), send messages and answer
+   * cards while one is in control. Off: it can still see a session here and Stop it, nothing more. It never switches
+   * computer use itself on. Machine-local, like every setting.
+   */
+  peerComputerControl: boolean;
 }
 
 export interface SettingsRepo {

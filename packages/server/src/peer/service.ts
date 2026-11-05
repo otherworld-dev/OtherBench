@@ -12,6 +12,7 @@ import {
 } from '@otherbench/core/domain/pairing.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
+import type { ComputerSessionSummary } from '@otherbench/core/types/events.js';
 import type { Peer, PeerInfo, PublicPeer } from '@otherbench/core/types/peer.js';
 import { isIP } from 'node:net';
 import type { Hono } from 'hono';
@@ -111,6 +112,30 @@ function chatIdsOf(ids: unknown): string[] {
   return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').slice(0, MAX_ACTIVE_CHATS) : [];
 }
 
+/** At most this many computer-use sessions are kept for a paired machine: it holds one at a time, so more is noise. */
+const MAX_COMPUTER_SESSIONS = 4;
+/** The longest chat id and last-action line kept from a paired machine. */
+const MAX_COMPUTER_ID = 200;
+const MAX_COMPUTER_ACTION = 200;
+
+/**
+ * A peer's `computerSessions`, as far as it is one: each a chat id and, when it says, a one-line last action, both
+ * strings and bounded; anything else in an entry is dropped, and so is an entry without a chat id. An older machine
+ * doesn't say, which reads as none.
+ */
+export function computerSessionsOf(said: unknown): ComputerSessionSummary[] {
+  if (!Array.isArray(said)) return [];
+  const out: ComputerSessionSummary[] = [];
+  for (const entry of said) {
+    if (out.length >= MAX_COMPUTER_SESSIONS) break;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { chatId, lastAction } = entry as Record<string, unknown>;
+    if (typeof chatId !== 'string' || chatId === '' || chatId.length > MAX_COMPUTER_ID) continue;
+    out.push(typeof lastAction === 'string' ? { chatId, lastAction: lastAction.slice(0, MAX_COMPUTER_ACTION) } : { chatId });
+  }
+  return out;
+}
+
 /** A peer's `waitingSince`: a finite time for each of `waiting`, the chats it says wait on a card; anything else dropped. */
 function waitingSinceOf(said: unknown, waiting: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -147,6 +172,8 @@ export class PeerService {
   private backgroundHere: () => string[] = () => [];
   private waitingHere: () => string[] = () => [];
   private waitingSinceHere: () => Record<string, number> = () => ({});
+  /** The chats controlling this computer (computer use), as told to its peers so they can show the banner and Stop it. */
+  private computerHere: () => ComputerSessionSummary[] = () => [];
   /** This machine's `gh` login, as told to its peers; the overview service supplies it. */
   private githubLoginHere: () => string | null = () => null;
   /** Each peer's chats with a reply running there, as it last said. */
@@ -159,6 +186,8 @@ export class PeerService {
   private readonly waitingSinceByPeer = new Map<string, Record<string, number>>();
   /** Each paired machine's `gh` login, as it last said. */
   private readonly loginByPeer = new Map<string, string | null>();
+  /** The chats controlling each paired machine (computer use), as it last said. */
+  private readonly computerByPeer = new Map<string, ComputerSessionSummary[]>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -179,7 +208,7 @@ export class PeerService {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
         if (event === 'activity') {
-          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; waitingSince?: unknown; githubLogin?: unknown } | null;
+          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; waitingSince?: unknown; githubLogin?: unknown; computerSessions?: unknown } | null;
           this.activityByPeer.set(nodeId, chatIdsOf(said?.chatIds));
           // An older machine doesn't say: none in the background, as far as we know.
           this.backgroundByPeer.set(nodeId, chatIdsOf(said?.backgroundChatIds));
@@ -187,6 +216,7 @@ export class PeerService {
           this.waitingByPeer.set(nodeId, waiting);
           this.waitingSinceByPeer.set(nodeId, waitingSinceOf(said?.waitingSince, waiting));
           this.loginByPeer.set(nodeId, typeof said?.githubLogin === 'string' ? said.githubLogin : null);
+          this.computerByPeer.set(nodeId, computerSessionsOf(said?.computerSessions));
           options.events?.emit({ type: 'peer-activity', nodeId });
         }
       },
@@ -209,12 +239,14 @@ export class PeerService {
     runningHere: () => string[],
     backgroundHere: () => string[] = () => [],
     waitingHere: () => string[] = () => [],
-    waitingSinceHere: () => Record<string, number> = () => ({})
+    waitingSinceHere: () => Record<string, number> = () => ({}),
+    computerHere: () => ComputerSessionSummary[] = () => []
   ): void {
     this.runningHere = runningHere;
     this.backgroundHere = backgroundHere;
     this.waitingHere = waitingHere;
     this.waitingSinceHere = waitingSinceHere;
+    this.computerHere = computerHere;
   }
 
   /** Where this machine's `gh` login comes from (the overview service); until set, none is told. */
@@ -227,11 +259,25 @@ export class PeerService {
     this.announce('activity', this.activity());
   }
 
-  /** What this machine tells its peers about its running replies (#790's "also active" hint) and background tasks. */
-  activity(): { chatIds: string[]; backgroundChatIds: string[]; waitingChatIds: string[]; waitingSince: Record<string, number>; githubLogin: string | null } {
+  /**
+   * What this machine tells its peers, whole each time (so a missed one is made good by the next, and a stream that
+   * opens gets it straight after its hello): the chats with a reply running (#790's "also active" hint), with
+   * background tasks running, and waiting on a card, since when, its `gh` login, and the chats controlling this
+   * computer with their last action. Only ids, times, counts and the one-line action summary: never a card's content,
+   * a grant, an audit row or an MCP server, which a paired machine has no route to read.
+   */
+  activity(): {
+    chatIds: string[];
+    backgroundChatIds: string[];
+    waitingChatIds: string[];
+    waitingSince: Record<string, number>;
+    githubLogin: string | null;
+    computerSessions: ComputerSessionSummary[];
+  } {
     return {
       chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere(), waitingChatIds: this.waitingHere(),
       waitingSince: this.waitingSinceHere(), githubLogin: this.githubLoginHere(),
+      computerSessions: this.computerHere().map((s) => (s.lastAction === undefined ? { chatId: s.chatId } : { chatId: s.chatId, lastAction: s.lastAction })),
     };
   }
 
@@ -256,6 +302,14 @@ export class PeerService {
    */
   waitingSince(nodeId: string): Record<string, number> {
     return this.status(nodeId).status === 'reachable' ? (this.waitingSinceByPeer.get(nodeId) ?? {}) : {};
+  }
+
+  /**
+   * The chats controlling `nodeId` (computer use), with their last action, as it last said; none while it isn't
+   * reachable. Its banner here, and the one thing this machine may do about it: Stop (`POST /chats/:id/computer/stop`).
+   */
+  computerSessions(nodeId: string): ComputerSessionSummary[] {
+    return this.status(nodeId).status === 'reachable' ? (this.computerByPeer.get(nodeId) ?? []) : [];
   }
 
   /** The `gh` login `nodeId` last said it has; null if none, unknown, or while it isn't reachable. */
@@ -499,6 +553,10 @@ export class PeerService {
     this.closers.delete(peer.nodeId);
     this.activityByPeer.delete(peer.nodeId);
     this.backgroundByPeer.delete(peer.nodeId);
+    this.waitingByPeer.delete(peer.nodeId);
+    this.waitingSinceByPeer.delete(peer.nodeId);
+    this.loginByPeer.delete(peer.nodeId);
+    this.computerByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------

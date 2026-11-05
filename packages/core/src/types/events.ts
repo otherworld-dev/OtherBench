@@ -5,10 +5,17 @@ import type { MessageStatus } from './messages.js';
 /**
  * App-wide events (v2 plan, Task 34): what changed anywhere in the app, as
  * opposed to one chat's turn stream. `GET /api/events` sends them so every
- * window (and the tray) stays current without polling. `peer-status` and
- * `sync-applied` are declared for the sync milestones and not emitted yet.
- * None of them reaches a paired machine: `/api/events` isn't on the peer
- * listener.
+ * window (and the tray) stays current without polling.
+ *
+ * `/api/events` isn't on the peer listener, and none of these events is sent
+ * to a paired machine as it is. What a paired machine needs to know live goes
+ * over its own `/peer/events` stream instead, as the `activity` announcement
+ * (`PeerService.activity`): the ids of the chats with a reply running, with
+ * background tasks, waiting on a card (and since when), and controlling this
+ * computer with their last action, whole each time; it arrives here as
+ * `peer-activity`, and `GET /api/peers` carries it. Synced rows arrive by
+ * sync (`sync-applied`). Grants, the audit trail and MCP health have no route
+ * on the peer listener, so their events stay on the machine they happen on.
  */
 export type AppEvent =
   | { type: 'chat-created' | 'chat-updated'; chat: Chat }
@@ -48,8 +55,11 @@ export type AppEvent =
       status: ScheduleRunStatus;
       detail: string | null;
     }
-  /** A chat started or stopped controlling this computer, or acted (computer use); `lastAction` is a one-line summary. */
-  | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string }
+  /**
+   * A chat started or stopped controlling this computer, or acted (computer use); `lastAction` is a one-line summary,
+   * and `startedFrom` the name of the paired machine the session was started from, when it was.
+   */
+  | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string; startedFrom?: string }
   /** How many background tasks a chat's agent has running now (spec 2026-10-17-claude-background-helpers-design); 0 when none. */
   | { type: 'background-tasks'; chatId: string; count: number }
   /** An app or app folder was made, changed or deleted on this machine: re-read both lists, as an undocked window holds its own. */
@@ -95,6 +105,8 @@ export interface RunningTurnSummary {
 export interface ComputerSessionSummary {
   chatId: string;
   lastAction?: string;
+  /** The paired machine the session was started from, by name; absent for one started here. */
+  startedFrom?: string;
 }
 
 /** A chat with background tasks running, as the app-wide stream reports it. */

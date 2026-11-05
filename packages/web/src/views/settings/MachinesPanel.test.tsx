@@ -8,6 +8,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       node: { rename: vi.fn() },
+      settings: { get: vi.fn(async () => ({ memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: true })), patch: vi.fn() },
       peers: { overview: vi.fn(), startPairing: vi.fn(), currentPairing: vi.fn(), cancelPairing: vi.fn(), add: vi.fn(), patch: vi.fn(), remove: vi.fn(), sync: vi.fn() },
     },
   };

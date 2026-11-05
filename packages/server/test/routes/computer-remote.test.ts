@@ -23,8 +23,10 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 // Computer use's routes under remote access (cowork-parity integration, seam
 // 5): the thread banner's Stop, GET /api/computer/status, and the session
 // events, which go out on the app-wide GET /api/events. Sign-in mode, the
-// Host check and the cross-site check all apply to them, and none of them is
-// on the peer listener. The desktop is FakeComputerDriver.
+// Host check and the cross-site check all apply to them. The peer listener
+// has neither the status nor the event stream; it has its own Stop and start
+// for a session here (peer/forward.ts), and its activity carries the session's
+// chat id and last action. The desktop is FakeComputerDriver.
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const PUBLIC_HOST = 'otherbench.test:4747';
@@ -226,16 +228,18 @@ describe('computer use routes and the peer listener', () => {
   const peerApp = (paired: boolean): Hono =>
     createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null), noteCalledFrom: () => {} } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
 
-  it('has none of them: a paired machine gets 404 for Stop, the status and the events, and nothing is stopped', async () => {
+  it('has neither the status nor the events; its Stop ends a session held here', async () => {
     await holding();
     const app = peerApp(true);
-    for (const [method, path] of ROUTES) expect((await call(app, method, path)).status, `${method} ${path}`).toBe(404);
+    for (const [method, path] of [STATUS, EVENTS]) expect((await call(app, method, path)).status, `${method} ${path}`).toBe(404);
     // (`/peer/events` is the listener's own stream of sync and activity hints: see the container test below.)
     for (const path of ['/peer/computer/status', '/peer/chats/c1/computer/stop', '/computer/status', '/events']) {
       expect((await call(app, 'GET', path)).status, path).toBe(404);
       expect((await call(app, 'POST', path)).status, path).toBe(404);
     }
     expect(driver.ended).toEqual([]);
+    expect((await call(app, ...STOP)).status).toBe(204);
+    expect(driver.ended).toEqual(['c1']);
   });
 
   it('refuses a stranger before any route is looked at', async () => {
@@ -243,7 +247,7 @@ describe('computer use routes and the peer listener', () => {
     for (const [method, path] of ROUTES) expect((await call(app, method, path)).status, `${method} ${path}`).toBe(401);
   });
 
-  it("never puts a computer session on a paired machine's /peer/events stream: it carries sync and activity hints only", async () => {
+  it("puts only a session's chat id and last action on a paired machine's /peer/events stream, in its activity", async () => {
     const real = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), computer: new FakeComputerDriver() });
     try {
       real.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
@@ -259,15 +263,19 @@ describe('computer use routes and the peer listener', () => {
       await real.computer!.ensureSession(chat.id, 'Held');
       await real.computer!.stop(chat.id);
       unregister();
-      // The session started and ended on this machine's own bus, and nothing of it went to the paired machine.
+      // The session started and ended on this machine's own bus; the paired machine heard of it only in the whole
+      // activity announcement, as an id: no computer-session event, no app, no screen, nothing typed.
       expect(seen.filter((t) => t === 'computer-session')).toHaveLength(2);
-      expect(sent.filter((s) => s.includes('computer'))).toEqual([]);
+      expect(sent.every((s) => s.startsWith('activity ') || s.startsWith('changes-available '))).toBe(true);
+      const said = sent.filter((s) => s.startsWith('activity ')).map((s) => (JSON.parse(s.slice('activity '.length)) as { computerSessions: unknown }).computerSessions);
+      expect(said).toEqual([[{ chatId: 'c9' }], []]);
     } finally {
       real.close();
     }
   });
 
-  it('takes no answer and no change from a paired machine while the computer may be in control here; a Stop still passes', async () => {
+  it('with paired machines not let in, takes no answer and no change from one while the computer may be in control here; a Stop still passes', async () => {
+    container.store.settings.update({ peerComputerControl: false });
     await holding();
     const api = forwardedApi(container);
     for (const path of ['/approvals/req-1/resolve', '/asks/ask-1/answer', '/chats/c1/turns', '/messages/m1/retry', '/chats/c1/helpers/t1/stop', '/chats/c1/notes']) {
@@ -284,6 +292,22 @@ describe('computer use routes and the peer listener', () => {
     expect(chatStop.status).toBe(200);
     expect(await chatStop.json()).toEqual({ stopped: [] });
     // It stops replies only: the session is the banner's, on this machine.
+    expect(driver.hasSession('c1')).toBe(true);
+  });
+
+  it('with paired machines let in (the default), takes their answers and messages while the computer is in control here', async () => {
+    expect(container.store.settings.get().peerComputerControl).toBe(true);
+    await holding();
+    const answered: { id: string; from: string | undefined }[] = [];
+    container = { ...container, toolProvider: { resolveApproval: (id: string, _choice: unknown, from?: string) => (answered.push({ id, from }), true), answerAsk: () => 'unknown' } as never };
+    const api = forwardedApi(container);
+    const res = await api.request('/approvals/req-1/resolve', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ choice: 'once' }) }, { peerNodeId: 'node-pc' });
+    expect(res.status).toBe(200);
+    // Answered on the one approval path, as from that machine (the audit's decidedOnNode).
+    expect(answered).toEqual([{ id: 'req-1', from: 'node-pc' }]);
+    // The gate is passed, so a message reaches the turn route (which refuses this empty body on its own terms).
+    const turn = await api.request('/chats/c1/turns', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' });
+    expect(turn.status).not.toBe(403);
     expect(driver.hasSession('c1')).toBe(true);
   });
 
@@ -317,13 +341,39 @@ describe('computer use routes and the peer listener', () => {
     await expect.poll(() => container.store.messages.get(assistantMessageIds[0]!)?.status).toBe('cancelled');
   });
 
-  it('the forwarded API itself has no computer route and no event stream', async () => {
+  it('the forwarded API itself has no computer status and no event stream, and its Stop needs a session for that chat', async () => {
     await holding();
     const api = forwardedApi(container);
-    for (const [method, path] of [['POST', '/chats/c1/computer/stop'], ['GET', '/computer/status'], ['GET', '/events']] as const) {
+    for (const [method, path] of [['GET', '/computer/status'], ['GET', '/events'], ['GET', '/chats/c1/computer'], ['POST', '/chats/other/computer/stop']] as const) {
       const res = await api.request(path, { method, ...(method === 'POST' ? { headers: JSON_HEADERS, body: '{}' } : {}) }, { peerNodeId: 'node-pc' });
       expect(res.status, path).toBe(404);
     }
     expect(driver.ended).toEqual([]);
+  });
+
+  it("refuses a paired machine's start when this machine doesn't let it, or computer use is off here, and starts nothing", async () => {
+    container.store.profiles.create({
+      id: 'p', name: 'P', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true }, isDefault: false, archivedAt: null,
+    } as never);
+    const start = (): Promise<Response> =>
+      Promise.resolve(forwardedApi(container).request('/chats/c1/computer/start', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' }));
+
+    container.store.settings.update({ peerComputerControl: false });
+    const off = await start();
+    expect(off.status).toBe(403);
+    expect(await off.json()).toMatchObject({ kind: 'peer_computer_off' });
+
+    container.store.settings.update({ peerComputerControl: true });
+    const unavailable = { ...container, computer: { ...container.computer!, available: () => false, holder: () => null } as never };
+    const noDriver = await Promise.resolve(forwardedApi(unavailable).request('/chats/c1/computer/start', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' }));
+    expect(noDriver.status).toBe(409);
+    expect(await noDriver.json()).toMatchObject({ kind: 'computer_off' });
+    expect(driver.hasSession('c1')).toBe(false);
+
+    const ok = await start();
+    expect(ok.status).toBe(202);
+    await expect.poll(() => driver.hasSession('c1')).toBe(true);
+    expect(events.computerSessions()).toEqual([{ chatId: 'c1', startedFrom: 'a paired machine' }]);
   });
 });

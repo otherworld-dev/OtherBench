@@ -308,6 +308,39 @@ describe('Inspector runs on', () => {
   });
 });
 
+describe('Inspector for a chat that runs on another machine', () => {
+  afterEach(() => {
+    cleanup();
+    useOtherBenchStore.setState({ machines: null });
+  });
+
+  const paired = {
+    self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+    listening: { running: true, addresses: [] },
+    peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable' as const, since: 0, lastSyncedAt: null, syncError: null }],
+  };
+
+  it("says grants, MCP servers and the audit trail shown are this machine's, not those of the machine it runs on", async () => {
+    useOtherBenchStore.setState({ machines: paired });
+    render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    for (const section of [grantsSection(), mcpHealthSection(), auditSection()]) {
+      expect(within(section).getByTestId('inspector-elsewhere-note')).toHaveTextContent(/^This chat runs on PC\./);
+    }
+    expect(within(grantsSection()).getByTestId('inspector-elsewhere-note')).toHaveTextContent("These are this machine's grants");
+    expect(within(auditSection()).getByTestId('inspector-elsewhere-note')).toHaveTextContent('audited there');
+  });
+
+  it('says nothing of the kind for a chat that runs here, or before machines are known', () => {
+    useOtherBenchStore.setState({ machines: paired });
+    const { unmount } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.queryByTestId('inspector-elsewhere-note')).toBeNull();
+    unmount();
+    useOtherBenchStore.setState({ machines: null });
+    render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.queryByTestId('inspector-elsewhere-note')).toBeNull();
+  });
+});
+
 describe('Inspector also active elsewhere', () => {
   afterEach(() => {
     cleanup();
@@ -659,6 +692,25 @@ describe('Inspector audit trail', () => {
     expect(items[0]).toHaveTextContent('run_command');
     expect(items[1]).toHaveTextContent('write_file');
     expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
+  });
+
+  it('names the paired machine a call was approved from, and nothing for one decided here', async () => {
+    useOtherBenchStore.setState({
+      machines: {
+        self: { id: 'node-self', name: 'PC', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-laptop', name: 'Laptop', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
+      },
+    });
+    mockedAuditList.mockResolvedValue([
+      { id: 'r1', chatId: 'chat-1', messageId: 'm1', toolName: 'computer', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'ask:once', decidedOnNode: 'node-laptop', createdAt: 2000 },
+      { id: 'h1', chatId: 'chat-1', messageId: 'm1', toolName: 'computer', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'ask:once', decidedOnNode: 'node-self', createdAt: 1000 },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(within(list).getByTestId('audit-r1')).getByTestId('audit-decided-on')).toHaveTextContent('on Laptop');
+    expect(within(within(list).getByTestId('audit-h1')).queryByTestId('audit-decided-on')).toBeNull();
+    useOtherBenchStore.setState({ machines: null });
   });
 
   it('labels a live artifact call', async () => {
