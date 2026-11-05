@@ -80,6 +80,21 @@ describe('PeerComputerControl', () => {
     expect(box).toBeDisabled();
   });
 
+  it('while turning it on, says to confirm it in the window on this computer; not confirmed, it stays off and says why', async () => {
+    let refuse: (err: unknown) => void = () => {};
+    vi.spyOn(api.settings, 'patch').mockImplementation(() => new Promise((_resolve, reject) => (refuse = reject)));
+    render(<PeerComputerControl />);
+    const box = screen.getByTestId('peer-computer-control');
+    await waitFor(() => expect(box).toBeEnabled());
+    await userEvent.setup().click(box);
+    expect(await screen.findByTestId('peer-computer-control-asking')).toHaveTextContent('It only turns on if you press OK there.');
+    expect(box).toBeDisabled();
+    refuse(new ApiError(403, "It wasn't turned on: it needs an OK in the question OtherBench shows on this computer. The person at this computer said no."));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The person at this computer said no.');
+    expect(screen.queryByTestId('peer-computer-control-asking')).toBeNull();
+    expect(box).not.toBeChecked();
+  });
+
   it('says why a change was refused, and keeps what the server has', async () => {
     vi.spyOn(api.settings, 'patch').mockRejectedValue(new ApiError(403, 'OtherBench is controlling this computer.'));
     render(<PeerComputerControl />);

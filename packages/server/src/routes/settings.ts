@@ -1,6 +1,15 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { mayChangePeerComputerControl, PEER_COMPUTER_CONTROL_HOST_ONLY_REASON } from '@otherbench/core/domain/settings.js';
+import {
+  mayChangePeerComputerControl,
+  PEER_COMPUTER_CONTROL_ASKING_REASON,
+  PEER_COMPUTER_CONTROL_CONFIRM_TEXT,
+  PEER_COMPUTER_CONTROL_HOST_ONLY_REASON,
+  PEER_COMPUTER_CONTROL_IN_CONTROL_REASON,
+  PEER_COMPUTER_CONTROL_NO_DESKTOP_REASON,
+  peerComputerControlNeedsHostConfirm,
+  peerComputerControlNotConfirmedReason,
+} from '@otherbench/core/domain/settings.js';
 import type { AppSettings, Store } from '@otherbench/core/ports/store.js';
 import { fromTheDesktopApp } from '../computer/desktop-only.js';
 import type { Container } from '../container.js';
@@ -23,12 +32,19 @@ export function clearMemoryProfile(store: Store, profileId: string): void {
 /**
  * `GET/PATCH /api/settings`: app-wide settings (spec 2026-10-03-project-memory-design §4), GitHub and Nextcloud on or
  * off (`features.ts`), and whether paired machines may start and approve computer use here (`peerComputerControl`).
- * Not on the peer listener: only this machine's own UI changes them. `peerComputerControl` is turned on only from
- * this machine's desktop app's window (`desktopOrigins`, the shell's `--cors-origin`s, as the desktop-only gate);
- * a browser tab or a signed-in phone may only turn it off.
+ * Not on the peer listener: only this machine's own UI changes them.
+ *
+ * `peerComputerControl` is turned on only with the OK of the person at this machine, in the desktop app's native
+ * dialog (`container.hostConfirm`, over the shell's private channel, which no HTTP client can reach): no desktop app,
+ * Cancel, nobody answering, or computer use possibly in control here, and it stays off. A request whose `Origin`
+ * isn't the desktop app's (`desktopOrigins`, the shell's `--cors-origin`s) is refused before anyone is asked, so a
+ * browser tab or a phone gets a clear answer and no dialog pops up here for it; that header can be forged, so it is
+ * only the early refusal, never the boundary. Turning it off needs neither, from anywhere.
  */
 export function settingsRoutes(container: Container, desktopOrigins: readonly string[] = []): Hono {
   const app = new Hono();
+  // One question at a time: a second switch-on while the first is being asked is refused, not queued.
+  let asking = false;
 
   app.get('/', (c) => c.json(container.store.settings.get()));
 
@@ -56,10 +72,32 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
       if (typeof body.peerComputerControl !== 'boolean') throw new HTTPException(400, { message: '"peerComputerControl" must be true or false.' });
       patch.peerComputerControl = body.peerComputerControl;
     }
-    const before = container.store.settings.get();
-    if (patch.peerComputerControl !== undefined && !mayChangePeerComputerControl(before.peerComputerControl, patch.peerComputerControl, fromTheDesktopApp(c.req.header('Origin'), desktopOrigins))) {
-      return c.json({ error: PEER_COMPUTER_CONTROL_HOST_ONLY_REASON, kind: 'desktop_app_only' }, 403);
+    const current = container.store.settings.get();
+    if (patch.peerComputerControl !== undefined && peerComputerControlNeedsHostConfirm(current.peerComputerControl, patch.peerComputerControl)) {
+      // The early refusal (forgeable, so not the boundary): it doesn't even claim to be the desktop app.
+      if (!mayChangePeerComputerControl(current.peerComputerControl, true, fromTheDesktopApp(c.req.header('Origin'), desktopOrigins))) {
+        return c.json({ error: PEER_COMPUTER_CONTROL_HOST_ONLY_REASON, kind: 'desktop_app_only' }, 403);
+      }
+      const confirmer = container.hostConfirm;
+      if (!confirmer) return c.json({ error: PEER_COMPUTER_CONTROL_NO_DESKTOP_REASON, kind: 'desktop_app_only' }, 403);
+      // Nobody is asked while a model may be at the screen.
+      if (container.computer?.mayBeInControl() === true) return c.json({ error: PEER_COMPUTER_CONTROL_IN_CONTROL_REASON, kind: 'desktop_only' }, 403);
+      if (asking) return c.json({ error: PEER_COMPUTER_CONTROL_ASKING_REASON, kind: 'already_asking' }, 409);
+      asking = true;
+      let answer: { ok: true } | { ok: false; reason: string };
+      try {
+        // The boundary: only the person's OK in the desktop app's own dialog on this machine.
+        answer = await confirmer.confirm(PEER_COMPUTER_CONTROL_CONFIRM_TEXT);
+      } catch (err) {
+        console.error('[otherbench-server] the desktop app could not ask about letting paired machines in:', err);
+        answer = { ok: false, reason: "The desktop app couldn't ask." };
+      } finally {
+        asking = false;
+      }
+      // Nothing in the request is written unless the person said OK.
+      if (answer.ok !== true) return c.json({ error: peerComputerControlNotConfirmedReason(answer.reason), kind: 'not_confirmed' }, 403);
     }
+    const before = container.store.settings.get();
     const after = container.store.settings.update(patch);
     if (before.peerComputerControl !== after.peerComputerControl && !FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });

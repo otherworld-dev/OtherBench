@@ -756,7 +756,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // no message): that machine's UI could be open in a browser the model is using. Only Stops pass. Unless this
   // machine lets paired machines start and approve computer use (Settings → Machines, off by default): then the
   // paired machine is trusted to drive it, cards and messages included, and that risk is the setting's to take. It is
-  // off by default and only turned on here, in the desktop app (routes/settings.ts).
+  // off by default and only turned on with an OK in this machine's desktop app's native dialog (routes/settings.ts).
   const desktopOnly = changesOnlyFromTheDesktopApp(container.computer, []);
   app.use('*', async (c, next) => (container.store.settings.get().peerComputerControl ? next() : desktopOnly(c, next)));
 

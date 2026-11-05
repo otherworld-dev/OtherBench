@@ -225,16 +225,41 @@ pub trait Desktop: Send + Sync {
     fn send(&self, inputs: &[Input]) -> usize;
 }
 
+/// A yes/no question to the person at this machine, in a native dialog the
+/// server can't answer itself (`settings.confirm`): for a change only they may
+/// make. Needs no computer-use driver. The real one is a Windows message box
+/// (win.rs); tests use a fake.
+pub trait Ask: Send + Sync {
+    /// Shows `text` with OK and Cancel (Cancel the default) and waits for the
+    /// person, closing it (as Cancel) once `dialog.should_close()`.
+    fn ask(&self, text: &str, dialog: &Dialog) -> Consent;
+}
+
+#[cfg(windows)]
+struct WinAsk;
+
+#[cfg(windows)]
+impl Ask for WinAsk {
+    fn ask(&self, text: &str, dialog: &Dialog) -> Consent {
+        win::consent(text, "OtherBench", dialog)
+    }
+}
+
 /// The shell for this app: with the switch on (Windows only), the real
-/// driver; otherwise none, and computer use reports off.
+/// driver; otherwise none, and computer use reports off. On Windows it can
+/// always ask the person a question (`Ask`), switch or not.
 pub fn shell(app: &tauri::AppHandle) -> Arc<Shell> {
     let shortcuts = || crate::hotkey::registered().into_iter().collect();
     #[cfg(windows)]
+    let ask: Option<Arc<dyn Ask>> = Some(Arc::new(WinAsk));
+    #[cfg(not(windows))]
+    let ask: Option<Arc<dyn Ask>> = None;
+    #[cfg(windows)]
     if enabled() {
-        return Arc::new(Shell::new(shortcuts, Some(Arc::new(desktop::WinDesktop::new(app.clone())) as Arc<dyn Desktop>), Limits::default()));
+        return Arc::new(Shell::new(shortcuts, Some(Arc::new(desktop::WinDesktop::new(app.clone())) as Arc<dyn Desktop>), ask, Limits::default()));
     }
     let _ = app;
-    Arc::new(Shell::new(shortcuts, None, Limits::default()))
+    Arc::new(Shell::new(shortcuts, None, ask, Limits::default()))
 }
 
 /// Stop from the shell itself: the hotkey, the indicator's Stop. Off the

@@ -484,7 +484,7 @@ export interface AppSettings {
    * "Let paired machines start and approve computer use" (Settings, Machines), off by default. On: a paired machine
    * may ask to start a computer-use session here (this machine's own start dialog asks, naming that machine), send
    * messages and answer cards while one is in control. Off: it can still see a session here and Stop it, nothing
-   * more. Only switched on from this machine's desktop app (`mayChangePeerComputerControl`); off from anywhere that
+   * more. Only switched on with an OK in this machine's desktop app's native dialog (`HostConfirm`); off from anywhere that
    * reaches Settings. It never switches computer use itself on. Machine-local and never synced, like every setting.
    */
   peerComputerControl: boolean;
