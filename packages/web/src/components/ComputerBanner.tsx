@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
-import { api } from '../state/api.js';
+import { ApiError, api } from '../state/api.js';
+import { computerSessionElsewhere } from '../state/peerActivity.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { oneLine } from '../viewer/browser.js';
 
@@ -9,16 +10,68 @@ import { oneLine } from '../viewer/browser.js';
  * 2026-10-12-computer-use-design section 7), from the `computer-session`
  * events and the events stream's hello. Stop ends control and the reply; the
  * shell's own bar and Ctrl+Alt+Backspace do the same on the machine itself.
+ * A session a paired machine started here says which one.
+ *
+ * Also while the chat controls a paired machine, as that machine last said
+ * (its `activity`, read through `GET /api/peers`): the banner names it, and
+ * Stop goes to this machine's server, which sends it there.
+ *
+ * And for a chat that runs on a reachable paired machine with a profile that
+ * uses the computer and no session: "Start on PC", which asks that machine to
+ * start one (it decides whether it lets paired machines, and its own start
+ * dialog asks the person there).
  *
  * The last action is the server's `actionSummary` of what was carried out,
  * which never holds typed text; it is still shown as one clean line in a
  * `<bdi>`. The session carries no app, so the banner names none.
  */
 export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
-  const session = useOtherBenchStore((s) => s.computerSessions[chat.id]);
+  const local = useOtherBenchStore((s) => s.computerSessions[chat.id]);
+  const machines = useOtherBenchStore((s) => s.machines);
+  const usesComputer = useOtherBenchStore((s) => s.profiles.find((p) => p.id === chat.profileId)?.toolPolicy.computer === true);
+  const elsewhere = local ? null : computerSessionElsewhere(machines, chat.id);
   const [busy, setBusy] = useState(false);
-  if (!session) return null;
+  const [startNote, setStartNote] = useState<{ chatId: string; text: string; failed: boolean } | null>(null);
+  const session = local ?? elsewhere;
+
+  if (!session) {
+    const runsOn = machines && chat.runsOn !== machines.self.id ? machines.peers.find((p) => p.nodeId === chat.runsOn && p.status === 'reachable') : undefined;
+    if (!runsOn || !usesComputer) return null;
+    const note = startNote?.chatId === chat.id ? startNote : null;
+    const machine = oneLine(runsOn.name);
+
+    async function start(): Promise<void> {
+      setBusy(true);
+      setStartNote(null);
+      try {
+        await api.chats.startComputer(chat.id);
+        setStartNote({ chatId: chat.id, text: `Asked ${machine}. Someone there has to say OK in its dialog before it starts.`, failed: false });
+      } catch (err) {
+        setStartNote({ chatId: chat.id, text: err instanceof ApiError ? err.message : `Couldn't ask ${machine} to start computer use.`, failed: true });
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return (
+      <div data-testid="computer-start-remote" className="mx-4 mb-2 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+        <span className="min-w-0 flex-1">
+          Computer use for this chat runs on <bdi>{machine}</bdi>.
+          {note && (
+            <span role={note.failed ? 'alert' : 'status'} className={`ml-2 ${note.failed ? 'text-[var(--danger)]' : ''}`}>
+              {note.text}
+            </span>
+          )}
+        </span>
+        <button type="button" disabled={busy} onClick={() => void start()} className="btn px-2 py-0.5">
+          Start on <bdi>{machine}</bdi>
+        </button>
+      </div>
+    );
+  }
+
   const lastAction = oneLine(session.lastAction);
+  const startedFrom = local?.startedFrom ? oneLine(local.startedFrom) : '';
 
   async function stop(): Promise<void> {
     setBusy(true);
@@ -35,11 +88,23 @@ export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
     <div
       data-testid="computer-banner"
       role="status"
+      {...(elsewhere ? { 'data-machine': elsewhere.nodeId } : {})}
       className="mx-4 mb-2 flex items-center gap-2 rounded border border-[var(--warn)] bg-[var(--bg-raised)] p-3 text-sm"
     >
       <span aria-hidden="true">{'\u{1F5B1}'}</span>
       <span className="min-w-0 flex-1">
-        OtherBench is controlling this computer.
+        {elsewhere ? (
+          <>
+            OtherBench is controlling <bdi>{oneLine(elsewhere.machine)}</bdi>.
+          </>
+        ) : (
+          'OtherBench is controlling this computer.'
+        )}
+        {startedFrom !== '' && (
+          <span data-testid="computer-banner-from" className="ml-2">
+            Started from <bdi>{startedFrom}</bdi>.
+          </span>
+        )}
         {lastAction !== '' && (
           <span data-testid="computer-banner-last" className="ml-2 text-xs break-words text-[var(--text-muted)]">
             Last: <bdi>{lastAction}</bdi>

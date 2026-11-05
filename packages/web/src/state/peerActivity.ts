@@ -44,3 +44,19 @@ export function waitingSinceElsewhere(machines: PeersOverview | null): ReadonlyM
 export function workingElsewhere(machines: PeersOverview | null, chatId: string): string | null {
   return machines?.peers.find((p) => p.status === 'reachable' && (p.activeChats ?? []).includes(chatId))?.name ?? null;
 }
+
+/**
+ * The paired machine `chatId` is controlling (computer use), as that machine last said, with its last action; null
+ * when none is, or the machine isn't reachable.
+ */
+export function computerSessionElsewhere(
+  machines: PeersOverview | null,
+  chatId: string
+): { nodeId: string; machine: string; lastAction?: string } | null {
+  for (const peer of machines?.peers ?? []) {
+    if (peer.status !== 'reachable') continue;
+    const session = (peer.computerSessions ?? []).find((s) => s.chatId === chatId);
+    if (session) return { nodeId: peer.nodeId, machine: peer.name, ...(session.lastAction === undefined ? {} : { lastAction: session.lastAction }) };
+  }
+  return null;
+}

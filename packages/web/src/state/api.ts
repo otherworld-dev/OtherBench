@@ -481,6 +481,11 @@ export interface PeerView extends PublicPeer {
   waitingChats?: string[];
   /** Since when (ms) each of `waitingChats` has waited, for the Needs you order; absent from an older machine. */
   waitingSince?: Record<string, number>;
+  /**
+   * The chats controlling that machine now (computer use), with their last action, while it's reachable; absent means
+   * none (or an older machine). The banner shows them, and its Stop is sent there.
+   */
+  computerSessions?: { chatId: string; lastAction?: string }[];
 }
 
 export interface PeersOverview {
@@ -661,6 +666,12 @@ export const api = {
     },
     /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
     stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+    /**
+     * Starts computer use for a chat that runs on a paired machine, there (`POST /api/chats/:id/computer/start`):
+     * 202 once asked, after which that machine's own start dialog asks; refused when it doesn't let paired machines,
+     * computer use is off there, or the chat's profile doesn't use it.
+     */
+    startComputer: (id: string) => post<{ starting: true }>(`/chats/${encodeURIComponent(id)}/computer/start`),
     /** Stops every reply running in the chat, here or on the paired machine running it (the reply's Stop): `POST /api/chats/:id/stop`. */
     stop: (id: string) => post<{ stopped: string[] }>(`/chats/${encodeURIComponent(id)}/stop`),
   },

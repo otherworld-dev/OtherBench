@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog.js';
 import { formatRelativeTime } from '../../lib/relativeTime.js';
 import { ApiError, api, type PairingView, type PeerView, type PeersOverview } from '../../state/api.js';
+import { PeerComputerControl } from './PeerComputerControl.js';
 
 export const FIREWALL_NOTE =
   'The first time OtherBench listens for other machines, Windows asks whether to allow it: allow it on Private networks only.';
@@ -279,6 +280,8 @@ export function MachinesPanel(): JSX.Element {
         </ul>
       )}
       {overview && overview.peers.length === 0 && <p className="text-[var(--text-faint)]">No paired machines yet.</p>}
+
+      <PeerComputerControl />
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-3">

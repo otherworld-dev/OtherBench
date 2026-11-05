@@ -21,7 +21,7 @@ import { ApiError, api, type GlobalMemoryView } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { MEMORY_MODEL_HINT, MemoryPanel } from './MemoryPanel.js';
 
-const FEATURES_ON = { githubEnabled: true, nextcloudEnabled: true };
+const FEATURES_ON = { githubEnabled: true, nextcloudEnabled: true, peerComputerControl: true };
 
 const mockedGet = vi.mocked(api.settings.get);
 const mockedPatch = vi.mocked(api.settings.patch);
