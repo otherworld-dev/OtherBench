@@ -144,6 +144,13 @@ impl Fake {
     }
 }
 
+/// The question is the same fake dialog as the start's: the same modes, the same record of what was shown.
+impl Ask for Fake {
+    fn ask(&self, text: &str, dialog: &Dialog) -> Consent {
+        self.consent(text, dialog)
+    }
+}
+
 impl Desktop for Fake {
     fn consent(&self, text: &str, dialog: &Dialog) -> Consent {
         self.dialogs.lock().unwrap().push(text.to_string());
@@ -307,7 +314,7 @@ impl H {
     }
 
     fn with(fake: Arc<Fake>, limits: Limits) -> Self {
-        let shell = Shell::new(|| vec![QUICK.to_string()], Some(fake.clone() as Arc<dyn Desktop>), limits);
+        let shell = Shell::new(|| vec![QUICK.to_string()], Some(fake.clone() as Arc<dyn Desktop>), Some(fake.clone() as Arc<dyn Ask>), limits);
         let (w, sink) = writer();
         shell.attach(w.clone());
         Self { shell, fake, w, sink, next: AtomicU64::new(1) }
@@ -436,7 +443,7 @@ fn hello_answers_every_field_and_no_event_comes_before_it() {
 
 #[test]
 fn hello_with_computer_use_off_says_so_and_no_start_is_ever_shown() {
-    let shell = Shell::new(|| vec![QUICK.to_string()], None, limits());
+    let shell = Shell::new(|| vec![QUICK.to_string()], None, None, limits());
     let (w, sink) = writer();
     shell.attach(w.clone());
     shell.request(Request { id: 1, method: "computer.hello".into(), params: json!({}) }, Reply::new(1, w.clone()));
@@ -1265,4 +1272,97 @@ fn quitting_is_not_held_up_by_a_worker_holding_the_ui() {
     drop(ops);
     wait_for("the quit to finish", || !h.events("computer.stopped").is_empty());
     assert_eq!(h.events("computer.stopped")[0], json!({ "chatId": "a", "why": "quit" }));
+}
+
+// settings.confirm: a yes/no question to the person here ------------------------
+
+const QUESTION: &str = "Let paired machines start and approve computer use on this computer?\n\nOnly press OK if you just turned this on yourself.";
+
+#[test]
+fn a_question_is_answered_yes_only_by_the_persons_ok_and_shows_what_it_was_told() {
+    let h = H::new();
+    h.hello();
+    let r = h.result(h.send("settings.confirm", json!({ "text": QUESTION })));
+    assert_eq!(r, json!({ "ok": true }));
+    assert_eq!(*h.fake.dialogs.lock().unwrap(), [QUESTION.to_string()]);
+    // Nothing of a session comes of it: no hotkey, no indicator.
+    assert!(h.fake.hotkey.lock().unwrap().is_empty());
+    assert!(h.fake.indicator.lock().unwrap().is_empty());
+    for (mode, reason) in [(Mode::No, ASK_DECLINED), (Mode::Fail, ASK_NOT_SHOWN)] {
+        *h.fake.mode.lock().unwrap() = mode;
+        assert_eq!(h.result(h.send("settings.confirm", json!({ "text": QUESTION }))), json!({ "ok": false, "reason": reason }));
+    }
+}
+
+#[test]
+fn a_question_nobody_answers_closes_itself_as_no() {
+    let h = H::with(Fake::new(), Limits { dialog: Duration::from_millis(100), ..limits() });
+    h.hello();
+    *h.fake.mode.lock().unwrap() = Mode::Hold;
+    assert_eq!(h.result(h.send("settings.confirm", json!({ "text": QUESTION }))), json!({ "ok": false, "reason": ASK_UNANSWERED }));
+    assert!(h.fake.dialog_closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn a_hello_closes_a_question_that_is_up_as_no() {
+    let h = H::new();
+    h.hello();
+    *h.fake.mode.lock().unwrap() = Mode::Hold;
+    let asked = h.send("settings.confirm", json!({ "text": QUESTION }));
+    wait_for("the question", || h.fake.dialogs.lock().unwrap().len() == 1);
+    h.hello();
+    assert_eq!(h.result(asked), json!({ "ok": false, "reason": ASK_CLOSED }));
+}
+
+#[test]
+fn a_question_is_one_at_a_time_and_never_beside_a_session_or_a_start() {
+    let h = H::new();
+    h.hello();
+    // While a chat holds a session: refused without showing anything.
+    let token = h.start("a");
+    let before = h.fake.dialogs.lock().unwrap().len();
+    assert_eq!(h.result(h.send("settings.confirm", json!({ "text": QUESTION }))), json!({ "ok": false, "reason": ASK_BUSY }));
+    assert_eq!(h.fake.dialogs.lock().unwrap().len(), before);
+    h.result(h.send("computer.end", json!({ "chatId": "a", "session": token })));
+
+    // While a question is up: a second question and a start are both refused.
+    *h.fake.mode.lock().unwrap() = Mode::Hold;
+    let asked = h.send("settings.confirm", json!({ "text": QUESTION }));
+    wait_for("the question", || h.fake.dialogs.lock().unwrap().len() == before + 1);
+    assert_eq!(h.result(h.send("settings.confirm", json!({ "text": QUESTION }))), json!({ "ok": false, "reason": ASK_BUSY }));
+    assert_eq!(h.result(h.send("computer.start", json!({ "chatId": "b", "title": "t" }))), json!({ "ok": false, "reason": BUSY }));
+    *h.fake.answer.lock().unwrap() = Some(Consent::Yes);
+    assert_eq!(h.result(asked), json!({ "ok": true }));
+    // Once it is answered, a start can come again.
+    *h.fake.mode.lock().unwrap() = Mode::Yes;
+    assert_eq!(h.result(h.send("computer.start", json!({ "chatId": "b", "title": "t" })))["ok"], json!(true));
+}
+
+#[test]
+fn a_question_needs_no_computer_use_but_does_need_a_way_to_ask_and_readable_text() {
+    // Computer use switched off: the question is still asked.
+    let fake = Fake::new();
+    let shell = Shell::new(|| vec![QUICK.to_string()], None, Some(fake.clone() as Arc<dyn Ask>), limits());
+    let (w, sink) = writer();
+    shell.attach(w.clone());
+    shell.request(Request { id: 1, method: "settings.confirm".into(), params: json!({ "text": QUESTION }) }, Reply::new(1, w.clone()));
+    wait_for("the answer", || sink.messages().len() == 1);
+    assert_eq!(sink.messages()[0]["result"], json!({ "ok": true }));
+
+    // Nothing to ask with: never a yes.
+    let shell = Shell::new(|| vec![QUICK.to_string()], None, None, limits());
+    let (w, sink) = writer();
+    shell.attach(w.clone());
+    shell.request(Request { id: 1, method: "settings.confirm".into(), params: json!({ "text": QUESTION }) }, Reply::new(1, w.clone()));
+    wait_for("the answer", || sink.messages().len() == 1);
+    assert_eq!(sink.messages()[0]["result"], json!({ "ok": false, "reason": CANT_ASK }));
+
+    // Missing, empty, not a string or too long: unreadable, nothing shown.
+    let h = H::new();
+    h.hello();
+    for params in [json!({}), json!({ "text": "  " }), json!({ "text": true }), json!({ "text": "x".repeat(MAX_ASK_TEXT + 1) })] {
+        let id = h.send("settings.confirm", params.clone());
+        assert!(h.answer_at(id).1.get("error").is_some(), "{params}");
+    }
+    assert!(h.fake.dialogs.lock().unwrap().is_empty());
 }

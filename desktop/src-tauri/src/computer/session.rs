@@ -42,7 +42,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use super::image::{self, Shot};
-use super::{act, keys, Consent, Desktop, Dialog, Where, NO_SESSION, OFF_REASON, STOP_HOTKEY};
+use super::{act, keys, Ask, Consent, Desktop, Dialog, Where, NO_SESSION, OFF_REASON, STOP_HOTKEY};
 use crate::rpc::{self, Reply, Request, Writer};
 
 const BUSY: &str = "Another chat is controlling this computer, or asking to. Stop it first.";
@@ -58,6 +58,14 @@ const STILL_RUNNING: &str = "An action for that chat had not stopped yet; it was
 const NOT_ANNOUNCED: &str = "The start of that session had not finished yet; it was ended.";
 const NO_CURSOR: &str = "The cursor is not on the screen OtherBench last looked at.";
 const TOO_BIG: &str = "The screenshot is larger than OtherBench can send.";
+const CANT_ASK: &str = "This OtherBench desktop app can't ask that here.";
+const ASK_BUSY: &str = "OtherBench is already asking something on this computer, or is controlling it. Try again once that's done.";
+const ASK_DECLINED: &str = "The person at this computer said no.";
+const ASK_UNANSWERED: &str = "Nobody answered on this computer in time.";
+const ASK_CLOSED: &str = "The question was closed before it was answered.";
+const ASK_NOT_SHOWN: &str = "The desktop app couldn't show the question.";
+/// The longest question `settings.confirm` shows, in characters.
+const MAX_ASK_TEXT: usize = 2000;
 
 /// How long things may take. The defaults are the wire's; tests shorten them.
 #[derive(Debug, Clone, Copy)]
@@ -246,6 +254,10 @@ struct Taken {
 struct Inner {
     shortcuts: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     desktop: Option<Arc<dyn Desktop>>,
+    /// Asks the person a yes/no question (`settings.confirm`); `None` where no dialog can be shown.
+    ask: Option<Arc<dyn Ask>>,
+    /// The question that is up, if any: one at a time, and closed (as Cancel) by a hello or the channel going.
+    asking: Mutex<Option<Dialog>>,
     limits: Limits,
     writer: Mutex<Option<Writer>>,
     state: Mutex<State>,
@@ -268,11 +280,14 @@ pub struct Shell(Arc<Inner>);
 impl Shell {
     /// `shortcuts`: the global shortcuts registered besides the stop hotkey
     /// (the quick-chat hotkey). `desktop`: the driver, or `None` while
-    /// computer use is switched off.
-    pub fn new(shortcuts: impl Fn() -> Vec<String> + Send + Sync + 'static, desktop: Option<Arc<dyn Desktop>>, limits: Limits) -> Self {
+    /// computer use is switched off. `ask`: the native yes/no question, or
+    /// `None` where none can be shown (it needs no driver).
+    pub fn new(shortcuts: impl Fn() -> Vec<String> + Send + Sync + 'static, desktop: Option<Arc<dyn Desktop>>, ask: Option<Arc<dyn Ask>>, limits: Limits) -> Self {
         Self(Arc::new(Inner {
             shortcuts: Box::new(shortcuts),
             desktop,
+            ask,
+            asking: Mutex::new(None),
             limits,
             writer: Mutex::new(None),
             state: Mutex::new(State { off: false, sessions: HashMap::new(), dialogs: HashMap::new(), on_screen: 0 }),
@@ -438,6 +453,7 @@ impl Inner {
                 self.spawn(move |me| me.end(taken, reply));
             }
             "computer.start" => self.admit(&params, reply),
+            "settings.confirm" => self.admit_question(&params, reply),
             "computer.hello" | "computer.screenshot" | "computer.cursor" | "computer.target" | "computer.act" => {
                 self.spawn(move |me| me.dispatch(&method, &params, reply));
             }
@@ -489,7 +505,60 @@ impl Inner {
         for p in &pendings {
             p.cancel();
         }
+        // A question that is up closes as Cancel: whatever asked it is gone or starting over.
+        if let Some(dialog) = locked(&self.asking).as_ref() {
+            dialog.dismiss();
+        }
         (lives, pendings)
+    }
+
+    // ---- a question -------------------------------------------------------------
+
+    /// The reader thread's part of `settings.confirm`: the server's question,
+    /// shown as it is told (plain text, at most `MAX_ASK_TEXT` characters), and
+    /// only the person's OK answers `{ ok: true }`. One at a time, and never
+    /// while a chat holds a session or a start dialog may be up: a model at the
+    /// screen must not be able to reach it, and a start can't begin meanwhile.
+    fn admit_question(self: &Arc<Self>, params: &Value, reply: Reply) {
+        let Some(ask) = self.ask.clone() else {
+            return reply.ok(json!({ "ok": false, "reason": CANT_ASK }));
+        };
+        let Some(text) = params.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty() && t.chars().count() <= MAX_ASK_TEXT).map(str::to_string) else {
+            return reply.err(UNREADABLE, None);
+        };
+        let dialog = Dialog::new(self.limits.dialog);
+        {
+            let mut st = self.state();
+            let mut asking = locked(&self.asking);
+            if !st.sessions.is_empty() || !st.dialogs.is_empty() || st.on_screen > 0 || asking.is_some() {
+                return reply.ok(json!({ "ok": false, "reason": ASK_BUSY }));
+            }
+            // Counted as on the screen, so a start that comes meanwhile is refused as busy.
+            st.on_screen += 1;
+            *asking = Some(dialog.clone());
+        }
+        self.spawn(move |me| me.question(&*ask, &text, &dialog, reply));
+    }
+
+    /// The worker's part: the dialog, with no act running meanwhile.
+    fn question(&self, ask: &dyn Ask, text: &str, dialog: &Dialog, reply: Reply) {
+        let no_acts = locked(&self.acting);
+        let answer = if dialog.should_close() { Consent::No } else { ask.ask(text, dialog) };
+        drop(no_acts);
+        {
+            let mut st = self.state();
+            st.on_screen -= 1;
+            *locked(&self.asking) = None;
+        }
+        let result = match answer {
+            Consent::Yes if !dialog.dismissed() => json!({ "ok": true }),
+            Consent::Yes => json!({ "ok": false, "reason": ASK_CLOSED }),
+            Consent::No if dialog.dismissed() => json!({ "ok": false, "reason": ASK_CLOSED }),
+            Consent::No if dialog.expired() => json!({ "ok": false, "reason": ASK_UNANSWERED }),
+            Consent::No => json!({ "ok": false, "reason": ASK_DECLINED }),
+            Consent::Failed => json!({ "ok": false, "reason": ASK_NOT_SHOWN }),
+        };
+        reply.ok(result);
     }
 
     // ---- hello ----------------------------------------------------------------
