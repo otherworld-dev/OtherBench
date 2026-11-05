@@ -358,6 +358,8 @@ export class TurnRunner {
   private readonly claudeAccountFor?: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
+  /** messageId -> the notice `cancel` was given, for the reply to end with (a scheduled run's time limit). */
+  private readonly stopNotices = new Map<string, string>();
   /** Running variants' chat and unattended flag, kept and cleared with `controllers`. */
   private readonly running = new Map<string, { chatId: string; unattended: boolean }>();
   /** The same running variants by chat, in start order, so `runningIn` doesn't scan every chat's. */
@@ -515,9 +517,18 @@ export class TurnRunner {
     };
   }
 
-  /** Aborts one variant's stream. A no-op if `messageId` isn't currently running (already finished, or unknown). */
-  cancel(messageId: string): void {
-    this.controllers.get(messageId)?.abort();
+  /**
+   * Aborts one variant's stream. A no-op if `messageId` isn't currently
+   * running (already finished, or unknown). `notice`, when given, says why in
+   * the reply: a notice part added as it ends stopped (the schedule service's
+   * time limit). Only the first stop's notice counts; a reply already
+   * stopping keeps none.
+   */
+  cancel(messageId: string, notice?: string): void {
+    const controller = this.controllers.get(messageId);
+    if (!controller) return;
+    if (notice !== undefined && !controller.signal.aborted) this.stopNotices.set(messageId, notice);
+    controller.abort();
   }
 
   /** The chat and unattended flag of a reply running now, or null when it isn't running here. */
@@ -773,6 +784,8 @@ export class TurnRunner {
     // teardown abort below -- that one must not turn a clean finish into a
     // cancellation.
     let cancelled = false;
+    // Why it was stopped, when whoever stopped it said (`cancel`'s notice).
+    let stopNotice: string | null = null;
     // This reply's sub-agent runner, when it offers the subagent tool.
     let subagents: SubagentRunner | null = null;
 
@@ -1097,6 +1110,8 @@ export class TurnRunner {
             : classifyProviderError(err);
     } finally {
       this.controllers.delete(messageId);
+      stopNotice = this.stopNotices.get(messageId) ?? null;
+      this.stopNotices.delete(messageId);
       this.running.delete(messageId);
       const inChat = this.runningByChat.get(chatId);
       inChat?.delete(messageId);
@@ -1133,6 +1148,13 @@ export class TurnRunner {
     // outcome, an aborted signal means this was a cancellation.
     if (cancelled && status === 'complete' && error === null) {
       status = 'cancelled';
+    }
+
+    // Stopped with a reason: the reply says so, as a notice part like any other,
+    // kept with the parts below and sent live before the terminal status.
+    if (stopNotice !== null && status !== 'complete') {
+      parts = [...parts, { type: 'notice', text: stopNotice }];
+      this.emit({ messageId, type: 'notice', text: stopNotice });
     }
 
     // The end is announced even when these writes fail -- above all when the

@@ -3,10 +3,10 @@ import {
   MAX_CONCURRENT_SCHEDULED_RUNS,
   SCHEDULE_CHECK_MAX_MS,
   SCHEDULE_LATE_AFTER_MS,
-  SCHEDULE_RUN_TIMEOUT_MS,
   nextRunAt,
   runChatTitle,
   scheduledPromptText,
+  timedOutText,
   type ScheduleRunStatus,
   type ScheduleTrigger,
 } from '@otherbench/core/domain/schedule.js';
@@ -22,21 +22,20 @@ import { collectMessageTree } from '../routes/chats.js';
 
 export interface ScheduleLimits {
   maxConcurrent: number;
-  timeoutMs: number;
   lateAfterMs: number;
   checkMaxMs: number;
 }
 
 export const DEFAULT_SCHEDULE_LIMITS: ScheduleLimits = {
   maxConcurrent: MAX_CONCURRENT_SCHEDULED_RUNS,
-  timeoutMs: SCHEDULE_RUN_TIMEOUT_MS,
   lateAfterMs: SCHEDULE_LATE_AFTER_MS,
   checkMaxMs: SCHEDULE_CHECK_MAX_MS,
 };
 
 export interface ScheduleServiceDeps {
   store: Store;
-  turnRunner: { on(cb: (e: TurnEvent) => void): () => void; cancel(messageId: string): void };
+  /** `cancel` is Stop's own (`POST /messages/:id/cancel`); its notice is what the stopped reply ends with. */
+  turnRunner: { on(cb: (e: TurnEvent) => void): () => void; cancel(messageId: string, notice?: string): void };
   /** `startTurn` bound to the container (turn-start.ts). */
   startTurn: (input: TurnInput) => Promise<TurnResult>;
   /** Rejects with a message the run records (a missing connection, one bound to another machine). */
@@ -72,7 +71,10 @@ interface ActiveRun {
   schedule: Schedule;
   chatId: string;
   messageId: string;
+  /** The time-limit timer; null when the schedule has no limit. */
   timer: unknown;
+  /** The limit in minutes this run started with; an edit during the run applies from the next one. */
+  limitMinutes: number | null;
   timedOut: boolean;
 }
 
@@ -319,6 +321,7 @@ export class ScheduleService {
         dueAt: run.dueAt,
         previousAt: previous?.startedAt ?? null,
         autoMode,
+        timeLimitMinutes: schedule.timeLimitMinutes,
       });
       const result = await this.startTurn({
         chatId: target.chatId,
@@ -402,10 +405,16 @@ export class ScheduleService {
     return tip.id;
   }
 
-  /** Watches the run's reply: arms the timeout and announces the start. A reply that already ended (a fast model) is ended here. */
+  /**
+   * Watches the run's reply: arms its time limit, if the schedule has one, and
+   * announces the start. The limit counts from here, the reply's start, and
+   * runs on through any wait (a card, a sub-agent, a long command). A reply
+   * that already ended (a fast model) is ended here.
+   */
   private track(schedule: Schedule, run: ScheduleRun, chatId: string, messageId: string): void {
-    const entry: ActiveRun = { runId: run.id, schedule, chatId, messageId, timer: null, timedOut: false };
-    entry.timer = this.scheduler.setTimeout(() => this.onTimeout(entry), this.limits.timeoutMs);
+    const limitMinutes = schedule.timeLimitMinutes;
+    const entry: ActiveRun = { runId: run.id, schedule, chatId, messageId, timer: null, limitMinutes, timedOut: false };
+    if (limitMinutes !== null) entry.timer = this.scheduler.setTimeout(() => this.onTimeout(entry), limitMinutes * 60_000);
     this.active.set(messageId, entry);
     this.emit({ type: 'schedule-run-started', scheduleId: schedule.id, scheduleName: schedule.name, runId: run.id, chatId, messageId });
     const status = this.store.messages.get(messageId)?.status;
@@ -413,7 +422,11 @@ export class ScheduleService {
   }
 
   /**
-   * The run's time is up. Runs in a timer, so nothing may escape it: a store
+   * The run's time is up: its reply is stopped as Stop stops it (the
+   * TurnRunner's abort, which reaches its tool calls, a card it waits on, its
+   * sub-agents and Claude Code's process), with a notice saying why, and
+   * `end` records the run as timed out when the reply's end comes in.
+   * Runs in a timer, so nothing may escape it: a store
    * error here (a locked database) would be an uncaught exception that takes
    * the server down. On one the run is given up on: ended as an error if the
    * store allows, its slot freed, and a check poked so waiting schedules go.
@@ -426,7 +439,7 @@ export class ScheduleService {
         return;
       }
       entry.timedOut = true;
-      this.turnRunner.cancel(entry.messageId);
+      this.turnRunner.cancel(entry.messageId, entry.limitMinutes !== null ? timedOutText(entry.limitMinutes) : undefined);
     } catch (err) {
       console.error(`[otherbench-server] schedule ${entry.schedule.id} run ${entry.runId} could not be stopped at its timeout:`, err);
       this.giveUp(entry, err);
@@ -469,10 +482,11 @@ export class ScheduleService {
     } else {
       this.active.delete(entry.messageId);
       this.scheduler.clearTimeout(entry.timer);
-      const final: ScheduleRunStatus = status === 'complete' ? 'complete' : status === 'cancelled' ? (entry.timedOut ? 'timed_out' : 'cancelled') : 'error';
+      // A reply stopped at the limit is timed out however its engine ended it (cleanly, or with an error the stop caused).
+      const final: ScheduleRunStatus = status === 'complete' ? 'complete' : entry.timedOut ? 'timed_out' : status === 'cancelled' ? 'cancelled' : 'error';
       const detail =
-        final === 'timed_out'
-          ? `Stopped after ${Math.round(this.limits.timeoutMs / 60_000)} minutes.`
+        final === 'timed_out' && entry.limitMinutes !== null
+          ? timedOutText(entry.limitMinutes)
           : final === 'error'
             ? (this.store.messages.get(entry.messageId)?.error?.message ?? null)
             : null;
@@ -491,7 +505,7 @@ export class ScheduleService {
   /**
    * Ends a run whose chat was deleted mid-reply as an error, and stops the
    * reply, which has nowhere left to write. Deleting a chat doesn't stop its
-   * reply, so the reply's own end could be up to the 30-minute timeout away:
+   * reply, so the reply's own end could be up to its time limit away, or never:
    * this is swept for at every check. Writes nothing if the schedule went too.
    */
   private endDeleted(entry: ActiveRun): void {

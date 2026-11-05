@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { formatInZone, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, formatInZone, timeLimitText, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
@@ -223,6 +223,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                   <p className="text-[var(--text-muted)]">
                     {s.target.kind === 'chat' ? `Chat: ${s.targetName}` : `New chat each run in ${s.targetName}`} · {profileName(s.profileId)}
                     {runsInAuto(s) && ' · Auto mode'}
+                    {s.timeLimitMinutes === null ? ' · No time limit' : s.timeLimitMinutes !== DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES && ` · Time limit ${timeLimitText(s.timeLimitMinutes)}`}
                   </p>
                   <p data-testid="schedule-next">Next run: {nextRunText(s, now)}</p>
                   {s.lastRun && (

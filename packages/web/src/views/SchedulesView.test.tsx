@@ -28,12 +28,13 @@ const list = vi.mocked(api.schedules.list);
 const patch = vi.mocked(api.schedules.patch);
 const run = vi.mocked(api.schedules.run);
 const create = vi.mocked(api.schedules.create);
+const runs = vi.mocked(api.schedules.runs);
 const cancel = vi.mocked(api.turns.cancel);
 
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
     id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' },
-    rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'), autoMode: false,
+    rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'), autoMode: false, timeLimitMinutes: 30,
     createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, activeRun: null, lastRun: null, warnings: [], ...over,
   };
 }
@@ -81,6 +82,30 @@ describe('SchedulesView', () => {
     expect(await screen.findByTestId('schedule-row-s1')).toHaveTextContent('Claude · Auto mode');
     expect(screen.getByTestId('schedule-row-s2')).not.toHaveTextContent('Auto mode');
     expect(screen.getByTestId('schedule-row-s3')).not.toHaveTextContent('Auto mode');
+  });
+
+  it('says when a schedule has no time limit, or one other than the usual 30 minutes', async () => {
+    list.mockResolvedValue([view(), view({ id: 's2', timeLimitMinutes: null }), view({ id: 's3', timeLimitMinutes: 120 })]);
+    render(<SchedulesView onClose={vi.fn()} />);
+    expect(await screen.findByTestId('schedule-row-s1')).not.toHaveTextContent('time limit');
+    expect(screen.getByTestId('schedule-row-s2')).toHaveTextContent('Mock · No time limit');
+    expect(screen.getByTestId('schedule-row-s3')).toHaveTextContent('Mock · Time limit 2 hours');
+  });
+
+  it("shows a timed-out run in the history with what stopped it", async () => {
+    list.mockResolvedValue([view()]);
+    runs.mockResolvedValue([
+      {
+        id: 'r1', scheduleId: 's1', trigger: 'scheduled', dueAt: 1, startedAt: Date.parse('2026-10-12T08:00:00Z'), finishedAt: 2, status: 'timed_out',
+        detail: "Stopped at the schedule's time limit of 30 minutes.", chatId: 'c1', createdChat: false, userMessageId: 'u1', messageId: 'm1', refusedCalls: 0,
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    await user.click(within(await screen.findByTestId('schedule-row-s1')).getByRole('button', { name: 'History' }));
+    const item = await screen.findByTestId('schedule-run-r1');
+    expect(within(item).getByTestId('run-status')).toHaveTextContent('Timed out');
+    expect(item).toHaveTextContent("Stopped at the schedule's time limit of 30 minutes.");
   });
 
   it('pauses and resumes', async () => {
@@ -136,7 +161,7 @@ describe('SchedulesView', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false })
+      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30 })
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -193,6 +218,41 @@ describe('SchedulesView', () => {
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ rule: { cadence: 'hourly', time: '08:00', everyHours: 4, weekdays: [1, 2, 3, 4, 5] } }))
     );
+  });
+
+  it('sets a new schedule\'s time limit, 30 minutes unless changed, and No limit sends null', async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    create.mockResolvedValue(view());
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    const limit = within(dialog).getByLabelText('Time limit');
+    expect(limit).toHaveDisplayValue('30 minutes');
+    expect(dialog).toHaveTextContent('A run still going after this is stopped, as Stop would, and marked Timed out.');
+    await user.selectOptions(limit, 'No limit');
+    expect(dialog).toHaveTextContent('A run goes on until it finishes or you stop it, however long that takes.');
+    await user.type(within(dialog).getByLabelText('Name'), 'Nightly');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Nightly', timeLimitMinutes: null })));
+  });
+
+  it("edits a schedule's time limit, sending only that", async () => {
+    list.mockResolvedValue([view({ timeLimitMinutes: 45 })]);
+    patch.mockResolvedValue(view({ timeLimitMinutes: 240 }));
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    await user.click(within(await screen.findByTestId('schedule-row-s1')).getByRole('button', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit schedule' });
+    const limit = within(dialog).getByLabelText('Time limit');
+    // A limit set some other way is shown as it is, not swapped for a listed one.
+    expect(limit).toHaveDisplayValue('45 minutes');
+    await user.selectOptions(limit, '4 hours');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('s1', { timeLimitMinutes: 240 }));
   });
 
   it("offers Auto for a Claude Code profile: ticking it changes the warnings and is saved with the schedule", async () => {

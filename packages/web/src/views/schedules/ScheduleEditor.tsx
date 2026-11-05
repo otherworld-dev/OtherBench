@@ -6,6 +6,7 @@ import { api } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import {
   CADENCE_OPTIONS,
+  NO_TIME_LIMIT,
   WEEKDAYS_MONDAY_FIRST,
   browserTimeZone,
   createBody,
@@ -16,6 +17,7 @@ import {
   patchBody,
   previewRuns,
   targetHasFolder,
+  timeLimitOptions,
   type ScheduleDraft,
 } from './draft.js';
 
@@ -280,6 +282,30 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
               </ul>
             </>
           )}
+        </div>
+
+        <div>
+          <label htmlFor={`${id}-limit`} className="block font-medium">
+            Time limit
+          </label>
+          <select
+            id={`${id}-limit`}
+            value={draft.timeLimitMinutes === null ? NO_TIME_LIMIT : String(draft.timeLimitMinutes)}
+            onChange={(e) => set('timeLimitMinutes', e.target.value === NO_TIME_LIMIT ? null : Number(e.target.value))}
+            aria-describedby={`${id}-limit-help`}
+            className={`${FIELD} w-auto`}
+          >
+            {timeLimitOptions(initial.timeLimitMinutes).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p id={`${id}-limit-help`} className="text-xs text-[var(--text-muted)]">
+            {draft.timeLimitMinutes === null
+              ? 'A run goes on until it finishes or you stop it, however long that takes.'
+              : 'A run still going after this is stopped, as Stop would, and marked Timed out. Time spent waiting counts.'}
+          </p>
         </div>
 
         {targetFixed ? (

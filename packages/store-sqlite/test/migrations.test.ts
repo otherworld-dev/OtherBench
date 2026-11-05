@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-15).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '037-app-open']);
+    expect(MIGRATIONS.slice(-16).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '037-app-open']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(37);
+      expect(SCHEMA_VERSION).toBe(38);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch']));
     } finally {
@@ -937,6 +937,32 @@ describe('runMigrations', () => {
       db.exec(`DELETE FROM project WHERE id = 'proj1'`);
       expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule`).get()).toEqual({ n: 0 });
       expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule_run`).get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('schedule-time-limit gives every existing schedule the 30-minute limit runs had, and keeps NULL for no limit', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-schedule-time-limit'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('chat1', 'Chat', 'p1', 1, 1)`);
+      db.exec(
+        `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, rule, timezone, enabled, next_run_at, created_at, updated_at)
+         VALUES ('old', 'S', 'p', 'p1', 'chat1', '{"cadence":"daily","time":"09:00"}', 'UTC', 1, 5, 1, 1)`
+      );
+
+      runMigrations(db);
+
+      expect(db.prepare(`SELECT time_limit_minutes FROM schedule WHERE id = 'old'`).get()).toEqual({ time_limit_minutes: 30 });
+      db.exec(`UPDATE schedule SET time_limit_minutes = NULL WHERE id = 'old'`);
+      expect(db.prepare(`SELECT time_limit_minutes FROM schedule WHERE id = 'old'`).get()).toEqual({ time_limit_minutes: null });
+      const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_schedule%'").all();
+      expect(triggers).toEqual([]);
     } finally {
       db.close();
     }

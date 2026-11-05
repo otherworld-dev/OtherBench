@@ -20,6 +20,7 @@ import { api, ApiError } from '../state/api.js';
 import { escapeStopsReply } from '../lib/escapeStopsReply.js';
 import { findMatches, firstMatchFrom, isFindShortcut, isMacPlatform, messageFindText, stepMatch, type FindMatch } from '../lib/chatFind.js';
 import { findRoots, locateMatch, showFindHighlight } from '../lib/findInDom.js';
+import { clampWindow, windowFor, type DrawnWindow } from '../lib/threadWindow.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useStopReply } from '../state/useStopReply.js';
@@ -149,15 +150,24 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
 
   const tailId = displayPath.at(-1)?.id ?? null;
 
-  // Where the drawn messages start: fixed once a chat is drawn, so a message arriving at the end doesn't take one off
-  // the top under a reader who has scrolled up, and moved earlier only as they near the top or pick an older prompt.
-  // Never so late that fewer than THREAD_WINDOW are drawn (switching to a shorter branch).
-  const [drawnFrom, setDrawnFrom] = useState<{ chatId: string | null; start: number } | null>(null);
+  // Which messages are drawn (lib/threadWindow.ts). Where they start is fixed once a chat is drawn, so a message
+  // arriving at the end doesn't take one off the top under a reader who has scrolled up, and moved earlier only as
+  // they near the top or go to an older message. They run to the end of the chat, unless find or the outline went
+  // to a message far back: then only the messages round it are drawn (`end`), more as the reader nears the bottom.
+  const [drawnFrom, setDrawnFrom] = useState<({ chatId: string | null } & DrawnWindow) | null>(null);
   const latestStart = Math.max(0, displayPath.length - THREAD_WINDOW);
-  const start = drawnFrom?.chatId === chatId ? Math.min(drawnFrom.start, latestStart) : latestStart;
-  if (displayPath.length > 0 && drawnFrom?.chatId !== chatId) setDrawnFrom({ chatId, start });
+  const drawn: DrawnWindow = drawnFrom?.chatId === chatId ? clampWindow(drawnFrom, displayPath.length, THREAD_WINDOW) : { start: latestStart, end: null };
+  const { start, end } = drawn;
+  if (displayPath.length > 0 && drawnFrom?.chatId !== chatId) setDrawnFrom({ chatId, start, end: null });
   const startRef = useRef(start);
   startRef.current = start;
+  const endRef = useRef(end);
+  endRef.current = end;
+  /** Draws whatever it takes for message `index` on the path to be drawn. */
+  const drawTo = (index: number): void => {
+    const next = windowFor(drawn, Math.min(index, displayPath.length - 1), displayPath.length, THREAD_WINDOW);
+    if (next.start !== start || next.end !== end) setDrawnFrom({ chatId, ...next });
+  };
 
   // Auto-follow: stay pinned to the bottom while the user is already there,
   // but never yank the view while they've scrolled up to read. `nearBottom`
@@ -181,10 +191,13 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       el.scrollTop = el.scrollHeight;
       return;
     }
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    const below = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Messages left undrawn below: the bottom of what's drawn isn't the latest, so it's never followed.
+    const near = endRef.current === null && below <= NEAR_BOTTOM_PX;
     nearBottomRef.current = near;
     setShowJump(!near);
     if (el.scrollTop < DRAW_EARLIER_PX && startRef.current > 0) drawEarlierRef.current();
+    if (below < DRAW_EARLIER_PX && endRef.current !== null) drawLaterRef.current();
   }, []);
 
   // Drawing earlier messages puts them above the reader. The message that was first is noted with where it sat, and
@@ -196,10 +209,16 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const first = displayPath[start];
     const el = first ? document.getElementById(`msg-${first.id}`) : null;
     keepPlaceRef.current = first && el ? { id: first.id, y: el.getBoundingClientRect().top } : null;
-    setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW) });
+    setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW), end });
   };
   const drawEarlierRef = useRef(drawEarlier);
   drawEarlierRef.current = drawEarlier;
+  // Drawing later messages puts them below the reader, so nothing they're reading moves.
+  const drawLater = (): void => {
+    if (end !== null) setDrawnFrom({ chatId, start, end: end + THREAD_WINDOW });
+  };
+  const drawLaterRef = useRef(drawLater);
+  drawLaterRef.current = drawLater;
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const before = keepPlaceRef.current;
@@ -213,27 +232,37 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const [goingTo, setGoingTo] = useState<string | null>(null);
   const goTo = (messageId: string): void => {
     const at = displayPath.findIndex((m) => m.id === messageId);
-    if (at !== -1 && at < start) setDrawnFrom({ chatId, start: at });
+    if (at !== -1) drawTo(at);
     setGoingTo(messageId);
   };
   useLayoutEffect(() => {
     if (!goingTo) return;
     setGoingTo(null);
     document.getElementById(`msg-${goingTo}`)?.scrollIntoView({ block: 'start' });
+    if (endRef.current !== null) {
+      nearBottomRef.current = false;
+      setShowJump(true);
+    }
   }, [goingTo]);
 
-  // Find in this chat (Ctrl+F in the pane). It searches every message on the thread's path, drawn or not
-  // (lib/chatFind.ts); going to a match draws back to it as the outline does, then scrolls to it and highlights it
+  const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
+  const openCompare = openVariants.length > 1 && isCompareSet(openVariants);
+  const sendUnder = openCompare ? (openVariants.find((v) => v.id === shownVariantId) ?? openVariants[0]!) : null;
+
+  // Find in this chat (Ctrl+F in the pane). It searches every message on the thread's path, drawn or not, and the
+  // reply on show in a compare turn waiting at the end (lib/chatFind.ts); going to a match draws to it as the outline
+  // does, without drawing everything between (lib/threadWindow.ts), then scrolls to it and highlights it
   // (lib/findInDom.ts). The bar belongs to the chat it was opened on, so switching chats in the pane closes it.
+  const searchPath = useMemo(() => (sendUnder ? [...displayPath, sendUnder] : displayPath), [displayPath, sendUnder]);
   const [find, setFind] = useState<FindState | null>(null);
   const findOpen = find !== null && find.chatId === chatId;
   const findQuery = findOpen ? find.query : '';
-  const matches = useMemo(() => findMatches(displayPath, findQuery), [displayPath, findQuery]);
+  const matches = useMemo(() => findMatches(searchPath, findQuery), [searchPath, findQuery]);
   const findAt = findOpen ? find.at : null;
   const findIndex = findAt ? matches.findIndex((m) => m.messageId === findAt.messageId && m.occurrence === findAt.occurrence) : -1;
   const findTarget = findIndex >= 0 ? matches[findIndex] : undefined;
   // A long user message is drawn folded; one whose match is past the fold is drawn open.
-  const findMessage = findTarget ? displayPath[findTarget.index] : undefined;
+  const findMessage = findTarget ? searchPath[findTarget.index] : undefined;
   const findPreview = findMessage?.role === 'user' ? userTextPreview(messageFindText(findMessage)) : null;
   const unfoldId = findTarget && findPreview !== null && findTarget.start + findQuery.length > findPreview.length ? findTarget.messageId : null;
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -249,16 +278,17 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     if (!el) return 0;
     const top = el.getBoundingClientRect().top;
     const seen = Array.from(el.querySelectorAll('[id^="msg-"]')).find((node) => node.getBoundingClientRect().bottom > top);
-    const at = seen ? displayPath.findIndex((m) => `msg-${m.id}` === seen.id) : -1;
+    const at = seen ? searchPath.findIndex((m) => `msg-${m.id}` === seen.id) : -1;
     return Math.max(0, at);
   };
   const showMatch = (match: FindMatch): void => {
-    if (match.index < start) setDrawnFrom({ chatId, start: match.index });
+    // A compare reply at the end is drawn whenever the end of the path is.
+    drawTo(match.index);
     setFindGoing(match);
   };
   const search = (query: string): void => {
     lastFindQueryRef.current = query;
-    const found = findMatches(displayPath, query);
+    const found = query === findQuery ? matches : findMatches(searchPath, query);
     const first = found[firstMatchFrom(found, firstInView())];
     setFind({ chatId, query, at: first ? { messageId: first.messageId, occurrence: first.occurrence } : null });
     if (first) showMatch(first);
@@ -303,20 +333,34 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       article.scrollIntoView({ block: 'center' });
     }
     // Moving off the bottom stops the thread following new text before the scroll event says so.
-    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    nearBottomRef.current = endRef.current === null && el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    if (!nearBottomRef.current) setShowJump(true);
   }, [findGoing]);
   useLayoutEffect(() => {
     if (!findOpen) showFindHighlight(findOwner, null);
   }, [findOpen, findOwner]);
   useEffect(() => () => showFindHighlight(findOwner, null), [findOwner]);
 
-  const jumpToLatest = useCallback((): void => {
+  // Jump to latest from messages drawn far back draws the end of the chat afresh, then goes to its bottom.
+  const [pinAfterDraw, setPinAfterDraw] = useState(false);
+  const jumpToLatest = (): void => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
     nearBottomRef.current = true;
     setShowJump(false);
-  }, []);
+    if (end !== null) {
+      setDrawnFrom({ chatId, start: latestStart, end: null });
+      setPinAfterDraw(true);
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
+  };
+  useLayoutEffect(() => {
+    if (!pinAfterDraw) return;
+    setPinAfterDraw(false);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [pinAfterDraw]);
 
   // Messages sent while a reply runs, waiting at the end of the thread.
   const waitingNotes = useOtherBenchStore((s) => (chatId ? s.chatNotes[chatId] : undefined));
@@ -350,9 +394,6 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     return () => ro.disconnect();
   }, [chatId]);
 
-  const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
-  const openCompare = openVariants.length > 1 && isCompareSet(openVariants);
-  const sendUnder = openCompare ? (openVariants.find((v) => v.id === shownVariantId) ?? openVariants[0]!) : null;
   // Regenerate and Edit would race a running reply, so they wait for the chat to be quiet.
   const chatStreaming = useMemo(() => chatMessages.some((m) => m.status === 'streaming'), [chatMessages]);
 
@@ -599,7 +640,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                       </button>
                     </div>
                   )}
-                  {displayPath.slice(start).map((m) => {
+                  {displayPath.slice(start, end ?? undefined).map((m) => {
                     let siblings = [m];
                     try {
                       siblings = siblingsOf(chatMessages, m.id);
@@ -673,6 +714,13 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                       />
                     );
                   })}
+                  {end !== null && (
+                    <div className="flex justify-center">
+                      <button type="button" onClick={drawLater} className="btn px-3 py-1 text-xs">
+                        Show later messages ({displayPath.length - end} more)
+                      </button>
+                    </div>
+                  )}
                   </>
                 )}
 

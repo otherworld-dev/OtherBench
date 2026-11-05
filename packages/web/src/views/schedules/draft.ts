@@ -1,5 +1,16 @@
 import { parseCron } from '@otherbench/core/domain/cron.js';
-import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, formatInZone, nextRuns, parseRule, type ScheduleRule, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import {
+  DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
+  SCHEDULE_NAME_MAX,
+  SCHEDULE_PROMPT_MAX,
+  SCHEDULE_TIME_LIMIT_CHOICES,
+  formatInZone,
+  nextRuns,
+  parseRule,
+  timeLimitText,
+  type ScheduleRule,
+  type ScheduleTarget,
+} from '@otherbench/core/domain/schedule.js';
 import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { CreateScheduleBody, PatchScheduleBody } from '../../state/api.js';
@@ -33,6 +44,8 @@ export interface ScheduleDraft {
   projectId: string;
   /** Runs use Claude Code's auto mode (`Schedule.autoMode`); offered only for a Claude Code profile. */
   autoMode: boolean;
+  /** How long a run may go, in minutes (`Schedule.timeLimitMinutes`); null for no limit. */
+  timeLimitMinutes: number | null;
 }
 
 /** The day checkboxes, Monday first. */
@@ -55,6 +68,19 @@ export const CADENCE_OPTIONS: { value: ScheduleRule['cadence']; label: string }[
   { value: 'cron', label: 'Cron rule' },
 ];
 
+/** The Time limit choice that means no limit; every other value is minutes. */
+export const NO_TIME_LIMIT = 'none';
+
+/**
+ * The Time limit choices: the usual ones and "No limit", plus the schedule's
+ * own limit when it is none of those (one set through the API), so opening
+ * the editor never changes it.
+ */
+export function timeLimitOptions(current: number | null): { value: string; label: string }[] {
+  const minutes = current === null || SCHEDULE_TIME_LIMIT_CHOICES.includes(current) ? [...SCHEDULE_TIME_LIMIT_CHOICES] : [...SCHEDULE_TIME_LIMIT_CHOICES, current].sort((a, b) => a - b);
+  return [...minutes.map((m) => ({ value: String(m), label: timeLimitText(m) })), { value: NO_TIME_LIMIT, label: 'No limit' }];
+}
+
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
 const DEFAULT_CRON = '0 9 * * 1-5';
@@ -75,6 +101,7 @@ export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): S
     chatId: prefill?.kind === 'chat' ? prefill.chatId : '',
     projectId: prefill?.kind === 'project' ? prefill.projectId : '',
     autoMode: false,
+    timeLimitMinutes: DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
   };
 }
 
@@ -95,6 +122,7 @@ export function draftFromSchedule(s: Schedule): ScheduleDraft {
     chatId: s.target.kind === 'chat' ? s.target.chatId : '',
     projectId: s.target.kind === 'project' ? s.target.projectId : '',
     autoMode: s.autoMode,
+    timeLimitMinutes: s.timeLimitMinutes,
   };
 }
 
@@ -181,6 +209,7 @@ export function createBody(d: ScheduleDraft): CreateScheduleBody {
     target: d.targetKind === 'chat' ? { chatId: d.chatId } : { projectId: d.projectId },
     rule: ruleOrThrow(d),
     autoMode: d.autoMode,
+    timeLimitMinutes: d.timeLimitMinutes,
   };
 }
 
@@ -193,6 +222,7 @@ export function patchBody(initial: ScheduleDraft, d: ScheduleDraft): PatchSchedu
   const rule = ruleOrThrow(d);
   if (JSON.stringify(rule) !== JSON.stringify(draftRule(initial))) body.rule = rule;
   if (d.autoMode !== initial.autoMode) body.autoMode = d.autoMode;
+  if (d.timeLimitMinutes !== initial.timeLimitMinutes) body.timeLimitMinutes = d.timeLimitMinutes;
   return body;
 }
 

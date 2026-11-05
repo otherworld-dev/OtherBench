@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@otherbench/core/domain/schedule.js';
+import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@otherbench/core/domain/schedule.js';
 import type {
   NewSchedule,
   NewScheduleRun,
@@ -35,6 +35,7 @@ function toSchedule(row: Record<string, unknown>): Schedule {
     enabled: valid && row.enabled === 1,
     nextRunAt: valid ? (row.next_run_at as number | null) : null,
     autoMode: row.auto_mode === 1,
+    timeLimitMinutes: row.time_limit_minutes as number | null,
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
     ...(valid ? {} : { invalid: rule }),
@@ -67,8 +68,8 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, auto_mode, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, auto_mode, time_limit_minutes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         s.id,
@@ -82,6 +83,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
         s.enabled ? 1 : 0,
         s.nextRunAt,
         s.autoMode === true ? 1 : 0,
+        s.timeLimitMinutes === undefined ? DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES : s.timeLimitMinutes,
         s.createdAt ?? now,
         s.updatedAt ?? now
       );
@@ -102,7 +104,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     if (!row) throw new Error(`schedule: not found: ${id}`);
     const next = { ...toSchedule(row), ...patch };
     this.db
-      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, enabled = ?, next_run_at = ?, auto_mode = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, enabled = ?, next_run_at = ?, auto_mode = ?, time_limit_minutes = ?, updated_at = ? WHERE id = ?')
       .run(
         next.name,
         next.prompt,
@@ -112,6 +114,7 @@ export class SqliteScheduleRepo implements ScheduleRepo {
         next.enabled ? 1 : 0,
         next.nextRunAt,
         next.autoMode ? 1 : 0,
+        next.timeLimitMinutes,
         next.updatedAt,
         id
       );

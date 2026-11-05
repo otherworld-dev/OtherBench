@@ -36,6 +36,7 @@ import { MIGRATION_034_CLAUDE_ACCOUNTS } from './034-claude-accounts.js';
 import { MIGRATION_035_SCHEDULE_AUTO } from './035-schedule-auto.js';
 import { MIGRATION_036_MESSAGE_FINISHED_AT } from './036-message-finished-at.js';
 import { MIGRATION_037_REMOTE_SESSIONS } from './037-remote-sessions.js';
+import { MIGRATION_038_SCHEDULE_TIME_LIMIT } from './038-schedule-time-limit.js';
 import { MIGRATION_037_APP_OPEN } from './037-app-open.js';
 import type { Migration } from './types.js';
 
@@ -79,6 +80,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_035_SCHEDULE_AUTO,
   MIGRATION_036_MESSAGE_FINISHED_AT,
   MIGRATION_037_REMOTE_SESSIONS,
+  MIGRATION_038_SCHEDULE_TIME_LIMIT,
   MIGRATION_037_APP_OPEN,
 ];
 
