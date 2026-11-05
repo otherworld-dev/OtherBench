@@ -12,6 +12,7 @@ import type {
   ComputerStopReason,
   ComputerTarget,
 } from '@otherbench/core/ports/computer.js';
+import type { HostConfirm } from '@otherbench/core/ports/host-confirm.js';
 import { DEFAULT_CALL_TIMEOUT_MS, DesktopChannelError, type ShellChannel } from './desktop-channel.js';
 import { COMPUTER_NO_SESSION_REASON } from './sessions.js';
 
@@ -78,6 +79,12 @@ const TOO_MANY_REASON ='OtherBench is keeping track of too many control sessions
 const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
 const START_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so nothing was started.";
 const START_REFUSED_REASON = 'The desktop app refused to start controlling this computer.';
+/** The longest question sent with `settings.confirm`, in characters. */
+export const MAX_CONFIRM_TEXT = 2000;
+const CONFIRM_NO_APP_REASON = "The desktop app isn't there to ask.";
+const CONFIRM_TIMEOUT_REASON = "The desktop app didn't answer in time.";
+const CONFIRM_UNREADABLE_REASON = "The desktop app's answer couldn't be read.";
+const CONFIRM_REFUSED_REASON = 'The desktop app said no.';
 const START_UNCONFIRMED = "OtherBench couldn't confirm that the desktop app cancelled it.";
 const END_GONE_REASON = 'The desktop app went away before it confirmed that the control session ended.';
 const END_REFUSED_REASON = "The desktop app couldn't end the control session.";
@@ -279,7 +286,7 @@ function pngSize(bytes: Buffer): { width: number; height: number } | null {
  *   - Every failure is told in this file's own words (or the shell's error as
  *     one bounded line), never the channel's internals.
  */
-export class DesktopComputerDriver implements ComputerDriver {
+export class DesktopComputerDriver implements ComputerDriver, HostConfirm {
   private ready = false;
   /** The hello, once said: every later call gets the same one. */
   private said: Promise<void> | null = null;
@@ -331,6 +338,28 @@ export class DesktopComputerDriver implements ComputerDriver {
    * from before this server, and the reset listeners are told; an answer
    * without it confirms nothing of the kind, and leaves computer use off.
    */
+  /**
+   * A yes/no question in the shell's native dialog (`settings.confirm`), for a
+   * change only the person at this machine may make (turning on
+   * `peerComputerControl`). It doesn't need computer use to be on: any shell
+   * that has said hello on this channel can ask. Only the shell's `{ ok: true }`
+   * is a yes; an older shell (it doesn't know the method), a closed channel, a
+   * timeout or anything unreadable is a no. Waits as long as a start does.
+   */
+  async confirm(text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    await this.hello();
+    if (this.isClosed() || !this.answered) return refusal(CONFIRM_NO_APP_REASON);
+    let answer: unknown;
+    try {
+      answer = await this.channel.call('settings.confirm', { text: text.slice(0, MAX_CONFIRM_TEXT) }, { timeoutMs: this.startTimeoutMs });
+    } catch (err) {
+      return refusal(timedOut(err) ? CONFIRM_TIMEOUT_REASON : failureText(err));
+    }
+    if (isRecord(answer) && answer['ok'] === true) return { ok: true };
+    if (isRecord(answer) && answer['ok'] === false) return refusal(cardLine(answer['reason'], MAX_REASON) || CONFIRM_REFUSED_REASON);
+    return refusal(CONFIRM_UNREADABLE_REASON);
+  }
+
   hello(): Promise<void> {
     this.said ??= this.sayHello();
     return this.said;

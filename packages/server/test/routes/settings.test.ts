@@ -2,7 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APP_SETTINGS, PEER_COMPUTER_CONTROL_HOST_ONLY_REASON } from '@otherbench/core/domain/settings.js';
+import {
+  DEFAULT_APP_SETTINGS,
+  PEER_COMPUTER_CONTROL_CONFIRM_TEXT,
+  PEER_COMPUTER_CONTROL_HOST_ONLY_REASON,
+  PEER_COMPUTER_CONTROL_IN_CONTROL_REASON,
+  PEER_COMPUTER_CONTROL_NO_DESKTOP_REASON,
+  peerComputerControlNotConfirmedReason,
+} from '@otherbench/core/domain/settings.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Profile } from '@otherbench/core/types/config.js';
@@ -70,6 +77,13 @@ function send(method: string, path: string, body?: unknown): Promise<Response> {
   );
 }
 
+/** Gives the container a desktop app whose native question answers `answer`; returns the questions it was asked. */
+function confirmWith(answer: { ok: true } | { ok: false; reason: string }): string[] {
+  const asked: string[] = [];
+  container = { ...container, hostConfirm: { confirm: async (text: string) => (asked.push(text), answer) } };
+  return asked;
+}
+
 /** The desktop shell's webview origin, as `--cors-origin` names it. */
 const DESKTOP_ORIGIN = 'http://tauri.localhost';
 
@@ -114,27 +128,77 @@ describe('/api/settings', () => {
     expect(container.store.settings.get()).toMatchObject({ githubEnabled: true, nextcloudEnabled: false });
   });
 
-  it("doesn't let paired machines start and approve computer use by default; the desktop app turns it on, and it says so", async () => {
+  it("doesn't let paired machines start and approve computer use by default; the person here confirms it in the desktop app, and it says so", async () => {
     expect(container.store.settings.get().peerComputerControl).toBe(false);
     expect(await (await send('GET', '/api/settings')).json()).toMatchObject({ peerComputerControl: false });
+    const asked = confirmWith({ ok: true });
     const seen: string[] = [];
     container.events!.subscribe((e) => seen.push(e.type));
     const on = await patchOnDesktop({ peerComputerControl: true }, DESKTOP_ORIGIN);
     expect(on.status).toBe(200);
     expect(await on.json()).toMatchObject({ peerComputerControl: true });
+    // The native question was asked, once, with core's words.
+    expect(asked).toEqual([PEER_COMPUTER_CONTROL_CONFIRM_TEXT]);
     expect(seen).toEqual(['settings-changed']);
     for (const value of ['no', null, 0]) expect((await patchOnDesktop({ peerComputerControl: value }, DESKTOP_ORIGIN)).status).toBe(400);
     expect(container.store.settings.get().peerComputerControl).toBe(true);
+    // Turning it off asks nobody.
     expect((await patchOnDesktop({ peerComputerControl: false }, DESKTOP_ORIGIN)).status).toBe(200);
     expect(container.store.settings.get().peerComputerControl).toBe(false);
+    expect(asked).toHaveLength(1);
   });
 
-  it('is turned on only from the desktop app: a tab, a script or a server with no desktop app is refused, writing nothing', async () => {
+  it("a forged desktop Origin isn't enough: with no OK from the person here (declined, unanswered, or no desktop app to ask) it stays off and nothing in the request is written", async () => {
+    // No desktop app to ask (a headless server, or the desktop app isn't running it).
+    const none = await patchOnDesktop({ peerComputerControl: true, githubEnabled: false }, DESKTOP_ORIGIN);
+    expect(none.status).toBe(403);
+    expect(await none.json()).toEqual({ error: PEER_COMPUTER_CONTROL_NO_DESKTOP_REASON, kind: 'desktop_app_only' });
+    for (const reason of ['The person at this computer said no.', 'Nobody answered on this computer in time.', "The desktop app didn't answer in time."]) {
+      const asked = confirmWith({ ok: false, reason });
+      const res = await patchOnDesktop({ peerComputerControl: true, githubEnabled: false }, DESKTOP_ORIGIN);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: peerComputerControlNotConfirmedReason(reason), kind: 'not_confirmed' });
+      expect(asked).toHaveLength(1);
+    }
+    // A confirmer that fails outright is a no too.
+    container = { ...container, hostConfirm: { confirm: () => Promise.reject(new Error('channel broke')) } };
+    expect((await patchOnDesktop({ peerComputerControl: true }, DESKTOP_ORIGIN)).status).toBe(403);
+    expect(container.store.settings.get()).toEqual(DEFAULT_APP_SETTINGS);
+  });
+
+  it('asks nobody while computer use may be in control here, and only one question at a time', async () => {
+    const asked = confirmWith({ ok: true });
+    const base = container;
+    container = { ...base, computer: { mayBeInControl: () => true } as never };
+    const held = await patchOnDesktop({ peerComputerControl: true }, DESKTOP_ORIGIN);
+    expect(held.status).toBe(403);
+    expect(await held.json()).toEqual({ error: PEER_COMPUTER_CONTROL_IN_CONTROL_REASON, kind: 'desktop_only' });
+    expect(asked).toEqual([]);
+
+    container = base;
+    let answer: (a: { ok: true }) => void = () => {};
+    container = { ...container, hostConfirm: { confirm: () => new Promise((resolve) => (answer = resolve)) } };
+    const app = createApp(container, { corsOrigins: [DESKTOP_ORIGIN] });
+    const patch = (): Promise<Response> =>
+      Promise.resolve(app.request('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: DESKTOP_ORIGIN }, body: JSON.stringify({ peerComputerControl: true }) }));
+    const first = patch();
+    await new Promise((r) => setTimeout(r, 0));
+    const second = await patch();
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ kind: 'already_asking' });
+    answer({ ok: true });
+    expect((await first).status).toBe(200);
+    expect(container.store.settings.get().peerComputerControl).toBe(true);
+  });
+
+  it("is refused before anyone is asked from a tab or a script that doesn't claim the desktop app's Origin, writing nothing", async () => {
+    const asked = confirmWith({ ok: true });
     for (const res of [await send('PATCH', '/api/settings', { peerComputerControl: true }), await patchOnDesktop({ peerComputerControl: true }), await patchOnDesktop({ peerComputerControl: true, githubEnabled: false })]) {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: PEER_COMPUTER_CONTROL_HOST_ONLY_REASON, kind: 'desktop_app_only' });
     }
-    // Nothing else in a refused PATCH was written either.
+    // No dialog popped up here for any of them, and nothing else in a refused PATCH was written either.
+    expect(asked).toEqual([]);
     expect(container.store.settings.get()).toEqual(DEFAULT_APP_SETTINGS);
   });
 

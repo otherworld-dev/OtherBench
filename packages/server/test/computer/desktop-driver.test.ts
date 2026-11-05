@@ -1685,3 +1685,44 @@ describe('DesktopComputerDriver: the hello as the shell\'s word that it holds no
     expect(logged.mock.calls[0]![0]).toBe('[otherbench-server] a computer-use reset listener failed:');
   });
 });
+
+describe('DesktopComputerDriver: a yes/no question to the person here (settings.confirm)', () => {
+  const askedText = (shell: FakeShell): unknown[] => shell.sent('settings.confirm').map((p) => (p as { text: unknown }).text);
+
+  it("sends the question as it is and says yes only for the shell's { ok: true }", async () => {
+    const { driver, shell } = await connected();
+    shell.override = (method) => (method === 'settings.confirm' ? { result: { ok: true } } : undefined);
+    expect(await driver.confirm('Let them in?')).toEqual({ ok: true });
+    expect(askedText(shell)).toEqual(['Let them in?']);
+    for (const [answer, reason] of [
+      [{ result: { ok: false, reason: 'The person at this computer said no.' } }, 'The person at this computer said no.'],
+      [{ result: { ok: 'yes' } }, "The desktop app's answer couldn't be read."],
+      [{ result: true }, "The desktop app's answer couldn't be read."],
+      [{ error: { message: 'Unknown method.' } }, 'Unknown method.'],
+    ] as [ShellAnswer, string][]) {
+      shell.override = (method) => (method === 'settings.confirm' ? answer : undefined);
+      expect(await driver.confirm('Let them in?')).toEqual({ ok: false, reason });
+    }
+  });
+
+  it('asks even with computer use switched off in the shell, which an older shell without the method answers as a no', async () => {
+    const { driver, shell } = await connected({ shell: Object.assign(new FakeShell(), { hello: HELLO_OFF }) });
+    expect(driver.available()).toBe(false);
+    // The fake shell, like an older one, doesn't know the method.
+    expect(await driver.confirm('Let them in?')).toMatchObject({ ok: false });
+    expect(askedText(shell)).toEqual(['Let them in?']);
+    shell.override = (method) => (method === 'settings.confirm' ? { result: { ok: true } } : undefined);
+    expect(await driver.confirm('Let them in?')).toEqual({ ok: true });
+  });
+
+  it('is a no when nobody answers in time or the desktop app is gone, and never asks a shell that is gone', async () => {
+    const { driver, shell, channel } = await connected({ driver: { startTimeoutMs: 30 } });
+    shell.override = (method) => (method === 'settings.confirm' ? 'silent' : undefined);
+    expect(await driver.confirm('Let them in?')).toEqual({ ok: false, reason: "The desktop app didn't answer in time." });
+    shell.close();
+    await vi.waitFor(() => expect(channel.closed).toBe(true));
+    const before = askedText(shell).length;
+    expect(await driver.confirm('Let them in?')).toEqual({ ok: false, reason: "The desktop app isn't there to ask." });
+    expect(askedText(shell)).toHaveLength(before);
+  });
+});

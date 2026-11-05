@@ -13,6 +13,7 @@ import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
 import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import type { HostConfirm } from '@otherbench/core/ports/host-confirm.js';
 import { MAIN_ACCOUNT } from '@otherbench/core/types/claude-accounts.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
@@ -192,6 +193,11 @@ export interface Container {
    */
   computer?: ComputerSessions;
   /**
+   * The desktop app's native yes/no question to the person at this machine (`settings.confirm` over the shell's
+   * channel): only a desktop server has it. Turning on `peerComputerControl` needs its OK (routes/settings.ts).
+   */
+  hostConfirm?: HostConfirm;
+  /**
    * The Code tab's terminals (spec 2026-10-21-code-terminal-design). Always set by `createContainer`; whether the
    * routes exist is app.ts's `terminals` option. Optional so route tests can leave it out or pass one with a fake PTY.
    */
@@ -251,6 +257,8 @@ export interface ContainerOptions {
   appVersion?: string;
   /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
   computer?: ComputerDriver;
+  /** The desktop shell's native yes/no question to the person here; cli.ts passes it with the desktop channel (the same driver). */
+  hostConfirm?: HostConfirm;
 }
 
 /** A folder's real path (on-disk case, a mapped drive as its UNC path), as the sandbox mounts it; the path itself when that can't be read. */
@@ -711,6 +719,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     mcpManager,
     browser,
     ...(computer ? { computer } : {}),
+    ...(options.hostConfirm ? { hostConfirm: options.hostConfirm } : {}),
     claudeScratchRoot,
     blobStore,
     memory,

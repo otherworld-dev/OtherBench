@@ -391,7 +391,7 @@ export async function runServe(
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
     serverPort: () => (boundPort > 0 ? boundPort : null),
-    ...(desktop ? { computer: desktop } : {}),
+    ...(desktop ? { computer: desktop, hostConfirm: desktop } : {}),
   });
 
   let signIn: SignIn | null = null;
