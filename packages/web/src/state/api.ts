@@ -37,6 +37,22 @@ export interface AuthStatus {
   };
 }
 
+/** Which things waiting on the user this device is told about by Web Push (server: `PushPrefs`). */
+export interface PushPrefs {
+  approvals: boolean;
+  replies: boolean;
+  scheduled: boolean;
+}
+
+/** `GET /api/push` (server: `PushStatusBody` in routes/push.ts). */
+export interface PushStatus {
+  available: boolean;
+  reason?: string;
+  publicKey?: string;
+  subscribed: boolean;
+  prefs: PushPrefs | null;
+}
+
 /** One signed-in browser in Settings → Remote access (server: `SignedInDevice` in remote/auth.ts). */
 export interface SignedInDevice {
   id: string;
@@ -588,6 +604,17 @@ export const api = {
     /** Signs one device out; 404 when it already was. */
     endSession: (id: string) => del(`/auth/sessions/${encodeURIComponent(id)}`),
     changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
+  },
+  /** Web Push for this signed-in device (server: routes/push.ts). Only in sign-in mode; elsewhere `status` says it isn't available. */
+  push: {
+    status: () => request<PushStatus>('/push'),
+    subscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }, prefs: PushPrefs) =>
+      put<{ subscribed: boolean; prefs: PushPrefs }>('/push/subscription', { ...sub, prefs }),
+    setPrefs: (prefs: PushPrefs) => patch<{ subscribed: boolean; prefs: PushPrefs | null }>('/push/subscription', { prefs }),
+    unsubscribe: () => del('/push/subscription'),
+    test: () => post<{ result: 'sent' | 'gone' | 'failed' }>('/push/test'),
+    /** This page is showing (or stopped): the server pushes nothing to this device meanwhile. */
+    active: (visible: boolean) => post<void>('/push/active', { visible }),
   },
 
   connections: {
