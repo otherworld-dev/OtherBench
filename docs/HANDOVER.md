@@ -75,6 +75,36 @@ desktop app and lets two machines share chats. Built so far:
   listener takes that stop ahead of its "this chat runs elsewhere" check,
   since a stop starts nothing. A reply's own Stop for a reply running here
   is handled here even if its chat has since moved.
+- **Live state between machines** (`peer/service.ts`, `activity()`): each
+  machine holds every paired machine's `/peer/events` stream open, and what
+  the other needs to see live is the `activity` announcement on it, sent
+  whole straight after the stream's hello and again whenever any of it
+  changes: the ids of its own chats with a reply running, with background
+  tasks, and waiting on a card (with since when), its `gh` login, and the
+  chats controlling it through computer use with their last action. The
+  receiving server keeps it per machine (none while that machine is
+  unreachable), emits `peer-activity`, and `GET /api/peers` carries it; the
+  web re-reads that on `peer-activity`, `peer-status`, `peers-changed` and
+  every `/api/events` hello, so a reconnect on either link makes good
+  anything missed. That drives the sidebar's working/Needs you marks, the
+  Stop button for a reply running elsewhere, the Overview's waiting chats
+  and the computer-use banner. `GET /api/events` itself is not on the peer
+  listener, and no app event is sent to a paired machine as it is. Synced
+  rows (chats, projects, profiles...) arrive by sync: a machine checks for
+  its own changes every 0.5 s and announces them, and the other pulls at
+  once and reloads its lists.
+- **Computer use across machines**: a paired machine sees a session on the
+  other in its banner ("OtherBench is controlling PC.") and its Stop is
+  sent there (`POST /api/chats/:id/computer/stop`, forwarded; the PC ends
+  the session only if that chat holds one there). While the PC lets it
+  (Settings → Machines, *Let paired machines start and approve computer
+  use*, on by default), the laptop can also start a session there ("Start
+  on PC" above the composer, `POST /api/chats/:id/computer/start`), message
+  the chat and answer its cards while it is in control; a reply the laptop
+  sent that uses the computer starts a session the same way. The PC's own
+  start dialog still asks every time, its banner says "Started from
+  Laptop", and its audit trail names the machine each call was approved
+  from. Turned off, the laptop can only see the session and stop it.
 
 **Notification clicks:** on Windows a notification is a WinRT toast shown
 by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On
@@ -664,6 +694,88 @@ of work landed after that plan closed out:
     logged once and the old certificate stays in use until the files change
     again. Settings shows the new expiry. `--tls auto` still makes its
     certificate only at start.
+  - **Web Push** ("Notify this device", migration 039, 2026-11-05). Sign-in
+    mode only: `cli.ts` makes a `PushService` (`server/src/push/service.ts`)
+    beside `remote`; in open and token modes `GET /api/push` says it isn't
+    available and its writes 404. Settings → Notifications has the toggle
+    (`web/src/views/settings/PushSection.tsx`), shown only in sign-in mode,
+    with Approvals, questions and plans / Replies finished / Scheduled runs
+    each on or off, and *Send a test*.
+    - **What is pushed.** The service hears the app events the desktop
+      notifier does (`web/src/desktop/notify.ts`) and pushes the same things:
+      a card waiting (tool approval, question, plan, generation prompt,
+      browser handover), a reply finished or failed, a scheduled run ended or
+      not started. Once per request, message or run; a scheduled run's own
+      reply isn't pushed twice; a self-started reply's end waits 3 s and is
+      skipped while the chat is still busy; nothing for an archived chat. The
+      payload is `{title, body, chatId, kind, tag}`: the chat's title (or the
+      schedule's name) and a fixed phrase for the kind ("Approval needed",
+      "Waiting for your answer", "Reply finished", "Scheduled run failed",
+      ...). Never message text, tool names, tool arguments or a run's error
+      detail. One tag (and `Topic`) per chat, so a newer push replaces an
+      older one. A chat on a paired machine isn't pushed from here (its
+      cards aren't announced app-wide here either).
+    - **Subscriptions** (`push_subscription`, `store-sqlite/src/repos/push-subscriptions.ts`).
+      One per remote session, keyed by its id, with `ON DELETE CASCADE` from
+      `remote_session`: signing a device out from the list, its own Sign
+      out, *Sign out everywhere*, a password change and expiry all delete it
+      (core's in-memory fake does the same). An endpoint subscribed again
+      under a new session moves to it. Local: no sync triggers, not in
+      `SYNC_TABLES`. A push service answering 404 or 410 deletes the row.
+      `/api/push` (`server/src/routes/push.ts`, behind the gate) works only on
+      the caller's own session from its cookie; the bearer token has no
+      device (409). Writes are under `/api`, so the cross-site write check
+      covers them.
+    - **Crypto, no dependency** (`server/src/push/web-push.ts`). VAPID
+      (RFC 8292) is an ES256 JWT signed with `node:crypto` (`aud` the
+      endpoint's origin, `exp` 12 h, `sub` the first public URL). The payload
+      is RFC 8291 aes128gcm, one record, at most 3,993 bytes of plaintext.
+      `test/push/web-push.test.ts` checks it byte for byte against RFC 8291's
+      Appendix A and verifies the JWT. The key pair is made on first use and
+      kept in the encrypted secret store as `push.vapid`; if it is ever
+      unreadable a new one is made and every subscription is dropped, as old
+      ones can't be pushed to.
+    - **Endpoints** (`server/src/push/endpoint.ts`). The browser names the
+      URL the server then POSTs to, so it is held like any outbound URL a
+      client names: https, no credentials, at most 2,048 characters, and not
+      this machine or a private network by spelling when saved (IP literals
+      through core's `isPublicAddress`, names through `isLocalNetworkName`).
+      When sent, the request's own `lookup` refuses a name if any address it
+      resolves to isn't public, so DNS rebinding can't reach a private
+      address. No redirects are followed; a 15 s timeout. The log names the
+      push service's host only, never the endpoint (it is a capability URL).
+    - **Not pushing what's on screen.** While the page is showing it posts
+      `POST /api/push/active {visible: true}` every 30 s (and `false` when
+      hidden; `web/src/lib/push.ts`, `reportPresence`), and a device that
+      said so in the last 45 s is skipped.
+    - **The browser side.** `web/public/sw.js` only shows pushes and handles
+      taps: it caches nothing and has no fetch handler. A tap focuses an open
+      OtherBench window and posts it the chat id, or opens `/?chat=<id>`,
+      which `state/usePush.ts` opens once the chats have loaded. It also
+      resubscribes on `pushsubscriptionchange`. `index.html` links a web
+      manifest (`display: standalone`) so iOS can add OtherBench to the Home
+      Screen, the only place iOS delivers Web Push; in Safari's own tabs the
+      toggle says to do that first.
+    - Tests: `server/test/push/` (`web-push`, `endpoint`, `service`),
+      `server/test/remote/push-routes.test.ts` (a signed-out, logged-out,
+      signed-out-everywhere or expired device's subscription is gone; private
+      and plain-http endpoints refused), `store-sqlite/test/repos/push-subscriptions.test.ts`,
+      `web/src/lib/push.test.ts`, `web/src/views/settings/PushSection.test.tsx`.
+  - **Phone layout** (2026-11-05). Below 640 px (`PHONE_BREAKPOINT`,
+    `App.tsx` sets `data-phone`) the sidebar is a drawer over the chat,
+    opened from a bar at the top that also shows the Overview's count; it
+    closes when a chat (the open one too), the Overview or a page is chosen,
+    or on the backdrop. The thread and composer take the full width. The
+    rest is unlayered CSS keyed on `[data-phone]` at the end of `index.css`,
+    so desktop is untouched and ChatList.tsx isn't changed: 44 px targets in
+    the drawer, on approval and question cards, in the composer and in
+    Settings; 16 px inputs (iOS zooms the page on a smaller one); Settings'
+    tabs scroll sideways in their strip and its list-and-editor panels stack;
+    safe-area insets. `web/e2e/phone.spec.ts` runs at 390x844 with touch:
+    open a chat from the drawer, answer an approval card, find the chat in
+    Needs you, open Settings, checking at each step that the page can't
+    scroll sideways, that no element runs past the edge outside a sideways
+    scroller, and that a full-page screenshot is 390 px wide.
 
 - **`/clear` and `/compact` in Claude Code chats.** A command is a user message
   with a `context` part. Typed `/clear` (or `/reset`, `/new`) in a chat whose
@@ -766,7 +878,7 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 | --- | --- | --- |
 | Grants keyed by the lower-cased full program path | The path the shell resolved, compared exactly | Lower-casing made different files one key (measured here: the Kelvin sign and `k`, a trailing no-break space) |
 | High-risk: terminals, Explorer, Settings, Registry Editor, MMC, Task Manager | A much longer list, plus anything not provably ordinary. Browsers and IDEs were on it at first and came off on Adam's ruling (2026-10-14): they may have "this chat" and "always" grants for their exact path, and the card says what such a grant lets the model do. Internet Explorer, Notepad++, Sublime Text and JetBrains Gateway stayed on it | Shells, script hosts, admin tools, remote clients and password managers can start or reach anything. With a lasting browser grant, devtools, `javascript:` addresses and OtherBench's own UI in a tab are in reach without a card, and with an IDE grant so is its terminal; Adam accepted that. Remove a name from `HIGH_RISK_STEMS` to allow lasting grants for it; `BROWSER_STEMS` and `IDE_STEMS` hold the ones that may have them |
-| (nothing) | Any window whose title carries `[otherbench-ui]` (every page of OtherBench's UI) is refused before any card, and the shell stops an action once its window shows it; while the computer may be in control the API takes changes only from the desktop app's window, and a paired machine changes nothing | With lasting browser grants a model could open OtherBench in the browser and answer its own cards. The second wall also ends "cards answered from a paired machine keep a session going" |
+| (nothing) | Any window whose title carries `[otherbench-ui]` (every page of OtherBench's UI) is refused before any card, and the shell stops an action once its window shows it; while the computer may be in control the API takes changes only from the desktop app's window, and a paired machine changes nothing unless *Let paired machines start and approve computer use* is on (the default since 2026-11-05, Adam's call) | With lasting browser grants a model could open OtherBench in the browser and answer its own cards. The second wall also ends "cards answered from a paired machine keep a session going", unless the machine lets paired machines in, which gives that up on purpose |
 | (nothing) | A browser or IDE whose built name (`OriginalFilename`) is of another kind, or is on the high-risk list, is once-only; an Electron IDE built as `electron.exe` is the one exception | The card's warning comes from the key's file name, so a program that is something else under that name must not get the wrong warning with a lasting grant |
 | (nothing) | Any character outside plain ASCII in the path makes the app once-only, with a warning on the card | No list of look-alike characters is ever complete. A user whose profile folder is `C:\Users\José\...` gets "Allow once" only for everything installed per user (most Electron and Squirrel apps) |
 | (nothing) | Catalog-signed apps (Notepad, Calculator) are once-only | The signer is read only from an embedded Authenticode signature that `WinVerifyTrust` verified; no revocation check is made |
@@ -799,8 +911,8 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 
 - **Claude Code helpers' images are not kept.** A Claude Code turn's own tool results keep their images (see *Tool images* above), but a helper's (Task/Agent) tool results and its report keep only their text, since TurnRunner stores images only from the reply's own results and a helper's card must never hold base64. A fresh Claude Code session is seeded with text only (`history.ts`), so it doesn't see earlier screenshots; a running session has them in Claude Code's own session files. Nothing has been checked against a live Claude Code session: that the SDK's transcript carries a relayed MCP image, or a picture its `Read` opened, as a base64 `image` block in the tool result, and at what size.
 - **Relayed MCP tools have no ticket.** Claude Code runs them with its own input after the hook; binding them needs a live check that Claude Code never changes an MCP tool's input between hook and call.
-- **A chat that runs on a paired machine:** the reply's Stop now reaches it. On the laptop, Stop in the message box (and Escape) for a chat whose reply runs on the PC asks the laptop's server to stop the chat (`POST /api/chats/:id/stop`), which forwards that one call over the peer channel to the PC, and the PC cancels the chat's replies running there; it passes the PC's desktop-only gate while the PC is under computer control. The Stop button shows as soon as the PC says it is replying in the chat ("Replying on PC…"), before the reply itself is on screen. What it doesn't do: it ends the reply, not the PC's computer session. A session that was used stays the chat's on the PC (as a reply's Stop leaves it on the machine itself) until the PC's banner Stop, the bar's Stop, the hotkey, idle or quit. The banner, the session events and the thumbnails are still local to the machine running the turn, so the laptop shows no banner for a chat holding the PC and has no way to end that session; showing it would mean sending session state to paired machines, which is deliberately never done. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit. Not tried on two real machines (`server/test/peer/remote-run.test.ts` uses two real servers over TLS on loopback).
-- **Only the desktop app's window changes anything while the computer may be in control** (a chat holds it, its start dialog may be up, or an end isn't confirmed: `ComputerSessions.mayBeInControl`). `changesOnlyFromTheDesktopApp` (`server/src/computer/desktop-only.ts`) refuses every write on the API that doesn't carry one of the shell's `--cors-origin`s as its `Origin` with 403 and "OtherBench is controlling this computer, so until that ends it only takes answers and changes from the OtherBench app on this computer..." (`COMPUTER_DESKTOP_ONLY_REASON`): a card's, a question's or a plan's answer, a message, a profile, an MCP server, a setting. When no chat holds the computer but its last end was never confirmed (after a channel fault, until the desktop app answers or OtherBench restarts), the refusal says so and that a restart clears it (`COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`); the web's note only knows of sessions in control, so it doesn't show in that state or while a start dialog is up. On the desktop server the per-launch API token is the real barrier against a browser tab, or any other program, driving the API: a tab doesn't have it, and since this round no child process inherits it. The Origin gate is defence in depth: it stops a browser that somehow had the token. Reads and the Stops (the banner's, a reply's, and the chat's `POST /api/chats/:id/stop`, which only cancels the chat's running replies) always pass; a background task's Stop does not. A paired machine changes nothing here meanwhile (the peer listener's forwarded API has the same gate with no origin allowed, so of its writes only a reply's Stop and the chat's Stop get through), so cards can no longer be answered from a paired machine while a session is live, which closes the old gap that they could keep it going. Outside the desktop app a card says to answer in the OtherBench app (`desktop-only-note`) and shows the server's reason when an answer is refused; its buttons stay, since the server decides.
+- **A chat that runs on a paired machine:** the reply's Stop now reaches it. On the laptop, Stop in the message box (and Escape) for a chat whose reply runs on the PC asks the laptop's server to stop the chat (`POST /api/chats/:id/stop`), which forwards that one call over the peer channel to the PC, and the PC cancels the chat's replies running there; it passes the PC's desktop-only gate while the PC is under computer control. The Stop button shows as soon as the PC says it is replying in the chat ("Replying on PC…"), before the reply itself is on screen. It ends the reply, not the PC's computer session; that has its own Stop. Since 2026-11-05 (Deck d1109) the laptop shows the banner for a chat holding the PC ("OtherBench is controlling PC.", from the PC's `activity`: the chat id and last action, nothing else), and its Stop goes to the PC (`POST /api/chats/:id/computer/stop`, forwarded by `forwardingRoutes` to the machine that says it holds that chat's session; the PC's `forwardedApi` route ends it only if that chat holds the session there, else 404 `no_session`, and also cancels the chat's replies there, as its own banner does). It passes the PC's desktop-only gate like every Stop. And while the PC lets paired machines start and approve computer use (see *Security posture*), the laptop can start a session on the PC ("Start on PC" above the composer for a chat that runs there with a computer-use profile; the PC's own start dialog asks), message the chat and answer its cards while it is in control; the PC's banner says "Started from Laptop" and its audit trail names the laptop on each call it approved. Any input the laptop puts into the chat (a message, a note or steer into a reply the PC started, an answer) makes a start in that chat the laptop's (`PeerInfluence`, `startCheck`), refused with the setting off; see *Security posture*. The thumbnails stay with the messages. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit, and the laptop's Stop still reaches it. Not tried on two real machines (`server/test/peer/remote-run.test.ts` uses two real servers over TLS on loopback).
+- **Only the desktop app's window changes anything while the computer may be in control** (a chat holds it, its start dialog may be up, or an end isn't confirmed: `ComputerSessions.mayBeInControl`). `changesOnlyFromTheDesktopApp` (`server/src/computer/desktop-only.ts`) refuses every write on the API that doesn't carry one of the shell's `--cors-origin`s as its `Origin` with 403 and "OtherBench is controlling this computer, so until that ends it only takes answers and changes from the OtherBench app on this computer..." (`COMPUTER_DESKTOP_ONLY_REASON`): a card's, a question's or a plan's answer, a message, a profile, an MCP server, a setting. When no chat holds the computer but its last end was never confirmed (after a channel fault, until the desktop app answers or OtherBench restarts), the refusal says so and that a restart clears it (`COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`); the web's note only knows of sessions in control, so it doesn't show in that state or while a start dialog is up. On the desktop server the per-launch API token is the real barrier against a browser tab, or any other program, driving the API: a tab doesn't have it, and since this round no child process inherits it. The Origin gate is defence in depth: it stops a browser that somehow had the token. Reads and the Stops (the banner's, a reply's, and the chat's `POST /api/chats/:id/stop`, which only cancels the chat's running replies) always pass; a background task's Stop does not. With *Let paired machines start and approve computer use* off, a paired machine changes nothing here meanwhile (the peer listener's forwarded API has the same gate with no origin allowed, so of its writes only a reply's Stop, the chat's Stop and the computer-use Stop get through), so cards can't be answered from a paired machine while a session is live. With it on (the default), the forwarded API skips this gate: the paired machine is trusted to drive the session, and a model that can reach that machine's OtherBench in a browser it has a lasting grant for could answer its own cards there. That is the setting's trade, stated under *Security posture*. Outside the desktop app a card says to answer in the OtherBench app (`desktop-only-note`) and shows the server's reason when an answer is refused; its buttons stay, since the server decides.
 - **Peer sync is an ungated write path during a session.** Sync isn't a request to this machine's API: changes pulled from a paired machine are applied whatever the computer is doing, so a profile (its tool policy), its system prompt and global memory can change here mid-session. Grants and MCP servers don't sync, so no approval and no new command arrives that way.
 - **Follow-up: tie the kind to the built name.** A browser's or IDE's kind, and so its lasting grant and its card's words, comes from the key's file name; a program with no built name at all (`OriginalFilename` missing) under a browser's or IDE's file name gets it too. Requiring a non-null built name of the same kind would close that, but needs a live look at what real browsers and IDEs report first (checklist items 33 and 34), or it would turn some into Allow once.
 - **Start timing.** `computer.start` waits 2 minutes for the dialog. When nobody has answered by then, the server ends that chat's start (which also dismisses a dialog still up) and the model is told nothing was started; an OK within the next 10 minutes is ended at once. If the desktop app doesn't confirm an end, every start for every chat is refused until it does, or until OtherBench restarts.
@@ -1135,6 +1247,74 @@ by path; immediate revocation; approvals never delegated (each tool call
 still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
+
+**A paired machine can drive this machine's desktop through computer use,
+by default.** With *Let paired machines start and approve computer use*
+on (Settings → Machines, per machine, on unless turned off), a paired
+machine can start a computer-use session here (`POST
+/api/chats/:id/computer/start` on the peer listener, or a message whose
+reply uses the computer), send messages while it is in control, and
+answer its cards, "always" grants for an app included: so it can click
+and type in any app the cards let through, as the person signed in here.
+What still holds: computer use must already be switched on here (the
+desktop app with `OTHERBENCH_COMPUTER_USE=1`, and the chat's profile); a
+remote start never switches either on and is refused, saying so, when
+they're off. This machine's own native start dialog still asks before
+every session, whoever asked for it; a start runs through the same
+`ComputerSessions.ensureSession`, and every action through the same
+`PermissionBroker` cards and grants, as a local one. The banner says which
+machine started the session and the audit names the machine each call was
+approved from (`decidedOnNode`). The setting is read on the server for
+every call, never trusted from the caller. What it gives up: while a
+session is in control, the desktop-only gate (below, under Computer use)
+no longer covers the peer listener, so a model holding a lasting browser
+grant here that can reach the paired machine's OtherBench in that browser
+could answer its own cards through it. **To switch it off**, untick the
+setting on the machine being controlled: a paired machine can then only
+see a session here and Stop it (Stop is always allowed, and ends a session
+only if that chat holds one). Off is meant to hold against input as well
+as against starts and answers: every write a paired machine sends over the
+listener that isn't a stop (a turn, a note or steer into a reply this
+machine started, a regenerate or retry, a head change, an answer to a card
+or question, a withdrawn note, the start itself) marks the chat it names
+as that machine's *before* it is handled (`PeerInfluence`,
+`forwardedApi`), and the mark stays while anything that input could reach
+is still to come: a reply running in the chat (so whatever it spawns,
+sub-agents included), a background task, or a note not yet delivered. It
+fails closed: a mark is dropped only once nothing holds it and the chat is
+idle. Each peer write holds it until that write has been handled, counted,
+so two overlapping writes keep it until both are done. Every reply running
+or started while the chat is marked is remembered, and a turn Claude Code
+starts by itself after one of those (a background task reported back,
+possibly after the chat had gone quiet) marks the chat again and holds the
+mark from the moment it is asked for, before anything is awaited, until it
+is running or declined (`PeerInfluence.inherit`, `background.ts`). That
+memory of influenced replies is never trimmed to make room (only a deleted
+chat's replies are forgotten), so a flood of replies can't wash a mark out.
+It is kept in memory, not on the message row: a self-started turn comes
+from a Claude Code process this server started, and those end with it, so
+after a restart nothing can carry on a reply from before it except a turn a
+person or a paired machine (marked anew) sends. Every
+computer-use start goes through `ComputerSessions.ensureSession`, whose
+`startCheck` treats a start in a marked chat as the paired machine's:
+refused while the setting is off, named on the banner while it is on. A
+write whose chat this machine can't tell (an unknown card, question or
+message) is refused while the setting is off. While a session is in
+control the desktop-only gate refuses every one of those writes anyway, so
+no card can be answered from the paired machine. Stops (the chat's, a
+reply's, a background task's, computer use's) neither mark nor are
+refused. What it can't cover: sync. A paired machine's synced rows
+(messages it wrote, a profile's tool policy) reach this machine without
+the listener, as they always have (*Peer sync is an ungated write path
+during a session*, under Computer use); a later turn here reads them. To take a machine's access away entirely,
+remove it in Settings → Machines. What the peer listener lets a paired
+machine read is unchanged apart from this: the computer-use start can tell
+it whether computer use is on here (the refusal says so), and the
+`activity` announcement now carries the chats controlling this computer
+with their last action (`actionSummary`, the same line as the banner,
+which never holds typed text and is derived from the stored tool call
+that syncs anyway). Grants, the audit trail, MCP health, the computer-use
+status route and `/api/events` are still not on the listener.
 
 **Sign-in mode is the whole UI on the network, by design** (`--public-url`,
 spec 2026-10-12-remote-access). A signed-in browser is the box's user
@@ -2110,7 +2290,7 @@ Spec: `docs/superpowers/specs/2026-10-20-code-tab-design.md`. The sidebar has a 
   - Core and the store: `core/test/apps.test.ts`, the store contract suite, and the app cases in `store-sqlite/test/sync.test.ts` and `migrations.test.ts`.
   - Web: unit tests beside each file in `web/src/code/`, plus `lib/changedFiles.test.ts` and `lib/editDiff.test.ts`.
   - e2e: `packages/web/e2e/code-tab.spec.ts` makes a temp git repo with one commit and creates the app through the API, because the folder picker can't be driven. It then goes through the UI: Code mode, the app home, a new chat answered by the mock, the branch in the git bar, Files, and the chat missing from Chat mode. It also checks that Code mode's tabs come back after a mode switch and a reload. Issues aren't covered, because CI has no `gh`. The spec skips itself when `git` isn't installed.
-- **Open apps.** Spec: `docs/superpowers/specs/2026-11-04-open-apps-design.md`. The Code sidebar lists only the apps that are open (`app.open`, migration `039-app-open`, set with `PATCH /api/apps/:id`). At its top is an **All apps** entry that opens the All apps page (tab id `apps:all`): sections per folder then Unfiled, cards, search, a Grid/List switch, and a card opens its app. Hovering or focusing an open app's heading shows a × (**Close <name>**); closing toasts "Closed <name>. It's still in All apps." with Undo. An app's home has **Close app** / **Keep in sidebar** and a breadcrumb `All apps / <folder> / <app>`. A closed app still shows in the sidebar while a card of it waits on you or a chat is running, with a line saying why. e2e: `packages/web/e2e/open-apps.spec.ts`.
+- **Open apps.** Spec: `docs/superpowers/specs/2026-11-04-open-apps-design.md`. The Code sidebar lists only the apps that are open (`app.open`, migration `040-app-open`, set with `PATCH /api/apps/:id`). At its top is an **All apps** entry that opens the All apps page (tab id `apps:all`): sections per folder then Unfiled, cards, search, a Grid/List switch, and a card opens its app. Hovering or focusing an open app's heading shows a × (**Close <name>**); closing toasts "Closed <name>. It's still in All apps." with Undo. An app's home has **Close app** / **Keep in sidebar** and a breadcrumb `All apps / <folder> / <app>`. A closed app still shows in the sidebar while a card of it waits on you or a chat is running, with a line saying why. e2e: `packages/web/e2e/open-apps.spec.ts`.
 - **App folders.** Spec: `docs/superpowers/specs/2026-10-25-app-folders-design.md`, moved to the All apps page by the Open apps work above. Apps are grouped into one level of folders, and the folders are managed on the All apps page (`AllAppsPage`, `AllAppsSection`, `AllAppsCard`, state in `useAppOrganiser`), not in the sidebar, which lists only open apps. **+ New folder** opens the name for editing (it clears a search first, and a double-click makes one folder). A section per folder, then Unfiled, each foldable. An app is filed by dragging its card onto a section or another card, or by **Move to folder…** in the card's menu (hidden when there are no folders; "No folder" takes it out). Cards and folders reorder by drag or Move up/down in their menus. A folder's menu has Rename, Move up, Move down and Delete…; deleting a folder moves its apps to Unfiled and deletes none (the confirm says so). Dragging is off while searching. **Move to app…** on a chat lists the apps in folder order (`codeSidebarAppOrder`).
   - **Where it lives.** Migration `032-app-folders` (the schema is now 32) adds the `app_folder` table and `app.folder_id`. `app_folder` has an `hlc` and sync triggers and syncs like `app`. `folder_id` is not a foreign key, for the reason `app_id` isn't: sync applies rows in no fixed order, so an app can arrive before its folder. The folder repo's `delete` clears `folder_id` itself, through the app repo so that change syncs, and every reader treats a folder that is missing as none, so the app shows at the top level. Routes: `/api/app-folders` CRUD, and `folderId` on an app's `PATCH`.
   - **Fold state** is per machine: the `otherbench.collapsedGroups` list in localStorage, with `folder:<id>` keys (`folderKey`). It isn't synced. Filing an app into a folded folder opens it, so the app stays in view.
@@ -2358,8 +2538,15 @@ this on startup.
   audit trail's "Ns ago" times are redrawn every 10 s without a fetch. What
   is left: a pending MCP sign-in that runs out of time ends with no event,
   so Settings > MCP servers still checks once a second while one is pending
-  (`McpSignIn.tsx`); and `/api/events` isn't on the peer listener, so none
-  of these events reaches a paired machine.
+  (`McpSignIn.tsx`). `/api/events` isn't on the peer listener and none of
+  these three events reaches a paired machine, deliberately: grants, the
+  audit trail and MCP health don't sync and have no route on the peer
+  listener, so a paired machine couldn't read what they announce. For a chat
+  that runs on another machine the Inspector's Tool grants, MCP servers and
+  Audit trail sections therefore show this machine's own (kept live by its
+  own events) under a line saying so ("This chat runs on PC. ..."); showing
+  the other machine's would mean new read routes on the peer listener, which
+  is a decision for Adam, not made here.
 - **An accepted upload is held in memory, not streamed to disk.** The 25MB
   cap now holds while the body is read (see Attachments above), so an
   oversized upload is refused about a megabyte past the cap. An upload
@@ -2395,9 +2582,25 @@ this on startup.
   kept-here connection, or name a blob outside the store (all refused, with
   tests). Pairing is between your own machines; treat a paired machine as
   you would your own account on it.
-- **Changes from another machine show up after a refresh of the lists.**
-  A sync reloads the chat list, projects, profiles and connections, and
-  open chats reload their messages; there's no finer-grained live update.
+- **Changes from another machine arrive by sync, a whole list at a time.**
+  A machine checks for its own changes every 0.5 s and announces them on
+  the peer stream; the other pulls at once, and each sync reloads the chat
+  list, projects, profiles, connections and apps whole (and open chats
+  their messages), so a change shows within about a second, but by
+  re-reading lists, not row by row. Running replies, cards waiting, background
+  tasks and computer-use sessions on the other machine are live (its
+  `activity`, see *Live state between machines*). What doesn't sync never
+  shows: grants, MCP servers, the audit log, schedules, settings.
+- **Computer use started from a paired machine still needs someone at the
+  machine being controlled.** The remote start goes through that machine's
+  own start (`ComputerSessions.ensureSession`), so the desktop shell's
+  native dialog comes up there and must be OK'd there; nobody answering
+  cancels it after 110 s. The dialog names the chat, not the machine that
+  asked (the banner does once it starts). Skipping the dialog for a remote
+  start would be a change to the shell's `computer.start` and to the one
+  local consent; it wasn't made. The remote start answers 202 at once and
+  the laptop learns of the session from the PC's activity; a Cancel there
+  is only in the PC's log. Not tried on two real machines.
 - **Project memory is summarised only by the machine a chat runs on**, so
   two machines don't redo and overwrite each other's notes. Its version
   history stays on the machine that wrote it.
@@ -2430,12 +2633,36 @@ this on startup.
   about 0.15 s slower, and the parsed export is held twice, in the worker
   and the main thread, until the worker is stopped. `planClaudeImport` and
   the preview's checks against the database still run on the main thread
+<<<<<<< HEAD
+  after the read.
+- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys.
+  iOS and Android trust of the hand-made CA is checked only on real devices.
+  **Web Push and the phone layout have not run on a real phone.** Not
+  checked by hand yet: delivery through Apple's, Google's and Mozilla's push
+  services (a browser only subscribes over https with a certificate it
+  trusts, so the CA must be installed and trusted first); on iOS 16.4+,
+  adding OtherBench to the Home Screen, opening it from there, allowing
+  notifications and getting a push with the app closed (the manifest's icon
+  is the SVG favicon, which iOS may not use for the Home Screen: a PNG
+  `apple-touch-icon` is still to make); a tap opening the right chat both
+  with OtherBench open and closed; Android Chrome showing the
+  notification; and the layout on a real 390 px screen (safe areas, the
+  keyboard over the composer). Nothing is pushed for a chat on a paired
+  machine. A device that sets "Notify this device" and then has its site
+  data cleared keeps its row until the push service answers 410. The
+  presence report is per session, not per tab, so one hidden tab on a
+  device can clear "showing" while another tab still shows. Phone layout:
+  Code mode, the Code panel overlay, the Inspector overlay and the viewer
+  were not reworked for 390 px (they open, at the narrow-window layout);
+  the Overview's rows and the chat header's buttons are smaller than 44 px. Sessions now survive a restart and Settings lists the
+=======
   after the read; the checks of chats already here yield every 50 chats.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
   no Web Push for approvals, and no phone layout work beyond the sidebar
   footer wrapping so Sign out stays reachable (the spec's §7 lists the other
   gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
   on real devices. Sessions now survive a restart and Settings lists the
+>>>>>>> dev
   signed-in devices (see *Sessions* under Remote access), but the list shows
   the address a device signed in from, not the one it was last seen at, and
   signing one device out doesn't forget its remembered-device cookie (that
@@ -2695,6 +2922,40 @@ surprise.
   first; the cheap ones were fixed then, and the rest (175 by 2026-11-04,
   with the tests written since) were fixed for Deck d954. CI now runs it as a
   required step, so a test that doesn't compile fails the build.
+- **Tests run the other packages' source, not their `dist/`.** Each
+  package's `exports` point at `dist/`, so a test in store-sqlite, server or
+  web used to run whatever core was last built (a test added to core's store
+  contract once silently didn't run in the SQLite suite). `vitest.workspace.ts`
+  now resolves `@otherbench/<pkg>/<path>.js` to `packages/<pkg>/src/<path>.ts`
+  for tests only; `tsc -b`, Node and the bundles still use `dist/`. What still
+  needs `npx tsc -b` first: the server tests that start a real worker thread
+  (`office/render.test.ts`, the Claude import reader), because Node runs the
+  worker from `packages/server/dist`, and `npm run typecheck:tests`, which
+  reads the other packages' types from `dist/`.
+- **Start vitest from the folder's real spelling on Windows.** Started from
+  `e:\...` when the folder is `E:\...`, vitest 2 loads modules under both
+  spellings and every `vi.mock` of a relative path quietly misses: each web
+  test file with one fails ("mockReset is not a function"), 72 files at
+  d71c5a08, 88 now. This was the "first full run after a merge fails 72 web
+  files" flake. Git Bash and PowerShell hand Node `E:`, while a process
+  started with a lowercase cwd (`cmd /c "cd /d e:\..."` reproduces it) keeps
+  `e:`, which most likely is why a re-run from another shell passed. `npm
+  test` (`scripts/vitest.mjs`) now starts vitest from the real path, and
+  `vitest.workspace.ts` refuses a direct `npx vitest` started from the wrong
+  case with a message saying so.
+- **Test time limits allow for a busy machine.** With other full runs going
+  at once (parallel agents), tests that start real processes (git, MCP
+  servers over stdio, the SQLite secret store's concurrent writes) or render
+  big panels missed vitest's 5 s, and `findBy*` missed testing-library's 1 s,
+  with nothing wrong. `vitest.workspace.ts` gives every package 20 s per test
+  and hook, and `packages/web/test/setup.ts` gives `findBy*`/`waitFor` 5 s; a
+  passing test is no slower. Tests that need wall-clock order use a fake
+  clock instead: the Office render queue (`office/render.test.ts`, which
+  missed a 1.5 s limit under load) and ChatList's date headings (which failed
+  in the first minute after midnight). Still on the real clock:
+  `blob-gc.test.ts`'s "real timing" sweep (3,000 blobs, its own 30 s), which
+  timed out in loaded runs on 2026-11-04, and `provider-live.test.ts`'s
+  300 ms live-call limit.
 - **Sub-agents share the chat's one browser page** (see the browser section).
   A browser per sub-agent would need `BrowserManager` keyed on more than the
   chat.

@@ -10,7 +10,7 @@ import { useLiveData } from '../lib/useLiveData.js';
 import { useNow } from '../lib/useNow.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
-import { alsoActive } from '../state/machines.js';
+import { alsoActive, machineName } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { isClaudeLoginChat } from '../state/claudeAccounts.js';
@@ -706,6 +706,22 @@ function GrantsSection({ chatId, profileId }: { chatId: string; profileId: strin
   );
 }
 
+/**
+ * Above Tool grants, MCP servers and Audit trail for a chat that runs on a paired machine. Those are kept on each
+ * machine and never sync, and the peer link has no route to read them (it is limited to running and stopping a
+ * chat), so what the sections show is this machine's own, kept live by this machine's events; the other machine's
+ * aren't shown, and this says so rather than letting this machine's pass for them.
+ */
+function ElsewhereNote({ chat, what }: { chat: Chat | null; what: string }): JSX.Element | null {
+  const machines = useOtherBenchStore((s) => s.machines);
+  if (!chat || !machines || chat.runsOn === machines.self.id) return null;
+  return (
+    <p data-testid="inspector-elsewhere-note" className="mb-2 text-xs text-[var(--text-muted)]">
+      This chat runs on {machineName(machines, chat.runsOn)}. {what}
+    </p>
+  );
+}
+
 function formatAuditTime(createdAt: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - createdAt) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
@@ -754,6 +770,8 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
   const { data: entries, failed } = useLiveData(() => api.audit.list(chatId), [chatId], (e) => e.type === 'audit-changed' && e.chatId === chatId);
   // "12s ago" keeps counting with no new entry to redraw it.
   const now = useNow(AUDIT_CLOCK_MS);
+  // A call approved from a paired machine says which (the decision's machine, kept by the server).
+  const machines = useOtherBenchStore((s) => s.machines);
   const [expanded, setExpanded] = useState(false);
   useSectionSummary(
     failed ? "couldn't load" : entries === null ? null : entries.length === 0 ? 'none' : `${entries.length} call${entries.length === 1 ? '' : 's'}`
@@ -777,7 +795,11 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
               <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt, now)}</span>
             </div>
             <div className="text-xs text-[var(--text-muted)]">
-              {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
+              {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span>
+              {entry.decidedOnNode && machines && entry.decidedOnNode !== machines.self.id ? (
+                <span data-testid="audit-decided-on"> on {machineName(machines, entry.decidedOnNode)}</span>
+              ) : null}{' '}
+              · {entry.durationMs}ms
             </div>
           </li>
         ))}
@@ -1010,14 +1032,17 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       {chat && <ClaudeCodeInspectorSection chatId={chat.id} />}
 
       <Section title="Tool grants">
+        <ElsewhereNote chat={chat} what="These are this machine's grants, which apply only when it runs here; that machine's aren't shown." />
         {chat ? <GrantsSection chatId={chat.id} profileId={chat.profileId} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       <Section title="MCP servers">
+        <ElsewhereNote chat={chat} what="These are this machine's MCP servers; it uses that machine's, which aren't shown." />
         <McpServersSection profile={chat ? profile : null} />
       </Section>
 
       <Section title="Audit trail">
+        <ElsewhereNote chat={chat} what="Its tool calls there are audited there and aren't shown; this is this machine's trail." />
         {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 

@@ -8,6 +8,7 @@ interface SettingsBody {
   memoryProfileId?: unknown;
   githubEnabled?: unknown;
   nextcloudEnabled?: unknown;
+  peerComputerControl?: unknown;
 }
 
 const FEATURES = ['githubEnabled', 'nextcloudEnabled'] as const;
@@ -17,7 +18,11 @@ export function clearMemoryProfile(store: Store, profileId: string): void {
   if (store.settings.get().memoryProfileId === profileId) store.settings.update({ memoryProfileId: null });
 }
 
-/** `GET/PATCH /api/settings`: app-wide settings (spec 2026-10-03-project-memory-design §4), and GitHub and Nextcloud on or off (`features.ts`). */
+/**
+ * `GET/PATCH /api/settings`: app-wide settings (spec 2026-10-03-project-memory-design §4), GitHub and Nextcloud on or
+ * off (`features.ts`), and whether paired machines may start and approve computer use here (`peerComputerControl`).
+ * Not on the peer listener: only this machine's own UI changes them.
+ */
 export function settingsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -42,8 +47,16 @@ export function settingsRoutes(container: Container): Hono {
       if (typeof value !== 'boolean') throw new HTTPException(400, { message: `"${key}" must be true or false.` });
       patch[key] = value;
     }
+    // Whether paired machines may start and approve computer use here (peer/forward.ts reads it on every call).
+    if (body.peerComputerControl !== undefined) {
+      if (typeof body.peerComputerControl !== 'boolean') throw new HTTPException(400, { message: '"peerComputerControl" must be true or false.' });
+      patch.peerComputerControl = body.peerComputerControl;
+    }
     const before = container.store.settings.get();
     const after = container.store.settings.update(patch);
+    if (before.peerComputerControl !== after.peerComputerControl && !FEATURES.some((key) => before[key] !== after[key])) {
+      container.events?.emit({ type: 'settings-changed' });
+    }
     if (FEATURES.some((key) => before[key] !== after[key])) {
       // Every window re-reads the settings, and the Overview drops or brings back its GitHub and Deck sections now.
       container.events?.emit({ type: 'settings-changed' });

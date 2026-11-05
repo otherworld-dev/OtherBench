@@ -6,6 +6,8 @@ import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
 import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
+import type { PushService } from './push/service.js';
+import { pushRoutes } from './routes/push.js';
 import { appNextcloudRoutes } from './routes/app-nextcloud.js';
 import { appFoldersRoutes } from './routes/app-folders.js';
 import { appsRoutes } from './routes/apps.js';
@@ -100,6 +102,11 @@ export interface AppOptions {
    * tests) mounts no terminal routes; `GET /api/terminal/status` then says `not-local`.
    */
   terminals?: boolean;
+  /**
+   * Web Push for signed-in devices (sign-in mode only): `cli.ts` makes one beside `remote`. Unset, `GET /api/push`
+   * says push isn't available here and its writes are refused.
+   */
+  push?: PushService | null;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
@@ -202,6 +209,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/sandbox', sandboxRoutes(container));
   authed.route('/view', viewRoutes(container, viewLinks, clientOf));
   authed.route('/events', eventsRoutes(container));
+  authed.route('/push', pushRoutes(remote ? (options.push ?? null) : null, remote));
   authed.route('/fs', fsRoutes());
   // toolsRoutes, like turnsRoutes, defines full paths under several
   // different prefixes (/mcp-servers, /chats/:id/grants, /grants/:id,

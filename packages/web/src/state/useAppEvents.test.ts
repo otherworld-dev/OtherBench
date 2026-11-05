@@ -4,6 +4,7 @@ import type { App } from '@otherbench/core/ports/store.js';
 import type { AppEvent, AppEventsHello } from '@otherbench/core/types/events.js';
 import { api } from './api.js';
 import { onAppEvent, onAppEventsHello } from './appEventListeners.js';
+import { refreshMachines } from './machines.js';
 import { useOtherBenchStore } from './store.js';
 import { refreshAfterSync, useAppEvents } from './useAppEvents.js';
 
@@ -81,6 +82,15 @@ describe('useAppEvents', () => {
     sse.onHello!({ pendingApprovals: [], runningTurns: [] });
     expect(hellos).toBe(2);
     off();
+  });
+
+  it("a hello re-reads paired machines' activity, as a peer-activity may have been missed while disconnected", () => {
+    renderHook(() => useAppEvents());
+    vi.mocked(refreshMachines).mockClear();
+    sse.onHello!({ pendingApprovals: [], runningTurns: [] });
+    expect(refreshMachines).toHaveBeenCalledTimes(1);
+    sse.onEvent!({ type: 'peer-activity', nodeId: 'node-pc' });
+    expect(refreshMachines).toHaveBeenCalledTimes(2);
   });
 
   describe('apps-changed', () => {

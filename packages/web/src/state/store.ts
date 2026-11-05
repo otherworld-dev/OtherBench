@@ -170,7 +170,7 @@ export interface OtherBenchState {
   /** Replies being written anywhere in the app: chat id by message id (#824). */
   appRunningTurns: Record<string, string>;
   /** Chats controlling this computer (computer use), by chat id, with their last action (`actionSummary`: never typed text). */
-  computerSessions: Record<string, { lastAction?: string }>;
+  computerSessions: Record<string, { lastAction?: string; startedFrom?: string }>;
   /** Chats with background tasks running anywhere in the app, by chat id, with how many. */
   appBackgroundChats: Record<string, number>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
@@ -827,9 +827,9 @@ function bump(counts: Record<string, number>, chatId: string): Record<string, nu
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
 }
 
-/** A computer session as the banner keeps it: a last action only when it is text. */
-function computerSessionOf(lastAction: unknown): { lastAction?: string } {
-  return typeof lastAction === 'string' ? { lastAction } : {};
+/** A computer session as the banner keeps it: a last action, and the paired machine it was started from, only when each is text. */
+function computerSessionOf(lastAction: unknown, startedFrom?: unknown): { lastAction?: string; startedFrom?: string } {
+  return { ...(typeof lastAction === 'string' ? { lastAction } : {}), ...(typeof startedFrom === 'string' ? { startedFrom } : {}) };
 }
 
 export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
@@ -996,7 +996,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
       appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
-      computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction)])),
+      computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction, c.startedFrom)])),
       appBackgroundChats: Object.fromEntries((hello.backgroundChats ?? []).filter((c) => c.count > 0).map((c) => [c.chatId, c.count])),
     }),
   applyAppEvent: (event) => {
@@ -1063,7 +1063,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
           const next = { ...state.computerSessions };
           if (event.active) {
             // An event with no last action (the session started, say) keeps the one already shown.
-            next[event.chatId] = typeof event.lastAction === 'string' ? computerSessionOf(event.lastAction) : (next[event.chatId] ?? {});
+            const before = next[event.chatId] ?? {};
+            next[event.chatId] = computerSessionOf(event.lastAction ?? before.lastAction, event.startedFrom ?? before.startedFrom);
           } else {
             delete next[event.chatId];
           }

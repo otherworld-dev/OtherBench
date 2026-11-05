@@ -8,6 +8,7 @@ import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
 import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
+import { COMPUTER_NO_SESSION_REASON } from '../computer/sessions.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
@@ -76,6 +77,133 @@ export class RemoteRuns {
   resolved(requestId: string): void {
     this.approvals.delete(requestId);
   }
+}
+
+/**
+ * The chats a paired machine has put input into over the peer listener (a turn, a note or steer, a regenerate or
+ * retry, a head change, an answer to a card or question), by the machine that last did. Every computer-use start for
+ * a marked chat is that machine's (`startCheck`): refused while this machine doesn't let paired machines start
+ * computer use, and named on the session when it does. Kept per chat rather than per reply because a note or an
+ * answer goes into a reply this machine started, and a held note can become a reply of its own later.
+ *
+ * It fails closed. A mark is dropped only by `settleIfIdle`, and only when nothing holds it and the chat is idle (no
+ * reply running, so nothing it spawned either, sub-agents included; no background task; no note waiting). Holds are
+ * counted: each peer write holds the mark from before it is handled until it has been (so two overlapping writes
+ * keep it until both are done), and so does a turn the agent starts by itself after a reply the input reached, from
+ * the moment it is asked for until it is running (`inherit`). Every reply running in a marked chat, and every reply
+ * started while it is marked, is remembered, so a self-started turn that carries one on is marked again even after
+ * the chat went quiet in between (a background task ended before the agent carried on). Nothing is ever evicted
+ * from that memory: a reply is forgotten only with its chat (`forgetChat`, on `chat-deleted`), so a paired machine
+ * can't wash a mark out by making many replies. It lives in memory, not on the message row, and that is enough: a
+ * self-started turn comes from a Claude Code process this server started, and those end with it, so after a restart
+ * no turn can carry on a reply from before it except one a person (or a paired machine, marked anew) sends.
+ */
+export class PeerInfluence {
+  private readonly byChat = new Map<string, string>();
+  private readonly holds = new Map<string, number>();
+  /** Replies a paired machine's input reached, with that machine and the reply's chat. */
+  private readonly replies = new Map<string, { nodeId: string; chatId: string }>();
+
+  /** Marks the chat as `nodeId`'s, with the replies running in it now, and holds the mark until the release is called. */
+  touch(chatId: string, nodeId: string, runningReplies: readonly string[] = []): () => void {
+    this.byChat.set(chatId, nodeId);
+    for (const id of runningReplies) this.replies.set(id, { nodeId, chatId });
+    return this.hold(chatId);
+  }
+
+  /** Replies started in a chat: remembered as the marking machine's while the chat is marked. */
+  started(chatId: string, messageIds: readonly string[]): void {
+    const nodeId = this.byChat.get(chatId);
+    if (nodeId !== undefined) for (const id of messageIds) this.replies.set(id, { nodeId, chatId });
+  }
+
+  /**
+   * A turn the agent asked to start by itself after reply `afterMessageId`: when the chat is marked, or that reply was
+   * reached by a paired machine's input, the chat is marked (again) as that machine's and held until the release,
+   * which the caller makes once the turn is running or has been declined. A no-op release otherwise.
+   */
+  inherit(chatId: string, afterMessageId: string): () => void {
+    const nodeId = this.byChat.get(chatId) ?? this.replies.get(afterMessageId)?.nodeId;
+    if (nodeId === undefined) return () => {};
+    this.byChat.set(chatId, nodeId);
+    return this.hold(chatId);
+  }
+
+  /** The paired machine whose input may reach the chat's replies now, or null when none. */
+  of(chatId: string): string | null {
+    return this.byChat.get(chatId) ?? null;
+  }
+
+  /** Drops the chat's mark when nothing holds it and nothing its input could reach is left (`idle`). */
+  settleIfIdle(chatId: string, idle: (chatId: string) => boolean): void {
+    if (this.byChat.has(chatId) && (this.holds.get(chatId) ?? 0) === 0 && idle(chatId)) this.byChat.delete(chatId);
+  }
+
+  private hold(chatId: string): () => void {
+    this.holds.set(chatId, (this.holds.get(chatId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.holds.get(chatId) ?? 1) - 1;
+      if (left > 0) this.holds.set(chatId, left);
+      else this.holds.delete(chatId);
+    };
+  }
+
+  /** The chat is gone, so none of its replies can be carried on: they, and its mark, are forgotten. */
+  forgetChat(chatId: string): void {
+    for (const [id, reply] of this.replies) if (reply.chatId === chatId) this.replies.delete(id);
+    if ((this.holds.get(chatId) ?? 0) === 0) this.byChat.delete(chatId);
+  }
+}
+
+/** Forwarded writes that only stop something: they start nothing and put no input into a chat. */
+const PEER_STOPS: readonly RegExp[] = [
+  /^\/chats\/[^/]+\/stop$/,
+  /^\/chats\/[^/]+\/computer\/stop$/,
+  /^\/messages\/[^/]+\/cancel$/,
+  /^\/chats\/[^/]+\/helpers\/[^/]+\/stop$/,
+];
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * The chat a forwarded write is for: named in its path (`/chats/:id/...`), or found from the message
+ * (`/messages/:id/...`) or the waiting card or question (`/approvals/:id/...`, `/asks/:id/...`) it names. Null when
+ * it can't be told.
+ */
+export function chatOfPeerWrite(container: Container, path: string): string | null {
+  const [, kind, raw] = path.split('/');
+  if (!raw) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (kind === 'chats') return id;
+  if (kind === 'messages') return container.store.messages.get(id)?.chatId ?? null;
+  if (kind === 'approvals' || kind === 'asks') return container.events?.pendingApprovals().find((p) => p.requestId === id)?.chatId ?? null;
+  return null;
+}
+
+/** Nothing a paired machine's input could still reach in the chat: no reply running, no background task, no note waiting. */
+export function chatIsIdle(container: Container, chatId: string): boolean {
+  const events = container.events;
+  if (events?.runningTurns().some((t) => t.chatId === chatId)) return false;
+  if (events?.backgroundChats().some((b) => b.chatId === chatId)) return false;
+  return !(container.notes?.hasWaiting(chatId) ?? false);
+}
+
+/** What a paired machine is told when this one doesn't let paired machines start or approve computer use. */
+export function peerComputerOffReason(here: string, from: string): string {
+  return `${here} doesn't let paired machines start or approve computer use, so ${from} can't. Turn on "Let paired machines start and approve computer use" in Settings → Machines on ${here}, or use it there.`;
+}
+
+/** What a paired machine is told when computer use isn't switched on here at all; it can only be switched on here. */
+export function computerOffHereReason(here: string): string {
+  return `Computer use is switched off on ${here}. It can only be switched on there, in the desktop app.`;
 }
 
 const TERMINAL = new Set(['complete', 'error', 'cancelled']);
@@ -513,6 +641,46 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     return c.json({ stopped });
   });
 
+  /**
+   * The computer-use banner's Stop for a chat controlling a paired machine (as that machine last said): the Stop goes
+   * there, over the peer channel, and that machine checks it holds a session for the chat before it ends anything.
+   * A session held here is ended here too. Nothing else about computer use is forwarded: never a start, never an
+   * answer to a card (the paired machine's desktop-only gate refuses those while it is under control anyway).
+   */
+  app.post('/chats/:id/computer/stop', async (c, next) => {
+    const chatId = c.req.param('id');
+    const peers = container.peers!;
+    const holders = container.store.peers.list().filter((p) => peers.computerSessions(p.nodeId).some((s) => s.chatId === chatId)).map((p) => p.nodeId);
+    if (holders.length === 0) return next();
+    if (container.computer?.holder() === chatId) await container.computer.stop(chatId);
+    let last: { status: number; body: unknown } | null = null;
+    for (const nodeId of holders) {
+      try {
+        const res = await peers.call(nodeId, { method: 'POST', path: `/api/chats/${encodeURIComponent(chatId)}/computer/stop` });
+        if (res.status === 204) return c.body(null, 204);
+        last = { status: res.status, body: res.body };
+      } catch (err) {
+        if (err instanceof PeerError && err.status === 503) last = { status: 503, body: { error: err.message, kind: 'peer_unreachable', nodeId } };
+        else throw err;
+      }
+    }
+    const status = last && last.status >= 400 && last.status < 600 ? last.status : 502;
+    const body = typeof last?.body === 'object' && last.body !== null ? last.body : { error: 'The other machine could not stop computer use.' };
+    return c.json(body as object, status as 404);
+  });
+
+  /**
+   * "Start computer use on PC" for a chat that runs on a paired machine: asked there, over the peer channel, where
+   * that machine decides (its setting, whether computer use is on there, the chat's profile) and its own start
+   * dialog asks. A chat that runs here has no such route: its sessions start when its model first uses the computer.
+   */
+  app.post('/chats/:id/computer/start', async (c) => {
+    const chatId = c.req.param('id');
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return c.json({ error: 'This chat runs on this machine: computer use starts here when its model first uses it.', kind: 'not_remote' }, 404);
+    return forward(container, c, nodeId, `/chats/${encodeURIComponent(chatId)}/computer/start`, { body: {} });
+  });
+
   // The slash menu: that machine has the chat's Claude Code processes and folder.
   app.get('/chats/:id/commands', async (c, next) => {
     const chatId = c.req.param('id');
@@ -569,8 +737,10 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
 /**
  * What a paired machine may call on this one's API over the peer listener:
  * running, steering, stopping and watching a chat that runs here, answering
- * its approvals, questions and plans, and stopping a reply still running here
- * in a chat moved elsewhere. Nothing else -- no settings, no folder browsing, no attaching
+ * its approvals, questions and plans, stopping a reply still running here
+ * in a chat moved elsewhere, stopping a computer-use session held here,
+ * and, while this machine lets it (`peerComputerControl`), starting one
+ * here (its own start dialog still asks). Nothing else -- no settings, no folder browsing, no attaching
  * files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
@@ -583,12 +753,55 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   const self = (): string => container.store.nodes.self().id;
 
   // While computer use may be in control of this machine, a paired machine changes nothing here (no answer,
-  // no message): that machine's UI could be open in a browser the model is using. Only Stops pass.
-  app.use('*', changesOnlyFromTheDesktopApp(container.computer, []));
+  // no message): that machine's UI could be open in a browser the model is using. Only Stops pass. Unless this
+  // machine lets paired machines start and approve computer use (Settings → Machines, on by default): then the
+  // paired machine is trusted to drive it, cards and messages included, and that risk is the setting's to take.
+  const desktopOnly = changesOnlyFromTheDesktopApp(container.computer, []);
+  app.use('*', async (c, next) => (container.store.settings.get().peerComputerControl ? next() : desktopOnly(c, next)));
+
+  // Every write a paired machine sends that isn't a stop puts input into a chat: the chat is marked as that
+  // machine's before the write is handled, so whatever reply it starts or reaches counts as that machine's for
+  // computer use (PeerInfluence, startCheck). A write whose chat can't be told is refused while this machine doesn't
+  // let paired machines start computer use: it could reach a reply nobody marked. Reads and stops pass unmarked.
+  app.use('*', async (c, next) => {
+    const influence = container.peerInfluence;
+    if (READ_METHODS.has(c.req.method) || !influence || PEER_STOPS.some((stop) => stop.test(c.req.path))) return next();
+    const chatId = chatOfPeerWrite(container, c.req.path);
+    if (chatId === null) {
+      if (!container.store.settings.get().peerComputerControl) {
+        return c.json({ error: "This machine can't tell which chat that is for, and doesn't let paired machines start or approve computer use, so it was refused.", kind: 'peer_computer_off' }, 403);
+      }
+      return next();
+    }
+    const running = container.events?.runningTurns().filter((t) => t.chatId === chatId).map((t) => t.messageId) ?? [];
+    const release = influence.touch(chatId, c.env.peerNodeId, running);
+    try {
+      await next();
+    } finally {
+      // Nothing came of it that its input could still reach (a head change, a note to a chat gone quiet), and no
+      // other write of a paired machine to the chat is still being handled: unmarked.
+      release();
+      influence.settleIfIdle(chatId, (id) => chatIsIdle(container, id));
+    }
+  });
 
   // The chat's Stop: its replies running here. Ahead of the check below, as a reply's Stop is: a chat moved to
   // another machine while a reply ran here must still be able to stop that reply, and a stop starts nothing.
   app.post('/chats/:id/stop', chatStop(container));
+
+  // The computer-use banner's Stop, for a session this machine holds for the chat: it ends that session and cancels
+  // the chat's replies here, as this machine's own banner does. Ahead of the check below for the same reason as the
+  // chat's Stop (a chat moved away keeps its session here). Only a stop: a chat that holds no session here (none is
+  // in control, its start dialog isn't up, or another chat holds it) is answered 404 and nothing is touched. There
+  // is no route here that starts a session, reads its state or the screen, or answers its cards.
+  app.post('/chats/:id/computer/stop', async (c) => {
+    const chatId = c.req.param('id');
+    const computer = container.computer;
+    if (!computer || computer.holder() !== chatId) return c.json({ error: COMPUTER_NO_SESSION_REASON, kind: 'no_session' }, 404);
+    await computer.stop(chatId);
+    console.info(`[otherbench-server] computer use for chat ${chatId} was stopped from paired machine ${c.env.peerNodeId}.`);
+    return c.body(null, 204);
+  });
 
   // A chat this machine doesn't run (its runs-on changed elsewhere and the
   // change hasn't arrived) is refused rather than run in two places.
@@ -596,6 +809,37 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     const chat = container.store.chats.get(c.req.param('id'));
     if (chat && chat.runsOn !== self()) return c.json({ error: 'This chat runs on another machine.', kind: 'not_here' }, 409);
     await next();
+  });
+
+  /**
+   * A paired machine starting computer use here for a chat that runs here ("Start computer use on PC"). Only when
+   * this machine lets paired machines (`peerComputerControl`), only when computer use is on here (a start never
+   * switches it on: no driver, or the shell said it's off, is refused) and only for a chat whose profile uses the
+   * computer. The start is this machine's own (`ComputerSessions.ensureSession`), so its native start dialog asks the
+   * person here, as for any start; it waits on that, so this answers 202 at once and the session shows on the
+   * paired machine once it has started (its activity). The session is named as started from the paired machine.
+   */
+  app.post('/chats/:id/computer/start', async (c) => {
+    const chat = container.store.chats.get(c.req.param('id'));
+    if (!chat) return c.json({ error: 'Chat not found.' }, 404);
+    const here = container.store.nodes.self().name;
+    const from = container.store.peers.get(c.env.peerNodeId)?.name ?? 'a paired machine';
+    if (!container.store.settings.get().peerComputerControl) return c.json({ error: peerComputerOffReason(here, from), kind: 'peer_computer_off' }, 403);
+    const computer = container.computer;
+    if (!computer || !computer.available()) return c.json({ error: computerOffHereReason(here), kind: 'computer_off' }, 409);
+    const profile = container.store.profiles.get(chat.profileId);
+    if (profile?.toolPolicy.computer !== true) {
+      return c.json({ error: `This chat's profile doesn't use computer use on ${here}. Turn it on for the profile there first.`, kind: 'computer_off_for_profile' }, 409);
+    }
+    const holder = computer.holder();
+    if (holder !== null && holder !== chat.id) return c.json({ error: `Another chat is controlling ${here}. Stop it first.`, kind: 'computer_busy' }, 409);
+    void computer.ensureSession(chat.id, chat.title, { from }).then(
+      (answer) => {
+        if (answer.ok !== true) console.info(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} did not start: ${answer.reason}`);
+      },
+      (err: unknown) => console.error(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} failed to start:`, err)
+    );
+    return c.json({ starting: true }, 202);
   });
 
   app.post('/approvals/:id/resolve', async (c) => {

@@ -37,6 +37,22 @@ export interface AuthStatus {
   };
 }
 
+/** Which things waiting on the user this device is told about by Web Push (server: `PushPrefs`). */
+export interface PushPrefs {
+  approvals: boolean;
+  replies: boolean;
+  scheduled: boolean;
+}
+
+/** `GET /api/push` (server: `PushStatusBody` in routes/push.ts). */
+export interface PushStatus {
+  available: boolean;
+  reason?: string;
+  publicKey?: string;
+  subscribed: boolean;
+  prefs: PushPrefs | null;
+}
+
 /** One signed-in browser in Settings → Remote access (server: `SignedInDevice` in remote/auth.ts). */
 export interface SignedInDevice {
   id: string;
@@ -485,6 +501,11 @@ export interface PeerView extends PublicPeer {
   waitingChats?: string[];
   /** Since when (ms) each of `waitingChats` has waited, for the Needs you order; absent from an older machine. */
   waitingSince?: Record<string, number>;
+  /**
+   * The chats controlling that machine now (computer use), with their last action, while it's reachable; absent means
+   * none (or an older machine). The banner shows them, and its Stop is sent there.
+   */
+  computerSessions?: { chatId: string; lastAction?: string }[];
 }
 
 export interface PeersOverview {
@@ -593,6 +614,17 @@ export const api = {
     endSession: (id: string) => del(`/auth/sessions/${encodeURIComponent(id)}`),
     changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
   },
+  /** Web Push for this signed-in device (server: routes/push.ts). Only in sign-in mode; elsewhere `status` says it isn't available. */
+  push: {
+    status: () => request<PushStatus>('/push'),
+    subscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }, prefs: PushPrefs) =>
+      put<{ subscribed: boolean; prefs: PushPrefs }>('/push/subscription', { ...sub, prefs }),
+    setPrefs: (prefs: PushPrefs) => patch<{ subscribed: boolean; prefs: PushPrefs | null }>('/push/subscription', { prefs }),
+    unsubscribe: () => del('/push/subscription'),
+    test: () => post<{ result: 'sent' | 'gone' | 'failed' }>('/push/test'),
+    /** This page is showing (or stopped): the server pushes nothing to this device meanwhile. */
+    active: (visible: boolean) => post<void>('/push/active', { visible }),
+  },
 
   connections: {
     list: () => request<Connection[]>('/connections'),
@@ -665,6 +697,12 @@ export const api = {
     },
     /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
     stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+    /**
+     * Starts computer use for a chat that runs on a paired machine, there (`POST /api/chats/:id/computer/start`):
+     * 202 once asked, after which that machine's own start dialog asks; refused when it doesn't let paired machines,
+     * computer use is off there, or the chat's profile doesn't use it.
+     */
+    startComputer: (id: string) => post<{ starting: true }>(`/chats/${encodeURIComponent(id)}/computer/start`),
     /** Stops every reply running in the chat, here or on the paired machine running it (the reply's Stop): `POST /api/chats/:id/stop`. */
     stop: (id: string) => post<{ stopped: string[] }>(`/chats/${encodeURIComponent(id)}/stop`),
   },

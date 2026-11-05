@@ -49,6 +49,18 @@ export interface ComputerSessionsDeps {
    * is ever ended for a missing chat.
    */
   chatExists?: (chatId: string) => boolean;
+  /**
+   * Asked before a new session is started for a chat (not for one already in control): whether a paired machine
+   * asked for it (a reply it sent is running in the chat), and if so whether this machine lets paired machines start
+   * computer use. `refuse` is what the model is told instead; `from` names the machine on the session's events (the
+   * banner). Without it every start counts as this machine's own.
+   */
+  startCheck?: (chatId: string) => { refuse: string } | { from: string | null };
+}
+
+/** What a start may say beside the chat: the paired machine that asked for it, by name (the remote start route). */
+export interface ComputerStartOptions {
+  from?: string;
 }
 
 export interface ComputerSessionsOptions {
@@ -114,6 +126,8 @@ export function endSessionsOfChatsThatAreGone(events: AppEventBus, sessions: Pic
 /** A start the driver has not answered yet: the native dialog may be up. */
 interface Start {
   readonly chatId: string;
+  /** The paired machine the start was asked from, by name; null for this machine's own. */
+  readonly from: string | null;
   /** Stopped, or left without a reply, while it waited. An OK that comes now is ended, not kept. */
   abandoned: boolean;
   /** It is waiting for earlier ends to be confirmed: the driver has not been asked yet, and no dialog is up. */
@@ -188,6 +202,8 @@ export class ComputerSessions implements ComputerDriver {
   private generation = 0;
   /** Whether the session in control has been looked through, asked about or acted in since it started. */
   private used = false;
+  /** The paired machine the session in control was started from, by name; null for this machine's own. */
+  private activeFrom: string | null = null;
   private starting: Start | null = null;
   private disposed = false;
   /** Ends the driver has been told of and has not answered yet. */
@@ -248,7 +264,7 @@ export class ComputerSessions implements ComputerDriver {
     return this.holder() !== null || this.ending.size > 0 || this.unconfirmed.size > 0;
   }
 
-  ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+  ensureSession(chatId: string, chatTitle: string, options: ComputerStartOptions = {}): Promise<ComputerAnswer> {
     if (this.disposed) return Promise.resolve({ ok: false, reason: COMPUTER_SHUTTING_DOWN_REASON });
     this.dropGoneHolder();
     const holder = this.holder();
@@ -259,6 +275,19 @@ export class ComputerSessions implements ComputerDriver {
     }
     // One dialog per chat: whoever asks while it is up gets its answer.
     if (this.starting !== null) return this.starting.answer;
+    // A new session: was it asked for from a paired machine, and may it be? (One in control carries on as it is.)
+    let from: string | null = options.from ?? null;
+    if (this.active !== chatId && from === null && this.deps.startCheck) {
+      let check: { refuse: string } | { from: string | null };
+      try {
+        check = this.deps.startCheck(chatId);
+      } catch (err) {
+        console.error(`[otherbench-server] couldn't check who asked to start computer use for chat ${chatId}:`, err);
+        check = { refuse: 'OtherBench could not check where this start was asked from, so nothing was started.' };
+      }
+      if ('refuse' in check) return Promise.resolve({ ok: false, reason: check.refuse });
+      from = check.from;
+    }
 
     let settle: (answer: ComputerAnswer) => void = () => {};
     let fail: (err: unknown) => void = () => {};
@@ -266,7 +295,7 @@ export class ComputerSessions implements ComputerDriver {
       settle = resolve;
       fail = reject;
     });
-    const start: Start = { chatId, abandoned: false, confirming: false, answer };
+    const start: Start = { chatId, from: this.active === chatId ? this.activeFrom : from, abandoned: false, confirming: false, answer };
     this.starting = start;
     // The title goes into the shell's native dialog. Whoever asks, the driver gets core's one clean line of it
     // (the computer tool passes it that way already; this is the last thing of OtherBench's between a title and the shell).
@@ -395,7 +424,7 @@ export class ComputerSessions implements ComputerDriver {
     const answer = await this.driver.act(chatId, action, expect);
     // Only what was carried out, and only while that same session is still the one in control.
     if (answer.ok === true && this.active === chatId && this.generation === session) {
-      this.announce({ type: 'computer-session', chatId, active: true, lastAction: actionSummary(action) });
+      this.announce({ type: 'computer-session', chatId, active: true, lastAction: actionSummary(action), ...(this.activeFrom === null ? {} : { startedFrom: this.activeFrom }) });
     }
     return answer;
   }
@@ -471,7 +500,8 @@ export class ComputerSessions implements ComputerDriver {
       this.active = chatId;
       this.generation += 1;
       this.used = false;
-      this.announce({ type: 'computer-session', chatId, active: true });
+      this.activeFrom = start.from;
+      this.announce({ type: 'computer-session', chatId, active: true, ...(start.from === null ? {} : { startedFrom: start.from }) });
     }
     return answer;
   }
@@ -524,6 +554,7 @@ export class ComputerSessions implements ComputerDriver {
     if (this.active === chatId) {
       this.active = null;
       this.used = false;
+      this.activeFrom = null;
       had = true;
       this.announce({ type: 'computer-session', chatId, active: false });
     }

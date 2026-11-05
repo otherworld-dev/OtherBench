@@ -289,3 +289,53 @@ describe('App view', () => {
     expect(screen.getByRole('separator', { name: 'Resize sidebar' })).toBeInTheDocument();
   });
 });
+
+describe('App on a phone (below 640px)', () => {
+  beforeEach(() => {
+    reset();
+    for (const list of [mockedConnections, mockedModels, mockedProfiles, mockedChats, mockedProjects]) list.mockResolvedValue([]);
+    // Every breakpoint matches: narrow and phone.
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+  afterEach(() => cleanup());
+
+  it('puts the sidebar in a drawer opened from the bar at the top, closed by the backdrop or by opening Settings', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveAttribute('data-phone');
+    expect(root.style.gridTemplateColumns).toBe('minmax(0, 1fr)');
+    const drawer = screen.getByTestId('sidebar-drawer');
+    expect(drawer).toHaveClass('hidden');
+    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Open the sidebar' }));
+    expect(drawer).not.toHaveClass('hidden');
+    await user.click(screen.getByTestId('drawer-backdrop'));
+    expect(drawer).toHaveClass('hidden');
+
+    await user.click(screen.getByRole('button', { name: 'Open the sidebar' }));
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByTestId('settings-view')).toBeInTheDocument();
+    expect(drawer).toHaveClass('hidden');
+  });
+
+  it('closes the drawer when the Overview is chosen in it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Open the sidebar' }));
+    await user.click(screen.getByRole('button', { name: 'Overview' }));
+    expect(await screen.findByTestId('overview-view')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-drawer')).toHaveClass('hidden');
+    expect(screen.getByTestId('phone-bar')).toHaveTextContent('Overview');
+  });
+});

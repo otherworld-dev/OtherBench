@@ -480,6 +480,13 @@ export interface AppSettings {
   githubEnabled: boolean;
   /** False turns Nextcloud off on this machine: no Deck, Wiki or Links, and the server never calls Nextcloud. */
   nextcloudEnabled: boolean;
+  /**
+   * "Let paired machines start and approve computer use" (Settings, Machines), on by default. On: a paired machine
+   * may start a computer-use session here (this machine's own start dialog still asks), send messages and answer
+   * cards while one is in control. Off: it can still see a session here and Stop it, nothing more. It never switches
+   * computer use itself on. Machine-local, like every setting.
+   */
+  peerComputerControl: boolean;
 }
 
 export interface SettingsRepo {
@@ -1145,6 +1152,49 @@ export interface RemoteSessionRepo {
   delete(id: string): boolean;
 }
 
+// --- Web Push subscriptions --------------------------------------------------
+
+/** Which things waiting on the user a device is told about by Web Push. */
+export interface PushPrefs {
+  /** A tool call, question, plan or prompt waiting for the user. */
+  approvals: boolean;
+  /** A reply finished or failed. */
+  replies: boolean;
+  /** A scheduled run ended or didn't start. */
+  scheduled: boolean;
+}
+
+/**
+ * One signed-in device's Web Push subscription (migration 040): the push
+ * service URL its browser handed out and the keys its payloads are encrypted
+ * to. One per remote session, and gone with it: signing the device out (or
+ * its session expiring) deletes the row. Local to this machine, never synced.
+ */
+export interface PushSubscriptionRecord {
+  /** The remote session (`RemoteSession.id`) this device signed in with. */
+  sessionId: string;
+  /** The push service's https URL for this browser. */
+  endpoint: string;
+  /** The browser's P-256 public key, base64url (65 bytes uncompressed). */
+  p256dh: string;
+  /** The browser's auth secret, base64url (16 bytes). */
+  auth: string;
+  prefs: PushPrefs;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PushSubscriptionRepo {
+  /** Sets the session's subscription; an endpoint held by another session moves to this one. */
+  put(sub: PushSubscriptionRecord): void;
+  bySession(sessionId: string): PushSubscriptionRecord | null;
+  list(): PushSubscriptionRecord[];
+  /** Whether there was a row to delete. */
+  deleteBySession(sessionId: string): boolean;
+  /** For a push service that says the subscription is gone (404/410). */
+  deleteByEndpoint(endpoint: string): boolean;
+}
+
 export interface Store {
   nodes: NodeRepo;
   locations: LocationRepo;
@@ -1174,6 +1224,8 @@ export interface Store {
   schedules: ScheduleRepo;
   /** Remote access's signed-in browsers (migration 037): local, never synced. */
   remoteSessions: RemoteSessionRepo;
+  /** Signed-in devices' Web Push subscriptions (migration 040): local, never synced, deleted with their session. */
+  pushSubscriptions: PushSubscriptionRepo;
   /**
    * Runs `fn` as one unit: SQLite commits everything it writes together, or
    * rolls it all back when it throws (the error is rethrown). Inside an open

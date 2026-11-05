@@ -111,6 +111,9 @@ export function useAppEvents(): void {
         emitAppEventsHello();
         // Missed a switch while disconnected, or this is start-up.
         refreshFeatures();
+        // And what paired machines said meanwhile (replies running, cards waiting, a session controlling one): the
+        // `peer-activity` events that would have re-read it may have been missed too.
+        refreshMachines();
       },
       onEvent: (event) => {
         applyAppEvent(event);

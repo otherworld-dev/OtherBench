@@ -8,7 +8,7 @@ import { ComputerBanner } from './ComputerBanner.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
-  return { ...actual, api: { ...actual.api, chats: { ...actual.api.chats, stopComputer: vi.fn() } } };
+  return { ...actual, api: { ...actual.api, chats: { ...actual.api.chats, stopComputer: vi.fn(), startComputer: vi.fn() } } };
 });
 
 import { api } from '../state/api.js';
@@ -66,6 +66,26 @@ describe('ComputerBanner', () => {
     expect(screen.getByTestId('computer-banner')).not.toHaveTextContent('SECRET');
   });
 
+  it('says which paired machine started a session here, and keeps saying it as actions come', () => {
+    act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, startedFrom: 'Laptop' }));
+    render(<ComputerBanner chat={chat} />);
+    expect(screen.getByTestId('computer-banner')).toHaveTextContent('OtherBench is controlling this computer.');
+    expect(screen.getByTestId('computer-banner-from')).toHaveTextContent('Started from Laptop.');
+    session('take a screenshot');
+    expect(screen.getByTestId('computer-banner-from')).toHaveTextContent('Started from Laptop.');
+    expect(screen.getByTestId('computer-banner')).toHaveTextContent('Last: take a screenshot');
+  });
+
+  it("names the starting machine from the hello too, and shows no such line for this computer's own session", () => {
+    act(() => useOtherBenchStore.getState().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'chat-1', startedFrom: 'Laptop' }] }));
+    const { unmount } = render(<ComputerBanner chat={chat} />);
+    expect(screen.getByTestId('computer-banner-from')).toHaveTextContent('Started from Laptop.');
+    unmount();
+    act(() => useOtherBenchStore.getState().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'chat-1' }] }));
+    render(<ComputerBanner chat={chat} />);
+    expect(screen.queryByTestId('computer-banner-from')).toBeNull();
+  });
+
   it('shows no last-action line before the first action', () => {
     session();
     render(<ComputerBanner chat={chat} />);
@@ -79,6 +99,98 @@ describe('ComputerBanner', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.chats.stopComputer).toHaveBeenCalledWith('chat-1');
     expect(api.chats.stopComputer).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a session on a paired machine', () => {
+    const machines = (status: 'reachable' | 'unreachable', computerSessions?: { chatId: string; lastAction?: string }[]): void =>
+      act(() =>
+        useOtherBenchStore.getState().setMachines({
+          self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+          listening: { running: true, addresses: [] },
+          peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status, since: 0, lastSyncedAt: null, syncError: null, ...(computerSessions ? { computerSessions } : {}) }],
+        } as never)
+      );
+
+    it('names the machine, shows its last action, and comes and goes with what that machine says', () => {
+      render(<ComputerBanner chat={chat} />);
+      machines('reachable', [{ chatId: 'chat-1', lastAction: 'left click at 3, 4' }]);
+      const banner = screen.getByTestId('computer-banner');
+      expect(banner).toHaveTextContent('OtherBench is controlling PC.');
+      expect(banner).not.toHaveTextContent('this computer');
+      expect(banner).toHaveAttribute('data-machine', 'node-pc');
+      expect(banner).toHaveTextContent('Last: left click at 3, 4');
+      machines('reachable', []);
+      expect(screen.queryByTestId('computer-banner')).toBeNull();
+    });
+
+    it("shows nothing for another chat's session, an unreachable machine or an older one that doesn't say", () => {
+      render(<ComputerBanner chat={chat} />);
+      machines('reachable', [{ chatId: 'other' }]);
+      expect(screen.queryByTestId('computer-banner')).toBeNull();
+      machines('unreachable', [{ chatId: 'chat-1' }]);
+      expect(screen.queryByTestId('computer-banner')).toBeNull();
+      machines('reachable');
+      expect(screen.queryByTestId('computer-banner')).toBeNull();
+    });
+
+    it("Stop asks this machine's server, which sends it to the machine in control", async () => {
+      machines('reachable', [{ chatId: 'chat-1' }]);
+      render(<ComputerBanner chat={chat} />);
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Stop' }));
+      expect(api.chats.stopComputer).toHaveBeenCalledWith('chat-1');
+    });
+
+    describe('Start on the machine the chat runs on', () => {
+      const remoteChat = { id: 'chat-1', title: 'Budget', runsOn: 'node-pc', profileId: 'p1' } as Chat;
+      const profile = (computer: boolean): void =>
+        act(() => useOtherBenchStore.setState({ profiles: [{ id: 'p1', name: 'P', toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer } } as never] }));
+      beforeEach(() => {
+        vi.mocked(api.chats.startComputer).mockReset().mockResolvedValue({ starting: true });
+      });
+
+      it("offers it for a chat on a reachable paired machine whose profile uses the computer, and says the machine's dialog asks", async () => {
+        profile(true);
+        machines('reachable', []);
+        render(<ComputerBanner chat={remoteChat} />);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Start on PC' }));
+        expect(api.chats.startComputer).toHaveBeenCalledWith('chat-1');
+        expect(await screen.findByRole('status')).toHaveTextContent('Asked PC. Someone there has to say OK in its dialog before it starts.');
+      });
+
+      it("shows the machine's refusal as it said it", async () => {
+        profile(true);
+        machines('reachable', []);
+        const { ApiError } = await import('../state/api.js');
+        vi.mocked(api.chats.startComputer).mockRejectedValue(new ApiError(403, "PC doesn't let paired machines start or approve computer use, so Laptop can't."));
+        render(<ComputerBanner chat={remoteChat} />);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Start on PC' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("PC doesn't let paired machines start or approve computer use");
+      });
+
+      it("isn't offered for a profile without computer use, an unreachable machine, or a chat that runs here", () => {
+        profile(false);
+        machines('reachable', []);
+        const { unmount } = render(<ComputerBanner chat={remoteChat} />);
+        expect(screen.queryByTestId('computer-start-remote')).toBeNull();
+        unmount();
+        profile(true);
+        machines('unreachable', []);
+        const second = render(<ComputerBanner chat={remoteChat} />);
+        expect(screen.queryByTestId('computer-start-remote')).toBeNull();
+        second.unmount();
+        machines('reachable', []);
+        render(<ComputerBanner chat={{ ...remoteChat, runsOn: 'node-self' }} />);
+        expect(screen.queryByTestId('computer-start-remote')).toBeNull();
+      });
+    });
+
+    it('a session on this computer wins: the banner says this computer', () => {
+      machines('reachable', [{ chatId: 'chat-1', lastAction: 'elsewhere' }]);
+      session('here');
+      render(<ComputerBanner chat={chat} />);
+      expect(screen.getByTestId('computer-banner')).toHaveTextContent('OtherBench is controlling this computer.');
+      expect(screen.getByTestId('computer-banner')).toHaveTextContent('Last: here');
+    });
   });
 
   it('keeps Stop usable when the stop request fails', async () => {

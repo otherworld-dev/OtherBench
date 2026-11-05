@@ -5,7 +5,11 @@ import type { Container } from '../container.js';
 /**
  * Computer use for the web app (spec 2026-10-12-computer-use-design section
  * 7). Mounted on this machine's own authed API only, never on the peer
- * listener: control is local to the machine that runs the turn.
+ * listener: control is local to the machine that runs the turn. A paired
+ * machine can only stop a session held here, through its own route in
+ * `peer/forward.ts` (`forwardedApi`), which checks that the chat holds one;
+ * and when a paired machine says one of its sessions is this chat's, this
+ * machine's Stop is sent there (`forwardingRoutes`) before reaching this.
  *
  * `POST /api/chats/:id/computer/stop`: the thread banner's Stop. Ends the
  * chat's control session and cancels its running reply. Stopping comes

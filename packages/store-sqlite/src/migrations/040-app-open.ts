@@ -6,9 +6,9 @@ import type { Migration } from './types.js';
 // open apps, and it travels with no change to sync beyond the 0/1 check.
 // Existing apps stay visible: they default to open. Adding a column doesn't
 // touch hlc, so nothing is logged for sync here.
-export const MIGRATION_039_APP_OPEN: Migration = {
-  version: 39,
-  name: '039-app-open',
+export const MIGRATION_040_APP_OPEN: Migration = {
+  version: 40,
+  name: '040-app-open',
   sql: `
 ALTER TABLE app ADD COLUMN open INTEGER NOT NULL DEFAULT 1;
 `,

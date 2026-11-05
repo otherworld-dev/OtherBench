@@ -66,6 +66,8 @@ import type {
   GlobalMemoryRepo,
   GlobalMemoryVersion,
   ProjectRepo,
+  PushSubscriptionRecord,
+  PushSubscriptionRepo,
   RemoteSession,
   RemoteSessionRepo,
   SettingsRepo,
@@ -856,6 +858,8 @@ class InMemoryIssueTickRepo implements IssueTickRepo {
 
 class InMemoryRemoteSessionRepo implements RemoteSessionRepo {
   private readonly rows = new Map<string, RemoteSession>();
+  /** Runs after a row is deleted, as SQLite's ON DELETE CASCADE does for push subscriptions. */
+  onDelete: (id: string) => void = () => {};
   insert(session: RemoteSession): void {
     this.rows.set(session.id, { ...session });
   }
@@ -878,7 +882,39 @@ class InMemoryRemoteSessionRepo implements RemoteSessionRepo {
     if (s) s.lastSeenAt = lastSeenAt;
   }
   delete(id: string): boolean {
-    return this.rows.delete(id);
+    const had = this.rows.delete(id);
+    if (had) this.onDelete(id);
+    return had;
+  }
+}
+
+class InMemoryPushSubscriptionRepo implements PushSubscriptionRepo {
+  private readonly rows = new Map<string, PushSubscriptionRecord>();
+  constructor(private readonly sessionExists: (id: string) => boolean) {}
+  put(sub: PushSubscriptionRecord): void {
+    // Like the table's foreign key: a subscription needs a live session.
+    if (!this.sessionExists(sub.sessionId)) throw new Error('FOREIGN KEY constraint failed');
+    for (const [id, row] of this.rows) if (row.endpoint === sub.endpoint && id !== sub.sessionId) this.rows.delete(id);
+    this.rows.set(sub.sessionId, { ...sub, prefs: { ...sub.prefs } });
+  }
+  bySession(sessionId: string): PushSubscriptionRecord | null {
+    const row = this.rows.get(sessionId);
+    return row ? { ...row, prefs: { ...row.prefs } } : null;
+  }
+  list(): PushSubscriptionRecord[] {
+    return [...this.rows.values()].sort((a, b) => a.createdAt - b.createdAt).map((row) => ({ ...row, prefs: { ...row.prefs } }));
+  }
+  deleteBySession(sessionId: string): boolean {
+    return this.rows.delete(sessionId);
+  }
+  deleteByEndpoint(endpoint: string): boolean {
+    for (const [id, row] of this.rows) {
+      if (row.endpoint === endpoint) {
+        this.rows.delete(id);
+        return true;
+      }
+    }
+    return false;
   }
 }
 
@@ -1599,11 +1635,17 @@ export class InMemoryStore implements Store {
   readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
   readonly audit: AuditRepo;
   readonly schedules: ScheduleRepo;
-  readonly remoteSessions: RemoteSessionRepo = new InMemoryRemoteSessionRepo();
+  readonly remoteSessions: RemoteSessionRepo;
+  readonly pushSubscriptions: PushSubscriptionRepo;
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {
     this.nodes = new InMemoryNodeRepo(selfNodeId);
+    const sessions = new InMemoryRemoteSessionRepo();
+    const pushSubscriptions = new InMemoryPushSubscriptionRepo((id) => sessions.get(id) !== null);
+    sessions.onDelete = (id) => pushSubscriptions.deleteBySession(id);
+    this.remoteSessions = sessions;
+    this.pushSubscriptions = pushSubscriptions;
     const schedules = new InMemoryScheduleRepo();
     this.schedules = schedules;
     const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));

@@ -1647,6 +1647,16 @@ describe('ChatList long groups', () => {
 describe('ChatList sorting by recent activity', () => {
   const hour = 3_600_000;
 
+  // Midday on a fixed day: on the real clock a chat from a minute ago is yesterday's in the first minute after midnight.
+  // Only Date is faked, so userEvent's timers still run.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     const now = Date.now();
     useOtherBenchStore.setState({

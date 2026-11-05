@@ -3,6 +3,9 @@ import { useSyncExternalStore } from 'react';
 /** Below this width the inspector can no longer sit as a third docked column -- it collapses (task 19 brief). */
 export const NARROW_BREAKPOINT = '(max-width: 1099.98px)';
 
+/** Below this width (a phone held upright, ~390px) the sidebar is a drawer over the chat, opened from a bar at the top. */
+export const PHONE_BREAKPOINT = '(max-width: 639.98px)';
+
 /**
  * Reactive `window.matchMedia` subscription. Used to drive the "inspector
  * collapses below ~1100px" layout rule (App.tsx, and each pane's header)

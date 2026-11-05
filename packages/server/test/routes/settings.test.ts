@@ -92,12 +92,26 @@ describe('/api/settings', () => {
     container.events!.subscribe((e) => seen.push(e.type));
     const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false });
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: true });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: false });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: true });
     expect(container.store.settings.get()).toMatchObject({ githubEnabled: true, nextcloudEnabled: false });
+  });
+
+  it('lets paired machines start and approve computer use by default; PATCH turns it off and on, and says so', async () => {
+    expect(container.store.settings.get().peerComputerControl).toBe(true);
+    const seen: string[] = [];
+    container.events!.subscribe((e) => seen.push(e.type));
+    const off = await send('PATCH', '/api/settings', { peerComputerControl: false });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toMatchObject({ peerComputerControl: false });
+    expect(seen).toEqual(['settings-changed']);
+    for (const value of ['no', null, 0]) expect((await send('PATCH', '/api/settings', { peerComputerControl: value })).status).toBe(400);
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+    await send('PATCH', '/api/settings', { peerComputerControl: true });
+    expect(container.store.settings.get().peerComputerControl).toBe(true);
   });
 
   it('PATCH refuses a feature switch that is not true or false, writing nothing', async () => {
