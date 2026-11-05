@@ -27,9 +27,9 @@ describe('app open', () => {
     store.apps.update('a1', { open: false, updatedAt: 5 });
 
     expect(store.apps.get('a1')!.open).toBe(false);
-    const rows = store.sync.changesSince(before, 1000).rows.filter((r) => r.tbl === 'app' && r.op === 'upsert');
+    const rows = store.sync.changesSince(before, 1000).rows.filter((r): r is Extract<ChangeRow, { op: 'upsert' }> => r.tbl === 'app' && r.op === 'upsert');
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.row!['open']).toBe(0);
+    expect(rows[0]!.row['open']).toBe(0);
     expect((db.prepare('SELECT COUNT(*) AS n FROM change_log WHERE seq > ?').get(before) as { n: number }).n).toBe(1);
   });
 
