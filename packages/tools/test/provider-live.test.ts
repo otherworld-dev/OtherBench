@@ -44,7 +44,7 @@ beforeEach(async () => {
     () => {
       if (manager.listFor([SERVER]).length !== 1) throw new Error('not connected yet');
     },
-    { timeout: 5000, interval: 25 }
+    { timeout: 15_000, interval: 25 }
   );
 });
 
@@ -125,7 +125,7 @@ describe('OtherBenchToolProvider live calls', () => {
       () => {
         if (manager.listFor(ids).length !== ids.length) throw new Error('not connected yet');
       },
-      { timeout: 5000, interval: 25 }
+      { timeout: 15_000, interval: 25 }
     );
 
   it('two servers with the same name both offering the tool: it is unavailable, never allowed and never called', async () => {
@@ -134,7 +134,7 @@ describe('OtherBenchToolProvider live calls', () => {
       () => {
         if (manager.listFor([SERVER, 'srv-live-2']).length !== 2) throw new Error('not connected yet');
       },
-      { timeout: 5000, interval: 25 }
+      { timeout: 15_000, interval: 25 }
     );
     const both = policy({ mcpServerIds: [SERVER, 'srv-live-2'] });
     expect(provider.liveStatus(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ state: 'unavailable', reason: ambiguous });

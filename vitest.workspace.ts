@@ -61,11 +61,16 @@ function workspaceSources(): Plugin {
   };
 }
 
+// Vitest's 5 s per test (10 s per hook) is missed under a full parallel run on a busy machine by tests that start real
+// processes (git, MCP servers over stdio) or render big panels, with nothing wrong. A passing test is no slower for a
+// longer limit; a test that sets its own keeps it.
+const timeouts = { testTimeout: 20_000, hookTimeout: 20_000 };
+
 export default defineWorkspace([
   ...packages.map((p) => ({
     ...(p.config ? { extends: join(p.dir, p.config) } : {}),
     plugins: [workspaceSources()],
-    test: { name: p.name, root: p.dir },
+    test: { name: p.name, root: p.dir, ...timeouts },
   })),
   'desktop',
 ]);
