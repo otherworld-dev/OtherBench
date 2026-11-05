@@ -13,7 +13,7 @@ function toRecord(row: Record<string, unknown>): PushSubscriptionRecord {
   };
 }
 
-/** Signed-in devices' Web Push subscriptions (migration 040). Local: the table has no sync triggers. */
+/** Signed-in devices' Web Push subscriptions (migration 039). Local: the table has no sync triggers. */
 export class SqlitePushSubscriptionRepo implements PushSubscriptionRepo {
   constructor(private readonly db: DatabaseSync) {}
 

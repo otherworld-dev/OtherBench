@@ -6,10 +6,10 @@ import type { Migration } from './types.js';
 // the browser handed out; `p256dh` and `auth` are the keys payloads are
 // encrypted to (RFC 8291). Local to this machine like `remote_session`: no
 // hlc column and no sync triggers, so a subscription never reaches a paired
-// machine. Numbered 040: 038 and 039 are taken by other branches.
-export const MIGRATION_040_PUSH_SUBSCRIPTIONS: Migration = {
-  version: 40,
-  name: '040-push-subscriptions',
+// machine.
+export const MIGRATION_039_PUSH_SUBSCRIPTIONS: Migration = {
+  version: 39,
+  name: '039-push-subscriptions',
   sql: `
 CREATE TABLE push_subscription (
   session_id TEXT PRIMARY KEY REFERENCES remote_session(id) ON DELETE CASCADE,

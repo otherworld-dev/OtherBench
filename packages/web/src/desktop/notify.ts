@@ -66,7 +66,8 @@ export function scheduledRunBody(status: ScheduleRunStatus, detail: string | nul
     case 'error':
       return `Failed: ${detail ?? 'the reply failed.'}`;
     case 'timed_out':
-      return 'Timed out';
+      // The detail names the limit: "Stopped at the schedule's time limit of 30 minutes."
+      return detail ? `Timed out. ${detail}` : 'Timed out';
     case 'cancelled':
       return 'Stopped';
     case 'not_started':

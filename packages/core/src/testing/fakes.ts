@@ -41,6 +41,7 @@ import type {
   McpServer,
   McpServerRepo,
   MemoryAuthor,
+  MessageOutline,
   MessageRepo,
   ModelRepo,
   NewChat,
@@ -94,7 +95,7 @@ import type { MediaWorkflow } from '../domain/media-workflows.js';
 import { compareApps, compareAppFolders } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
-import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
+import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 import { laterThrough } from '../domain/sync.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
@@ -1405,6 +1406,13 @@ class InMemoryMessageRepo implements MessageRepo {
     return newest?.id ?? null;
   }
 
+  outline(chatId: string): MessageOutline[] {
+    return [...this.byId.values()]
+      .filter((m) => m.chatId === chatId)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((m) => ({ id: m.id, parentId: m.parentId, role: m.role }));
+  }
+
   searchText(query: string, limit: number, offset = 0): { messageId: string; chatId: string; snippet: string }[] {
     // Every word must appear, like the SQLite store's FTS match.
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -1489,7 +1497,13 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   create(s: NewSchedule): Schedule {
     if (this.rows.has(s.id)) throw new Error(`Duplicate id: ${s.id}`);
     const now = Date.now();
-    const full: Schedule = { ...structuredClone(s), autoMode: s.autoMode ?? false, createdAt: s.createdAt ?? now, updatedAt: s.updatedAt ?? now };
+    const full: Schedule = {
+      ...structuredClone(s),
+      autoMode: s.autoMode ?? false,
+      timeLimitMinutes: s.timeLimitMinutes === undefined ? DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES : s.timeLimitMinutes,
+      createdAt: s.createdAt ?? now,
+      updatedAt: s.updatedAt ?? now,
+    };
     this.rows.set(full.id, full);
     return structuredClone(full);
   }

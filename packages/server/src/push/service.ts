@@ -56,7 +56,7 @@ const hostOf = (endpoint: string): string => {
 /**
  * Web Push for remote access's signed-in devices (sign-in mode only). Each
  * device that turned on "Notify this device" holds one subscription, tied to
- * its remote session (migration 040), so signing it out (or its session
+ * its remote session (migration 039), so signing it out (or its session
  * expiring) deletes it. It hears the same app events as the desktop app's
  * notifier (`web/src/desktop/notify.ts`) and tells subscribed devices about
  * the same things: a card waiting (approval, question, plan, prompt,

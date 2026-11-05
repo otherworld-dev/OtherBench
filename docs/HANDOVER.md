@@ -278,14 +278,25 @@ of work landed after that plan closed out:
   whole chat (`GET /chats/:id/messages`), so there is no server route: a
   user message's text as typed and a reply's text parts as rendered, without
   their Markdown, never tool calls, tool results, reasoning or cards
-  (`lib/chatFind.ts`). It starts at the first match from the top of the view
-  and wraps, as a browser's does. Going to a match draws back to it as the
+  (`lib/chatFind.ts`), plus the reply on show in a compare turn still
+  waiting at the end of the chat for one to be kept (only the tab on show,
+  even in Split). It starts at the first match from the top of the view
+  and wraps, as a browser's does. Going to a match draws to it the way the
   outline does, opens a folded user message if the match is past the fold,
   scrolls to it and highlights it with a CSS Custom Highlight over a Range
   (`lib/findInDom.ts`, `::highlight(chat-find)` in index.css), so no
-  message's elements change. Not searched: the replies of a compare turn
-  still waiting at the end of the chat for one to be kept, other branches,
-  and a helper's text inside its card. A reply's Markdown is stripped line
+  message's elements change. Neither find nor the outline draws everything
+  from a far-back message to the end (that froze a 600-message chat as
+  opening it did): a message within 40 of what's drawn grows the drawn run
+  to it, one further away is drawn with the 40 from it only, cut loose from
+  the end (`lib/threadWindow.ts`). Then a "Show later messages" button and
+  scrolling near the bottom draw on, the thread doesn't follow new text, and
+  Jump to latest draws the end of the chat afresh. A compare strip or
+  waiting notes at the end still show below the cut. Not searched: other
+  branches, the other tabs of a compare turn (and a reopened compare strip
+  on a tab other than the kept one), and a helper's text inside its card.
+  Searching is client-side on every key; on 600 messages with three
+  170k-character pastes it takes a few ms. A reply's Markdown is stripped line
   by line rather than parsed (`markdownText`): micromark took about 2ms a
   reply, the better part of a second on the first key in a long chat. Where
   the page shows a reply's text differently from the stripped text, the
@@ -313,7 +324,27 @@ of work landed after that plan closed out:
   and the job `packages/server/src/import/claude-import.ts`. claude.ai's
   ids are kept, so importing the same export again skips what is already
   there, and each chat is written in one transaction (`Store.transaction`)
-  so a failed chat leaves nothing behind. Imported chats start with both
+  so a failed chat leaves nothing behind. Importing a newer export adds
+  what a chat gained on claude.ai since (`planNewMessages`,
+  `packages/core/src/domain/import-refresh.ts`): a message is new when its
+  claude.ai id isn't in the chat (`MessageRepo.outline`), so text is never
+  compared. A chat holding nothing but claude.ai's messages gets them on
+  the end and opens on claude.ai's branch, with the memory cursors moved
+  past them as on a first import. A chat carried on here (a message of its
+  own on any branch) keeps its branch and stays open on it: claude.ai's
+  messages go in under the parents they have on claude.ai, which makes them
+  a branch beside the user's to switch to, and the cursors aren't moved, so
+  the user's own messages are still summarised. A claude.ai reply that
+  lands beside a reply made here is marked regenerated, so the two aren't
+  taken for a compare turn. claude.ai's own edits and regenerations come in
+  as branches, as on a first import. Files on the new messages are stored
+  as a first import stores them. A message that can't be placed (its parent
+  isn't there, its id is another chat's, or it would sit beside one of the
+  chat's own messages of the other role) is left out with everything under
+  it. The preview lists each chat that gets messages, how many and whether
+  on the end or as a branch (the first 20 by name), the report says what
+  was done, and an open chat that was given messages reloads them. Cowork
+  sessions go through the same code. Imported chats start with both
   memory cursors at their newest message, which keeps the memory sweeps
   from summarising hundreds of old chats. Project docs and every claude.ai
   memory file are written under `<db>.imported/claude/`, and a project's
@@ -633,7 +664,7 @@ of work landed after that plan closed out:
     logged once and the old certificate stays in use until the files change
     again. Settings shows the new expiry. `--tls auto` still makes its
     certificate only at start.
-  - **Web Push** ("Notify this device", migration 040, 2026-11-05). Sign-in
+  - **Web Push** ("Notify this device", migration 039, 2026-11-05). Sign-in
     mode only: `cli.ts` makes a `PushService` (`server/src/push/service.ts`)
     beside `remote`; in open and token modes `GET /api/push` says it isn't
     available and its writes 404. Settings → Notifications has the toggle
@@ -664,12 +695,7 @@ of work landed after that plan closed out:
       `/api/push` (`server/src/routes/push.ts`, behind the gate) works only on
       the caller's own session from its cookie; the bearer token has no
       device (409). Writes are under `/api`, so the cross-site write check
-      covers them. The migration is numbered 040 because 038 and 039 are held
-      for other branches (`migrations.test.ts` allows just those two gaps).
-      `runMigrations` only applies numbers above the database's own, so a
-      database that reaches 040 first would never get 038 or 039: merge
-      those before this reaches a real database, or renumber this one past
-      them.
+      covers them.
     - **Crypto, no dependency** (`server/src/push/web-push.ts`). VAPID
       (RFC 8292) is an ES256 JWT signed with `node:crypto` (`aud` the
       endpoint's origin, `exp` 12 h, `sub` the first public URL). The payload
@@ -1998,14 +2024,15 @@ Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925).
 
 - **Where it lives.** `schedule` and `schedule_run` (migration `023-schedules`) are local. They have no sync triggers, so a schedule runs only on the machine that holds it. Deleting its chat, project or profile deletes it. Archiving its profile leaves it, and its runs record "Didn't run" until the profile is changed.
 - **Rules.** `ScheduleRule` in `packages/core/src/domain/schedule.ts`, stored as JSON in `schedule.rule`, so the two later kinds needed no migration (an older build reads one as an unreadable rule, and the schedule shows disabled). `hourly` runs at its start time and every 1-23 hours after it until midnight, starting again from the start time each day, on every day or only on chosen weekdays (every 3 hours from 08:00 is 08:00, 11:00 … 23:00). `cron` is a standard five-field rule, parsed by hand in `packages/core/src/domain/cron.ts` (no dependency): `*`, lists, ranges, steps, month and weekday names, 7 for Sunday, and `@hourly`, `@daily`, `@midnight`, `@weekly`, `@monthly`, `@yearly`, `@annually`. No seconds field and no `@reboot`. Day of month and day of week follow Vixie cron: if neither field starts with `*`, either matching is enough; if one does (`*` or `*/2`), both must match. A day of month past a month's end never matches that month, unlike the monthly kind. A rule that can never run (`0 0 30 2 *`) is refused. Create and PATCH check the rule with `parseRule` and answer 400 with a plain message (`"rule.cron": The minute field's "61" is out of range: 0 to 59.`). Every kind goes through the same `nextRunAt` walk and `wallToInstant`, so clock changes behave alike: a slot in the spring gap moves forward by the gap, one in the autumn fold runs once at the first time, and two slots that land on the same instant run once. A day with no clock change near it takes a fast path, so `* * * * *` stays cheap. The walk looks up to 50 years ahead, for rules such as 29 February on a Monday.
-- **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". Runs stop after 30 minutes ("Timed out"). On start, a run left running by the previous process is marked as an error. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
+- **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". On start, a run left running by the previous process is marked as an error ("OtherBench stopped before this run finished."): its reply was already reconciled, so there is nothing left to time. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
+- **Time limit.** Each schedule has one (`Schedule.timeLimitMinutes`, migration 038, `schedule.time_limit_minutes`): 1 minute to 24 hours, or null for no limit. A new schedule gets 30 minutes (`DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES`), and so did every schedule made before, since 30 minutes was the fixed limit all runs had: long enough for a report or a triage run, Claude Code's included, short enough that a run stuck in auto mode doesn't go all night holding one of the two run slots. The editor's Time limit offers 10 and 30 minutes, 1, 2, 4 and 8 hours and No limit (`SCHEDULE_TIME_LIMIT_CHOICES`), plus a schedule's own value if it was set to something else through the API; the list shows "No time limit" or "Time limit 2 hours" when it isn't the usual 30. The service arms a timer when the run's reply starts (`track`), so everything after that counts, a wait on a card, a sub-agent or a long command included; with no limit no timer is armed. A run keeps the limit it started with if the schedule is edited during it. At the limit the reply is stopped through `TurnRunner.cancel`, the same abort the user's Stop uses, which settles a card it waits on, stops its sub-agents, kills a shell command's process tree and ends Claude Code's process. `cancel` takes an optional notice for this: the stopped reply ends with a notice part, "Stopped at the schedule's time limit of 30 minutes.", which is kept with the message and sent live before its status, so the run's chat says why it stopped. The run is recorded as "Timed out" with the same text as its detail (whether the engine ended the reply cleanly or with an error the stop caused), and `schedule-run-finished` goes out with `timed_out`: the desktop and browser notifications say "Timed out. Stopped at the schedule's time limit of 30 minutes." The run's opening paragraph tells the model the limit ("It is stopped if it is still going after 30 minutes."). A Stop by hand before the limit is still "Stopped", with no notice.
 - **Unattended.** Every scheduled run (and Run now) is unattended: `TurnInput.unattended` → `EngineRequest.unattended` → `ToolContext.unattended`. The last two came from thread cards and nothing set them until now. The schedule service sets them, and `TurnInput.unattended` is new. `OtherBenchToolProvider.settle` refuses any call that would raise a card with `approval_unavailable`, audited `deny:unattended` (the Inspector says "refused: nobody to approve (scheduled run)"), and the run's history counts them. Grants, read-only tools under "Ask on changes", artifacts and allowed web tools still run. Thread cards already answer for the model in an unattended run: a question gets the unattended text and a plan stays closed. Claude Code's auto mode is used in a scheduled run only when its schedule opts in (`Schedule.autoMode`, migration 035, on a Claude Code profile): `TurnInput.unattendedAuto` → `EngineRequest.autoMode` → `ToolContext.unattendedAuto`, which is what lets the provider take a `deferAsk` in an unattended run. The chat's own Auto never applies to a scheduled run, its helpers between replies or a self-start (`SelfStart.unattendedAuto`). The flag is only ever set by the service, never from a request body, so the peer listener can't set it.
 - **Sandbox.** Sandboxed commands run unattended under "Ask on changes" (no card). `unattendedWarnings` reads `ToolPolicy.shellRuns` through `runsShellInSandbox`: only a shell on this machine gets the "needs approval" line, and a sandboxed one gets a line saying hosts off its list are refused unless a grant already covers them (an Always grant, or one for the schedule's own chat).
 - **Editor.** Repeats offers Daily, Weekly, Monthly, Every few hours and Cron rule. Under the rule it lists the next three runs in the schedule's zone (`previewRuns` in `web/src/views/schedules/draft.ts`), or what is wrong with the rule as it is typed, so a typo in a cron rule shows at once. A new schedule's preview uses the browser's zone, which is the server's while schedules run on the machine that holds them.
 - **Deleting a chat or project.** Its delete dialog says how many schedules go with it ("Its 2 schedules are deleted too."), and nothing when there are none. The count is read from `/api/schedules` when the dialog opens (`useScheduleCount`); if that fails the line is left out. A project's line counts its own schedules only, as its sub-projects and chats stay.
 - **Notifications.** In the desktop app, shown even while OtherBench is focused (Settings → Desktop → "Scheduled runs"). The run's own "Reply finished" is suppressed. In a plain browser, Settings → Notifications → "Scheduled runs" turns on browser notifications for a run finishing, failing or not running (`web/src/lib/browserNotify.ts`). It is off until turned on, and the browser asks first. A notification is tagged with its run, so several open tabs show it once, and a click opens the run's chat. They only appear while OtherBench is open in a tab, and only where the browser offers the Notification API (`http://127.0.0.1`, `localhost` or https; not plain http to another address, and not Chrome on Android, which needs a service worker). Replies and approvals still don't notify in a browser.
-- **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
-- **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
+- **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Create and PATCH take `timeLimitMinutes` (whole minutes, 1 to 1440, or null; left out on create it is 30), checked by `parseTimeLimit`. Not mounted on the peer listener.
+- **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. The chat schedule is given a 1 hour time limit in the editor, and the spec checks the list and the run's opening paragraph say so. A run actually timing out is covered by the service's unit tests (fake clock), not e2e. Every schedule is set for twelve hours ahead so nothing fires on its own.
 
 ### Live artifacts
 
@@ -2464,10 +2491,13 @@ this on startup.
 - **Importing again with memory ticked folds claude.ai's notes in again.**
   The learned note and the project notes take whatever the model makes of
   the notes a second time. Untick the box for a re-run.
-- **A second import doesn't add messages a chat gained on claude.ai since
-  the first.** A chat that is already here is skipped whole, so one carried
-  on in OtherBench keeps its own branch; the preview and the report count the
-  chats this affects.
+- **A re-import leaves out claude.ai messages it can't place.** A new
+  message whose parent isn't in the chat, whose id is already another
+  chat's, or that would sit beside one of the chat's own messages of the
+  other role is skipped with everything under it; the preview and the
+  report give the count per chat. When claude.ai's messages go in as a
+  branch beside the user's, memory summarises them only if the user
+  switches to that branch.
 - **An imported project's docs folder does nothing until there is a
   workspace.** Extra folders only apply to a chat with a workspace folder
   (spec 2026-10-07-extra-folders), and imported projects have none, so the
@@ -2481,6 +2511,7 @@ this on startup.
   about 0.15 s slower, and the parsed export is held twice, in the worker
   and the main thread, until the worker is stopped. `planClaudeImport` and
   the preview's checks against the database still run on the main thread
+<<<<<<< HEAD
   after the read.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys.
   iOS and Android trust of the hand-made CA is checked only on real devices.
@@ -2502,6 +2533,14 @@ this on startup.
   Code mode, the Code panel overlay, the Inspector overlay and the viewer
   were not reworked for 390 px (they open, at the narrow-window layout);
   the Overview's rows and the chat header's buttons are smaller than 44 px. Sessions now survive a restart and Settings lists the
+=======
+  after the read; the checks of chats already here yield every 50 chats.
+- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
+  no Web Push for approvals, and no phone layout work beyond the sidebar
+  footer wrapping so Sign out stays reachable (the spec's §7 lists the other
+  gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
+  on real devices. Sessions now survive a restart and Settings lists the
+>>>>>>> dev
   signed-in devices (see *Sessions* under Remote access), but the list shows
   the address a device signed in from, not the one it was last seen at, and
   signing one device out doesn't forget its remembered-device cookie (that
@@ -2570,7 +2609,7 @@ this on startup.
   the guidance alone; an `update` that leaves the calls alone keeps the
   approval and one that changes args asks for that call only; a Claude Code
   chat making one with relayed tool names; viewing from the paired laptop.
-- **Scheduled tasks phase 2 is partly built.** Every-N-hours and cron rules, browser notifications for scheduled runs and the schedule count in the chat and project delete dialogs are done (see "Scheduled tasks"). Still missing: schedules don't sync or move between machines, there are no phone notifications, no per-schedule timeout and no attachments in the prompt. A cron rule has no `L`, `W`, `#` or seconds, and a schedule's zone can't be changed. Deleting a profile still removes its schedules without a mention, and the e2e spec doesn't cover the new rule kinds.
+- **Scheduled tasks phase 2 is partly built.** Every-N-hours and cron rules, browser notifications for scheduled runs and the schedule count in the chat and project delete dialogs are done (see "Scheduled tasks"). Still missing: schedules don't sync or move between machines, there are no phone notifications and no attachments in the prompt. A cron rule has no `L`, `W`, `#` or seconds, and a schedule's zone can't be changed. Deleting a profile still removes its schedules without a mention, and the e2e spec doesn't cover the new rule kinds.
 - **Slash commands.** Claude Code's own automatic compaction draws no line in
   the thread. A chat's own commands appear in the `/` menu only after its first
   reply since the server started; listing them any other way would run the

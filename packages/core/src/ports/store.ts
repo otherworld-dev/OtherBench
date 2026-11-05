@@ -1,4 +1,4 @@
-import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError, SubagentStatus } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, MessageStatus, Part, Role, SerializedError, SubagentStatus } from '../types/messages.js';
 import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
@@ -495,6 +495,13 @@ export interface SettingsRepo {
 
 // --- messages ----------------------------------------------------------------
 
+/** A message's place in its chat's tree, without its content: what `MessageRepo.outline` lists. */
+export interface MessageOutline {
+  id: string;
+  parentId: string | null;
+  role: Role;
+}
+
 export interface MessageRepo {
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage;
   get(id: string): CanonMessage | null;
@@ -546,6 +553,12 @@ export interface MessageRepo {
   latestBySession(chatId: string, sessionId: string): CanonMessage | null;
   /** The id of the newest message in `chatId` (by createdAt, then id), or null: lets the memory sweeps skip an up-to-date chat without reading it. */
   latestId(chatId: string): string | null;
+  /**
+   * Every message in `chatId`, oldest first (by createdAt, then id), as its
+   * id, parent and role only: a re-import works out what a chat lacks from
+   * this without reading every message's parts.
+   */
+  outline(chatId: string): MessageOutline[];
   /** Records that the user kept this compare variant at `at` (see `CanonMessage.keptAt`). Throws when the id does not exist. */
   markKept(id: string, at: number): void;
 }
@@ -992,6 +1005,13 @@ export interface Schedule {
    * refused. Off by default: nobody watches what the classifier allows.
    */
   autoMode: boolean;
+  /**
+   * How long a run may go, in minutes, before it is stopped as Stop stops it
+   * and recorded as timed out; null for no limit. Counts from the reply's
+   * start, a wait on a card included. 30 by default
+   * (`DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES`).
+   */
+  timeLimitMinutes: number | null;
   createdAt: number;
   updatedAt: number;
   /**
@@ -1001,11 +1021,16 @@ export interface Schedule {
   invalid?: string;
 }
 
-/** What `ScheduleRepo.create` takes: timestamps default to now, `autoMode` to false. */
-export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' | 'autoMode'> & { createdAt?: number; updatedAt?: number; autoMode?: boolean };
+/** What `ScheduleRepo.create` takes: timestamps default to now, `autoMode` to false, `timeLimitMinutes` to 30. */
+export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' | 'autoMode' | 'timeLimitMinutes'> & {
+  createdAt?: number;
+  updatedAt?: number;
+  autoMode?: boolean;
+  timeLimitMinutes?: number | null;
+};
 
 /** What `ScheduleRepo.update` may change. The target is fixed once made. */
-export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
 
 /** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
 export interface ScheduleRun {

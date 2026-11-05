@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
-import { createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, previewRuns, targetHasFolder, type ScheduleDraft } from './draft.js';
+import { NO_TIME_LIMIT, createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, previewRuns, targetHasFolder, timeLimitOptions, type ScheduleDraft } from './draft.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return { id: 'c1', title: 'Trip plans', profileId: 'p-chat', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -13,7 +13,7 @@ function profile(id: string, over: Partial<Profile> = {}): Profile {
   return { id, name: id, description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null, ...over };
 }
 function schedule(over: Partial<Schedule> = {}): Schedule {
-  return { id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' }, rule: { cadence: 'weekly', time: '07:30', weekdays: [1, 3] }, timezone: 'Europe/London', enabled: true, nextRunAt: 5, autoMode: false, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' }, rule: { cadence: 'weekly', time: '07:30', weekdays: [1, 3] }, timezone: 'Europe/London', enabled: true, nextRunAt: 5, autoMode: false, timeLimitMinutes: 30, createdAt: 1, updatedAt: 1, ...over };
 }
 const valid = (over: Partial<ScheduleDraft> = {}): ScheduleDraft => ({ ...emptyDraft({ kind: 'chat', chatId: 'c1' }, 'p1'), name: 'Report', prompt: 'hello', ...over });
 
@@ -21,7 +21,7 @@ describe('drafts', () => {
   it('starts a new schedule daily at 09:00 on its prefilled target', () => {
     expect(emptyDraft({ kind: 'project', projectId: 'pr1' }, 'p1')).toEqual({
       name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', everyHours: '3', hourlyWeekdays: [0, 1, 2, 3, 4, 5, 6], cron: '0 9 * * 1-5',
-      targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false,
+      targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false, timeLimitMinutes: 30,
     });
     expect(emptyDraft(null, '')).toMatchObject({ targetKind: 'chat', chatId: '', projectId: '' });
   });
@@ -31,6 +31,8 @@ describe('drafts', () => {
     expect(draftFromSchedule(schedule({ rule: { cadence: 'monthly', time: '09:00', monthDay: 31 } }))).toMatchObject({ cadence: 'monthly', monthDay: '31' });
     expect(draftFromSchedule(schedule()).autoMode).toBe(false);
     expect(draftFromSchedule(schedule({ autoMode: true })).autoMode).toBe(true);
+    expect(draftFromSchedule(schedule()).timeLimitMinutes).toBe(30);
+    expect(draftFromSchedule(schedule({ timeLimitMinutes: null })).timeLimitMinutes).toBeNull();
   });
 
   it('names the first thing to fix', () => {
@@ -49,9 +51,10 @@ describe('drafts', () => {
 
   it('builds the create body, trimming the name and sorting the days', () => {
     expect(createBody(valid({ name: ' Report ', cadence: 'weekly', weekdays: [5, 1] }))).toEqual({
-      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] }, autoMode: false,
+      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] }, autoMode: false, timeLimitMinutes: 30,
     });
     expect(createBody(valid({ autoMode: true }))).toMatchObject({ autoMode: true });
+    expect(createBody(valid({ timeLimitMinutes: null }))).toMatchObject({ timeLimitMinutes: null });
     expect(createBody(valid({ targetKind: 'project', projectId: 'pr1', cadence: 'monthly', monthDay: '15' }))).toMatchObject({
       target: { projectId: 'pr1' }, rule: { cadence: 'monthly', time: '09:00', monthDay: 15 },
     });
@@ -62,6 +65,16 @@ describe('drafts', () => {
     expect(patchBody(initial, initial)).toEqual({});
     expect(patchBody(initial, { ...initial, name: 'Daily', time: '08:00' })).toEqual({ name: 'Daily', rule: { cadence: 'weekly', time: '08:00', weekdays: [1, 3] } });
     expect(patchBody(initial, { ...initial, autoMode: true })).toEqual({ autoMode: true });
+    expect(patchBody(initial, { ...initial, timeLimitMinutes: 120 })).toEqual({ timeLimitMinutes: 120 });
+    expect(patchBody(initial, { ...initial, timeLimitMinutes: null })).toEqual({ timeLimitMinutes: null });
+  });
+
+  it('offers the usual time limits and No limit, keeping a limit of its own that is none of them', () => {
+    const labels = (current: number | null): string[] => timeLimitOptions(current).map((o) => o.label);
+    expect(labels(30)).toEqual(['10 minutes', '30 minutes', '1 hour', '2 hours', '4 hours', '8 hours', 'No limit']);
+    expect(labels(null)).toEqual(labels(30));
+    expect(timeLimitOptions(45).map((o) => o.value)).toEqual(['10', '30', '45', '60', '120', '240', '480', NO_TIME_LIMIT]);
+    expect(labels(1440).at(-2)).toBe('24 hours');
   });
 });
 

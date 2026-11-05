@@ -149,6 +149,8 @@ export interface CreateScheduleBody {
   rule: ScheduleRule;
   enabled?: boolean;
   autoMode?: boolean;
+  /** Minutes, or null for no limit; left out on create it is 30. */
+  timeLimitMinutes?: number | null;
 }
 
 /** `PATCH /api/schedules/:id`: any of these; the target can't change. */
@@ -159,6 +161,8 @@ export interface PatchScheduleBody {
   rule?: ScheduleRule;
   enabled?: boolean;
   autoMode?: boolean;
+  /** Minutes, or null for no limit; left out on create it is 30. */
+  timeLimitMinutes?: number | null;
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
