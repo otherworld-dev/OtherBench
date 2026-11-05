@@ -103,6 +103,11 @@ export type ComputerAnswer = { ok: true } | { ok: false; reason: string };
 
 export type ComputerStopReason = 'hotkey' | 'button' | 'idle' | 'quit';
 
+/** What a start may say beside the chat: the paired machine that asked for it, by name. */
+export interface ComputerStartOptions {
+  from?: string;
+}
+
 export interface ComputerScreenshot {
   png: Buffer;
   width: number;
@@ -114,10 +119,13 @@ export interface ComputerDriver {
   available(): boolean;
   /**
    * Starts (or continues) the chat's control session. The shell shows its
-   * native dialog the first time. Every other call below needs the session:
-   * without one the driver shows, tells and does nothing.
+   * native dialog the first time, whoever asked. Every other call below needs
+   * the session: without one the driver shows, tells and does nothing.
+   * `start.from`: the paired machine, by name, that asked for the start, for
+   * the dialog to say so; it changes nothing else (the person here still has
+   * to say OK). Left out, the dialog is a local start's.
    */
-  ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer>;
+  ensureSession(chatId: string, chatTitle: string, start?: ComputerStartOptions): Promise<ComputerAnswer>;
   endSession(chatId: string): Promise<void>;
   screenshot(chatId: string): Promise<ComputerScreenshot>;
   /** Where the cursor is, in the last screenshot's pixels. */

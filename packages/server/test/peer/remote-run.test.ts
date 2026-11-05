@@ -786,24 +786,75 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     pc.container.store.profiles.update(profileId, { toolPolicy: { ...profile.toolPolicy, computer: true } });
   };
 
-  it("the laptop starts computer use on the PC: the PC's own start runs, the session is named as the laptop's, and the laptop sees it", async () => {
+  it("by default the PC doesn't let paired machines in: the laptop's start is refused, its dialog never comes up, and the laptop can't turn it on", async () => {
     const driver = new FakeComputerDriver();
     const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
     computerProfile(pc, profileId);
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    expect(pc.container.store.settings.get().peerComputerControl).toBe(false);
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ kind: 'peer_computer_off' });
+    expect(driver.started).toEqual([]);
+    expect(pc.container.computer!.holder()).toBeNull();
+    // Nor can the laptop turn it on: the PC's listener has no settings route (with the setting off, a write it can't
+    // place in a chat is refused before that), and settings never sync.
+    const patch = await laptop.container.peers!.call(pc.id, { method: 'PATCH', path: '/api/settings', body: { peerComputerControl: true } });
+    expect([403, 404]).toContain(patch.status);
+    laptop.container.store.settings.update({ peerComputerControl: true });
+    await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+    await pc.container.peers!.syncerOrNull()!.pullFrom(laptop.id);
+    expect(pc.container.store.settings.get().peerComputerControl).toBe(false);
+    // A reply the laptop sent that tries to start computer use there is refused the same way.
+    const sent = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await sent.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await expect.poll(() => pc.container.events!.runningTurns().map((t) => t.messageId)).toContain(replyId);
+    expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: false });
+    expect(driver.started).toEqual([]);
+    pc.container.turnRunner.cancel(replyId);
+  });
+
+  it("the laptop starts computer use on the PC once the PC lets it: the PC's own dialog asks, naming the laptop, the session is named as the laptop's, and the laptop sees it", async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    computerProfile(pc, profileId);
+    pc.container.store.settings.update({ peerComputerControl: true });
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
 
     const res = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
     expect(res.status).toBe(202);
     await expect.poll(() => pc.container.computer!.holder()).toBe(chatId);
     expect(driver.hasSession(chatId)).toBe(true);
+    // The person at the PC was asked, and the dialog said the laptop asked.
+    expect(driver.started).toEqual([{ chatId, chatTitle: expect.any(String), from: 'Laptop' }]);
     // The PC's banner says where it was started from.
     expect(pc.container.events!.computerSessions()).toEqual([{ chatId, startedFrom: 'Laptop' }]);
     await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
   });
 
+  it('a start the person at the PC declines, or leaves until the dialog closes, starts nothing', async () => {
+    const driver = new FakeComputerDriver();
+    const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    computerProfile(pc, profileId);
+    pc.container.store.settings.update({ peerComputerControl: true });
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    for (const reason of ["The user didn't let OtherBench control the computer.", "Nobody answered the desktop app's question in time, so OtherBench didn't take control."]) {
+      driver.startAnswer = { ok: false, reason };
+      const before = driver.started.length;
+      expect((await laptop.api('POST', `/api/chats/${chatId}/computer/start`)).status).toBe(202);
+      await expect.poll(() => driver.started.length).toBe(before + 1);
+      expect(driver.started.at(-1)).toMatchObject({ chatId, from: 'Laptop' });
+      await expect.poll(() => pc.container.computer!.holder()).toBeNull();
+      expect(driver.hasSession(chatId)).toBe(false);
+      expect(pc.container.events!.computerSessions()).toEqual([]);
+    }
+  });
+
   it("refuses the laptop's start when the PC doesn't let paired machines, when the chat's profile doesn't use the computer, and when computer use is off there", async () => {
     const driver = new FakeComputerDriver();
     const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    pc.container.store.settings.update({ peerComputerControl: true });
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
 
     const noProfile = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
@@ -824,6 +875,7 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
   it('refuses a start on a PC where computer use is switched off, and switches nothing on', async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     computerProfile(pc, profileId);
+    pc.container.store.settings.update({ peerComputerControl: true });
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
     const res = await laptop.api('POST', `/api/chats/${chatId}/computer/start`);
     expect(res.status).toBe(409);
@@ -850,6 +902,7 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     pc.container.store.settings.update({ peerComputerControl: true });
     expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
     expect(pc.container.events!.computerSessions()).toEqual([{ chatId, startedFrom: 'Laptop' }]);
+    expect(driver.started).toEqual([{ chatId, chatTitle: 'Held', from: 'Laptop' }]);
     pc.container.turnRunner.cancel(replyId);
   });
 
@@ -861,12 +914,15 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
     expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });
     expect(pc.container.events!.computerSessions()).toEqual([{ chatId }]);
+    // Its dialog is a local start's: it names no other machine.
+    expect(driver.started).toEqual([{ chatId, chatTitle: 'Held' }]);
     pc.container.turnRunner.cancel(replyId);
   });
 
   it("while the PC is under control and lets paired machines in, the laptop's message runs and its answer to the card is the PC's audit, naming the laptop", async () => {
     const driver = new FakeComputerDriver();
     const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+    pc.container.store.settings.update({ peerComputerControl: true });
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
     await pc.container.computer!.ensureSession(chatId, 'Held');
     expect(pc.container.computer!.mayBeInControl()).toBe(true);
@@ -919,6 +975,7 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     it('with the PC letting paired machines in, the same note gets it started, named as the laptop\'s', async () => {
       const driver = new FakeComputerDriver();
       const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
+      pc.container.store.settings.update({ peerComputerControl: true });
       const { replyId, userId } = await localReply(pc, laptop, chatId, profileId);
       expect((await note(laptop, chatId, profileId, userId)).status).toBe(202);
       expect(await pc.container.computer!.ensureSession(chatId, 'Held')).toMatchObject({ ok: true });

@@ -4,7 +4,9 @@
 //! use is switched off, and a fake in the tests.
 //!
 //! - A session belongs to one chat and is created only by the person's OK in
-//!   the native dialog. It is named by a fresh token (256 random bits); every
+//!   the native dialog, whoever asked for it: a start a paired machine asked
+//!   for (`from`, the server's word) shows the same dialog, naming that
+//!   machine. It is named by a fresh token (256 random bits); every
 //!   later request must carry it byte for byte, or it is answered `no-session`
 //!   and nothing is done.
 //! - One chat at a time: a start is refused while another chat holds a
@@ -182,6 +184,8 @@ impl Drop for Acting {
 struct Pending {
     chat: String,
     title: String,
+    /// The paired machine the server says asked for this start; the dialog names it.
+    from: Option<String>,
     replies: Mutex<Vec<Reply>>,
     cancelled: AtomicBool,
     dialog: Dialog,
@@ -368,15 +372,25 @@ fn mint_token() -> Option<String> {
 /// A chat title as the dialog shows it: one plain line, no control, hidden
 /// or direction-changing character, at most 80 characters with the ellipsis.
 pub fn clean_title(title: &str) -> String {
+    clean_line(title, "this chat")
+}
+
+/// A paired machine's name as the dialog shows it: the same rules as a title,
+/// "a paired machine" when nothing is left of it.
+pub fn clean_machine(name: &str) -> String {
+    clean_line(name, "a paired machine")
+}
+
+fn clean_line(text: &str, empty: &str) -> String {
     let hidden = |c: char| {
         let u = c as u32;
         c.is_control()
             || matches!(u, 0xAD | 0x34F | 0x61C | 0x115F | 0x1160 | 0x17B4 | 0x17B5 | 0x180B..=0x180F | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x206F)
             || matches!(u, 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 | 0xFFF0..=0xFFFB | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF)
     };
-    let plain: String = title.chars().map(|c| if hidden(c) { ' ' } else { c }).collect();
+    let plain: String = text.chars().map(|c| if hidden(c) { ' ' } else { c }).collect();
     let line = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-    let line = if line.is_empty() { "this chat".to_string() } else { line };
+    let line = if line.is_empty() { empty.to_string() } else { line };
     if line.chars().count() > 80 {
         format!("{}\u{2026}", line.chars().take(79).collect::<String>())
     } else {
@@ -386,13 +400,20 @@ pub fn clean_title(title: &str) -> String {
 
 /// The native dialog's text. The title is the chat's name, untrusted (the
 /// model may have written it): plain text, marked as the chat's name, and
-/// isolated so its letters can't reorder the rest. It can't change what the
-/// buttons say or do (Windows draws them).
-pub fn dialog_text(title: &str) -> String {
-    format!(
-        "Let OtherBench control this computer for the chat named '\u{2068}{}\u{2069}'?\n\nIt will ask before using each app. Stop any time with Ctrl+Alt+Backspace.",
-        clean_title(title)
-    )
+/// isolated so its letters can't reorder the rest. `from` is the paired
+/// machine the server says asked for the start (its name, set on that
+/// machine), shown the same way so the person here knows the start isn't
+/// theirs. Neither can change what the buttons say or do (Windows draws them).
+pub fn dialog_text(title: &str, from: Option<&str>) -> String {
+    let ask = match from {
+        None => format!("Let OtherBench control this computer for the chat named '\u{2068}{}\u{2069}'?", clean_title(title)),
+        Some(machine) => format!(
+            "The paired machine '\u{2068}{}\u{2069}' wants to start computer use here. Let OtherBench control this computer for the chat named '\u{2068}{}\u{2069}'?",
+            clean_machine(machine),
+            clean_title(title)
+        ),
+    };
+    format!("{ask}\n\nIt will ask before using each app. Stop any time with Ctrl+Alt+Backspace.")
 }
 
 impl Inner {
@@ -502,6 +523,12 @@ impl Inner {
         let (Some(chat), Some(title)) = (chat_of(params), params.get("title").and_then(Value::as_str)) else {
             return reply.err(UNREADABLE, None);
         };
+        // Who asked, if not this machine: a string or nothing. Anything else is unreadable rather than shown as local.
+        let from = match params.get("from") {
+            None => None,
+            Some(Value::String(name)) => Some(name.clone()),
+            Some(_) => return reply.err(UNREADABLE, None),
+        };
         let mut st = self.state();
         // The hot path: the same token at once, no dialog, no event, no idle reset.
         if let Some(live) = st.sessions.get(&chat) {
@@ -521,6 +548,7 @@ impl Inner {
         let pending = Arc::new(Pending {
             chat: chat.clone(),
             title: title.to_string(),
+            from,
             replies: Mutex::new(vec![reply]),
             cancelled: AtomicBool::new(false),
             dialog: Dialog::new(self.limits.dialog),
@@ -537,7 +565,7 @@ impl Inner {
         // No dialog while an act (of a session that has just ended) is still pressing.
         let no_acts = locked(&self.acting);
         // The person, and nobody else, answers this; a start already ended shows nothing.
-        let consent = if pending.cancelled() { Consent::No } else { desktop.consent(&dialog_text(&pending.title), &pending.dialog) };
+        let consent = if pending.cancelled() { Consent::No } else { desktop.consent(&dialog_text(&pending.title, pending.from.as_deref()), &pending.dialog) };
         self.state().on_screen -= 1;
         let refused = match consent {
             Consent::Yes if !pending.cancelled() => None,

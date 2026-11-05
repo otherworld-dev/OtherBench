@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APP_SETTINGS } from '@otherbench/core/domain/settings.js';
+import { DEFAULT_APP_SETTINGS, PEER_COMPUTER_CONTROL_HOST_ONLY_REASON } from '@otherbench/core/domain/settings.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Profile } from '@otherbench/core/types/config.js';
@@ -70,6 +70,20 @@ function send(method: string, path: string, body?: unknown): Promise<Response> {
   );
 }
 
+/** The desktop shell's webview origin, as `--cors-origin` names it. */
+const DESKTOP_ORIGIN = 'http://tauri.localhost';
+
+/** A PATCH from a desktop server's app (its `--cors-origin`), with `origin` as the request's Origin (none: a tab or a script). */
+function patchOnDesktop(body: unknown, origin?: string): Promise<Response> {
+  return Promise.resolve(
+    createApp(container, { corsOrigins: [DESKTOP_ORIGIN] }).request('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(origin === undefined ? {} : { Origin: origin }) },
+      body: JSON.stringify(body),
+    })
+  );
+}
+
 describe('/api/settings', () => {
   it('GET returns the defaults: no memory model', async () => {
     const res = await send('GET', '/api/settings');
@@ -92,7 +106,7 @@ describe('/api/settings', () => {
     container.events!.subscribe((e) => seen.push(e.type));
     const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: true });
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: false });
     expect(seen).toEqual(['settings-changed']);
@@ -100,18 +114,37 @@ describe('/api/settings', () => {
     expect(container.store.settings.get()).toMatchObject({ githubEnabled: true, nextcloudEnabled: false });
   });
 
-  it('lets paired machines start and approve computer use by default; PATCH turns it off and on, and says so', async () => {
-    expect(container.store.settings.get().peerComputerControl).toBe(true);
+  it("doesn't let paired machines start and approve computer use by default; the desktop app turns it on, and it says so", async () => {
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+    expect(await (await send('GET', '/api/settings')).json()).toMatchObject({ peerComputerControl: false });
     const seen: string[] = [];
     container.events!.subscribe((e) => seen.push(e.type));
+    const on = await patchOnDesktop({ peerComputerControl: true }, DESKTOP_ORIGIN);
+    expect(on.status).toBe(200);
+    expect(await on.json()).toMatchObject({ peerComputerControl: true });
+    expect(seen).toEqual(['settings-changed']);
+    for (const value of ['no', null, 0]) expect((await patchOnDesktop({ peerComputerControl: value }, DESKTOP_ORIGIN)).status).toBe(400);
+    expect(container.store.settings.get().peerComputerControl).toBe(true);
+    expect((await patchOnDesktop({ peerComputerControl: false }, DESKTOP_ORIGIN)).status).toBe(200);
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+  });
+
+  it('is turned on only from the desktop app: a tab, a script or a server with no desktop app is refused, writing nothing', async () => {
+    for (const res of [await send('PATCH', '/api/settings', { peerComputerControl: true }), await patchOnDesktop({ peerComputerControl: true }), await patchOnDesktop({ peerComputerControl: true, githubEnabled: false })]) {
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: PEER_COMPUTER_CONTROL_HOST_ONLY_REASON, kind: 'desktop_app_only' });
+    }
+    // Nothing else in a refused PATCH was written either.
+    expect(container.store.settings.get()).toEqual(DEFAULT_APP_SETTINGS);
+  });
+
+  it('is turned off from anywhere, and a tab may send it as it already is', async () => {
+    container.store.settings.update({ peerComputerControl: true });
+    expect((await send('PATCH', '/api/settings', { peerComputerControl: true })).status).toBe(200);
     const off = await send('PATCH', '/api/settings', { peerComputerControl: false });
     expect(off.status).toBe(200);
-    expect(await off.json()).toMatchObject({ peerComputerControl: false });
-    expect(seen).toEqual(['settings-changed']);
-    for (const value of ['no', null, 0]) expect((await send('PATCH', '/api/settings', { peerComputerControl: value })).status).toBe(400);
     expect(container.store.settings.get().peerComputerControl).toBe(false);
-    await send('PATCH', '/api/settings', { peerComputerControl: true });
-    expect(container.store.settings.get().peerComputerControl).toBe(true);
+    expect((await send('PATCH', '/api/settings', { peerComputerControl: false })).status).toBe(200);
   });
 
   it('PATCH refuses a feature switch that is not true or false, writing nothing', async () => {

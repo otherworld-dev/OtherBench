@@ -98,13 +98,19 @@ desktop app and lets two machines share chats. Built so far:
   sent there (`POST /api/chats/:id/computer/stop`, forwarded; the PC ends
   the session only if that chat holds one there). While the PC lets it
   (Settings → Machines, *Let paired machines start and approve computer
-  use*, on by default), the laptop can also start a session there ("Start
-  on PC" above the composer, `POST /api/chats/:id/computer/start`), message
-  the chat and answer its cards while it is in control; a reply the laptop
-  sent that uses the computer starts a session the same way. The PC's own
-  start dialog still asks every time, its banner says "Started from
+  use*, off by default, and only turned on in the PC's own desktop app),
+  the laptop can also ask to start a session there ("Start on PC" above the
+  composer, `POST /api/chats/:id/computer/start`), message the chat and
+  answer its cards while it is in control; a reply the laptop sent that
+  uses the computer asks to start a session the same way. A remote start
+  is accepted at the PC, by design: the PC's own start dialog asks every
+  time and says which machine asked ("The paired machine 'Laptop' wants to
+  start computer use here..."), and declined or left unanswered (it closes
+  as Cancel after 110 s) nothing starts. Its banner says "Started from
   Laptop", and its audit trail names the machine each call was approved
-  from. Turned off, the laptop can only see the session and stop it.
+  from. Off, the laptop can only see the session and stop it. The setting
+  is never synced and isn't on the peer listener, so the laptop can't turn
+  it on.
 
 **Notification clicks:** on Windows a notification is a WinRT toast shown
 by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On
@@ -843,7 +849,7 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 
 **How it is gated**
 
-- **The native dialog is the only local consent.** Before anything happens in a chat (a screenshot, or asking the shell what is under a point), the shell shows a Windows message box titled *OtherBench*: "Let OtherBench control this computer for the chat named '<title>'? It will ask before using each app. Stop any time with Ctrl+Alt+Backspace." Cancel is the default. It closes itself as Cancel after 110 seconds, when the server ends that start, and on quit; Cancel gives the model "The user didn't let OtherBench control the computer." The cards in the web UI can be answered from another device, so they can't stand in for it. The dialog comes before the first app card, because finding out which app is under a point is itself reading the screen.
+- **The native dialog is the only local consent.** Before anything happens in a chat (a screenshot, or asking the shell what is under a point), the shell shows a Windows message box titled *OtherBench*: "Let OtherBench control this computer for the chat named '<title>'? It will ask before using each app. Stop any time with Ctrl+Alt+Backspace." Cancel is the default. It closes itself as Cancel after 110 seconds, when the server ends that start, and on quit; Cancel gives the model "The user didn't let OtherBench control the computer." The cards in the web UI can be answered from another device, so they can't stand in for it. A start a paired machine asked for (see *Computer use across machines*) shows the same dialog and needs the same OK here; it starts with "The paired machine '<name>' wants to start computer use here." The server sends the machine's name with `computer.start` as `from` (one clean line, at most 64 characters, `ComputerSessions` passing it only for a new session that `startCheck` or the remote start route says came from a paired machine) and the shell only shows it, cleaned and isolated like the title; a `from` that isn't a string is refused as unreadable, never shown as a local start. The dialog comes before the first app card, because finding out which app is under a point is itself reading the screen.
 - **Per app, keyed by the exact program path.** The shell resolves the path (long names, on-disk case, links and subst drives resolved, the `\\?\` prefix stripped) and core compares it byte for byte: no lower-casing and no trimming anywhere. A computer grant is exactly `{ app }`; a grant with any other key beside it never matches (and a browser grant is now exactly `{ host }`). The card takes the app's name and full path from `describeApp` only, shows the window title on its own line labelled "Window title (set by the app):", and shows typed text in full in its own box.
 - **Typed text** never appears in the audit, the app events, the banner, the bar or any summary (they say `type 312 characters (3 lines)`). Besides the card, it is shown in full only behind the thread's "Show typed text" toggle. It is kept in the stored call, so it is in the chat's JSON export (which is the data and keeps every call whole) and is synced to paired machines; the Markdown export shows a computer call's summary instead of its arguments (`core/src/domain/export.ts`).
 - `screenshot`, `cursor_position` and `wait` need no card. Every other action needs a grant for the app or a card.
@@ -878,7 +884,7 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 | --- | --- | --- |
 | Grants keyed by the lower-cased full program path | The path the shell resolved, compared exactly | Lower-casing made different files one key (measured here: the Kelvin sign and `k`, a trailing no-break space) |
 | High-risk: terminals, Explorer, Settings, Registry Editor, MMC, Task Manager | A much longer list, plus anything not provably ordinary. Browsers and IDEs were on it at first and came off on Adam's ruling (2026-10-14): they may have "this chat" and "always" grants for their exact path, and the card says what such a grant lets the model do. Internet Explorer, Notepad++, Sublime Text and JetBrains Gateway stayed on it | Shells, script hosts, admin tools, remote clients and password managers can start or reach anything. With a lasting browser grant, devtools, `javascript:` addresses and OtherBench's own UI in a tab are in reach without a card, and with an IDE grant so is its terminal; Adam accepted that. Remove a name from `HIGH_RISK_STEMS` to allow lasting grants for it; `BROWSER_STEMS` and `IDE_STEMS` hold the ones that may have them |
-| (nothing) | Any window whose title carries `[otherbench-ui]` (every page of OtherBench's UI) is refused before any card, and the shell stops an action once its window shows it; while the computer may be in control the API takes changes only from the desktop app's window, and a paired machine changes nothing unless *Let paired machines start and approve computer use* is on (the default since 2026-11-05, Adam's call) | With lasting browser grants a model could open OtherBench in the browser and answer its own cards. The second wall also ends "cards answered from a paired machine keep a session going", unless the machine lets paired machines in, which gives that up on purpose |
+| (nothing) | Any window whose title carries `[otherbench-ui]` (every page of OtherBench's UI) is refused before any card, and the shell stops an action once its window shows it; while the computer may be in control the API takes changes only from the desktop app's window, and a paired machine changes nothing unless *Let paired machines start and approve computer use* is on (off by default and turned on only in that machine's desktop app, Adam's call 2026-11-05) | With lasting browser grants a model could open OtherBench in the browser and answer its own cards. The second wall also ends "cards answered from a paired machine keep a session going", unless the machine lets paired machines in, which gives that up on purpose |
 | (nothing) | A browser or IDE whose built name (`OriginalFilename`) is of another kind, or is on the high-risk list, is once-only; an Electron IDE built as `electron.exe` is the one exception | The card's warning comes from the key's file name, so a program that is something else under that name must not get the wrong warning with a lasting grant |
 | (nothing) | Any character outside plain ASCII in the path makes the app once-only, with a warning on the card | No list of look-alike characters is ever complete. A user whose profile folder is `C:\Users\José\...` gets "Allow once" only for everything installed per user (most Electron and Squirrel apps) |
 | (nothing) | Catalog-signed apps (Notepad, Calculator) are once-only | The signer is read only from an embedded Authenticode signature that `WinVerifyTrust` verified; no revocation check is made |
@@ -911,8 +917,8 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 
 - **Claude Code helpers' images are not kept.** A Claude Code turn's own tool results keep their images (see *Tool images* above), but a helper's (Task/Agent) tool results and its report keep only their text, since TurnRunner stores images only from the reply's own results and a helper's card must never hold base64. A fresh Claude Code session is seeded with text only (`history.ts`), so it doesn't see earlier screenshots; a running session has them in Claude Code's own session files. Nothing has been checked against a live Claude Code session: that the SDK's transcript carries a relayed MCP image, or a picture its `Read` opened, as a base64 `image` block in the tool result, and at what size.
 - **Relayed MCP tools have no ticket.** Claude Code runs them with its own input after the hook; binding them needs a live check that Claude Code never changes an MCP tool's input between hook and call.
-- **A chat that runs on a paired machine:** the reply's Stop now reaches it. On the laptop, Stop in the message box (and Escape) for a chat whose reply runs on the PC asks the laptop's server to stop the chat (`POST /api/chats/:id/stop`), which forwards that one call over the peer channel to the PC, and the PC cancels the chat's replies running there; it passes the PC's desktop-only gate while the PC is under computer control. The Stop button shows as soon as the PC says it is replying in the chat ("Replying on PC…"), before the reply itself is on screen. It ends the reply, not the PC's computer session; that has its own Stop. Since 2026-11-05 (Deck d1109) the laptop shows the banner for a chat holding the PC ("OtherBench is controlling PC.", from the PC's `activity`: the chat id and last action, nothing else), and its Stop goes to the PC (`POST /api/chats/:id/computer/stop`, forwarded by `forwardingRoutes` to the machine that says it holds that chat's session; the PC's `forwardedApi` route ends it only if that chat holds the session there, else 404 `no_session`, and also cancels the chat's replies there, as its own banner does). It passes the PC's desktop-only gate like every Stop. And while the PC lets paired machines start and approve computer use (see *Security posture*), the laptop can start a session on the PC ("Start on PC" above the composer for a chat that runs there with a computer-use profile; the PC's own start dialog asks), message the chat and answer its cards while it is in control; the PC's banner says "Started from Laptop" and its audit trail names the laptop on each call it approved. Any input the laptop puts into the chat (a message, a note or steer into a reply the PC started, an answer) makes a start in that chat the laptop's (`PeerInfluence`, `startCheck`), refused with the setting off; see *Security posture*. The thumbnails stay with the messages. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit, and the laptop's Stop still reaches it. Not tried on two real machines (`server/test/peer/remote-run.test.ts` uses two real servers over TLS on loopback).
-- **Only the desktop app's window changes anything while the computer may be in control** (a chat holds it, its start dialog may be up, or an end isn't confirmed: `ComputerSessions.mayBeInControl`). `changesOnlyFromTheDesktopApp` (`server/src/computer/desktop-only.ts`) refuses every write on the API that doesn't carry one of the shell's `--cors-origin`s as its `Origin` with 403 and "OtherBench is controlling this computer, so until that ends it only takes answers and changes from the OtherBench app on this computer..." (`COMPUTER_DESKTOP_ONLY_REASON`): a card's, a question's or a plan's answer, a message, a profile, an MCP server, a setting. When no chat holds the computer but its last end was never confirmed (after a channel fault, until the desktop app answers or OtherBench restarts), the refusal says so and that a restart clears it (`COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`); the web's note only knows of sessions in control, so it doesn't show in that state or while a start dialog is up. On the desktop server the per-launch API token is the real barrier against a browser tab, or any other program, driving the API: a tab doesn't have it, and since this round no child process inherits it. The Origin gate is defence in depth: it stops a browser that somehow had the token. Reads and the Stops (the banner's, a reply's, and the chat's `POST /api/chats/:id/stop`, which only cancels the chat's running replies) always pass; a background task's Stop does not. With *Let paired machines start and approve computer use* off, a paired machine changes nothing here meanwhile (the peer listener's forwarded API has the same gate with no origin allowed, so of its writes only a reply's Stop, the chat's Stop and the computer-use Stop get through), so cards can't be answered from a paired machine while a session is live. With it on (the default), the forwarded API skips this gate: the paired machine is trusted to drive the session, and a model that can reach that machine's OtherBench in a browser it has a lasting grant for could answer its own cards there. That is the setting's trade, stated under *Security posture*. Outside the desktop app a card says to answer in the OtherBench app (`desktop-only-note`) and shows the server's reason when an answer is refused; its buttons stay, since the server decides.
+- **A chat that runs on a paired machine:** the reply's Stop now reaches it. On the laptop, Stop in the message box (and Escape) for a chat whose reply runs on the PC asks the laptop's server to stop the chat (`POST /api/chats/:id/stop`), which forwards that one call over the peer channel to the PC, and the PC cancels the chat's replies running there; it passes the PC's desktop-only gate while the PC is under computer control. The Stop button shows as soon as the PC says it is replying in the chat ("Replying on PC…"), before the reply itself is on screen. It ends the reply, not the PC's computer session; that has its own Stop. Since 2026-11-05 (Deck d1109) the laptop shows the banner for a chat holding the PC ("OtherBench is controlling PC.", from the PC's `activity`: the chat id and last action, nothing else), and its Stop goes to the PC (`POST /api/chats/:id/computer/stop`, forwarded by `forwardingRoutes` to the machine that says it holds that chat's session; the PC's `forwardedApi` route ends it only if that chat holds the session there, else 404 `no_session`, and also cancels the chat's replies there, as its own banner does). It passes the PC's desktop-only gate like every Stop. And while the PC lets paired machines start and approve computer use (see *Security posture*), the laptop can ask to start a session on the PC ("Start on PC" above the composer for a chat that runs there with a computer-use profile; the PC's own start dialog asks the person there, naming the laptop), message the chat and answer its cards while it is in control; the PC's banner says "Started from Laptop" and its audit trail names the laptop on each call it approved. Any input the laptop puts into the chat (a message, a note or steer into a reply the PC started, an answer) makes a start in that chat the laptop's (`PeerInfluence`, `startCheck`), refused with the setting off; see *Security posture*. The thumbnails stay with the messages. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit, and the laptop's Stop still reaches it. Not tried on two real machines (`server/test/peer/remote-run.test.ts` uses two real servers over TLS on loopback).
+- **Only the desktop app's window changes anything while the computer may be in control** (a chat holds it, its start dialog may be up, or an end isn't confirmed: `ComputerSessions.mayBeInControl`). `changesOnlyFromTheDesktopApp` (`server/src/computer/desktop-only.ts`) refuses every write on the API that doesn't carry one of the shell's `--cors-origin`s as its `Origin` with 403 and "OtherBench is controlling this computer, so until that ends it only takes answers and changes from the OtherBench app on this computer..." (`COMPUTER_DESKTOP_ONLY_REASON`): a card's, a question's or a plan's answer, a message, a profile, an MCP server, a setting. When no chat holds the computer but its last end was never confirmed (after a channel fault, until the desktop app answers or OtherBench restarts), the refusal says so and that a restart clears it (`COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`); the web's note only knows of sessions in control, so it doesn't show in that state or while a start dialog is up. On the desktop server the per-launch API token is the real barrier against a browser tab, or any other program, driving the API: a tab doesn't have it, and since this round no child process inherits it. The Origin gate is defence in depth: it stops a browser that somehow had the token. Reads and the Stops (the banner's, a reply's, and the chat's `POST /api/chats/:id/stop`, which only cancels the chat's running replies) always pass; a background task's Stop does not. With *Let paired machines start and approve computer use* off, a paired machine changes nothing here meanwhile (the peer listener's forwarded API has the same gate with no origin allowed, so of its writes only a reply's Stop, the chat's Stop and the computer-use Stop get through), so cards can't be answered from a paired machine while a session is live. With it on (off by default; only the PC's own desktop app turns it on), the forwarded API skips this gate: the paired machine is trusted to drive the session, and a model that can reach that machine's OtherBench in a browser it has a lasting grant for could answer its own cards there. That is the setting's trade, stated under *Security posture*. Outside the desktop app a card says to answer in the OtherBench app (`desktop-only-note`) and shows the server's reason when an answer is refused; its buttons stay, since the server decides.
 - **Peer sync is an ungated write path during a session.** Sync isn't a request to this machine's API: changes pulled from a paired machine are applied whatever the computer is doing, so a profile (its tool policy), its system prompt and global memory can change here mid-session. Grants and MCP servers don't sync, so no approval and no new command arrives that way.
 - **Follow-up: tie the kind to the built name.** A browser's or IDE's kind, and so its lasting grant and its card's words, comes from the key's file name; a program with no built name at all (`OriginalFilename` missing) under a browser's or IDE's file name gets it too. Requiring a non-null built name of the same kind would close that, but needs a live look at what real browsers and IDEs report first (checklist items 33 and 34), or it would turn some into Allow once.
 - **Start timing.** `computer.start` waits 2 minutes for the dialog. When nobody has answered by then, the server ends that chat's start (which also dismisses a dialog still up) and the model is told nothing was started; an OK within the next 10 minutes is ended at once. If the desktop app doesn't confirm an end, every start for every chat is refused until it does, or until OtherBench restarts.
@@ -1249,18 +1255,31 @@ approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
 
 **A paired machine can drive this machine's desktop through computer use,
-by default.** With *Let paired machines start and approve computer use*
-on (Settings → Machines, per machine, on unless turned off), a paired
-machine can start a computer-use session here (`POST
-/api/chats/:id/computer/start` on the peer listener, or a message whose
-reply uses the computer), send messages while it is in control, and
-answer its cards, "always" grants for an app included: so it can click
-and type in any app the cards let through, as the person signed in here.
-What still holds: computer use must already be switched on here (the
-desktop app with `OTHERBENCH_COMPUTER_USE=1`, and the chat's profile); a
-remote start never switches either on and is refused, saying so, when
-they're off. This machine's own native start dialog still asks before
-every session, whoever asked for it; a start runs through the same
+once this machine lets it.** *Let paired machines start and approve
+computer use* (Settings → Machines, per machine) is **off by default**:
+the default is `false` in `DEFAULT_APP_SETTINGS`, and since a default is
+never written to the database (only a change is), an install from before
+2026-11-05 that never touched the setting reads it as off with no
+migration. It is **switched on only at the machine itself, in its desktop
+app**: `PATCH /api/settings` refuses turning it on (403, `desktop_app_only`,
+core's `mayChangePeerComputerControl`) unless the request's `Origin` is one
+of the shell's `--cors-origin`s, the same test as the desktop-only gate, so
+a browser tab, a signed-in phone or browser (sign-in mode), a script with
+the token, and a server with no desktop app can't. Turning it off works
+from anywhere that reaches Settings. The peer listener has no settings
+route, and settings never sync, so a paired machine can't turn it on.
+With it on, a paired machine can ask to start a computer-use session here
+(`POST /api/chats/:id/computer/start` on the peer listener, or a message
+whose reply uses the computer), send messages while it is in control, and
+answer its cards, "always" grants for an app included: so once someone
+here has accepted the session it can click and type in any app the cards
+let through, as the person signed in here, with nobody here approving
+each step. What still holds: computer use must already be switched on
+here (the desktop app with `OTHERBENCH_COMPUTER_USE=1`, and the chat's
+profile); a remote start never switches either on and is refused, saying
+so, when they're off. This machine's own native start dialog asks before
+every session, whoever asked for it, and says which paired machine asked;
+nobody answering is a Cancel after 110 s. A start runs through the same
 `ComputerSessions.ensureSession`, and every action through the same
 `PermissionBroker` cards and grants, as a local one. The banner says which
 machine started the session and the audit names the machine each call was
@@ -1270,7 +1289,8 @@ session is in control, the desktop-only gate (below, under Computer use)
 no longer covers the peer listener, so a model holding a lasting browser
 grant here that can reach the paired machine's OtherBench in that browser
 could answer its own cards through it. **To switch it off**, untick the
-setting on the machine being controlled: a paired machine can then only
+setting on the machine being controlled (from anywhere that reaches its
+Settings): a paired machine can then only
 see a session here and Stop it (Stop is always allowed, and ends a session
 only if that chat holds one). Off is meant to hold against input as well
 as against starts and answers: every write a paired machine sends over the
@@ -2591,16 +2611,13 @@ this on startup.
   tasks and computer-use sessions on the other machine are live (its
   `activity`, see *Live state between machines*). What doesn't sync never
   shows: grants, MCP servers, the audit log, schedules, settings.
-- **Computer use started from a paired machine still needs someone at the
-  machine being controlled.** The remote start goes through that machine's
-  own start (`ComputerSessions.ensureSession`), so the desktop shell's
-  native dialog comes up there and must be OK'd there; nobody answering
-  cancels it after 110 s. The dialog names the chat, not the machine that
-  asked (the banner does once it starts). Skipping the dialog for a remote
-  start would be a change to the shell's `computer.start` and to the one
-  local consent; it wasn't made. The remote start answers 202 at once and
-  the laptop learns of the session from the PC's activity; a Cancel there
-  is only in the PC's log. Not tried on two real machines.
+- **The laptop isn't told when the PC declines its start.** A remote
+  start is accepted at the PC by design (its dialog asks, naming the
+  laptop; see *Computer use across machines*). The start route answers 202
+  at once and the laptop learns of the session from the PC's activity; a
+  Cancel there, or the dialog closing unanswered after 110 s, is only in
+  the PC's log, so the laptop just never sees a session. Not tried on two
+  real machines.
 - **Project memory is summarised only by the machine a chat runs on**, so
   two machines don't redo and overwrite each other's notes. Its version
   history stays on the machine that wrote it.

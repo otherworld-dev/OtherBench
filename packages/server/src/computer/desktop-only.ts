@@ -22,6 +22,15 @@ const ALWAYS_ALLOWED: readonly RegExp[] = [
 const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
+ * Whether a request came from the desktop app's own window: its `Origin` is one of the shell's `--cors-origin`s
+ * (`allowed`), which a page can't set. A browser tab (same origin, or none), a signed-in phone and the peer listener
+ * (`allowed` empty) never count.
+ */
+export function fromTheDesktopApp(origin: string | undefined, allowed: readonly string[]): boolean {
+  return origin !== undefined && allowed.includes(origin);
+}
+
+/**
  * While computer use may be in control of this machine, the API takes a
  * change (a card's answer, a question's or plan's, a message, a profile, an
  * MCP server, a setting) only from the desktop app's own window, which is

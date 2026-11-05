@@ -165,6 +165,29 @@ describe('computer use routes in sign-in mode', () => {
   });
 });
 
+describe('"Let paired machines start and approve computer use" from a signed-in device', () => {
+  it('a signed-in phone or browser can turn it off but not on', async () => {
+    const app = createApp(container, { remote: fx.remote });
+    const cookie = await signIn(app);
+    const patch = (value: boolean): Promise<Response> =>
+      Promise.resolve(
+        app.request(
+          '/api/settings',
+          { method: 'PATCH', headers: { ...JSON_HEADERS, Cookie: cookie, 'Sec-Fetch-Site': 'same-origin', Origin: PUBLIC_ORIGIN }, body: JSON.stringify({ peerComputerControl: value }) },
+          from('10.0.0.7')
+        )
+      );
+    const on = await patch(true);
+    expect(on.status).toBe(403);
+    expect(await on.json()).toMatchObject({ kind: 'desktop_app_only' });
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+
+    container.store.settings.update({ peerComputerControl: true });
+    expect((await patch(false)).status).toBe(200);
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+  });
+});
+
 describe('computer use routes and the cross-site check', () => {
   it("refuses a Stop sent by another site's page, a form or a navigation, in every mode, and stops nothing", async () => {
     await holding();
@@ -242,6 +265,20 @@ describe('computer use routes and the peer listener', () => {
     expect(driver.ended).toEqual(['c1']);
   });
 
+  it('has no settings route, so a paired machine can neither turn the setting on nor change any other', async () => {
+    const app = peerApp(true);
+    const api = forwardedApi(container);
+    for (const value of [true, false]) {
+      for (const path of ['/api/settings', '/settings']) {
+        const res = await app.request(path, { method: 'PATCH', headers: { ...JSON_HEADERS, Origin: 'http://tauri.localhost' }, body: JSON.stringify({ peerComputerControl: value }) }, from('10.0.0.7'));
+        expect(res.status, path).toBe(404);
+      }
+      const direct = await api.request('/settings', { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ peerComputerControl: value }) }, { peerNodeId: 'node-pc' });
+      expect(direct.status).toBe(404);
+      expect(container.store.settings.get().peerComputerControl).toBe(false);
+    }
+  });
+
   it('refuses a stranger before any route is looked at', async () => {
     const app = peerApp(false);
     for (const [method, path] of ROUTES) expect((await call(app, method, path)).status, `${method} ${path}`).toBe(401);
@@ -295,8 +332,9 @@ describe('computer use routes and the peer listener', () => {
     expect(driver.hasSession('c1')).toBe(true);
   });
 
-  it('with paired machines let in (the default), takes their answers and messages while the computer is in control here', async () => {
-    expect(container.store.settings.get().peerComputerControl).toBe(true);
+  it('with paired machines let in (turned on here), takes their answers and messages while the computer is in control here', async () => {
+    expect(container.store.settings.get().peerComputerControl).toBe(false);
+    container.store.settings.update({ peerComputerControl: true });
     await holding();
     const answered: { id: string; from: string | undefined }[] = [];
     container = { ...container, toolProvider: { resolveApproval: (id: string, _choice: unknown, from?: string) => (answered.push({ id, from }), true), answerAsk: () => 'unknown' } as never };

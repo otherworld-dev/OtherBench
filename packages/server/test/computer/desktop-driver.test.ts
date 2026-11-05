@@ -351,6 +351,24 @@ describe('DesktopComputerDriver: starting a session', () => {
     ]);
   });
 
+  it("sends the paired machine a start was asked from, as one clean bounded line, for the dialog to name; the shell's answer is still the person's", async () => {
+    const { driver, shell } = await connected();
+    shell.startAnswer = { ok: false, reason: "The user didn't let OtherBench control the computer." };
+    expect(await driver.ensureSession('c', 'Budget', { from: 'Laptop' })).toEqual({ ok: false, reason: "The user didn't let OtherBench control the computer." });
+    shell.startAnswer = { ok: true };
+    expect(await driver.ensureSession('c', 'Budget', { from: `Lap‮top\n${'x'.repeat(200)}` })).toEqual({ ok: true });
+    await driver.ensureSession('d', 'Other', { from: '​' });
+    const sent = shell.sent('computer.start') as { chatId: string; title: string; from?: string }[];
+    expect(sent[0]).toEqual({ chatId: 'c', title: 'Budget', from: 'Laptop' });
+    expect(sent[1]!.from).toBe(`Laptop ${'x'.repeat(56)}…`);
+    expect(Array.from(sent[1]!.from!)).toHaveLength(64);
+    expect(sent[2]!.from).toBe('a paired machine');
+    // A local start sends no `from`, as before.
+    await driver.ensureSession('e', 'Mine');
+    expect(sent.length + 1).toBe(shell.sent('computer.start').length);
+    expect(shell.sent('computer.start').at(-1)).toEqual({ chatId: 'e', title: 'Mine' });
+  });
+
   it('has one start with the shell per chat at a time: whoever asks meanwhile gets its answer', async () => {
     const { driver, shell } = await connected();
     shell.override = silentOn('computer.start');

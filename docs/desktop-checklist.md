@@ -106,7 +106,7 @@ tools never do.
 - [ ] 13. A session that was used carries over to the chat's next reply with no new dialog. One that was started but never used ends with its reply.
 - [ ] 14. After 10 minutes with no action the session ends by itself: the banner and the bar go and the hotkey is released.
 - [ ] 15. Deleting the chat (or its profile) while it holds control ends the session.
-- [ ] 16. With the screen locked (Win+L), start from a paired machine or another signed-in device: no session starts until someone at the machine answers the dialog, and an action in a session that is already live is refused ("OtherBench couldn't read the keyboard state (is the computer locked?); nothing was done."). The same with a UAC prompt up.
+- [ ] 16. With the screen locked (Win+L), start from a paired machine (with *Let paired machines start and approve computer use* turned on in this machine's desktop app) or another signed-in device: no session starts until someone at the machine answers the dialog (for a paired machine's start it begins "The paired machine '<name>' wants to start computer use here."), and an action in a session that is already live is refused ("OtherBench couldn't read the keyboard state (is the computer locked?); nothing was done."). The same with a UAC prompt up.
 - [ ] 17. A start whose bar can't be shown (if that can be provoked) is refused and the stop hotkey is released.
 
 ### Targets and risk
@@ -134,7 +134,7 @@ tools never do.
   - Open a second OtherBench (`npm run serve`, browser mode) in that browser: the tab's title shows `OtherBench [otherbench-ui]` and the browser's window title includes it; any click or key the model sends into that window is refused with no card ("That window is showing OtherBench's own pages. OtherBench never controls itself, in a browser or anywhere else."). Have the model type its address and press Enter in one `type` action while on another page: nothing more is typed once the title changes ("That window is showing OtherBench's own pages now...").
   - Undock that browser's developer tools (F12, then the dock menu's separate window): any action in it is refused ("That's a browser's developer tools window...").
   - Edge or Chrome split view with OtherBench in the unfocused pane: note whether an action in that pane goes through. It is expected to (a known residual: the window title is the focused pane's).
-  - The desktop app itself, mid-session: answering a card and sending a message still work there (its origin is on the server's list). The desktop server's API can't be opened in a browser tab without the per-launch token; a paired machine can't answer until Stop.
+  - The desktop app itself, mid-session: answering a card and sending a message still work there (its origin is on the server's list). The desktop server's API can't be opened in a browser tab without the per-launch token; a paired machine can't answer until Stop (with *Let paired machines start and approve computer use* off, the default).
   - Then remove the grant (Inspector) and close the second OtherBench.
 
 ### Input accuracy
