@@ -41,6 +41,13 @@ const NEW_CHAT_TITLE_MAX = 60;
 /** `resumedAs` for a group that was closed without a turn (its sender deleted, cleared, or stopped from the card). */
 export const NO_RESUME = 'none';
 
+export const STOPPED_FROM_CARD = 'Stopped from the send card.';
+export const SENDER_STOPPED = 'The chat that sent this was stopped.';
+/** What a chat is told when the work it passed on was stopped from that chat's own card. */
+const PASSED_ON_STOPPED = 'The chat it was sent to stopped the work it had passed on.';
+/** Stops that mean "don't carry on": a group stopped for one of these closes without resuming its sender. */
+const NO_RESUME_REASONS: ReadonlySet<string> = new Set([STOPPED_FROM_CARD, SENDER_STOPPED]);
+
 /** What a reply ended by saying: its text after its last tool call, the part a sender wants back. */
 function finalText(parts: readonly Part[]): string {
   let start = 0;
@@ -80,6 +87,8 @@ export class ChatSendService implements ChatMessenger {
   /** Sending replies whose group has all come back, waiting for their chat to be free. */
   private readonly due = new Set<string>();
   private off: (() => void) | null = null;
+  /** Set by dispose: a follow-up queued just before (a reply that ended as the server closed) then does nothing. */
+  private disposed = false;
 
   constructor(deps: ChatSendDeps) {
     this.deps = deps;
@@ -88,13 +97,60 @@ export class ChatSendService implements ChatMessenger {
     this.generateId = deps.generateId ?? randomUUID;
   }
 
+  /**
+   * Listens for replies ending, then picks up where a previous process left off: a send whose reply isn't
+   * running here any more ended as that reply is stored (a restart already reconciled it as an error), and
+   * anything still queued gets another look.
+   */
   start(): void {
     this.off = this.deps.turnRunner.on((e) => {
       if (e.type === 'status' && e.status !== undefined && e.status !== 'streaming') this.onReplyEnded(e.messageId, e.status);
     });
+    for (const row of this.store.chatSends.unsettled()) {
+      if (row.status !== 'running' || row.toReplyId === null || this.deps.turnRunner.runningInfo(row.toReplyId) !== null) continue;
+      const stored = this.store.messages.get(row.toReplyId)?.status;
+      this.onReplyEnded(row.toReplyId, stored === undefined || stored === 'streaming' ? 'error' : stored);
+    }
+    this.drainAll();
+  }
+
+  /** Stop on the send card of reply `fromMessageId`: everything it started stops, down the chain, and it doesn't resume. */
+  stop(fromMessageId: string): void {
+    this.stopTree(fromMessageId, STOPPED_FROM_CARD);
+    this.maybeResume(fromMessageId);
+  }
+
+  /** The chats with sends of theirs still out, or back and waiting to resume them: the "waiting on chats" status. */
+  waitingChatIds(): string[] {
+    const ids = new Set(this.store.chatSends.unsettled().map((r) => r.fromChatId));
+    for (const m of this.due) {
+      const chatId = this.store.chatSends.byFromMessage(m)[0]?.fromChatId;
+      if (chatId !== undefined) ids.add(chatId);
+    }
+    return [...ids];
+  }
+
+  /**
+   * Stops every unsettled send of reply `fromMessageId` with `reason`: a queued one settles now, a running one has
+   * its reply stopped (it settles when that reply ends) and its own sends stopped in turn. A send whose reply
+   * already ended, waiting on sends of its own, closes once those have.
+   */
+  private stopTree(fromMessageId: string, reason: string): void {
+    for (const row of this.store.chatSends.byFromMessage(fromMessageId).filter((r) => !isSettled(r.status))) {
+      if (row.status === 'queued') {
+        this.settle(row.id, 'stopped', null, reason);
+        continue;
+      }
+      if (row.reason === null) this.store.chatSends.update(row.id, { reason });
+      if (row.toReplyId === null) continue;
+      if (this.deps.turnRunner.runningInfo(row.toReplyId) !== null) this.deps.turnRunner.cancel(row.toReplyId);
+      this.stopTree(row.toReplyId, reason);
+      this.maybeResume(row.toReplyId);
+    }
   }
 
   dispose(): void {
+    this.disposed = true;
     this.off?.();
     this.off = null;
   }
@@ -297,6 +353,7 @@ export class ChatSendService implements ChatMessenger {
    */
   private onReplyEnded(replyId: string, status: MessageStatus): void {
     const out = this.store.chatSends.byFromMessage(replyId);
+    if (status !== 'complete' && out.some((r) => !isSettled(r.status))) this.stopTree(replyId, SENDER_STOPPED);
     if (status === 'complete' && out.some((r) => r.resumedAs === null)) {
       // Its sends' replies may already all be in (a fast target): then it is due now that it has ended.
       this.maybeResume(replyId);
@@ -315,6 +372,7 @@ export class ChatSendService implements ChatMessenger {
     }
     // After the notes service and the app events have heard it, so a chat's own waiting messages go first.
     setImmediate(() => {
+      if (this.disposed) return;
       this.drainAll();
       this.resumeDue();
     });
@@ -330,6 +388,10 @@ export class ChatSendService implements ChatMessenger {
     if (group.length === 0 || group.some((r) => !isSettled(r.status) || r.resumedAs !== null)) return;
     // The sending reply itself must have ended first: its chat isn't free until then anyway.
     if (this.store.messages.get(fromMessageId)?.status === 'streaming') return;
+    if (group.every((r) => r.status === 'stopped' && r.reason !== null && NO_RESUME_REASONS.has(r.reason))) {
+      this.close(fromMessageId, 'stopped', PASSED_ON_STOPPED);
+      return;
+    }
     const sender = this.store.chats.get(group[0]!.fromChatId);
     if (!sender) {
       this.close(fromMessageId, 'dropped', 'The chat that sent this was deleted.');
@@ -350,7 +412,8 @@ export class ChatSendService implements ChatMessenger {
     if (group[0]) this.changed([group[0].fromChatId]);
     this.due.delete(fromMessageId);
     for (const row of this.store.chatSends.byToReply(fromMessageId).filter((r) => !isSettled(r.status))) {
-      this.settle(row.id, status, null, reason);
+      // A row Stop already marked keeps its own reason, so a stop from the card above stays a stop from the card.
+      this.settle(row.id, status, null, row.reason ?? reason);
       this.maybeResume(row.fromMessageId);
     }
   }
