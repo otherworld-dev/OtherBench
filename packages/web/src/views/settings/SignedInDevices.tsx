@@ -15,13 +15,15 @@ export function SignedInDevices(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      setDevices((await api.auth.sessions()).sessions);
-    } catch (err) {
-      setError(`Couldn't list the signed-in devices: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, []);
+  // Its state is set in the callbacks, after the read: none of it synchronously in the effect that loads on open.
+  const load = useCallback(
+    (): Promise<void> =>
+      api.auth.sessions().then(
+        (r) => setDevices(r.sessions),
+        (err: unknown) => setError(`Couldn't list the signed-in devices: ${err instanceof Error ? err.message : String(err)}`)
+      ),
+    []
+  );
 
   useEffect(() => {
     void load();

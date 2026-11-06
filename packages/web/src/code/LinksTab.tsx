@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { Bookmark } from '@otherbench/core/types/nextcloud.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -68,7 +69,7 @@ export function LinksTab({ app }: { app: App }): JSX.Element {
   const refresh = (): void => setReload((n) => n + 1);
 
   useCodeRefresh(app.id, refresh);
-  useEffect(() => setError(null), [app.id, tag]);
+  if (useChanged([app.id, tag])) setError(null);
   useEffect(() => {
     // Nothing to ask for: the server would only answer no-bookmark-tag.
     if (tag === null) return;

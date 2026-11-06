@@ -4,6 +4,7 @@ import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, DockIcon, GearIcon, MenuIcon, SignOutIcon } from './components/icons.js';
 import { dock, isIndicatorView, isQuickView } from './desktop/bridge.js';
 import { useDocks } from './desktop/useDocks.js';
+import { useChanged } from './lib/useChanged.js';
 import { NARROW_BREAKPOINT, PHONE_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
@@ -190,9 +191,7 @@ function MainApp(): JSX.Element {
   usePush(loaded, signedInRemotely);
 
   // The drawer gets out of the way once something is chosen in it: a chat, the Overview, or a page of its own.
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [activeChatId, overviewOpen, projectPage, appPage, schedulesPage, settingsViewOpen, usageViewOpen, isPhone]);
+  if (useChanged([activeChatId, overviewOpen, projectPage, appPage, schedulesPage, settingsViewOpen, usageViewOpen, isPhone])) setDrawerOpen(false);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;

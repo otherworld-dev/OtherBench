@@ -5,6 +5,7 @@ import type { App, Project } from '@otherbench/core/ports/store.js';
 import { DEFAULT_COLLECTIVE, type ProjectLinksSuggestion } from '@otherbench/core/types/nextcloud.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
+import { useChanged } from '../lib/useChanged.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api, type CreateAppBody, type PatchAppBody } from '../state/api.js';
 import { useFeatures } from '../state/features.js';
@@ -153,8 +154,8 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
   const linkedListed = orderedProjects.some((p) => p.id === draft.linkedProjectId);
 
   const chosenCollective = draft.wikiCollective.trim();
+  if (useChanged([chosenCollective, nextcloud])) setCollectivePages(null);
   useEffect(() => {
-    setCollectivePages(null);
     if (chosenCollective === '' || !nextcloud) return;
     let live = true;
     api.nextcloud.collectivePages(chosenCollective).then(

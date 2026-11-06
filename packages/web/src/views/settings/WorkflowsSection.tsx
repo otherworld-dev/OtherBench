@@ -3,6 +3,7 @@ import { checkpointLoaderOf, type MediaWorkflow, type WorkflowBinding, type Work
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import { ApiError, api, type MediaModelsResult } from '../../state/api.js';
 import { openInBrowser } from '../../desktop/bridge.js';
+import { useChanged } from '../../lib/useChanged.js';
 
 const ROLE_LABELS: Record<WorkflowRole, string> = {
   prompt: 'Prompt',
@@ -125,18 +126,21 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   const recentLoad = useRef(0);
 
   // Overlapping loads (tab, focus, Refresh) can finish out of order, so only the latest one applies.
-  async function loadRecent(): Promise<void> {
+  // Its state is set in the callbacks, once the list has come: none of it synchronously in the effect below.
+  function loadRecent(): Promise<void> {
     const mine = ++recentLoad.current;
-    try {
-      const rows = await api.connections.comfyRecent(connectionId);
-      if (mine !== recentLoad.current) return;
-      setRecent(rows);
-      setRecentError(null);
-    } catch (err) {
-      if (mine !== recentLoad.current) return;
-      console.error('[otherbench-web] failed to list recent ComfyUI workflows:', err);
-      setRecentError(errorMessage(err, 'Could not reach ComfyUI.'));
-    }
+    return api.connections.comfyRecent(connectionId).then(
+      (rows) => {
+        if (mine !== recentLoad.current) return;
+        setRecent(rows);
+        setRecentError(null);
+      },
+      (err: unknown) => {
+        if (mine !== recentLoad.current) return;
+        console.error('[otherbench-web] failed to list recent ComfyUI workflows:', err);
+        setRecentError(errorMessage(err, 'Could not reach ComfyUI.'));
+      }
+    );
   }
   // Loads on open and whenever the tab is selected; while it shows, coming back to the window reloads it too
   // (the usual flow is to run something in ComfyUI and switch back).
@@ -175,14 +179,18 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
     };
   }, [tab, templates, connectionId]);
 
-  async function reload(): Promise<void> {
-    try {
-      setWorkflows(await api.mediaWorkflows.list());
-      setListError(null);
-    } catch (err) {
-      console.error('[otherbench-web] failed to list workflows:', err);
-      setListError(errorMessage(err, 'Could not load the workflows.'));
-    }
+  // As loadRecent: the state is set in the callbacks.
+  function reload(): Promise<void> {
+    return api.mediaWorkflows.list().then(
+      (list) => {
+        setWorkflows(list);
+        setListError(null);
+      },
+      (err: unknown) => {
+        console.error('[otherbench-web] failed to list workflows:', err);
+        setListError(errorMessage(err, 'Could not load the workflows.'));
+      }
+    );
   }
   useEffect(() => {
     void reload();
@@ -191,10 +199,11 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
   const media = draft?.media;
   // The model files come from the loader the bound model file is on, whatever the workflow makes.
   const loader = draft ? checkpointLoaderOf(draft, draft.media) : undefined;
+  // Another loader starts from Loading, in the same render, so the last one's files never show under it.
+  if (useChanged([connectionId, media, loader]) && media && loader) setCheckpoints(null);
   useEffect(() => {
     if (!media || !loader) return;
     let cancelled = false;
-    setCheckpoints(null);
     api.connections
       .mediaModels(connectionId, media, loader)
       .then((r) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { api } from '../state/api.js';
 import { serverUrl } from '../state/transport.js';
 
@@ -11,10 +12,12 @@ import { serverUrl } from '../state/transport.js';
 export function ViewerImage({ chatId, path, alt }: { chatId: string; path: string; alt: string }): JSX.Element {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
+  if (useChanged([chatId, path])) {
     setSrc(null);
     setFailed(false);
+  }
+  useEffect(() => {
+    let cancelled = false;
     api.view.open(chatId, path).then(
       (o) => {
         if (cancelled) return;

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened, type ViewText } from '../state/api.js';
@@ -79,9 +80,9 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
     pathRef.current = path;
   });
 
+  if (useChanged([chatId, path, attempt])) setError(null);
   useEffect(() => {
     let cancelled = false;
-    setError(null);
     api.view.open(chatId, path).then(
       (o) => {
         if (cancelled) return;

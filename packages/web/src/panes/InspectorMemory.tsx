@@ -3,6 +3,7 @@ import { hasMemoryContent, validateMemoryBody, type MemoryUpdateOutcome } from '
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
 import { MemoryNote } from '../components/MemoryNote.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
+import { useChanged } from '../lib/useChanged.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { ApiError, api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -45,7 +46,7 @@ export function InspectorMemory({ chat, project }: { chat: Chat; project: Projec
   const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null);
   const [refresh, setRefresh] = useState(0);
 
-  useEffect(() => setNotice(null), [chat.id]);
+  if (useChanged([chat.id])) setNotice(null);
   useSectionSummary(
     !view
       ? loadFailed

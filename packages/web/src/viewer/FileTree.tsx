@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type JSX, type KeyboardEvent, type MouseEvent } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { Menu, type MenuItem } from '../components/Menu.js';
 import { isDesktop, openFolder, revealPath } from '../desktop/bridge.js';
 import { isContextMenuKey } from '../panes/sidebar/ChatRow.js';
@@ -216,10 +217,12 @@ export function FileTree({ chatId, onOpen, onOpenArtifact }: { chatId: string; o
       cancelled = true;
     };
   }, [chatId, stamp]);
-  useEffect(() => {
-    let cancelled = false;
+  if (useChanged([chatId])) {
     setRoots(null);
     setError(null);
+  }
+  useEffect(() => {
+    let cancelled = false;
     api.view.roots(chatId).then(
       (r) => !cancelled && setRoots(r.roots),
       (err: unknown) => !cancelled && setError(failure(err))

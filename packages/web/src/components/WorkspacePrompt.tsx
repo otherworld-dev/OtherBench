@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
+import { useChanged } from '../lib/useChanged.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api, type InferLocationResult, type LocationView } from '../state/api.js';
 import { isReachablePeer, machineName } from '../state/machines.js';
@@ -57,11 +58,12 @@ function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unreso
   const [inference, setInference] = useState<(InferLocationResult & { chosen: string }) | null>(null);
   const [locationName, setLocationName] = useState('');
 
-  useEffect(() => {
+  // Another chat, or another reason it doesn't resolve: the form starts again.
+  if (useChanged([chat.id, unresolved.reason])) {
     setDraft('');
     setError(null);
     setInference(null);
-  }, [chat.id, unresolved.reason]);
+  }
 
   useEffect(() => {
     let cancelled = false;

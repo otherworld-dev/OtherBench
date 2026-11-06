@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { api, type BrowserLiveEvent, type BrowserLiveState, type BrowserPanelInput } from '../state/api.js';
 import { SseClient, type SseConnect } from '../state/sse.js';
 import { streamApiUrl } from '../state/transport.js';
@@ -64,9 +65,12 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
   const wheel = useRef<{ x: number; y: number; dy: number; timer: ReturnType<typeof setTimeout> | null }>({ x: 0, y: 0, dy: 0, timer: null });
   const surface = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  // Another chat's browser starts blank, in the same render, so the last one's page never shows under it.
+  if (useChanged([chatId, connect])) {
     setState(null);
     setFrame(null);
+  }
+  useEffect(() => {
     const show = (s: BrowserLiveState | null | undefined): void => {
       if (!s || typeof s !== 'object') return;
       setState(s);

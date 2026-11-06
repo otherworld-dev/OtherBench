@@ -52,13 +52,15 @@ export function MemoryNote(props: MemoryNoteProps): JSX.Element {
   const [viewing, setViewing] = useState<{ body: string } | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
-  async function loadVersions(): Promise<void> {
-    try {
-      setVersions(await props.loadVersions());
-      setHistoryError(null);
-    } catch (err) {
-      setHistoryError(errorText(err, "Couldn't load the history."));
-    }
+  // Its state is set in the callbacks, after the read: none of it synchronously in the effect that reloads it.
+  function loadVersions(): Promise<void> {
+    return props.loadVersions().then(
+      (loaded) => {
+        setVersions(loaded);
+        setHistoryError(null);
+      },
+      (err: unknown) => setHistoryError(errorText(err, "Couldn't load the history."))
+    );
   }
 
   // The owner changed the note: an open history shows the new version.
