@@ -219,6 +219,6 @@ describe('approval events over the real SSE channel', () => {
 
     const result = (await execPromise) as Record<string, unknown>;
     expect(result.error).toBeUndefined();
-    reader.cancel();
+    await reader.cancel();
   });
 });

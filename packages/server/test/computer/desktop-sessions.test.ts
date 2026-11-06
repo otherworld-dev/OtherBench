@@ -121,7 +121,7 @@ describe('a start that fails for a chat that is in control', () => {
     // Two other calls take every ordinary place on the channel.
     shell.override = (method, params) => (method === 'computer.start' && params['chatId'] !== 'c' ? 'silent' : undefined);
     const others = [driver.ensureSession('x', 'X'), driver.ensureSession('y', 'Y')];
-    others.forEach((p) => p.catch(() => {}));
+    for (const p of others) p.catch(() => {});
     await tick();
 
     expect(await sessions.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: 'The desktop app has too many requests waiting; nothing was sent.' });
