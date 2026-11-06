@@ -105,6 +105,11 @@ export interface EngineRequest {
    * context), so a call that would need a card is refused instead.
    */
   unattended?: boolean;
+  /**
+   * A handover summary (the message answered holds a `handover-request` part): the Claude Code engine sends its
+   * fixed prompt and refuses every tool call, so the reply can never stop on a card. Other engines ignore it.
+   */
+  handover?: boolean;
   /** The reply's sub-agent runner, handed to tools on `ToolContext.subagents`. Absent: the `subagent` tool says sub-agents aren't available. */
   subagents?: SubagentHost;
   /** Set on a sub-agent's own request: every tool call it makes carries it. */

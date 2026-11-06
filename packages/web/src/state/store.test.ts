@@ -8,6 +8,7 @@ import { CLIENT_ID } from '../lib/clientId.js';
 import { formatReset } from '../components/PlanUsageMeter.js';
 import { useToasts } from '../lib/toasts.js';
 import { useClaudeAccounts } from './claudeAccounts.js';
+import { pendingHandovers } from './handover.js';
 import { viewTabId } from '../viewer/items.js';
 import { ALL_APPS_TAB_ID } from './allAppsTab.js';
 import { appTabId } from './appTab.js';
@@ -1263,5 +1264,33 @@ describe('Claude account events', () => {
     expect(load).toHaveBeenCalledTimes(2);
     useOtherBenchStore.getState().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'm1', status: 'complete' });
     expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('chat-handed-over', () => {
+  beforeEach(() => {
+    useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
+    useToasts.setState({ toasts: [] });
+    pendingHandovers.clear();
+  });
+
+  it('opens the fresh chat in the window that asked for it', () => {
+    const s = () => useOtherBenchStore.getState();
+    s().setChats([makeChat({ id: 'old', title: 'Rig' }), makeChat({ id: 'new', title: 'Rig (continued)' })]);
+    s().setActiveChatId('old');
+    pendingHandovers.add('old');
+    s().applyAppEvent({ type: 'chat-handed-over', fromChatId: 'old', toChatId: 'new', title: 'Rig (continued)' });
+    expect(s().activeChatId).toBe('new');
+    expect(pendingHandovers.has('old')).toBe(false);
+    expect(useToasts.getState().toasts).toEqual([]);
+  });
+
+  it('says so, with the chat to open, in a window that did not ask', () => {
+    const s = () => useOtherBenchStore.getState();
+    s().setChats([makeChat({ id: 'old', title: 'Rig' }), makeChat({ id: 'new', title: 'Rig (continued)' })]);
+    s().setActiveChatId('old');
+    s().applyAppEvent({ type: 'chat-handed-over', fromChatId: 'old', toChatId: 'new', title: 'Rig (continued)' });
+    expect(s().activeChatId).toBe('old');
+    expect(useToasts.getState().toasts).toMatchObject([{ tone: 'ok', chatId: 'new', text: 'Continued in Rig (continued)' }]);
   });
 });

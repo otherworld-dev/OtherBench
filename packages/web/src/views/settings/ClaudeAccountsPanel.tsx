@@ -3,6 +3,7 @@ import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
 import { toast } from '../../lib/toasts.js';
 import { ApiError, api } from '../../state/api.js';
 import { useClaudeAccounts } from '../../state/claudeAccounts.js';
+import { FreshChatSection } from './FreshChatSection.js';
 
 /** How often the list is read again while an account is signing in. */
 export const SIGN_IN_POLL_MS = 2000;
@@ -106,6 +107,7 @@ export function ClaudeAccountsPanel(): JSX.Element {
         ))}
       </ul>
       <AddAccount count={accounts.length} onAdded={reload} />
+      <FreshChatSection />
     </div>
   );
 }

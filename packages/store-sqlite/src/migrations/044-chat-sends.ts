@@ -5,9 +5,9 @@ import type { Migration } from './types.js';
 // to this machine, so no sync triggers: sends only reach chats that run here.
 // No foreign keys either, as in migration 029: a chat can be deleted while a
 // send to or from it waits, and ChatSendService settles the row then.
-export const MIGRATION_043_CHAT_SENDS: Migration = {
-  version: 43,
-  name: '043-chat-sends',
+export const MIGRATION_044_CHAT_SENDS: Migration = {
+  version: 44,
+  name: '044-chat-sends',
   sql: `
 CREATE TABLE chat_send (
   id TEXT PRIMARY KEY,

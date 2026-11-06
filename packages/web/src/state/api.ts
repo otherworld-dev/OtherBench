@@ -415,6 +415,10 @@ export type ChatPatchBody = Partial<{
   appId: string | null;
   /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */
   memoryExcluded: boolean;
+  /** Where the fresh chat card asks again after Not now (tokens per call); null uses the setting. Not chat activity. */
+  handoverAskAt: number | null;
+  /** False stops the fresh chat card for this chat. Not chat activity. */
+  handoverSuggest: boolean;
   /** Its place in its sidebar section, higher first (#823). Not chat activity: leaves updatedAt alone. */
   sortOrder: number;
   /** False marks a finished reply as seen, clearing the sidebar's dot. Not chat activity either. */
@@ -690,6 +694,8 @@ export const api = {
     /** Re-runs the reply to `messageId` on another Claude account (202). */
     continueOnAccount: (chatId: string, body: { messageId: string; account: string }) =>
       post<{ userMessageId: string; assistantMessageIds: string[] }>(`/chats/${chatId}/continue-on-account`, body),
+    /** Start fresh chat on the fresh chat card (202): the summary turn's ids; the new chat follows as `chat-handed-over`. */
+    handover: (chatId: string, body: { messageId: string }) => post<{ userMessageId: string; assistantMessageIds: string[] }>(`/chats/${chatId}/handover`, body),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),
     /** The chat as a file (#820): the shown conversation as Markdown, or the whole tree as JSON. */

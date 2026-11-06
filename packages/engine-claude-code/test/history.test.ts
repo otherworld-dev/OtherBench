@@ -19,6 +19,15 @@ describe('renderHistory', () => {
     expect(out).toContain('[asked: Which colour? -> User has answered your questions: "Which colour?"="Blue".]');
     expect(out).toContain('[plan -> The user approved the plan. Go ahead with it.]');
   });
+  it("passes a handed-over chat's summary on, and nothing of the handover parts themselves", () => {
+    const out = renderHistory([
+      m('a0', 'assistant', [{ type: 'handover', direction: 'from', chatId: 'old', title: 'Rig' }, { type: 'text', text: '## Goal\nA rig.' }]),
+      m('u1', 'user', [{ type: 'text', text: 'carry on' }]),
+    ]);
+    expect(out).toContain('## Goal\nA rig.');
+    expect(out).not.toContain('Rig');
+    expect(out).not.toContain('old');
+  });
   it('is empty for a first message', () => {
     expect(renderHistory([m('u1', 'user', [{ type: 'text', text: 'hi' }])])).toBe('');
   });

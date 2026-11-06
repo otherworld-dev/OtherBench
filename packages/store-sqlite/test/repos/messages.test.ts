@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Part } from '@otherbench/core/types/messages.js';
 import { freshDb, seedChatChain } from '../helpers.js';
-import { SqliteMessageRepo } from '../../src/repos/messages.js';
+import { deriveSearchText, SqliteMessageRepo } from '../../src/repos/messages.js';
 
 function seedChat(db: ReturnType<typeof freshDb>, chatId = 'chat-a'): void {
   seedChatChain(db, { connectionId: `${chatId}::conn`, modelId: `${chatId}::model`, profileId: `${chatId}::profile`, chatId });
@@ -205,5 +205,11 @@ describe('SqliteMessageRepo', () => {
     }
     expect(repo.searchText('papaya', 2)).toHaveLength(2);
     db.close();
+  });
+});
+
+describe('deriveSearchText', () => {
+  it('leaves handover parts out of search', () => {
+    expect(deriveSearchText([{ type: 'handover-request' }, { type: 'handover', direction: 'to', chatId: 'c2', title: 'Rig (continued)' }, { type: 'text', text: 'Summary' }])).toBe('Summary');
   });
 });

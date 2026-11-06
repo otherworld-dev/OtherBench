@@ -92,6 +92,9 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
       case 'context':
       case 'image':
       case 'file':
+      // A handover's request line and links come from the stored message, not the stream (the link is written after the turn).
+      case 'handover-request':
+      case 'handover':
       // Only ever on a user message (spec 2026-11-06-chat-to-chat-design), which is never streamed.
       case 'chat-link':
         break;

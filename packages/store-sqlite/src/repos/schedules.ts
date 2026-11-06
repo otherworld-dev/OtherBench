@@ -240,6 +240,13 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     return this.db.prepare('SELECT 1 FROM schedule_run WHERE chat_id = ? AND created_chat = 1 LIMIT 1').get(chatId) !== undefined;
   }
 
+  retarget(id: string, chatId: string): void {
+    const row = this.row(id);
+    if (!row) throw new Error(`schedule: not found: ${id}`);
+    if (row.chat_id === null) throw new Error(`schedule: ${id} runs in a project, not a chat`);
+    this.db.prepare('UPDATE schedule SET chat_id = ?, updated_at = ? WHERE id = ?').run(chatId, Date.now(), id);
+  }
+
   private row(id: string): Record<string, unknown> | undefined {
     return this.db.prepare('SELECT * FROM schedule WHERE id = ?').get(id);
   }

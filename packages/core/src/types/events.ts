@@ -32,6 +32,8 @@ export type AppEvent =
   | { type: 'approval-resolved'; chatId: string; requestId: string }
   /** A chat moved to another Claude account after the first hit its usage limit. `from`/`to` are display names; `resetsAt` is ms epoch. */
   | { type: 'claude-account-switched'; chatId: string; from: string; to: string; resetsAt: number | null; midReply: boolean }
+  /** A chat was handed over to a fresh chat (spec 2026-11-06-fresh-chat-handover-design): the window that asked opens it, the rest say so. */
+  | { type: 'chat-handed-over'; fromChatId: string; toChatId: string; title: string }
   /** Every Claude account is out of usage; `resets` says when each is back. */
   | { type: 'claude-accounts-exhausted'; chatId: string; resets: { name: string; resetsAt: number | null }[] }
   /** A machine was paired, renamed or removed: re-read the list. */

@@ -20,6 +20,7 @@ import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { recordBackgroundUsage } from '../background-usage.js';
 import { continueOnAccount, NOT_HERE } from '../claude-accounts/switcher.js';
+import { HandoverError } from '../handover/service.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
@@ -39,6 +40,8 @@ interface ChatBody {
   effort?: unknown;
   claudeAccount?: unknown;
   accountAutoSwitch?: unknown;
+  handoverAskAt?: unknown;
+  handoverSuggest?: unknown;
   folders?: unknown;
   projectId?: unknown;
   appId?: unknown;
@@ -49,7 +52,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'claudeAccount', 'accountAutoSwitch', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'claudeAccount', 'accountAutoSwitch', 'handoverAskAt', 'handoverSuggest', 'folders', 'projectId', 'appId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread', 'dealtWithAt']);
 
 /** Spec 2026-10-20-code-tab-design, "Calls I made": an app chat's folder is the app's folder, so it can't be set on the chat. */
 const APP_FOLDER_LOCKED = "An app chat uses its app's folder.";
@@ -332,6 +335,15 @@ export function chatsRoutes(container: Container): Hono {
       patch.claudeAccount = body.claudeAccount;
     }
     if (body.accountAutoSwitch !== undefined) patch.accountAutoSwitch = optionalBoolean(body.accountAutoSwitch, 'accountAutoSwitch', false);
+    // The fresh chat card: where it asks again after Not now, and whether it asks at all.
+    if (body.handoverAskAt !== undefined) {
+      const at = body.handoverAskAt;
+      if (at !== null && (typeof at !== 'number' || !Number.isInteger(at) || at < 0)) {
+        throw new HTTPException(400, { message: '"handoverAskAt" must be null or a whole number of tokens.' });
+      }
+      patch.handoverAskAt = at;
+    }
+    if (body.handoverSuggest !== undefined) patch.handoverSuggest = optionalBoolean(body.handoverSuggest, 'handoverSuggest', true);
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
     if (body.unread !== undefined) patch.unread = optionalBoolean(body.unread, 'unread', false);
     if (body.sortOrder !== undefined) {
@@ -413,6 +425,21 @@ export function chatsRoutes(container: Container): Hono {
     const account = requireNonEmptyString(body.account, 'account');
     const result = await continueOnAccount(container, { chatId, messageId, account, midReply: false });
     return c.json(result, 202);
+  });
+
+  // "Start fresh chat" on the fresh chat card (spec 2026-11-06-fresh-chat-handover-design): the summary
+  // turn starts now and the rest runs on the server, so the answer is the summary turn's ids.
+  app.post('/:id/handover', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown };
+    const messageId = requireNonEmptyString(body.messageId, 'messageId');
+    const handover = container.handover;
+    if (!handover) throw new HTTPException(503, { message: 'Handing chats over is not available here.' });
+    try {
+      return c.json(await handover.start(c.req.param('id'), messageId), 202);
+    } catch (err) {
+      if (err instanceof HandoverError) return c.json({ error: err.message, kind: err.kind }, err.status);
+      throw err;
+    }
   });
 
   // Export (#820): the shown conversation as Markdown, or the whole tree as

@@ -31,7 +31,7 @@ const COLUMNS: Record<keyof ChatSendPatch, string> = {
   finishedAt: 'finished_at',
 };
 
-/** Chat-to-chat sends (migration 043). Local: the table has no sync triggers. */
+/** Chat-to-chat sends (migration 044). Local: the table has no sync triggers. */
 export class SqliteChatSendRepo implements ChatSendRepo {
   constructor(private readonly db: DatabaseSync) {}
 

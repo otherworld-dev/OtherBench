@@ -75,4 +75,23 @@ describe('SqliteChatRepo', () => {
     expect(() => repo.delete('does-not-exist')).not.toThrow();
     db.close();
   });
+
+  it('keeps the context size and the fresh chat card fields, synced field by field', () => {
+    const db = freshDb();
+    seedProfileChain(db, { connectionId: 'conn-a', modelId: 'model-a', profileId: 'profile-a' });
+    const repo = new SqliteChatRepo(db);
+    const created = repo.create({ id: 'chat-a', title: 'Rig', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    expect(created).toMatchObject({ contextTokens: null, handoverAskAt: null, handoverSuggest: true });
+    expect(repo.get('chat-a')).toMatchObject({ contextTokens: null, handoverAskAt: null, handoverSuggest: true });
+
+    const before = JSON.parse((db.prepare("SELECT field_hlc FROM chat WHERE id = 'chat-a'").get() as { field_hlc: string }).field_hlc) as Record<string, string>;
+    repo.update('chat-a', { contextTokens: 420_000, handoverAskAt: 630_000, handoverSuggest: false });
+    expect(repo.get('chat-a')).toMatchObject({ contextTokens: 420_000, handoverAskAt: 630_000, handoverSuggest: false });
+    const after = JSON.parse((db.prepare("SELECT field_hlc FROM chat WHERE id = 'chat-a'").get() as { field_hlc: string }).field_hlc) as Record<string, string>;
+    for (const field of ['contextTokens', 'handoverAskAt', 'handoverSuggest']) {
+      expect(after[field]).toBeDefined();
+      expect(after[field]).not.toBe(before[field]);
+    }
+    db.close();
+  });
 });

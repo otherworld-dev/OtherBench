@@ -119,6 +119,15 @@ export interface Chat {
   /** Move to another Claude account on a usage limit and carry on. Repositories always fill it (false by default). */
   accountAutoSwitch?: boolean;
   /**
+   * How much context the chat's latest reply's last model call read (`Usage.contextTokens`), or null before
+   * any was measured. What the fresh chat card compares with its threshold. Repositories always fill it.
+   */
+  contextTokens?: number | null;
+  /** The context size at which the fresh chat card asks again after "Not now"; null uses the setting. Repositories always fill it. */
+  handoverAskAt?: number | null;
+  /** False when "Don't ask again for this chat" was chosen: no fresh chat card. Repositories always fill it (true by default). */
+  handoverSuggest?: boolean;
+  /**
    * The project this chat is filed under, or null for "No project" (spec
    * 2026-10-03-projects-design). Purely organisational: moving a chat never
    * changes its folder or profile. Set to null when the project is deleted.
@@ -533,6 +542,10 @@ export interface AppSettings {
    * reaches Settings. It never switches computer use itself on. Machine-local and never synced, like every setting.
    */
   peerComputerControl: boolean;
+  /** Offer a fresh chat when a Claude Code chat's calls read more than `handoverThresholdTokens` (spec 2026-11-06-fresh-chat-handover-design). */
+  handoverEnabled: boolean;
+  /** The context size per call, in tokens, from which the fresh chat card shows. */
+  handoverThresholdTokens: number;
 }
 
 export interface SettingsRepo {
@@ -1160,6 +1173,8 @@ export interface ScheduleRepo {
   runningRuns(): ScheduleRun[];
   /** Whether some run created this chat. */
   madeChat(chatId: string): boolean;
+  /** Points a chat schedule at another chat (a handover's new chat). Throws for a project schedule. */
+  retarget(id: string, chatId: string): void;
 }
 
 // --- remote sessions ---------------------------------------------------------
@@ -1245,7 +1260,7 @@ export interface PushSubscriptionRepo {
 
 /**
  * One message a chat's model sent to another chat, and where it is. Local to
- * this machine (migration 043, no sync triggers): sends only reach chats that
+ * this machine (migration 044, no sync triggers): sends only reach chats that
  * run here. None of the ids is a foreign key: a chat can be deleted while a
  * send to or from it waits, and the service settles it then.
  */

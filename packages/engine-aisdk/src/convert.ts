@@ -309,6 +309,8 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'notice':
       case 'context':
       case 'context-summary':
+      case 'handover-request':
+      case 'handover':
       case 'subagent':
       case 'user-note':
       case 'chat-link':
@@ -364,6 +366,9 @@ async function assistantContentFromParts(
       case 'context':
       case 'context-summary':
       case 'notice':
+      // A handover link says where the chat went, not anything the model said.
+      case 'handover-request':
+      case 'handover':
       case 'chat-link':
         // Dropped entirely, same reasoning as `reasoning`: a capability-
         // fallback disclosure describes what OTHERBENCH did, not something the

@@ -86,6 +86,22 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(out[0]).toEqual({ type: 'thinking', since: null });
     expect(out.at(-1)).toMatchObject({ type: 'finish' });
   });
+  it("reports how much context the reply's own last call read, leaving helpers' calls out", () => {
+    const m = new SdkEventMapper();
+    const said = (usage: object, parent: string | null = null) =>
+      ({ type: 'assistant', message: { id: 'x', content: [{ type: 'text', text: '' }], usage }, parent_tool_use_id: parent, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    m.map(said({ input_tokens: 10, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 5_000, output_tokens: 1 }));
+    m.map(said({ input_tokens: 2, cache_read_input_tokens: 380_000, cache_creation_input_tokens: 9_000, output_tokens: 1 }));
+    m.map(said({ input_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 }, 'toolu_helper'));
+    const out = m.map({ type: 'result', subtype: 'success', is_error: false, usage: { input_tokens: 5 }, uuid: 'u', session_id: 's' } as unknown as SDKMessage);
+    expect(out.at(-1)).toMatchObject({ type: 'finish', usage: { contextTokens: 389_002 } });
+  });
+  it('says nothing of context when no call carried usage', () => {
+    const m = new SdkEventMapper();
+    const out = m.map({ type: 'result', subtype: 'success', is_error: false, usage: {}, uuid: 'u', session_id: 's' } as unknown as SDKMessage);
+    const finish = out.at(-1) as unknown as { usage: Record<string, unknown> };
+    expect(finish.usage).not.toHaveProperty('contextTokens');
+  });
   it('ignores a stream_event with no event payload instead of throwing', () => {
     const m = new SdkEventMapper();
     expect(m.map({ type: 'stream_event', parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);

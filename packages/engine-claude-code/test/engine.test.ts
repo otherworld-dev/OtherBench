@@ -20,6 +20,7 @@ import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-too
 import { PermissionBroker, SUBAGENT_MEDIA_REFUSAL, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { FakeToolProvider, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { CLEAR_ON_ITS_OWN, NOTHING_TO_COMPACT } from '@otherbench/core/domain/context-lines.js';
+import { HANDOVER_PROMPT, NOTHING_TO_HAND_OVER } from '@otherbench/core/domain/handover.js';
 import { MAX_REQUEST_ATTACHMENT_BYTES } from '@otherbench/core/domain/request-budget.js';
 
 let ws: string;
@@ -3033,6 +3034,22 @@ describe('ClaudeCodeChatEngine slash commands', () => {
     const { query, calls } = fakeQuery(compactTurn({ hook: true }));
     await collect(engine(query).stream(compactReq(compactMessage([{ type: 'text', text: '(Artifacts in this chat: a.html)' }] as CanonMessage['parts']))));
     expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: '/compact keep x' }]);
+  });
+
+  it('a handover sends only the fixed summary prompt on the continued session', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield delta('## Goal'); yield success(); });
+    const handoverMessage: CanonMessage = { ...user(''), id: 'u2', parts: [{ type: 'handover-request' }] };
+    const events = await collect(engine(query).stream(compactReq(handoverMessage, { handover: true })));
+    expect(calls).toHaveLength(1);
+    expect(promptContent(calls[0]!.prompt)).toEqual([{ type: 'text', text: HANDOVER_PROMPT }]);
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('a handover with no session to continue is refused', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    const events = await collect(engine(query).stream(req({ messages: [{ ...user(''), id: 'u1', parts: [{ type: 'handover-request' }] }], handover: true })));
+    expect(events).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_HAND_OVER } }]);
+    expect(calls).toHaveLength(0);
   });
 
   it('compact with no session to continue is refused', async () => {

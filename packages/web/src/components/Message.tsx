@@ -13,6 +13,9 @@ import { isToolImageRef, type ToolImageRef } from '@otherbench/core/domain/tool-
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { ContinueOnAccount } from './ContinueOnAccount.js';
+import { HandoverCard } from './HandoverCard.js';
+import { isHandoverRequest } from '@otherbench/core/domain/handover.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { ContextLine } from './ContextLine.js';
 import { AuthedImage } from './AuthedImage.js';
 import { EditDiff } from './EditDiff.js';
@@ -33,6 +36,22 @@ import { UserNoteBlock } from './UserNoteBlock.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { browserCallLabel, browserPageOf, displayLines, oneLine } from '../viewer/browser.js';
 import { useViewer } from '../viewer/ViewerContext.js';
+
+/** The link between a chat and the fresh chat it was handed over to or from; opens that chat. */
+function HandoverLink({ part }: { part: Extract<Part, { type: 'handover' }> }): JSX.Element {
+  const open = useOtherBenchStore((s) => s.setActiveChatId);
+  const label = `${part.direction === 'to' ? 'Continued in' : 'Continued from'} ${part.title}`;
+  return (
+    <div className="my-1 text-xs text-[var(--text-muted)]">
+      <button type="button" className="underline hover:text-[var(--text)]" onClick={() => open(part.chatId)}>
+        {label}
+      </button>
+      {part.direction === 'to' && part.schedulesMoved !== undefined && part.schedulesMoved > 0 && (
+        <span> {part.schedulesMoved === 1 ? 'Its schedule runs there now.' : `Its ${part.schedulesMoved} schedules run there now.`}</span>
+      )}
+    </div>
+  );
+}
 
 function NoticeBlock({ text }: { text: string }): JSX.Element {
   return (
@@ -382,6 +401,8 @@ function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element
       return <NoticeBlock key={key} text={part.text} />;
     case 'context-summary':
       return <ContextSummaryBlock key={key} part={part} />;
+    case 'handover':
+      return <HandoverLink key={key} part={part} />;
     case 'user-note':
       return <UserNoteBlock key={key} part={part} />;
     case 'image':
@@ -836,6 +857,8 @@ export interface MessageProps {
   };
   /** Unfolds a long user message: find in the chat is going to a match in its folded part. */
   showAllText?: boolean;
+  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card. */
+  offerHandover?: boolean;
 }
 
 /** A thinking estimate in a few characters: `850`, `4.2k`, `23k`. */
@@ -884,7 +907,12 @@ export function Message({
   editing,
   framed = false,
   showAllText = false,
+  offerHandover = false,
 }: MessageProps): JSX.Element {
+  // A handover's request is a line, like /compact's (spec 2026-11-06-fresh-chat-handover-design).
+  if (isHandoverRequest(message)) {
+    return <ContextLine id={`msg-${message.id}`} kind="handover" at={message.createdAt} aside={branch && branch.total > 1 ? <BranchSwitcher branch={branch} /> : undefined} />;
+  }
   const line = contextLineOf(message);
   if (line) {
     // A line edited from another message (or edited into one) still has its siblings to switch to.
@@ -1014,6 +1042,7 @@ export function Message({
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>
       )}
       <ContinueOnAccount message={message} />
+      {offerHandover && <HandoverCard message={message} />}
 
     </article>
   );
