@@ -426,7 +426,7 @@ Judge a run by its exit code and the `Errors` line, not only the counts.
 
 ## More
 
-`docs/HANDOVER.md` — what's actually built (milestone by milestone), the
-security posture stated plainly, known gaps, and every deliberate deviation
-from the original spec. Read that before trusting this app with anything you
+`docs/HANDOVER.md` — the security posture stated plainly, known gaps, every
+deliberate deviation from the original spec, and an index of `docs/features/`,
+one page per feature saying what's actually built. Read that before trusting this app with anything you
 care about, or before picking up where this session left off.
