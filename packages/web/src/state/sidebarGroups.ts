@@ -12,6 +12,14 @@ export const NO_PROJECT_KEY = '__no_project__';
  */
 export const UNKNOWN_APP_KEY = '__unknown_app__';
 
+/**
+ * The key of another machine's section in Needs you. Those start closed, so for them being in the set means
+ * opened: the same per-device store, the other way round.
+ */
+export function machineQueueOpenKey(machineKey: string): string {
+  return `needs-you-open:${machineKey}`;
+}
+
 /** DOM id of a sidebar group's wrapper, for scrolling to it. */
 export function groupDomId(key: string): string {
   return `project-group-${key}`;

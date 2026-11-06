@@ -567,6 +567,59 @@ describe('ChatList status', () => {
     expect(screen.queryByTestId('needs-you-row-talked')).toBeNull();
   });
 
+  describe('with another machine paired', () => {
+    const paired = {
+      self: { id: 'node-self', name: 'Laptop', fingerprint: 'f' },
+      listening: { running: true, addresses: [] },
+      peers: [{ nodeId: 'node-pc', name: 'PC', status: 'reachable' }],
+    } as unknown as NonNullable<ReturnType<typeof useOtherBenchStore.getState>['machines']>;
+
+    it("lists this machine's chats, and the other machine's under its name and count, closed", () => {
+      useOtherBenchStore.setState({ machines: paired, chats: [finished('coding', { runsOn: 'node-pc' }), finished('phd'), finished('more', { runsOn: 'node-pc' })] });
+      render(<ChatList />);
+      expect(within(screen.getByTestId('group-needs-you')).getByRole('heading', { name: /Needs you/ })).toHaveTextContent('1');
+      expect(listIds()).toEqual(['phd']);
+      const heading = screen.getByTestId('needs-you-machine-heading-node-pc');
+      expect(heading).toHaveTextContent('PC');
+      expect(heading).toHaveTextContent('2');
+      expect(heading).toHaveAttribute('aria-expanded', 'false');
+      // Still in their groups, with the tick there.
+      expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['coding', 'more', 'phd']);
+      expect(within(screen.getByTestId('chat-row-coding')).getByRole('button', { name: 'Nothing to do here' })).toBeInTheDocument();
+    });
+
+    it('opens a machine to show its chats in queue order, and remembers that on this device', async () => {
+      const user = userEvent.setup();
+      useOtherBenchStore.setState({ machines: paired, chats: [finished('coding', { runsOn: 'node-pc' }), finished('phd')] });
+      const first = render(<ChatList />);
+      await user.click(screen.getByTestId('needs-you-machine-heading-node-pc'));
+      expect(listIds()).toEqual(['phd', 'coding']);
+      expect(within(screen.getByTestId('needs-you-machine-node-pc')).getByTestId('needs-you-row-coding')).toBeInTheDocument();
+      expect(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)).toContain('needs-you-open:node-pc');
+      first.unmount();
+
+      resetSidebarGroupsForTests();
+      render(<ChatList />);
+      expect(listIds()).toEqual(['phd', 'coding']);
+      await user.click(screen.getByTestId('needs-you-machine-heading-node-pc'));
+      expect(listIds()).toEqual(['phd']);
+    });
+
+    it("shows the list for another machine's chats even with none here", () => {
+      useOtherBenchStore.setState({ machines: paired, chats: [finished('coding', { runsOn: 'node-pc' })] });
+      render(<ChatList />);
+      expect(within(screen.getByTestId('group-needs-you')).getByRole('heading', { name: /Needs you/ })).toHaveTextContent('0');
+      expect(screen.getByTestId('needs-you-machine-heading-node-pc')).toHaveTextContent('1');
+    });
+
+    it('puts chats on a machine no longer paired in a section of their own', () => {
+      useOtherBenchStore.setState({ machines: paired, chats: [finished('old', { runsOn: 'node-gone' })] });
+      render(<ChatList />);
+      expect(listIds()).toEqual([]);
+      expect(screen.getByTestId('needs-you-machine-heading-__unpaired__')).toHaveTextContent('Machines no longer paired');
+    });
+  });
+
   it('while searching, chats stay in their groups with their word, and the list goes', async () => {
     useOtherBenchStore.setState({ chats: [finished('done', { title: 'Needle' })] });
     render(<ChatList />);

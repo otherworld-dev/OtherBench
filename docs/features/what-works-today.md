@@ -40,7 +40,12 @@ of work landed after that plan closed out:
   sent in the hello; a peer says it in its activity as `waitingSince`).
   Messages from before 036 have no finish time and go by when they started; a
   card on an older peer goes by its chat's last message. The chat stays in its
-  group too, so it has two rows. Background
+  group too, so it has two rows. The list leads with this machine's chats;
+  each paired machine with chats waiting gets its own heading under them,
+  with its name and count, closed until opened (`splitByMachine`; chats on a
+  machine no longer paired share one heading at the end). Which are open is
+  kept per device, in the collapsed-groups store under `needs-you-open:<node
+  id>`. Background
   tasks keep a chat out of the list unless its reply asks the user something
   (`asksUser`, a `?` in its last two paragraphs): a server left running never
   finishes, and that reply has stopped on them. Search matches titles and

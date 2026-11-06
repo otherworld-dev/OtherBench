@@ -17,7 +17,7 @@ import { setChatPinned } from '../state/chatActions.js';
 import { chatStatus, groupStatusSummary, isOnCard, needsYouChats, useChatActivity, type ChatStatus } from '../state/chatStatus.js';
 import { modeOfChat } from '../state/mode.js';
 import { projectTabId } from '../state/projectTab.js';
-import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
+import { machineQueueOpenKey, NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { schedulesDeletedLine, useScheduleCount } from '../views/schedules/useScheduleCount.js';
 import { OverviewJumpList } from '../overview/OverviewJumpList.js';
@@ -25,6 +25,8 @@ import { useOtherBenchStore } from '../state/store.js';
 import { AllAppsEntry } from './sidebar/AllAppsEntry.js';
 import { ChatFilters } from './sidebar/ChatFilters.js';
 import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
+import { MachineQueueSection } from './sidebar/MachineQueueSection.js';
+import { splitByMachine } from './sidebar/machineQueues.js';
 import { focusLater, headingSelector, LIST_SELECTOR, neighbourHeadingSelector, ROW_PREFIX, rowSelector, type RowKind } from './sidebar/focus.js';
 import { appMenuItems, chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
 import {
@@ -171,8 +173,17 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // While searching every chat stays in its group, so a result is found where it lives.
   // In the order each chat came to need the user, as the server recorded it, so a reload keeps it (`needsYouChats`).
   const queue = useMemo(() => needsYouChats(chats, activity, now), [chats, activity, now]);
-  const needsYou = useMemo(() => (searching ? [] : queue.filter((c) => modeOfChat(c) === mode)), [searching, queue, mode]);
-  const needsYouIds = useMemo(() => new Set(needsYou.map((c) => c.id)), [needsYou]);
+  const needsYou = useMemo(
+    () => splitByMachine(searching ? [] : queue.filter((c) => modeOfChat(c) === mode), machines),
+    [searching, queue, mode, machines]
+  );
+  /** Whether another machine's section in Needs you is open: they start closed. */
+  const machineQueueOpen = (key: string): boolean => collapsedGroups.has(machineQueueOpenKey(key));
+  // The chats with a row in the list now: a closed section's chats have none.
+  const needsYouIds = useMemo(
+    () => new Set([...needsYou.here, ...needsYou.elsewhere.filter((m) => collapsedGroups.has(machineQueueOpenKey(m.key))).flatMap((m) => m.chats)].map((c) => c.id)),
+    [needsYou, collapsedGroups]
+  );
   // Its row in the group gets the tick too, so a chat can be ticked off where it is, searching or not.
   const queuedIds = useMemo(() => new Set(queue.map((c) => c.id)), [queue]);
   const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
@@ -1012,13 +1023,25 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           <>
           {codeMode && <AllAppsEntry active={activeChatId === ALL_APPS_TAB_ID} count={apps.length} onOpen={openAllApps} />}
 
-          {needsYou.length > 0 && (
+          {(needsYou.here.length > 0 || needsYou.elsewhere.length > 0) && (
             <div className="mb-1.5" data-testid="group-needs-you">
               <h2 className="label-caps flex justify-between px-2 pb-1 text-[var(--warn)]">
                 <span>Needs you</span>
-                <span className="font-normal tabular-nums">{needsYou.length}</span>
+                <span className="font-normal tabular-nums">{needsYou.here.length}</span>
               </h2>
-              <ul>{needsYou.map((c) => renderRow(c, null, false, true))}</ul>
+              {needsYou.here.length > 0 && <ul>{needsYou.here.map((c) => renderRow(c, null, false, true))}</ul>}
+              {needsYou.elsewhere.map((m) => (
+                <MachineQueueSection
+                  key={m.key}
+                  machineKey={m.key}
+                  name={m.name}
+                  count={m.chats.length}
+                  open={machineQueueOpen(m.key)}
+                  onToggle={() => setGroupCollapsed(machineQueueOpenKey(m.key), !machineQueueOpen(m.key))}
+                >
+                  {m.chats.map((c) => renderRow(c, null, false, true))}
+                </MachineQueueSection>
+              ))}
             </div>
           )}
 
