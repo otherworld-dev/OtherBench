@@ -83,7 +83,7 @@ export class SqliteAppRepo implements AppRepo {
   }
 
   update(id: string, patch: Partial<Omit<App, 'id'>>): App {
-    return this.crud.update(id, toStoredWorkspace(patch, this.selfId()) as Partial<Omit<App, 'id'>>);
+    return this.crud.update(id, toStoredWorkspace(patch, this.selfId()));
   }
 
   /**

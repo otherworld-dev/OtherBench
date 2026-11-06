@@ -67,7 +67,7 @@ export class UserAsks {
 
   private makeRoom(): void {
     while (this.pending.size >= MAX_PENDING_ASKS) {
-      const oldest = this.pending.values().next().value as PendingAsk | undefined;
+      const oldest = this.pending.values().next().value;
       if (!oldest) return;
       console.warn(`[UserAsks] ${MAX_PENDING_ASKS} asks are pending; settling the oldest ("${oldest.ask.id}") as cancelled.`);
       oldest.settle({ cancelled: true });

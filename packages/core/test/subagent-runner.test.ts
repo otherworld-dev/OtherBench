@@ -67,7 +67,7 @@ async function* answer(text: string): AsyncIterable<EngineEvent> {
 }
 
 function harness(engine: ChatEngine, over: Partial<SubagentRunnerDeps> = {}, toolProvider = new FakeToolProvider({ tools: [readFile] })) {
-  const store = (over.store as InMemoryStore | undefined) ?? seeded();
+  const store = (over.store) ?? seeded();
   const controller = new AbortController();
   let parts: Part[] = [];
   const events: { callId: string; event: SubagentEvent }[] = [];

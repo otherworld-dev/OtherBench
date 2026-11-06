@@ -52,10 +52,10 @@ beforeEach(() => {
     streamRegistry: new StreamRegistry(turnRunner, store),
     blobStore: createBlobStore(join(dir, 'attachments')),
     streamTimings: { keepaliveMs: 30, idleTimeoutMs: 60_000 },
-    browser: browser as unknown as BrowserPort,
+    browser: browser,
     close: () => {},
   };
-  store.chats.create({ id: 'c1', title: 'C', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null } as never);
+  store.chats.create({ id: 'c1', title: 'C', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null });
 });
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -190,7 +190,7 @@ describe('browser routes', () => {
       lastSyncSeq: 0,
       pairedAt: 1,
     });
-    container.store.chats.create({ id: 'far', title: 'F', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null, runsOn: 'node-pc' } as never);
+    container.store.chats.create({ id: 'far', title: 'F', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null, runsOn: 'node-pc' });
     expect(await json(await app().request('/api/chats/far/browser'))).toEqual({ open: false, elsewhere: 'Gigabyte' });
     expect((await app().request('/api/chats/far/browser', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })).status).toBe(204);
     expect(browser.close).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ describe('browser routes', () => {
     browser.close.mockImplementation(async () => {
       throw new Error('boom');
     });
-    container.store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null } as never);
+    container.store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null });
     expect((await app().request('/api/chats/c2', { method: 'DELETE' })).status).toBe(204);
   });
 

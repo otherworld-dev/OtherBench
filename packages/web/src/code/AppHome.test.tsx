@@ -93,7 +93,7 @@ describe('AppHome', () => {
   it('the start box makes a chat in the app and sends the message', async () => {
     useOtherBenchStore.setState({ apps: [app()], appsLoaded: true });
     vi.mocked(api.chats.create).mockResolvedValue(chat('c7'));
-    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['m1'] } as Awaited<ReturnType<typeof api.turns.create>>);
+    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['m1'] });
     render(<AppHome appId="a1" />);
     const user = userEvent.setup();
     await user.type(screen.getByRole('textbox', { name: 'Start a chat in OtherBench' }), 'Fix the receipt upload');

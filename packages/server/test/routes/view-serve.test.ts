@@ -205,7 +205,7 @@ describe('GET /view/<id>/', () => {
 
     expect(await open(make('d', 'notes', 'markdown', '# n'))).toMatchObject({ name: 'notes.md', kind: 'markdown', url: null });
     // A version from another chat isn't this chat's to open.
-    store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, workspace: null, pinned: false, archivedAt: null } as never);
+    store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, workspace: null, pinned: false, archivedAt: null });
     const other = await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c2', artifactVersionId: 'p-v1' }) });
     expect(other.status).toBe(404);
     // The link dies with its chat.

@@ -108,7 +108,7 @@ describe('ComputerBanner', () => {
           self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
           listening: { running: true, addresses: [] },
           peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status, since: 0, lastSyncedAt: null, syncError: null, ...(computerSessions ? { computerSessions } : {}) }],
-        } as never)
+        })
       );
 
     it('names the machine, shows its last action, and comes and goes with what that machine says', () => {

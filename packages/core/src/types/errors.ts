@@ -117,7 +117,7 @@ function messageOf(err: unknown, fallback: string): string {
 function causeCodeOf(err: Error): string {
   const cause = (err as { cause?: unknown }).cause;
   if (typeof cause === 'object' && cause !== null && 'code' in cause) {
-    return String((cause as { code: unknown }).code);
+    return String((cause).code);
   }
   return '';
 }

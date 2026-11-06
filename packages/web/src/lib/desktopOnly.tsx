@@ -12,7 +12,7 @@ import { useOtherBenchStore } from '../state/store.js';
  */
 export function answerErrorText(err: unknown, fallback: string): string {
   const known = err instanceof ApiError && err.status === 403 && (err.message === COMPUTER_DESKTOP_ONLY_REASON || err.message === COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON);
-  return known ? (err as ApiError).message : fallback;
+  return known ? (err).message : fallback;
 }
 
 /**

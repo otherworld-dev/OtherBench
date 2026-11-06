@@ -126,7 +126,7 @@ export function parseSubagentInput(args: unknown): { ok: true; input: SubagentIn
     if (t['mcpServers'] !== undefined) {
       const list = t['mcpServers'];
       if (!Array.isArray(list) || !list.every((s) => typeof s === 'string')) return { ok: false, message: '"tools.mcpServers" must be a list of MCP server names.' };
-      ask.mcpServers = list as string[];
+      ask.mcpServers = list;
     }
     input.tools = ask;
   }
@@ -173,7 +173,7 @@ function effectiveSandboxHosts(policy: ToolPolicy): string[] {
 function blockedHostsOf(policy: ToolPolicy): string[] | null {
   const hosts: unknown = policy.browserBlockedHosts;
   if (hosts === undefined || hosts === null) return [];
-  return Array.isArray(hosts) && hosts.every((h) => typeof h === 'string') ? (hosts as string[]) : null;
+  return Array.isArray(hosts) && hosts.every((h) => typeof h === 'string') ? (hosts) : null;
 }
 
 /** Both blocked lists as one: the first list's entries, then the second's that it doesn't already hold (compared by canonical host). */

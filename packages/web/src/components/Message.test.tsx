@@ -849,7 +849,7 @@ describe('Message sub-agent cards', () => {
       { type: 'tool-call', id, name: 'Bash', args: { command: 'git log' } },
       { type: 'tool-result', id, name: 'Bash', result: 'ok', isError: false },
     ];
-    const helper = (callId: string, label: string, over: Partial<Extract<Part, { type: 'subagent' }>> = {}): Part => card({ callId, label, ...over }) as Part;
+    const helper = (callId: string, label: string, over: Partial<Extract<Part, { type: 'subagent' }>> = {}): Part => card({ callId, label, ...over });
 
     it('folds tool groups and helper cards in a row into one closed block with a summary', async () => {
       const parts: Part[] = [

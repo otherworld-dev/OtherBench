@@ -106,7 +106,7 @@ async function setup(...replies: string[]) {
   const store = new InMemoryStore();
   store.chats.create({ id: 'chat-1', title: 'Budget sheet', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
   const driver = new FakeComputerDriver();
-  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver });
   const requests: ApprovalRequest[] = [];
   provider.onApprovalEvent((e) => {
     if (e.type === 'request') requests.push(e.request);

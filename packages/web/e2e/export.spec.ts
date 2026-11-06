@@ -39,14 +39,14 @@ test('exports a chat as Markdown and as JSON from its menu', async ({ page }) =>
   const toast = page.getByTestId('toast').filter({ hasText: `Downloaded ${md.suggestedFilename()}` });
   await expect(toast).toBeVisible();
   await expect(toast.getByRole('button', { name: 'Show in folder' })).toHaveCount(0);
-  const text = readFileSync((await md.path())!, 'utf8');
+  const text = readFileSync((await md.path()), 'utf8');
   expect(text).toContain(`## You\n\n${question}`);
   // Which profile answers depends on what earlier specs left as the default, so match any "Profile (model)" heading.
   expect(text).toMatch(/\n## .+ \(.+\)\n\nHere is a mock reply from OtherBench/);
 
   const json = await exportAs('JSON (every branch)');
   expect(json.suggestedFilename()).toMatch(/\.json$/);
-  const body = JSON.parse(readFileSync((await json.path())!, 'utf8')) as { format: string; messages: unknown[]; shownPath: string[] };
+  const body = JSON.parse(readFileSync((await json.path()), 'utf8')) as { format: string; messages: unknown[]; shownPath: string[] };
   expect(body.format).toBe('otherbench-chat-export');
   expect(body.messages).toHaveLength(2);
   expect(body.shownPath).toHaveLength(2);

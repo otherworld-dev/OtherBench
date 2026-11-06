@@ -19,7 +19,7 @@ describe('the recall tool', () => {
     const store = new InMemoryStore();
     chat(store, 'old', 'We picked Hetzner for the staging box.');
     chat(store, 'asking', 'Which host did we pick for Hetzner staging?');
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
     const requests: ApprovalRequest[] = [];
     provider.onApprovalEvent((e) => {
       if (e.type === 'request') requests.push(e.request);

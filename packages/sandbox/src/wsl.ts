@@ -63,7 +63,7 @@ export function execArgs(user: WslUser, argv: string[]): string[] {
   return ['-d', DISTRO, '-u', user, '--exec', ...argv];
 }
 
-export function createWslRunner(spawn: SpawnFn = nodeSpawn as SpawnFn, exe: string = wslExePath()): WslRunner {
+export function createWslRunner(spawn: SpawnFn = nodeSpawn, exe: string = wslExePath()): WslRunner {
   // WSL_UTF8 asks newer wsl.exe for UTF-8; decodeWslOutput copes either way.
   // The server's own API token never reaches wsl.exe (core/domain/child-env.ts).
   const env = { ...withoutServerSecrets(process.env), WSL_UTF8: '1' };

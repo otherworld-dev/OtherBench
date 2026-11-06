@@ -264,7 +264,7 @@ describe('while the computer may be in control, changes come only from the deskt
     expect(sessions.mayBeInControl()).toBe(false);
     // Server without computer use: no gate at all.
     const { computer: _drop, ...without } = container;
-    const res = await createApp(without as Container).request('/api/chats/chat-2', { method: 'DELETE' });
+    const res = await createApp(without).request('/api/chats/chat-2', { method: 'DELETE' });
     expect(res.status).toBe(204);
   });
 });
@@ -387,7 +387,7 @@ describe('computer use and the rest of the API', () => {
 
   it('GET /api/events says no chat is in control on a server with no event bus', async () => {
     const { events: _drop, ...without } = container;
-    const stream = await createApp(without as Container).request('/api/events');
+    const stream = await createApp(without).request('/api/events');
     const reader = stream.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('"computerSessions":[]');
     await reader.cancel();

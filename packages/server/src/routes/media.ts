@@ -38,7 +38,7 @@ function parseCheckpoint(value: unknown): string | undefined {
 async function readBody(c: { req: { json(): Promise<unknown> } }): Promise<WorkflowBody> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('The request body must be a JSON object.');
-  return body as WorkflowBody;
+  return body;
 }
 
 const isBuiltin = (id: string): boolean => BUILTIN_WORKFLOWS.some((w) => w.id === id);

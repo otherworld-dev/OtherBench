@@ -19,7 +19,7 @@ const mcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => 
 
 function gated() {
   const { store, driver } = setup();
-  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver });
   const requests: ApprovalRequest[] = [];
   const events: ToolApprovalEvent[] = [];
   provider.onApprovalEvent((e) => {
@@ -53,7 +53,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
   it('is offered only when the profile turns it on and a driver is available', async () => {
     const store = new InMemoryStore();
     const driver = new FakeComputerDriver();
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver });
     const names = async (p: ToolPolicy) => (await provider.listTools(p)).map((t) => t.name);
     expect(await names(policy())).toContain('computer');
     expect(await names(policy({ computer: false }))).not.toContain('computer');
@@ -61,7 +61,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
     expect(await names(policy({ computer: 'true' as never }))).not.toContain('computer');
     driver.isAvailable = false;
     expect(await names(policy())).not.toContain('computer');
-    const without = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never);
+    const without = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
     expect((await without.listTools(policy())).map((t) => t.name)).not.toContain('computer');
   });
 
@@ -313,7 +313,7 @@ describe('the computer tool in OtherBenchToolProvider', () => {
 
   it("audits the broker's own unattended refusal as deny:unattended", async () => {
     const store = new InMemoryStore();
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
     // A computer-source spec with no describeCall: only the broker stands in its way.
     const bare: ToolSpec = { name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute: async () => 'ran' };
     expect(await provider.requestApproval(bare, { action: 'screenshot', app: null }, policy(), ctx({ unattended: true }))).toEqual({ allowed: false, reason: COMPUTER_UNATTENDED_REASON });
@@ -462,7 +462,7 @@ describe('screen-derived text at each place the provider puts it', () => {
   it('refuses and audits a computer call the broker could not decide, instead of letting the failure out', async () => {
     const { store, driver } = setup();
     const broker = new PermissionBroker(store);
-    const provider = new OtherBenchToolProvider(store, broker, mcp as never, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, broker, mcp, { computer: driver });
     const tool = await gatedTool(provider);
     broker.decide = () => {
       throw new Error(HOSTILE);
@@ -480,7 +480,7 @@ describe('screen-derived text at each place the provider puts it', () => {
 
   it('answers a tool that throws while it runs with one clean labelled line, and audits it', async () => {
     const { store, driver } = setup();
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver });
     const real = (await provider.relayOtherBenchTools(policy()))[0]!;
     // The tool answers its own failures; this is for one that ever got out of it.
     const throwing: ToolSpec = { ...real, describeCall: async () => ({ args: { action: 'screenshot', app: null }, risk: 'read' }), execute: async () => { throw new Error(HOSTILE); } };
@@ -502,7 +502,7 @@ describe('screen-derived text at each place the provider puts it', () => {
   it("hands the shell's start dialog the chat's title as one clean line", async () => {
     const { store, driver } = setup();
     store.chats.update('chat-1', { title: HOSTILE });
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver });
     const tool = await gatedTool(provider);
     expect(await tool.execute({ action: 'screenshot' }, ctx())).toEqual(SHOT);
     expect(driver.started).toEqual([{ chatId: 'chat-1', chatTitle: CLEAN }]);

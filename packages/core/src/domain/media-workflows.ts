@@ -365,5 +365,5 @@ export function workflowImportProblem(graph: unknown, bindings: unknown): string
       return `The binding for "${role}" must have a nodeId and an input.`;
     }
   }
-  return workflowProblem({ graph: graph as Graph, bindings: bindings as Bindings });
+  return workflowProblem({ graph: graph as Graph, bindings: bindings });
 }

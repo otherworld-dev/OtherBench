@@ -86,7 +86,7 @@ describe('MockChatEngine', () => {
 
       const deltas = events.filter((e) => e.type === 'text-delta');
       expect(deltas.length).toBeGreaterThan(1);
-      const fullText = deltas.map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      const fullText = deltas.map((e) => (e).text).join('');
       expect(fullText.length).toBeGreaterThan(0);
 
       const finish = events.at(-1);
@@ -309,7 +309,7 @@ describe('MockChatEngine', () => {
       const subagent: ToolSpec = { name: 'subagent', description: '', parameters: {}, risk: 'read', source: 'subagent', execute };
       const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#subagents read #tool notes.txt\nthanks', { tools: [subagent] })));
 
-      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      const calls = events.filter((e) => e.type === 'tool-call');
       expect(calls.map((c) => c.args)).toEqual([
         { description: 'First helper', prompt: 'read #tool notes.txt' },
         { description: 'Second helper', prompt: 'Say hello.' },
@@ -609,7 +609,7 @@ describe('MockChatEngine', () => {
       const todos: ToolSpec = { name: 'update_todos', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
       const sleep = fakeSleep();
       const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#todos', { tools: [todos] })));
-      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      const calls = events.filter((e) => e.type === 'tool-call');
       expect(calls.map((c) => c.name)).toEqual(['update_todos', 'update_todos', 'update_todos']);
       expect((calls[0]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['in_progress', 'pending']);
       expect((calls[2]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['completed', 'completed']);
@@ -694,7 +694,7 @@ describe('MockChatEngine', () => {
     it('replies with Markdown lists, line breaks kept (the word-chunked replies lose them)', async () => {
       const engine = new MockChatEngine({ sleep: fakeSleep() });
       const events = await drain(engine.stream(makeRequest('#lists')));
-      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e).text).join('');
       expect(text).toBe(LISTS_REPLY);
       expect(text).toContain('\n3. Third step\n');
       expect(events.at(-1)?.type).toBe('finish');
@@ -709,7 +709,7 @@ describe('MockChatEngine', () => {
     it('replies with the system prompt it was given, for checking what a turn sent (e2e)', async () => {
       const engine = new MockChatEngine({ sleep: fakeSleep() });
       const events = await drain(engine.stream(makeRequest('#echo-system', { messages: [systemMessage('# Project memory: Alpha\n- pinned-fact'), userMessage('#echo-system')] })));
-      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e).text).join('');
       expect(text).toBe('# Project memory: Alpha - pinned-fact');
       expect(events.at(-1)?.type).toBe('finish');
     });
@@ -717,7 +717,7 @@ describe('MockChatEngine', () => {
     it('says so when there is no system prompt', async () => {
       const engine = new MockChatEngine({ sleep: fakeSleep() });
       const events = await drain(engine.stream(makeRequest('#echo-system')));
-      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e).text).join('');
       expect(text).toBe('No system prompt.');
     });
   });

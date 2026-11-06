@@ -23,6 +23,12 @@ export default defineConfig(
       // server, or a test assertion (`expect(...).rejects`) that never runs.
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
+      // Awaiting a value that isn't a promise usually means an API stopped being async.
+      '@typescript-eslint/await-thenable': 'error',
+      // A new event or message kind fails the build where a switch doesn't handle it.
+      '@typescript-eslint/switch-exhaustiveness-check': ['error', { considerDefaultExhaustiveForUnions: true }],
+      // A cast that changes nothing hides the casts that do.
+      '@typescript-eslint/no-unnecessary-type-assertion': 'error',
     },
   },
   {

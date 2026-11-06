@@ -141,7 +141,7 @@ describe('MemoryPanel: the learned note', () => {
 
 describe('MemoryPanel: Memory model', () => {
   function select(): HTMLSelectElement {
-    return screen.getByRole('combobox', { name: 'Memory model' }) as HTMLSelectElement;
+    return screen.getByRole<HTMLSelectElement>('combobox', { name: 'Memory model' });
   }
 
   it('offers Default plus every live profile, with a privacy hint about what the model reads', async () => {

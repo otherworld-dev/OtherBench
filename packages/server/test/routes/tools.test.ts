@@ -621,7 +621,7 @@ describe('Approval routes', () => {
   });
 
   it("an 'always' answer with a host stores a browser grant for that site", async () => {
-    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null });
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
     const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
@@ -650,7 +650,7 @@ describe('Approval routes', () => {
   });
 
   it("a browser card's 'always' answer is held to the sandbox network's rules: one key, the card's own host, stored canonical", async () => {
-    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null });
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
     const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
@@ -738,7 +738,7 @@ describe('Approval routes', () => {
   });
 
   it("an 'always' answer with the card's app stores a computer grant for exactly that app; one that is not a string is a 400 and stores nothing", async () => {
-    store.chats.create({ id: 'chat-c', title: 'C', profileId: 'profile-c', headMessageId: null, pinned: false, archivedAt: null } as never);
+    store.chats.create({ id: 'chat-c', title: 'C', profileId: 'profile-c', headMessageId: null, pinned: false, archivedAt: null });
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true };
     const driver = new FakeComputerDriver();
     const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcpManager, { computer: driver });

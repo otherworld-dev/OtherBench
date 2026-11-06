@@ -204,7 +204,7 @@ describe('planClaudeImport: content blocks', () => {
       }),
     ]);
     const parts = partsOf(chat, 'a1');
-    const [ha, view] = parts.filter((p) => p.type === 'tool-call') as Extract<Part, { type: 'tool-call' }>[];
+    const [ha, view] = parts.filter((p) => p.type === 'tool-call');
     expect(ha!.id).toBe('call_a1_1');
     expect(ha!.name).toBe('Home Assistant:ha_get_state');
     expect(view!.id).toBe('call_a1_2');
@@ -253,7 +253,7 @@ describe('planClaudeImport: content blocks', () => {
         ],
       }),
     ]);
-    const results = partsOf(chat, 'a1').filter((p) => p.type === 'tool-result') as Extract<Part, { type: 'tool-result' }>[];
+    const results = partsOf(chat, 'a1').filter((p) => p.type === 'tool-result');
     expect(results.map((r) => r.result)).toEqual(['[An image, not included in the claude.ai export]\n[2 images, not included in the claude.ai export]', 'Read memory']);
   });
 

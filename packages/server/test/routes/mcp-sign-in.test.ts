@@ -355,7 +355,7 @@ describe('sign-in mode (remote access)', { timeout: 20_000 }, () => {
     expect(login.status).toBe(200);
     const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
     const request = (path: string, init: RequestInit = {}) =>
-      remoteApp.request(path, { ...init, headers: { ...HOST, Cookie: cookie, ...((init.headers as Record<string, string>) ?? {}) } }, from('10.0.0.7'));
+      remoteApp.request(path, { ...init, headers: { ...HOST, Cookie: cookie, ...((init.headers) ?? {}) } }, from('10.0.0.7'));
     return { remoteApp, request };
   }
 
@@ -534,7 +534,7 @@ describe('editing and deleting a signed-in server', { timeout: 20_000 }, () => {
       const unchangedForm = () => app().request(`/api/mcp-servers/${id}`, patchJson({ name: 'Hosted Docs', transport: 'http', command: null, args: [], url: fixture.url, enabled: true }));
       const urlChange = () => app().request(`/api/mcp-servers/${id}`, patchJson({ url: second.url }));
       const sends = changeFirst ? [urlChange, unchangedForm] : [unchangedForm, urlChange];
-      const results = await Promise.all(sends.map((send) => send()));
+      const results = await Promise.all(sends.map(async (send) => send()));
       expect(results.map((r) => r.status)).toEqual([200, 200]);
 
       // Whichever the lock ran last decides the URL; the connection and the sign-in state must agree with it.

@@ -57,7 +57,7 @@ function tabClientId(): string {
   window.addEventListener('pagehide', () => claim(false));
   // Back from the back-forward cache: the page shows again, so it holds the id again.
   window.addEventListener('pageshow', (e) => {
-    if ((e as PageTransitionEvent).persisted) claim(true);
+    if ((e).persisted) claim(true);
   });
   return id;
 }

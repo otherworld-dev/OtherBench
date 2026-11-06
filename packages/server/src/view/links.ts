@@ -67,7 +67,7 @@ export class ViewLinks {
       this.links.delete(oldest);
     }
     const id = randomBytes(16).toString('base64url');
-    this.links.set(id, { link: { ...link, expiresAt: now + VIEW_LINK_TTL_MS } as ViewLink, diesAt: now + VIEW_LINK_MAX_MS });
+    this.links.set(id, { link: { ...link, expiresAt: now + VIEW_LINK_TTL_MS }, diesAt: now + VIEW_LINK_MAX_MS });
     return id;
   }
 

@@ -140,7 +140,7 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
     ['a name with a colon', ['mount', 'E:\\a:b', '/mnt/e/a:b', 'ro'], /doesn't allow/],
     ['a name ending in a dot', ['mount', 'E:\\a.', '/mnt/e/a.', 'ro'], /dot or a space/],
   ])('refuses %s', (_name, args, message) => {
-    const r = run(args as string[]);
+    const r = run(args);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(message);
     expect(r.out).toBe('');

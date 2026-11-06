@@ -251,7 +251,7 @@ describe('toModelMessages', () => {
 
   it('loads each distinct attachment once per request, however many parts name it', async () => {
     const loadAttachment = vi.fn(async () => FAKE_PNG);
-    const parts: Part[] = Array.from({ length: 30 }, () => ({ type: 'image', attachmentId: 'same', mime: 'image/png' }) as Part);
+    const parts: Part[] = Array.from({ length: 30 }, () => ({ type: 'image', attachmentId: 'same', mime: 'image/png' }));
     await toModelMessages([makeMessage('user', parts), makeMessage('user', parts)], VISION_AND_TOOLS, loadAttachment);
     expect(loadAttachment).toHaveBeenCalledTimes(1);
   });

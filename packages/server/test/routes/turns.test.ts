@@ -328,7 +328,7 @@ describe('POST /api/chats/:id/stop', () => {
     const a = seedChat();
     const res = await postTurn(a.chatId, a.profileIds);
     const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
-    const other = container.store.chats.create({ id: 'other-chat', title: 'Other', profileId: a.profileIds[0]!, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null } as never);
+    const other = container.store.chats.create({ id: 'other-chat', title: 'Other', profileId: a.profileIds[0]!, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
 
     const stopRes = await app().request(`/api/chats/${other.id}/stop`, { method: 'POST' });
     expect(stopRes.status).toBe(200);
@@ -895,7 +895,7 @@ describe('POST /api/chats/:id/helpers/:taskId/stop', () => {
   it('stops a helper, and 404s an unknown one', async () => {
     container.store.chats.create({ id: 'chat-1', title: 'T', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const stopHelper = vi.fn(async (_chat: string, taskId: string) => taskId === 'k1');
-    container.engine = { ...container.engine, stopHelper } as typeof container.engine;
+    container.engine = { ...container.engine, stopHelper };
     const ok = await app().request('/api/chats/chat-1/helpers/k1/stop', { method: 'POST' });
     expect(ok.status).toBe(200);
     expect(stopHelper).toHaveBeenCalledWith('chat-1', 'k1');
@@ -908,7 +908,7 @@ describe('POST /api/chats/:id/helpers/:taskId/stop', () => {
     const stopHelper = vi.fn(async () => {
       throw new HelperStopError("This version of Claude Code can't stop one background task.");
     });
-    container.engine = { ...container.engine, stopHelper } as typeof container.engine;
+    container.engine = { ...container.engine, stopHelper };
     const res = await app().request('/api/chats/chat-1/helpers/k1/stop', { method: 'POST' });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "This version of Claude Code can't stop one background task." });

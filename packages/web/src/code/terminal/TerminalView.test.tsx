@@ -74,7 +74,7 @@ beforeEach(() => {
     media: query,
     addEventListener: (_type: string, l: Listener) => schemeListeners.add(l),
     removeEventListener: (_type: string, l: Listener) => schemeListeners.delete(l),
-  })) as unknown as typeof window.matchMedia;
+  }));
   document.documentElement.style.setProperty('--bg', '#f2efe6');
   document.documentElement.style.setProperty('--text', '#0a1118');
 });

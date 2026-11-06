@@ -43,7 +43,7 @@ afterEach(() => {
 
 function withListCommands(listCommands: NonNullable<ChatEngine['listCommands']>): ReturnType<typeof vi.fn> {
   const fn = vi.fn(listCommands);
-  container.engine = { ...container.engine, listCommands: fn } as ChatEngine;
+  container.engine = { ...container.engine, listCommands: fn };
   return fn;
 }
 

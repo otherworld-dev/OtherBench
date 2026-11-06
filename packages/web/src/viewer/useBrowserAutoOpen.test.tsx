@@ -5,7 +5,7 @@ import { useViewerStore, viewerFor } from './state.js';
 import { browserCalls, useBrowserAutoOpen } from './useBrowserAutoOpen.js';
 
 const msg = (id: string, status: CanonMessage['status'], parts: Part[]): CanonMessage =>
-  ({ id, chatId: 'c1', parentId: null, role: 'assistant', parts, status, error: null, producedBy: null, createdAt: 1 }) as CanonMessage;
+  ({ id, chatId: 'c1', parentId: null, role: 'assistant', parts, status, error: null, producedBy: null, createdAt: 1 });
 const call = (id: string, name = 'browser'): Part => ({ type: 'tool-call', id, name, args: { command: 'open', url: 'https://example.com/' } });
 const viewer = () => viewerFor(useViewerStore.getState().viewers, 'c1');
 

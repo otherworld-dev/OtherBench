@@ -36,7 +36,7 @@ function run(args: string[], stdin?: string): Promise<number> {
     const child = spawn(process.execPath, ['../server/dist/cli.js', ...args], { cwd: webDir, stdio: ['pipe', 'ignore', 'inherit'] });
     child.once('error', reject);
     child.once('exit', (code) => resolve(code ?? 1));
-    child.stdin!.end(stdin ?? '');
+    child.stdin.end(stdin ?? '');
   });
 }
 

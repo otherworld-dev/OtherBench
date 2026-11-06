@@ -75,7 +75,7 @@ describe('GeneratedMedia', () => {
 
   it('shows a video with controls', () => {
     render(<GeneratedMedia result={video} scope={scope} />);
-    const el = screen.getByTestId('generated-video') as HTMLVideoElement;
+    const el = screen.getByTestId<HTMLVideoElement>('generated-video');
     expect(el.controls).toBe(true);
     expect(el.getAttribute('src')).toBe('/api/chats/c1/messages/m1/tool-images/v1');
     expect(screen.getByText(/Generated a video/)).toBeInTheDocument();

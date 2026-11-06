@@ -40,7 +40,7 @@ export function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: str
     const merged = { ...last, text: last.text + text } as Part;
     return [...parts.slice(0, -1), merged];
   }
-  return [...parts, { type: kind, text } as Part];
+  return [...parts, { type: kind, text }];
 }
 
 /** Folds a content event (text, reasoning, tool call or result, notice) into a sub-agent's own parts; any other event changes nothing. */
@@ -142,7 +142,7 @@ const END_STATUSES: ReadonlySet<string> = new Set(['complete', 'error', 'cancell
 function isUsage(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const u = value as Record<string, unknown>;
-  return ['tokensIn', 'tokensOut', 'tokensCached', 'tokensReasoning'].every((k) => typeof u[k] === 'number' && Number.isFinite(u[k]) && (u[k] as number) >= 0);
+  return ['tokensIn', 'tokensOut', 'tokensCached', 'tokensReasoning'].every((k) => typeof u[k] === 'number' && Number.isFinite(u[k]) && (u[k]) >= 0);
 }
 
 /** Whether `value` is a well-formed `SubagentEvent`: for events that come from outside this process (a paired machine's relay). */

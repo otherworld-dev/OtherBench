@@ -95,7 +95,7 @@ export class SqliteCrudRepo<T extends { id: string }> {
     if (!current) {
       throw new Error(`${this.mapping.table}: not found: ${id}`);
     }
-    const updated = { ...current, ...patch, id } as T;
+    const updated = { ...current, ...patch, id };
     const values = this.mapping.toRow(updated).slice(1);
     const nonIdColumns = this.mapping.columns.slice(1);
     if (this.clock && stamp !== false) {

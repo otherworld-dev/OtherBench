@@ -226,7 +226,7 @@ describe('syncing two machines over the peer listener', () => {
     // What a store could hand over from old rows: the syncer itself must not act on any of these sizes.
     const sizes: unknown[] = ['big', Number.NaN, 1.5, -1, Number.POSITIVE_INFINITY, 64 * 1024 * 1024 + 1, 'big'];
     const rows = sizes.map((size, i) => ({ id: `pc-${i}`, sha256: blobs[i]!.sha256, size: size as number }));
-    const sync = laptop.store.sync!;
+    const sync = laptop.store.sync;
     const realMissing = sync.missingBlobs.bind(sync);
     sync.missingBlobs = () => rows;
     const asked: string[] = [];
@@ -246,7 +246,7 @@ describe('syncing two machines over the peer listener', () => {
     sync.missingBlobs = realMissing;
     await laptop.syncer.pullFrom('node-PC');
     expect(asked.filter((p) => p.startsWith('/peer/blobs/'))).toHaveLength(6);
-    expect(laptop.store.sync!.missingBlobs()).toEqual([]);
+    expect(laptop.store.sync.missingBlobs()).toEqual([]);
   });
 
   it('offers no file row and serves no blob for a file that is not bound to a message of its own chat', async () => {

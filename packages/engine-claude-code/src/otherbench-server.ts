@@ -80,7 +80,7 @@ async function answer(current: Current, args: unknown, off: string): Promise<Cal
 
 /** A zod shape as the JSON schema Claude Code is shown. */
 function jsonSchemaOf(shape: z.ZodRawShape): Record<string, unknown> {
-  return z.toJSONSchema(z.object(shape)) as Record<string, unknown>;
+  return z.toJSONSchema(z.object(shape));
 }
 
 /** The `artifact` tool as Claude Code sees it, from OtherBench's in-process MCP server (Deck #896). */
@@ -155,7 +155,7 @@ export function otherBenchMcpServer(name: string, tools: OtherBenchServerTool[])
   instance.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const tool = byName.get(request.params.name);
     if (!tool) return errorResult(`OtherBench has no tool called "${request.params.name}".`);
-    const toolUseId = (request.params._meta as Record<string, unknown> | undefined)?.[TOOL_USE_ID_META];
+    const toolUseId = (request.params._meta)?.[TOOL_USE_ID_META];
     try {
       return await tool.call(request.params.arguments ?? {}, { ...(typeof toolUseId === 'string' && toolUseId.length > 0 ? { toolUseId } : {}), signal: extra.signal });
     } catch (err) {

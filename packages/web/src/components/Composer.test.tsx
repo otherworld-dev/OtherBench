@@ -446,7 +446,7 @@ describe('Composer', () => {
       mockedUpload.mockResolvedValue(makeAttachment({ id: 'att-3', filename: 'picked.png' }));
       const user = userEvent.setup();
       render(<Composer chat={makeChat()} />);
-      const input = screen.getByTestId('composer-file-input') as HTMLInputElement;
+      const input = screen.getByTestId<HTMLInputElement>('composer-file-input');
       const click = vi.spyOn(input, 'click');
       await user.click(screen.getByRole('button', { name: 'Attach files' }));
       expect(click).toHaveBeenCalled();

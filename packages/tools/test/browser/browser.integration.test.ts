@@ -94,7 +94,7 @@ async function pageValue(selector: string): Promise<string> {
 async function described(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const d = await tool.describeCall!(args, ctx);
   if ('refuse' in d) throw new Error(d.refuse);
-  return d.args as Record<string, unknown>;
+  return d.args;
 }
 
 /** The ref on the snapshot line naming `role "name"`. */

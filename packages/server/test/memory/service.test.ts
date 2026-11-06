@@ -595,7 +595,7 @@ describe('timeouts and shutdown (fix round 1)', () => {
       ...engine,
       async *stream(req) {
         await new Promise((resolve) => req.signal.addEventListener('abort', resolve, { once: true }));
-        yield { type: 'error', error: { kind: 'cancelled', message: 'The request was cancelled.', retryable: false } } as EngineEvent;
+        yield { type: 'error', error: { kind: 'cancelled', message: 'The request was cancelled.', retryable: false } };
       },
     };
     expect(await runHung(cancelling)).toEqual({ status: 'failed', error: timeoutMessage });

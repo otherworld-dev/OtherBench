@@ -11,7 +11,7 @@ export function recallTool(store: Store): ToolSpec {
   return {
     name: RECALL_TOOL,
     description: RECALL_TOOL_DESCRIPTION,
-    parameters: RECALL_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+    parameters: RECALL_TOOL_PARAMETERS,
     risk: 'read',
     source: 'recall',
     execute: async (args, ctx) => runRecallCommand(store, { chatId: ctx.chatId }, args),

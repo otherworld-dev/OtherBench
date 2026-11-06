@@ -235,7 +235,7 @@ function DeckList({
       </div>
       {board && (
         <div role="group" aria-label="Deck columns" className="flex flex-wrap gap-1 text-xs">
-          {[...board.stacks.map((s) => ({ key: s.id as Column, title: s.title, count: s.cards.length })), { key: 'archived' as Column, title: 'Archived', count: board.archived.length }].map(
+          {[...board.stacks.map((s) => ({ key: s.id, title: s.title, count: s.cards.length })), { key: 'archived' as Column, title: 'Archived', count: board.archived.length }].map(
             (c) => (
               <button
                 key={c.key}

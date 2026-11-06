@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 function chat(id: string, workspace: Workspace | null, extra: Record<string, unknown> = {}): void {
-  container.store.chats.create({ id, title: id, profileId: 'p', headMessageId: null, workspace, pinned: false, archivedAt: null, ...extra } as never);
+  container.store.chats.create({ id, title: id, profileId: 'p', headMessageId: null, workspace, pinned: false, archivedAt: null, ...extra });
 }
 
 const app = () => createApp(container);

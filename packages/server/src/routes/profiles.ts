@@ -34,7 +34,7 @@ function parseParams(value: unknown): ModelParams {
   }
   // ModelParams' fields are all optional numbers; trust the shape rather
   // than re-deriving a bespoke schema for four passthrough numeric knobs.
-  return value as ModelParams;
+  return value;
 }
 
 const MAX_BLOCKED_HOSTS = 200;
@@ -163,7 +163,7 @@ function parseToolPolicy(container: Container, value: unknown, base: ToolPolicy 
     ...(typeof v['agentUserSettings'] === 'boolean' ? { agentUserSettings: v['agentUserSettings'] } : base.agentUserSettings !== undefined ? { agentUserSettings: base.agentUserSettings } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
-    ...(shellRuns !== undefined ? { shellRuns: shellRuns as ToolPolicy['shellRuns'] } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
+    ...(shellRuns !== undefined ? { shellRuns: shellRuns } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
     ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
     ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),
     ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),

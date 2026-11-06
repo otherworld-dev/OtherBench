@@ -110,7 +110,7 @@ describe('TabBar (#824)', () => {
     await user.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'true');
     const items = screen.getAllByRole('menuitemradio');
-    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['One chat', 'Two side by side', 'Two stacked', 'Three side by side', 'One big, two stacked', 'Four in a grid']);
+    expect(items.map((i) => i.textContent.replace('✓', '').trim())).toEqual(['One chat', 'Two side by side', 'Two stacked', 'Three side by side', 'One big, two stacked', 'Four in a grid']);
     expect(screen.getByRole('menuitemradio', { name: 'One chat' })).toHaveAttribute('aria-checked', 'true');
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu', { name: 'Layout' })).toBeNull();

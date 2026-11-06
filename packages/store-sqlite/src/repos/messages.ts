@@ -368,7 +368,7 @@ export class SqliteMessageRepo implements MessageRepo {
             ORDER BY rank, m.rowid
             LIMIT ? OFFSET ?`
         )
-        .all(match, limit, offset) as Record<string, unknown>[];
+        .all(match, limit, offset);
     } catch (err) {
       // Secondary guard, not the primary defence (that's the quoting above):
       // an FTS5 edge case we haven't enumerated should degrade to "no
@@ -400,7 +400,7 @@ export class SqliteMessageRepo implements MessageRepo {
             ORDER BY best, m.chat_id
             LIMIT ?`
         )
-        .all(match, limit) as Record<string, unknown>[];
+        .all(match, limit);
     } catch (err) {
       // Same guard as searchText.
       if (isSqliteError(err)) return [];

@@ -748,7 +748,7 @@ describe('AiSdkChatEngine.listModels (real providers, injectable fetch)', () => 
         { status: 200 }
       )
     );
-    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+    const engine = engineWithFetch(fetchImpl);
 
     const models = await engine.listModels(makeConnection({ kind: 'google' }), 'goog-key');
 
@@ -759,14 +759,14 @@ describe('AiSdkChatEngine.listModels (real providers, injectable fetch)', () => 
 
   it('rejects with a classifiable error when the provider returns 401', async () => {
     const fetchImpl = vi.fn(async () => new Response('{"error":"invalid key"}', { status: 401 }));
-    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+    const engine = engineWithFetch(fetchImpl);
 
     await expect(engine.listModels(makeConnection({ kind: 'openai' }), 'bad-key')).rejects.toThrow();
   });
 
   it('testConnection reports ok:false with the classified message on failure', async () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 401 }));
-    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+    const engine = engineWithFetch(fetchImpl);
 
     const result = await engine.testConnection(makeConnection({ kind: 'openai' }), 'bad-key');
 
@@ -801,7 +801,7 @@ describe('AiSdkChatEngine.listModels (real providers, injectable fetch)', () => 
 
   it('testConnection reports ok:true when models list successfully', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'gpt-4o' }] }), { status: 200 }));
-    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+    const engine = engineWithFetch(fetchImpl);
 
     const result = await engine.testConnection(makeConnection({ kind: 'openai' }), 'sk-key');
 

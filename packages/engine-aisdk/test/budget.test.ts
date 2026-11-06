@@ -87,7 +87,7 @@ describe('tool images: the caps are decided from the references before any bytes
     const size = vi.fn(() => FAKE_PNG.length);
     const out = await toModelMessages(shots(ids), CAPS, never, { chatId: 'c', load, size });
     expect(load).toHaveBeenCalledTimes(3);
-    expect(load.mock.calls.map((c) => (c[0] as { attachmentId: string }).attachmentId)).toEqual(['img-49', 'img-48', 'img-47']);
+    expect(load.mock.calls.map((c) => (c[0]).attachmentId)).toEqual(['img-49', 'img-48', 'img-47']);
     expect(outputs(out).filter((o) => o.value.some((v) => v.type === 'image-data'))).toHaveLength(3);
   });
 
@@ -101,7 +101,7 @@ describe('tool images: the caps are decided from the references before any bytes
     const sizes: Record<string, number> = { old: 4 * MB, mid: 4 * MB, new: 4 * MB }; // 12 MB against a 10 MB total
     const load = vi.fn(async (ref: { attachmentId: string }) => png(sizes[ref.attachmentId]));
     const out = await toModelMessages(shots(['old', 'mid', 'new']), CAPS, never, { chatId: 'c', load, size: (ref) => sizes[ref.attachmentId]! });
-    expect(load.mock.calls.map((c) => (c[0] as { attachmentId: string }).attachmentId)).toEqual(['new', 'mid']);
+    expect(load.mock.calls.map((c) => (c[0]).attachmentId)).toEqual(['new', 'mid']);
     expect(outputs(out)[0]!.value[0]).toEqual({ type: 'text', text: IMAGE_TOO_LARGE_NOTE });
   });
 
@@ -129,7 +129,7 @@ function userMessage(parts: Part[], id = 'u1'): CanonMessage {
 }
 
 describe("user attachments: picked from the references, then read once each", () => {
-  const images = (n: number): Part[] => Array.from({ length: n }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mime: 'image/png' }) as Part);
+  const images = (n: number): Part[] => Array.from({ length: n }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mime: 'image/png' }));
 
   it('reads no more than the count cap for fifty distinct images, the newest ones', async () => {
     const load = vi.fn(async (_id: string) => png());
@@ -144,7 +144,7 @@ describe("user attachments: picked from the references, then read once each", ()
   it('never reads a file whose row is over the cap, is not available here, or would pass the total', async () => {
     const sizes: Record<string, number | null> = { huge: 26 * MB, foreign: null, a: 24 * MB, b: 24 * MB, c: 24 * MB };
     const load = vi.fn(async (id: string) => png(sizes[id] ?? 0));
-    const parts: Part[] = ['huge', 'foreign', 'a', 'b', 'c'].map((id) => ({ type: 'file', attachmentId: id, mime: 'application/pdf', filename: `${id}.pdf` }) as Part);
+    const parts: Part[] = ['huge', 'foreign', 'a', 'b', 'c'].map((id) => ({ type: 'file', attachmentId: id, mime: 'application/pdf', filename: `${id}.pdf` }));
     const out = await toModelMessages([userMessage(parts)], CAPS, load, undefined, (id) => sizes[id] ?? null);
     expect(load.mock.calls.map((c) => c[0])).toEqual(['b', 'c']); // the newest two are picked; a would make 72 MB
     const content = (out[0] as { content: { type: string; text?: string }[] }).content;
@@ -161,8 +161,8 @@ describe("user attachments: picked from the references, then read once each", ()
   it('names a file that turns out, once read, to be longer than its row said or more than the request has room for', async () => {
     const sizes: Record<string, number> = { liar: 10, a: 10, b: 10, c: 10 };
     const real: Record<string, number> = { liar: 26 * MB, a: 24 * MB, b: 24 * MB, c: 24 * MB };
-    const parts: Part[] = ['liar', 'a', 'b', 'c'].map((id) => ({ type: 'file', attachmentId: id, mime: 'application/pdf', filename: `${id}.pdf` }) as Part);
-    const out = await toModelMessages([userMessage(parts)], CAPS, async (id) => png(real[id]!), undefined, (id) => sizes[id] ?? null);
+    const parts: Part[] = ['liar', 'a', 'b', 'c'].map((id) => ({ type: 'file', attachmentId: id, mime: 'application/pdf', filename: `${id}.pdf` }));
+    const out = await toModelMessages([userMessage(parts)], CAPS, async (id) => png(real[id]), undefined, (id) => sizes[id] ?? null);
     const content = (out[0] as { content: { type: string; text?: string }[] }).content;
     expect(content.map((c) => (c.type === 'text' ? c.text : c.type))).toEqual([
       '[attachment "liar.pdf" omitted: too large to send]',

@@ -135,7 +135,7 @@ function ocsPick(payload: unknown, key: string): unknown {
       data = 'data' in o ? o.data : o;
     } else if ('data' in p) data = p.data;
   }
-  if (key && data && typeof data === 'object' && !Array.isArray(data) && key in (data as object)) {
+  if (key && data && typeof data === 'object' && !Array.isArray(data) && key in (data)) {
     return (data as Record<string, unknown>)[key];
   }
   return data;

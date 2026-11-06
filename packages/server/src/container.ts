@@ -544,7 +544,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const engine = new RoutingChatEngine(
     aisdkEngine,
     new ClaudeCodeChatEngine({
-      query: query as unknown as QueryFn,
+      query: query,
       approvals: toolProvider,
       listEndpointModels: endpointModelLister(aisdkEngine),
       // Artifacts (Deck #896) and recall: the same executors as the API engines' tools.

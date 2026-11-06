@@ -9,7 +9,7 @@ function make() {
   const events: EngineBackgroundEvent[] = [];
   let clock = 1000;
   const tasks = new BackgroundTasks('chat-1', (e) => events.push(e), () => clock);
-  const helpers = () => (events.filter((e) => e.type === 'helpers').at(-1) as Extract<EngineBackgroundEvent, { type: 'helpers' }> | undefined)?.helpers;
+  const helpers = () => (events.filter((e) => e.type === 'helpers').at(-1))?.helpers;
   const cardEvents = () => events.filter((e): e is Extract<EngineBackgroundEvent, { type: 'helper-event' }> => e.type === 'helper-event');
   return { tasks, events, helpers, cardEvents, tick: (ms: number) => (clock += ms) };
 }
