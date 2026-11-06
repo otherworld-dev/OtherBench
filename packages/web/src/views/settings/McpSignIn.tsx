@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useEffectEvent, useState, type JSX } from 'react';
 import type { McpServer } from '@otherbench/core/ports/store.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { openInBrowser } from '../../desktop/bridge.js';
+import { useChanged } from '../../lib/useChanged.js';
 import { ApiError, api } from '../../state/api.js';
 
 const SIGN_OUT_CONFIRM = 'OtherBench will forget this sign-in. The provider still lists OtherBench as allowed until you remove it there.';
@@ -32,10 +33,9 @@ export function McpSignIn({ server, health, onChanged }: { server: McpServer; he
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pasted, setPasted] = useState('');
-  const onChangedRef = useRef(onChanged);
-  onChangedRef.current = onChanged;
+  const finishedSigningIn = useEffectEvent(() => onChanged());
 
-  useEffect(() => setOptimisticPending(false), [auth]);
+  if (useChanged([auth])) setOptimisticPending(false);
   const pending = (auth?.pending ?? false) || optimisticPending;
 
   useEffect(() => {
@@ -45,7 +45,7 @@ export function McpSignIn({ server, health, onChanged }: { server: McpServer; he
         .list()
         .then((all) => {
           const mine = all.find((s) => s.id === server.id);
-          if (mine && !mine.auth?.pending) onChangedRef.current();
+          if (mine && !mine.auth?.pending) finishedSigningIn();
         })
         .catch(() => {});
     }, 1000);

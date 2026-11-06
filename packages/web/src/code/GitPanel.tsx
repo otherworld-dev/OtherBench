@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type JSX } from 'react';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { GitFileChange, GitStatus } from '@otherbench/core/types/code.js';
 import { EditDiff } from '../components/EditDiff.js';
@@ -107,10 +107,10 @@ export function GitPanel({ app, status, readOnly, onChanged, onClose, onBusyChan
   // The guard every action passes, whatever drives it: a disabled control is only the visible half of it.
   // A ref, so two requests in one tick (before `busy` re-renders) can't both start.
   const busyRef = useRef(false);
-  const busyChange = useRef(onBusyChange);
-  busyChange.current = onBusyChange;
+  // Closed mid-action: the bar is told it's no longer busy, through the onBusyChange it has now.
+  const notBusy = useEffectEvent(() => onBusyChange?.(false));
   useEffect(() => () => {
-    if (busyRef.current) busyChange.current?.(false);
+    if (busyRef.current) notBusy();
   }, []);
   async function run(action: () => Promise<string | null>): Promise<boolean> {
     if (readOnly || busyRef.current) return false;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import { Message } from '../components/Message.js';
@@ -34,10 +34,9 @@ export function QuickChat(): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useChatSync(chat?.id ?? null);
-  // Esc stops a running reply first; with nothing running it hides the window. Read through a ref by the key listener.
+  // Esc stops a running reply first; with nothing running it hides the window. The key listener reads the latest through an effect event.
   const replies = useStopReply(chat?.id ?? null);
-  const repliesRef = useRef(replies);
-  repliesRef.current = replies;
+  const currentReplies = useEffectEvent(() => replies);
 
   useEffect(() => {
     api.profiles
@@ -59,8 +58,9 @@ export function QuickChat(): JSX.Element {
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
       e.preventDefault();
-      if (repliesRef.current.canStop) {
-        void repliesRef.current.stop();
+      const running = currentReplies();
+      if (running.canStop) {
+        void running.stop();
         return;
       }
       hideQuick().catch((err: unknown) => console.error('[otherbench-web] failed to hide quick chat:', err));

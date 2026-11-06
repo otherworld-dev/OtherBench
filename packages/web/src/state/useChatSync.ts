@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useEffectEvent, useRef } from 'react';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import type { BackgroundHelper, BackgroundMark, ChatLevelEvent } from '@otherbench/core/types/background.js';
@@ -35,10 +35,9 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
   const runsOn = useOtherBenchStore((s) => (chatId ? s.chats.find((c) => c.id === chatId)?.runsOn : undefined));
   // With several panes open, only the focused one drives the header's
   // connection status. Focus moving between panes must not reconnect a
-  // stream, so this is read through refs rather than restarting the effect.
-  const reportRef = useRef(reportStatus);
+  // stream, so this is read through an effect event rather than restarting the effect.
+  const reporting = useEffectEvent(() => reportStatus);
   const statusRef = useRef<StreamConnectionStatus>('idle');
-  reportRef.current = reportStatus;
 
   useEffect(() => {
     if (reportStatus) useOtherBenchStore.getState().setStreamStatus(statusRef.current);
@@ -72,7 +71,7 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     const setStreamStatus = useOtherBenchStore.getState().setStreamStatus;
     const report = (status: StreamConnectionStatus): void => {
       statusRef.current = status;
-      if (reportRef.current) setStreamStatus(status);
+      if (reporting()) setStreamStatus(status);
     };
 
     const { applyChatEvent, setChatBackground, setChatNotes, settleUnsureNotes } = useOtherBenchStore.getState();

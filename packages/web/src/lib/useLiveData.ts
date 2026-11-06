@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { onAppEvent, onAppEventsHello } from '../state/appEventListeners.js';
+import { useChanged } from './useChanged.js';
 
 /** How long a refetch waits after an event for the rest of a burst (a reconnect, a turn's tool calls). */
 export const LIVE_DEBOUNCE_MS = 200;
@@ -29,11 +30,16 @@ export function useLiveData<T>(
 ): { data: T | null; failed: boolean; refetch: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [failed, setFailed] = useState(false);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
-  const refetchOnRef = useRef(refetchOn);
-  refetchOnRef.current = refetchOn;
+  // The caller's latest fetcher and filter, without either restarting the effect.
+  const fetchNow = useEffectEvent(() => fetcher());
+  const wanted = useEffectEvent((event: AppEvent) => refetchOn(event));
   const refetchRef = useRef<() => void>(() => {});
+
+  // New deps go back to loading in the same render, so the old chat's data is never drawn under the new one.
+  if (useChanged(deps)) {
+    setData(null);
+    setFailed(false);
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -41,13 +47,10 @@ export function useLiveData<T>(
     let timer: ReturnType<typeof setTimeout> | null = null;
     /** When the first event since the last read came. */
     let waitingSince: number | null = null;
-    setData(null);
-    setFailed(false);
 
     function load(): void {
       const request = ++latest;
-      fetcherRef
-        .current()
+      fetchNow()
         .then((result) => {
           if (disposed || request !== latest) return;
           setData(result);
@@ -76,7 +79,7 @@ export function useLiveData<T>(
     load();
     refetchRef.current = load;
     const offEvent = onAppEvent((event) => {
-      if (refetchOnRef.current(event)) later();
+      if (wanted(event)) later();
     });
     const offHello = onAppEventsHello(later);
     return () => {
