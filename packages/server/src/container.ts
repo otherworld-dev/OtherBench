@@ -67,6 +67,9 @@ import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } 
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
+import { ChatSendService } from './chat-sends/service.js';
+import { createAppChat } from './routes/chats.js';
+import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import { NotesService } from './notes/service.js';
 import { runAbandonedAttachmentSweep, startAbandonedAttachmentSweep, type AbandonedSweeper } from './attachment-sweep.js';
 import { workspaceResolver } from './workspace-view.js';
@@ -134,6 +137,12 @@ export interface Container {
    * without one.
    */
   notes?: NotesService;
+  /**
+   * Chats that message each other (spec 2026-11-06-chat-to-chat-design): the
+   * sends, their delivery and the sender's resume. Always set by
+   * `createContainer`; optional so route tests can build a Container without one.
+   */
+  chatSends?: ChatSendService;
   /**
    * Import from claude.ai (spec 2026-10-09-claude-import-design). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -537,7 +546,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   }
   // Image and video generation: backends are resolved per call, from the profile's choice.
   const media = createMediaHost({ store, secrets });
-  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, ...(computer ? { computer } : {}) });
+  // The service is built once the container exists (it starts turns); until then the tool has nothing to send with.
+  let chatSends: ChatSendService | null = null;
+  const chats: ChatMessenger = {
+    list: (ctx) => chatSends?.list(ctx) ?? [],
+    send: async (ctx, targets) => (chatSends ? chatSends.send(ctx, targets) : { refused: 'OtherBench is still starting. Try again in a moment.' }),
+  };
+  const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, chats, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'otherbench-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   // Built after the engine, which reads it only once a request is made.
@@ -744,6 +759,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       appNotes.dispose();
       // Before the engine and store go: stops the schedule timer and its reply listeners.
       container.schedules?.dispose();
+      container.chatSends?.dispose();
       // Before the store goes: stops the Overview's check timer.
       container.overview?.dispose();
       // And the abandoned-attachment sweep's.
@@ -821,6 +837,26 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     blobStore,
     isHeld: (a) => notesService.heldAttachmentIds(a.chatId).includes(a.id),
   });
+  // Chats that message each other: started after the notes service, so a chat's own waiting
+  // messages go out before another chat's, and before the scheduler.
+  chatSends = new ChatSendService({
+    store,
+    turnRunner,
+    startTurn: (input) => startTurn(container, input),
+    resolveProfile: (id) => resolveProfile({ store, secrets }, id),
+    resolveWorkspace: (ws) => workspaceResolver(container)(ws),
+    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
+    createAppChat: (app, title) => createAppChat(container, app, title),
+    emit: (e) => events.emit(e),
+  });
+  container.chatSends = chatSends;
+  try {
+    chatSends.start();
+  } catch (err) {
+    // Never let chat-to-chat recovery stop the server starting.
+    console.warn('[otherbench-server] chat-to-chat sends failed to start:', err);
+  }
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
   // what tells the service a chat is busy).

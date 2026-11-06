@@ -25,6 +25,8 @@ export type AppEvent =
   /** `selfStarted`: nobody asked for this reply, the agent carried on by itself after a background task finished. */
   | { type: 'turn-started'; chatId: string; messageIds: string[]; selfStarted?: boolean }
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
+  /** A chat-to-chat send from or to these chats changed (spec 2026-11-06-chat-to-chat-design): re-read their sends. */
+  | { type: 'chat-sends-changed'; chatIds: string[] }
   /** `at`: when the card started waiting (ms), stamped by the server's event bus if the emitter didn't. */
   | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser'; at?: number }
   | { type: 'approval-resolved'; chatId: string; requestId: string }

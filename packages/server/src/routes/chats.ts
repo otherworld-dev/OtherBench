@@ -87,7 +87,7 @@ function requireExistingApp(container: Container, value: unknown): App {
 }
 
 /** `id` when it names a profile that exists and isn't archived, else null: a default that was archived or deleted is passed over. */
-function usableProfileId(container: Container, id: string | null): string | null {
+function usableProfileId(container: Pick<Container, 'store'>, id: string | null): string | null {
   if (id === null) return null;
   const profile = container.store.profiles.get(id);
   return profile && profile.archivedAt === null ? profile.id : null;
@@ -139,8 +139,32 @@ export function collectMessageTree(store: Store, chatId: string): CanonMessage[]
 }
 
 /** Starting a chat in an app, or moving one into it, opens the app in the Code sidebar. Only a closed app is written. */
-function openApp(container: Container, app: App): void {
+function openApp(container: Pick<Container, 'store'>, app: App): void {
   if (!app.open) container.store.apps.update(app.id, { open: true, updatedAt: Date.now() });
+}
+
+/**
+ * A new chat in `app`, as `POST /chats` makes one under an app: the app's folder, its default profile (else the
+ * usual default), Auto on, and the app opened in the Code sidebar. For a chat another chat's agent starts (spec
+ * 2026-11-06-chat-to-chat-design). Throws when there is no profile at all.
+ */
+export function createAppChat(container: Pick<Container, 'store'>, app: App, title: string): Chat {
+  const profileId = usableProfileId(container, app.defaultProfileId) ?? appDefaultProfileId(container.store);
+  if (!profileId) throw new Error('There is no profile to start a chat with. Create one in Settings first.');
+  const created = container.store.chats.create({
+    id: randomUUID(),
+    title: title.length > 0 ? title : DEFAULT_TITLE,
+    profileId,
+    headMessageId: null,
+    workspace: app.workspace,
+    pinned: false,
+    archivedAt: null,
+    projectId: null,
+    appId: app.id,
+    autoMode: true,
+  });
+  openApp(container, app);
+  return created;
 }
 
 export function chatsRoutes(container: Container): Hono {

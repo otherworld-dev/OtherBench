@@ -1,0 +1,228 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_SENDS_PER_CHAIN } from '@otherbench/core/domain/chat-sends.js';
+import { TurnRunner } from '@otherbench/core/domain/turn.js';
+import { resolveWorkspace } from '@otherbench/core/domain/workspace.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
+import type { SendOutcome, SendTarget } from '@otherbench/core/ports/chat-messenger.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
+import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
+import type { ResolvedProfile } from '@otherbench/core/types/config.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
+import { ChatSendService, type ChatSendDeps } from '../../src/chat-sends/service.js';
+import { collectMessageTree, createAppChat } from '../../src/routes/chats.js';
+import { AppEventBus } from '../../src/stream/events.js';
+import { StreamRegistry } from '../../src/stream/registry.js';
+import { startTurn, type TurnStartDeps } from '../../src/turn-start.js';
+
+/** A ChatEngine driven by hand per message id (as in schedule/service.test.ts), recording every request. */
+function manualEngine(): { engine: ChatEngine; push: (messageId: string, event: EngineEvent | null) => void; requests: EngineRequest[] } {
+  interface Channel {
+    queued: (EngineEvent | null)[];
+    waiters: ((event: EngineEvent | null) => void)[];
+  }
+  const channels = new Map<string, Channel>();
+  const requests: EngineRequest[] = [];
+  const channelFor = (messageId: string): Channel => {
+    let ch = channels.get(messageId);
+    if (!ch) {
+      ch = { queued: [], waiters: [] };
+      channels.set(messageId, ch);
+    }
+    return ch;
+  };
+  const engine: ChatEngine = {
+    async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+      requests.push(req);
+      const ch = channelFor(req.messageId);
+      while (true) {
+        if (req.signal.aborted) return;
+        const event = await new Promise<EngineEvent | null>((resolve) => {
+          if (ch.queued.length > 0) {
+            resolve(ch.queued.shift() as EngineEvent | null);
+            return;
+          }
+          const onAbort = (): void => resolve(null);
+          req.signal.addEventListener('abort', onAbort, { once: true });
+          ch.waiters.push((e) => {
+            req.signal.removeEventListener('abort', onAbort);
+            resolve(e);
+          });
+        });
+        if (event === null || req.signal.aborted) return;
+        yield event;
+        if (event.type === 'finish' || event.type === 'error') return;
+      }
+    },
+    listModels: async () => [],
+    testConnection: async () => ({ ok: true, message: 'ok', latencyMs: 0 }),
+  };
+  const push = (messageId: string, event: EngineEvent | null): void => {
+    const ch = channelFor(messageId);
+    const waiter = ch.waiters.shift();
+    if (waiter) waiter(event);
+    else ch.queued.push(event);
+  };
+  return { engine, push, requests };
+}
+
+const FINISH: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+let store: InMemoryStore;
+let engine: ReturnType<typeof manualEngine>;
+let bus: AppEventBus;
+let events: AppEvent[];
+let runner: TurnRunner;
+let turnDeps: TurnStartDeps;
+let service: ChatSendService;
+let waitingNotes: Set<string>;
+
+async function resolveP(id: string): Promise<ResolvedProfile> {
+  const p = store.profiles.get(id);
+  if (!p) throw new Error(`Profile "${id}" not found.`);
+  return { ...p, connection: store.connections.get(p.connectionId)!, apiKey: null, model: null };
+}
+
+function build(over: Partial<ChatSendDeps> = {}): ChatSendService {
+  return new ChatSendService({
+    store,
+    turnRunner: runner,
+    startTurn: (input) => startTurn(turnDeps, input),
+    resolveProfile: resolveP,
+    resolveWorkspace: (ws) => resolveWorkspace(ws, store.nodes.self().id, store.locations.allPaths(), () => true),
+    isChatBusy: (chatId) => bus.runningTurns().some((t) => t.chatId === chatId),
+    hasWaitingNotes: (chatId) => waitingNotes.has(chatId),
+    createAppChat: (app, title) => createAppChat({ store }, app, title),
+    emit: (e) => bus.emit(e),
+    ...over,
+  });
+}
+
+function addChat(id: string, over: Record<string, unknown> = {}): void {
+  store.chats.create({ id, title: `Chat ${id}`, profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, ...over });
+}
+
+/** Starts a turn in `chatId` with `text` and returns its reply's id (still streaming). */
+async function reply(chatId: string, text = 'hello'): Promise<string> {
+  const chat = store.chats.get(chatId)!;
+  const tip = chat.headMessageId === null ? null : store.messages.children(chat.headMessageId).at(-1)?.id ?? chat.headMessageId;
+  const result = await startTurn(turnDeps, { chatId, parentId: tip, userParts: [{ type: 'text', text }], profiles: [await resolveP(chat.profileId)] });
+  return result.assistantMessageIds[0]!;
+}
+
+async function finish(replyId: string, text: string): Promise<void> {
+  engine.push(replyId, { type: 'text-delta', text });
+  engine.push(replyId, FINISH);
+  await vi.waitFor(() => expect(store.messages.get(replyId)?.status).toBe('complete'));
+  await flush();
+  await service.idle();
+}
+
+function ctxFor(chatId: string, messageId: string, over: Partial<ToolContext> = {}): ToolContext {
+  return { chatId, messageId, profileId: 'p1', workspaceRoot: null, signal: new AbortController().signal, ...over };
+}
+
+async function send(chatId: string, messageId: string, targets: SendTarget[]): Promise<SendOutcome> {
+  const out = await service.send(ctxFor(chatId, messageId), targets);
+  await flush();
+  await service.idle();
+  return out;
+}
+
+const refusal = (out: SendOutcome): string => ('refused' in out ? out.refused : '');
+/** The newest reply in a chat. */
+const latestReply = (chatId: string): string | undefined =>
+  collectMessageTree(store, chatId)
+    .filter((m) => m.role === 'assistant')
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .at(-1)?.id;
+
+beforeEach(() => {
+  store = new InMemoryStore();
+  engine = manualEngine();
+  runner = new TurnRunner(store, engine.engine);
+  bus = new AppEventBus();
+  bus.attach(runner, store);
+  events = [];
+  bus.subscribe((e) => events.push(e));
+  turnDeps = { store, turnRunner: runner, streamRegistry: new StreamRegistry(runner, store), events: bus };
+  waitingNotes = new Set();
+  store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  store.profiles.create({
+    id: 'p1', name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
+    toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', artifacts: false, recall: false },
+    isDefault: true, archivedAt: null,
+  });
+  for (const id of ['A', 'B', 'C', 'D']) addChat(id);
+  service = build();
+  service.start();
+});
+
+afterEach(() => service.dispose());
+
+describe('ChatSendService: sending', () => {
+  it('refuses a compare turn', async () => {
+    const chat = store.chats.get('A')!;
+    const result = await startTurn(turnDeps, { chatId: 'A', parentId: chat.headMessageId, userParts: [{ type: 'text', text: 'x' }], profiles: [await resolveP('p1'), await resolveP('p1')] });
+    expect(refusal(await send('A', result.assistantMessageIds[0]!, [{ chatId: 'B', text: 'x' }]))).toMatch(/Compare/);
+    expect(store.chatSends.byFromChat('A')).toEqual([]);
+  });
+
+  it('refuses the sender itself, an unknown chat, an archived one and one on another machine', async () => {
+    store.chats.update('C', { archivedAt: 1 });
+    store.chats.update('D', { runsOn: 'node-2' });
+    const r = await reply('A');
+    expect(refusal(await send('A', r, [{ chatId: 'A', text: 'x' }]))).toMatch(/itself/);
+    expect(refusal(await send('A', r, [{ chatId: 'nope', text: 'x' }]))).toMatch(/no chat/i);
+    expect(refusal(await send('A', r, [{ chatId: 'C', text: 'x' }]))).toMatch(/archived/);
+    expect(refusal(await send('A', r, [{ chatId: 'D', text: 'x' }]))).toMatch(/runs on .*only chats on this machine/);
+    expect(store.chatSends.byFromChat('A')).toEqual([]);
+  });
+
+  it('refuses an app it cannot name exactly, or whose folder is not on this machine', async () => {
+    store.apps.create({ id: 'app1', name: 'Web' });
+    store.apps.create({ id: 'app2', name: 'web' });
+    store.apps.create({ id: 'app3', name: 'Away', workspace: { kind: 'machine', nodeId: 'other-node', root: 'Z:/nowhere' } });
+    const r = await reply('A');
+    expect(refusal(await send('A', r, [{ app: 'Nothing', text: 'x' }]))).toMatch(/No app/);
+    expect(refusal(await send('A', r, [{ app: 'WEB', text: 'x' }]))).toMatch(/More than one app/);
+    expect(refusal(await send('A', r, [{ app: 'Away', text: 'x' }]))).toMatch(/folder/);
+  });
+
+  it('starts a new chat in an app with its folder and default profile, titled from the text, and opens the app', async () => {
+    store.apps.create({ id: 'app1', name: 'Server', workspace: null, defaultProfileId: 'p1', open: false });
+    const r = await reply('A');
+    const out = await send('A', r, [{ app: 'server', text: 'Add a /health route\nand a test' }]);
+    if (!('sent' in out)) throw new Error(refusal(out));
+    const made = store.chats.get(out.sent[0]!.chatId)!;
+    expect(made).toMatchObject({ appId: 'app1', profileId: 'p1', title: 'Add a /health route' });
+    expect(out.sent[0]).toMatchObject({ createdChat: true, app: 'Server' });
+    expect(store.apps.get('app1')!.open).toBe(true);
+  });
+
+  it('records a top-level send as depth 1 of a chain named after the sending reply', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    expect(store.chatSends.byFromMessage(r)).toMatchObject([{ chainId: r, depth: 1, fromChatId: 'A', toChatId: 'B', text: 'x' }]);
+  });
+
+  it('refuses more than 4 targets from one reply, counting earlier sends', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }, { chatId: 'C', text: 'x' }, { chatId: 'D', text: 'x' }]);
+    addChat('E');
+    addChat('F');
+    expect(refusal(await send('A', r, [{ chatId: 'E', text: 'x' }, { chatId: 'F', text: 'x' }]))).toMatch(/4/);
+  });
+
+  it('lists the chats it could send to: not itself, not archived, with their app and whether they are busy', async () => {
+    store.apps.create({ id: 'app1', name: 'Server' });
+    store.chats.update('B', { appId: 'app1' });
+    store.chats.update('D', { archivedAt: 1 });
+    await reply('C');
+    const listed = service.list(ctxFor('A', 'r'));
+    expect(listed.map((c) => c.chatId).sort()).toEqual(['B', 'C']);
+    expect(listed.find((c) => c.chatId === 'B')).toMatchObject({ app: 'Server', busy: false });
+    expect(listed.find((c) => c.chatId === 'C')).toMatchObject({ busy: true });
+  });
+});
+

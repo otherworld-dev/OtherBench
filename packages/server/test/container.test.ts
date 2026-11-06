@@ -498,7 +498,7 @@ describe('createContainer and the sandbox', () => {
       expect(sandbox).toBeInstanceOf(FakeSandbox);
       expect(sandbox.setupCalls).toBe(0);
       // The provider got it: the sandboxed run_command is relayed for a profile whose shell runs there.
-      const policy: ToolPolicy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
+      const policy: ToolPolicy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate', chatMessages: false };
       expect((await (container.toolProvider as OtherBenchToolProvider).relayTools(policy)).map((t) => t.name)).toEqual(['run_command']);
       container.close();
       await vi.waitFor(() => expect(sandbox.closed).toBe(true));
