@@ -682,6 +682,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         pendingAsks={extras[m.id]?.pendingAsks ?? []}
                         onAnswerAsk={answerAsk}
                         {...(extras[m.id]?.progressByCall ? { progressByCall: extras[m.id]?.progressByCall } : {})}
+                        {...(extras[m.id]?.thinkingSince !== undefined ? { thinkingSince: extras[m.id]?.thinkingSince } : {})}
+                        {...(extras[m.id]?.thinkingTokens !== undefined ? { thinkingTokens: extras[m.id]?.thinkingTokens } : {})}
                         branch={
                           !compare && siblings.length > 1
                             ? {

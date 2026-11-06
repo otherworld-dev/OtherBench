@@ -23,6 +23,10 @@ export interface MessageExtras {
   pendingAsks?: UserAsk[];
   /** The latest progress of each generation call still running, by tool call id. Absent means none. */
   progressByCall?: Record<string, MediaProgress>;
+  /** When the model started the thinking it is doing now (epoch ms, the server's clock). Absent when it isn't thinking. */
+  thinkingSince?: number;
+  /** The engine's estimate of the tokens thought so far in that thinking, when it gives one. */
+  thinkingTokens?: number;
 }
 
 export const emptyExtras: MessageExtras = { usage: null, pendingApprovals: [] };
@@ -46,6 +50,13 @@ export function applyEventToMessage(
       return { message: { ...message, parts: appendDelta(message.parts, 'text', event.text) }, extras };
     case 'reasoning-delta':
       return { message: { ...message, parts: appendDelta(message.parts, 'reasoning', event.text) }, extras };
+    case 'thinking': {
+      if (typeof event.since === 'number') {
+        const { thinkingTokens: _old, ...rest } = extras;
+        return { message, extras: { ...rest, thinkingSince: event.since, ...(typeof event.tokens === 'number' ? { thinkingTokens: event.tokens } : {}) } };
+      }
+      return { message, extras: withoutThinking(extras) };
+    }
     case 'tool-call':
       return {
         message: { ...message, parts: [...message.parts, { type: 'tool-call', id: event.id, name: event.name, args: event.args }] },
@@ -75,7 +86,7 @@ export function applyEventToMessage(
       // A message that is no longer streaming cannot be waiting on anyone: drop
       // any approval card still showing (the server settles these as denials,
       // but the `approval-resolved` may be lost to a reconnect or arrive late).
-      return { message: { ...message, status: event.status }, extras: event.status === 'streaming' ? extras : withoutApprovals(extras) };
+      return { message: { ...message, status: event.status }, extras: event.status === 'streaming' ? extras : withoutThinking(withoutApprovals(extras)) };
     case 'notice':
       // Task 21's capability-fallback disclosure -- appended as its own
       // Part (never merged into an adjacent text part, unlike
@@ -125,6 +136,12 @@ function withoutApprovals(extras: MessageExtras): MessageExtras {
   const running = Object.keys(extras.progressByCall ?? {}).length > 0;
   if (extras.pendingApprovals.length === 0 && (extras.pendingAsks ?? []).length === 0 && !running) return extras;
   return { ...extras, pendingApprovals: [], pendingAsks: [], progressByCall: {} };
+}
+
+function withoutThinking(extras: MessageExtras): MessageExtras {
+  if (extras.thinkingSince === undefined && extras.thinkingTokens === undefined) return extras;
+  const { thinkingSince: _was, thinkingTokens: _tokens, ...rest } = extras;
+  return rest;
 }
 
 function withoutProgress(extras: MessageExtras, callId: string): MessageExtras {

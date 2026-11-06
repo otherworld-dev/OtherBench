@@ -121,6 +121,9 @@ export interface VariantCardProps {
   onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
   /** This variant's running generation calls, like `pendingApprovals`. */
   progressByCall?: MessageExtras['progressByCall'];
+  /** When this variant's model started the thinking it is doing now, like `progressByCall`. */
+  thinkingSince?: number;
+  thinkingTokens?: number;
 }
 
 /**
@@ -144,6 +147,8 @@ export function VariantCard({
   pendingAsks = [],
   onAnswerAsk,
   progressByCall,
+  thinkingSince,
+  thinkingTokens,
 }: VariantCardProps): JSX.Element {
   const metrics = useVariantMetrics(variant, usage, models);
 
@@ -162,7 +167,7 @@ export function VariantCard({
         </span>
       </div>
 
-      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} {...(progressByCall ? { progressByCall } : {})} />
+      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} {...(progressByCall ? { progressByCall } : {})} {...(thinkingSince !== undefined ? { thinkingSince } : {})} {...(thinkingTokens !== undefined ? { thinkingTokens } : {})} />
 
       <div className="flex items-center justify-between gap-2">
         {/* One cut off when its machine went away is that machine's to finish: regenerate instead (forward.ts keepCutOffReply). */}
@@ -347,6 +352,8 @@ export function VariantTabs({
               pendingAsks={extras[active.id]?.pendingAsks ?? []}
               onAnswerAsk={onAnswerAsk}
               {...(extras[active.id]?.progressByCall ? { progressByCall: extras[active.id]?.progressByCall } : {})}
+              {...(extras[active.id]?.thinkingSince !== undefined ? { thinkingSince: extras[active.id]?.thinkingSince } : {})}
+              {...(extras[active.id]?.thinkingTokens !== undefined ? { thinkingTokens: extras[active.id]?.thinkingTokens } : {})}
             />
           </div>
         )
@@ -384,6 +391,8 @@ export function VariantGrid({
           pendingAsks={extras[v.id]?.pendingAsks ?? []}
           onAnswerAsk={onAnswerAsk}
           {...(extras[v.id]?.progressByCall ? { progressByCall: extras[v.id]?.progressByCall } : {})}
+          {...(extras[v.id]?.thinkingSince !== undefined ? { thinkingSince: extras[v.id]?.thinkingSince } : {})}
+          {...(extras[v.id]?.thinkingTokens !== undefined ? { thinkingTokens: extras[v.id]?.thinkingTokens } : {})}
         />
       ))}
     </div>

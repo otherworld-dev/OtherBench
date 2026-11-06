@@ -114,6 +114,14 @@ export interface EngineRequest {
 export type EngineEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'reasoning-delta'; text: string }
+  /**
+   * The model started thinking at `since` (epoch ms), or stopped (null), with
+   * an estimate of the tokens thought so far in this block when the engine
+   * has one. Live only: replayed from the stream buffer, never stored. A model
+   * whose thinking text isn't shown (Claude Code's) can think for minutes with
+   * nothing else arriving; this is what says it is still working.
+   */
+  | { type: 'thinking'; since: number | null; tokens?: number }
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
   | { type: 'finish'; usage: Usage; finishReason: string }

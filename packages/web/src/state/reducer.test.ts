@@ -219,6 +219,34 @@ describe('subagent events', () => {
   });
 });
 
+describe('thinking', () => {
+  const start: TurnEvent = { messageId: 'm1', type: 'thinking', since: 1000 };
+  const stop: TurnEvent = { messageId: 'm1', type: 'thinking', since: null };
+
+  it('keeps when thinking started, replays it from hello, and drops it when thinking stops', () => {
+    const replayed = applyHelloBuffer(baseMessage(), [start], 'streaming');
+    expect(replayed.extras.thinkingSince).toBe(1000);
+    expect(replayed.message.parts).toEqual([]);
+    const after = applyEventToMessage(replayed.message, replayed.extras, stop);
+    expect(after.extras.thinkingSince).toBeUndefined();
+  });
+
+  it('keeps the latest token estimate, and a new thinking block starts without one', () => {
+    let acc = replayEvents(baseMessage(), emptyExtras, [start, { ...start, tokens: 400 }, { ...start, tokens: 900 }]);
+    expect(acc.extras).toMatchObject({ thinkingSince: 1000, thinkingTokens: 900 });
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'thinking', since: 2000 });
+    expect(acc.extras.thinkingSince).toBe(2000);
+    expect(acc.extras.thinkingTokens).toBeUndefined();
+  });
+
+  it('drops it when the message stops streaming', () => {
+    let acc = replayEvents(baseMessage(), emptyExtras, [{ ...start, tokens: 5 }]);
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status: 'complete' });
+    expect(acc.extras.thinkingSince).toBeUndefined();
+    expect(acc.extras.thinkingTokens).toBeUndefined();
+  });
+});
+
 describe('tool-progress', () => {
   const progress: TurnEvent = { messageId: 'm1', type: 'tool-progress', callId: 't1', progress: { stage: 'generating', step: 4, steps: 20 } };
 

@@ -136,6 +136,9 @@ export class SdkEventMapper {
   private readonly backgrounded = new Set<string>();
   /** Claude Code's task ids by the tool call that started them, for its later task messages. */
   private readonly taskCalls = new Map<string, string>();
+  /** The stream index of the main agent's thinking block still open (-1 when it had none), or null, and when it opened. */
+  private thinkingIndex: number | null = null;
+  private thinkingSince = 0;
   private readonly now: () => number;
 
   constructor(private readonly options: SdkEventMapperOptions = {}) {
@@ -220,6 +223,12 @@ export class SdkEventMapper {
       case 'system': {
         if (m['subtype'] === 'task_started' || m['subtype'] === 'task_updated' || m['subtype'] === 'task_notification') return this.taskMessage(m);
         if (m['subtype'] === 'compact_boundary') return this.compactBoundary(m);
+        // Claude Code's estimate of the open thinking block's tokens so far, about once a second. It names no
+        // helper, so it counts only while the reply's own agent is thinking.
+        if (m['subtype'] === 'thinking_tokens') {
+          const tokens = m['estimated_tokens'];
+          return this.thinkingIndex !== null && typeof tokens === 'number' ? [{ type: 'thinking', since: this.thinkingSince, tokens }] : [];
+        }
         if (m['subtype'] === 'local_command_output') {
           // A local command's answer (not seen in the live probe, mapped anyway): the reply's text, unless a helper's.
           const content = m['content'];
@@ -231,7 +240,15 @@ export class SdkEventMapper {
       }
       case 'stream_event': {
         if (m['parent_tool_use_id'] !== null) return [];
-        const event = m['event'] as { type?: string; delta?: { type?: string; text?: string; thinking?: string } } | null | undefined;
+        const event = m['event'] as { type?: string; index?: number; content_block?: { type?: string }; delta?: { type?: string; text?: string; thinking?: string } } | null | undefined;
+        // A thinking block opening and closing: its text may never come (Opus leaves it out), so the start alone says it is thinking.
+        if (event?.type === 'content_block_start' && (event.content_block?.type === 'thinking' || event.content_block?.type === 'redacted_thinking')) {
+          this.thinkingIndex = typeof event.index === 'number' ? event.index : -1;
+          this.thinkingSince = this.now();
+          return [{ type: 'thinking', since: this.thinkingSince }];
+        }
+        if (event?.type === 'content_block_stop' && this.thinkingIndex !== null && (event.index === this.thinkingIndex || this.thinkingIndex === -1)) return this.stopThinking();
+        if (event?.type === 'message_stop') return this.stopThinking();
         if (event?.type !== 'content_block_delta' || !event.delta) return [];
         if (event.delta.type === 'text_delta' && event.delta.text) { this.sawDelta = true; return [{ type: 'text-delta', text: event.delta.text }]; }
         if (event.delta.type === 'thinking_delta' && event.delta.thinking) { this.sawDelta = true; return [{ type: 'reasoning-delta', text: event.delta.thinking }]; }
@@ -304,11 +321,18 @@ export class SdkEventMapper {
       }
       case 'result': {
         const background = this.backgroundOpen();
-        return [...background, ...this.result(m)];
+        return [...this.stopThinking(), ...background, ...this.result(m)];
       }
       default:
         return [];
     }
+  }
+
+  /** The thinking block's end, once; nothing when none is open. */
+  private stopThinking(): MappedEvent[] {
+    if (this.thinkingIndex === null) return [];
+    this.thinkingIndex = null;
+    return [{ type: 'thinking', since: null }];
   }
 
   /** A turn's result: its usage when it succeeded, else its error. */

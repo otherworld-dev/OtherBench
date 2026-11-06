@@ -56,6 +56,36 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map(ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'b' } }))).toEqual([{ type: 'reasoning-delta', text: 'b' }]);
     expect(m.map(ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'sub' } }, 'toolu_1'))).toEqual([]);
   });
+  it('says when the main agent starts and stops thinking, even with no thinking text', () => {
+    const m = new SdkEventMapper({ now: () => 5000 });
+    expect(m.map(ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }))).toEqual([{ type: 'thinking', since: 5000 }]);
+    expect(m.map(ev({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'x' } }))).toEqual([]);
+    expect(m.map(ev({ type: 'content_block_stop', index: 0 }))).toEqual([{ type: 'thinking', since: null }]);
+    // A text block's stop says nothing more.
+    expect(m.map(ev({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }))).toEqual([]);
+    expect(m.map(ev({ type: 'content_block_stop', index: 1 }))).toEqual([]);
+    // A helper's thinking is its own.
+    expect(m.map(ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }, 'toolu_1'))).toEqual([]);
+  });
+  it("carries Claude Code's thinking-token estimate only while the reply's own thinking block is open", () => {
+    const m = new SdkEventMapper({ now: () => 5000 });
+    const tokens = (n: number) => ({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: n, estimated_tokens_delta: 50, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;
+    expect(m.map(tokens(50))).toEqual([]);
+    m.map(ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }));
+    expect(m.map(tokens(1200))).toEqual([{ type: 'thinking', since: 5000, tokens: 1200 }]);
+    m.map(ev({ type: 'content_block_stop', index: 0 }));
+    expect(m.map(tokens(1300))).toEqual([]);
+  });
+  it('ends thinking left open when the message or the turn ends', () => {
+    const m = new SdkEventMapper({ now: () => 7 });
+    m.map(ev({ type: 'content_block_start', index: 0, content_block: { type: 'redacted_thinking' } }));
+    expect(m.map(ev({ type: 'message_stop' }))).toEqual([{ type: 'thinking', since: null }]);
+    expect(m.map(ev({ type: 'message_stop' }))).toEqual([]);
+    m.map(ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }));
+    const out = m.map({ type: 'result', subtype: 'success', is_error: false, usage: {}, uuid: 'u', session_id: 's' } as unknown as SDKMessage);
+    expect(out[0]).toEqual({ type: 'thinking', since: null });
+    expect(out.at(-1)).toMatchObject({ type: 'finish' });
+  });
   it('ignores a stream_event with no event payload instead of throwing', () => {
     const m = new SdkEventMapper();
     expect(m.map({ type: 'stream_event', parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);

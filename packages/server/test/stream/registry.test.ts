@@ -718,4 +718,21 @@ describe('StreamRegistry and generation progress', () => {
       { messageId: 'm1', type: 'tool-progress', callId: 't2', progress: { stage: 'queued' } },
     ]);
   });
+
+  it("buffers a run of thinking events as its latest, so a long think doesn't fill the hello", () => {
+    let emit: ((event: TurnEvent) => void) | null = null;
+    const runner = { on: (cb: (event: TurnEvent) => void) => { emit = cb; return () => {}; } } as unknown as TurnRunner;
+    const registry = new StreamRegistry(runner, new InMemoryStore());
+    registry.registerTurn('c1', ['m1']);
+    const got: unknown[] = [];
+    registry.subscribe('c1', (e) => got.push(e));
+    emit!({ messageId: 'm1', type: 'thinking', since: 10 });
+    for (const tokens of [100, 200, 300]) emit!({ messageId: 'm1', type: 'thinking', since: 10, tokens });
+    emit!({ messageId: 'm1', type: 'text-delta', text: 'Done.' });
+    expect(got).toHaveLength(5);
+    expect(registry.snapshot('c1').find((b) => b.messageId === 'm1')?.events).toEqual([
+      { messageId: 'm1', type: 'thinking', since: 10, tokens: 300 },
+      { messageId: 'm1', type: 'text-delta', text: 'Done.' },
+    ]);
+  });
 });

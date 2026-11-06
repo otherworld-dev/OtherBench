@@ -1018,4 +1018,23 @@ describe('Message user notes', () => {
       expect(screen.getByText('Generating… step 12 of 30')).toBeInTheDocument();
     });
   });
+
+  describe('thinking clock', () => {
+    it('shows how long a streaming reply has been thinking, outside the searchable body', () => {
+      render(<Message message={base({ status: 'streaming', parts: [] })} thinkingSince={Date.now() - 125_000} />);
+      const clock = screen.getByTestId('thinking-clock');
+      expect(clock).toHaveTextContent(/^Thinking · 2m 5s$/);
+      expect(clock.closest('[data-message-body]')).toBeNull();
+    });
+
+    it('adds the estimate of tokens thought so far when there is one', () => {
+      render(<Message message={base({ status: 'streaming', parts: [] })} thinkingSince={Date.now()} thinkingTokens={23_456} />);
+      expect(screen.getByTestId('thinking-clock')).toHaveTextContent(/^Thinking · 0s · ~23k tokens$/);
+    });
+
+    it('shows nothing once the reply has finished', () => {
+      render(<Message message={base({ status: 'complete', parts: [] })} thinkingSince={Date.now()} />);
+      expect(screen.queryByTestId('thinking-clock')).toBeNull();
+    });
+  });
 });

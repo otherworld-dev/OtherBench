@@ -24,7 +24,8 @@ import { TextWithNoteOffers } from './AppNoteCards.js';
 import { hasNoteOffer } from '@otherbench/core/domain/app-notes.js';
 import { PlanCard } from './PlanCard.js';
 import { QuestionCard } from './QuestionCard.js';
-import { SubagentCard, subagentDisplayStatus } from './SubagentCard.js';
+import { formatDuration, SubagentCard, subagentDisplayStatus } from './SubagentCard.js';
+import { useNow } from '../lib/useNow.js';
 import { TodoChecklist } from './TodoChecklist.js';
 import { UserNoteBlock } from './UserNoteBlock.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
@@ -793,6 +794,10 @@ export interface MessageProps {
   onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
   /** The latest progress of each generation call still running, by tool call id. */
   progressByCall?: Record<string, MediaProgress>;
+  /** When the model started the thinking it is doing now (epoch ms); shown as a running clock while the reply streams. */
+  thinkingSince?: number;
+  /** The engine's estimate of the tokens thought so far in that thinking. */
+  thinkingTokens?: number;
   /** Shows the `‹ 2 / 3 ›` switcher: this message has non-compare siblings (a regenerated reply, an edited prompt). */
   branch?: BranchInfo;
   /** Offers "Regenerate" (assistant messages). Omit where it doesn't apply, e.g. a compare turn's variants. */
@@ -818,6 +823,27 @@ export interface MessageProps {
   showAllText?: boolean;
 }
 
+/** A thinking estimate in a few characters: `850`, `4.2k`, `23k`. */
+export function formatThinkingTokens(n: number): string {
+  if (n < 1000) return String(Math.round(n));
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+/**
+ * How long the model has been thinking, ticking every second. Its own
+ * component, so the tick re-renders only this line and not the message.
+ */
+function ThinkingClock({ since, tokens }: { since: number; tokens?: number }): JSX.Element {
+  const now = useNow(1000);
+  return (
+    <p data-testid="thinking-clock" className="text-xs text-[var(--text-faint)]">
+      Thinking · <span className="font-mono">{formatDuration(now - since)}</span>
+      {tokens !== undefined && tokens > 0 && <> · <span className="font-mono">~{formatThinkingTokens(tokens)}</span> tokens</>}
+    </p>
+  );
+}
+
 /**
  * Renders one message. This is also the renderer VariantCard (VariantTabs.tsx)
  * wraps for a single tab/split-column's body -- task 27's design calls for
@@ -834,6 +860,8 @@ export function Message({
   pendingAsks = [],
   onAnswerAsk,
   progressByCall,
+  thinkingSince,
+  thinkingTokens,
   branch,
   onRegenerate,
   onEdit,
@@ -923,6 +951,9 @@ export function Message({
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
       )}
+
+      {/* Outside the body, so find in the chat never matches it. */}
+      {message.status === 'streaming' && thinkingSince !== undefined && <ThinkingClock since={thinkingSince} {...(thinkingTokens !== undefined ? { tokens: thinkingTokens } : {})} />}
 
       {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
 
