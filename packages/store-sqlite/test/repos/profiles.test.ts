@@ -49,7 +49,19 @@ describe('SqliteProfileRepo', () => {
       isDefault: true,
       archivedAt: null,
       useGlobalMemory: true,
+      browserAllowedSites: [],
     });
+    db.close();
+  });
+
+  it("stores the browser's site list, none when it is left out", () => {
+    const db = freshDb();
+    seedConnectionAndModel(db, { connectionId: 'conn-a', modelId: 'model-a' });
+    const repo = new SqliteProfileRepo(db);
+    repo.create(makeProfile({ id: 'profile-a', connectionId: 'conn-a', modelId: 'model-a', browserAllowedSites: ['example.com', '*.example.org'] }));
+    expect(repo.get('profile-a')!.browserAllowedSites).toEqual(['example.com', '*.example.org']);
+    repo.update('profile-a', { browserAllowedSites: [] });
+    expect(repo.get('profile-a')!.browserAllowedSites).toEqual([]);
     db.close();
   });
 

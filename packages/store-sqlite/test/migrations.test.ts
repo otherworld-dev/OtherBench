@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-18).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes']);
+    expect(MIGRATIONS.slice(-19).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(41);
+      expect(SCHEMA_VERSION).toBe(42);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch']));
     } finally {
@@ -963,6 +963,35 @@ describe('runMigrations', () => {
       expect(db.prepare(`SELECT time_limit_minutes FROM schedule WHERE id = 'old'`).get()).toEqual({ time_limit_minutes: null });
       const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_schedule%'").all();
       expect(triggers).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+  it('profile-browser-sites gives every existing profile an empty site list, which syncs with the profile', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-profile-browser-sites'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+
+      runMigrations(db);
+
+      expect(db.prepare(`SELECT browser_allowed_sites FROM profile WHERE id = 'p1'`).get()).toEqual({ browser_allowed_sites: '[]' });
+      const store = new SqliteStore(db);
+      expect(store.profiles.get('p1')!.browserAllowedSites).toEqual([]);
+      // A change to the list is a change to the profile row, so the existing triggers log it for sync.
+      const logged = (): number => (db.prepare(`SELECT COUNT(*) AS n FROM change_log WHERE tbl = 'profile' AND row_id = 'p1'`).get() as { n: number }).n;
+      const before = logged();
+      store.profiles.update('p1', { browserAllowedSites: ['example.com', '*.example.org'] });
+      expect(logged()).toBe(before + 1);
+      expect(store.profiles.get('p1')!.browserAllowedSites).toEqual(['example.com', '*.example.org']);
+      // A row holding something other than a list of strings reads as no list rather than breaking the profile.
+      db.exec(`UPDATE profile SET browser_allowed_sites = 'not json' WHERE id = 'p1'`);
+      expect(store.profiles.get('p1')!.browserAllowedSites).toEqual([]);
+      db.exec(`UPDATE profile SET browser_allowed_sites = '["example.com", 7, null]' WHERE id = 'p1'`);
+      expect(store.profiles.get('p1')!.browserAllowedSites).toEqual(['example.com']);
     } finally {
       db.close();
     }

@@ -24,6 +24,7 @@ const mapping: CrudMapping<Profile> = {
     'is_default',
     'archived_at',
     'use_global_memory',
+    'browser_allowed_sites',
   ],
   toRow: (p) => [
     p.id,
@@ -38,6 +39,7 @@ const mapping: CrudMapping<Profile> = {
     toBool(p.isDefault),
     p.archivedAt,
     toBool(p.useGlobalMemory !== false),
+    toJson(p.browserAllowedSites ?? []),
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -52,8 +54,25 @@ const mapping: CrudMapping<Profile> = {
     isDefault: fromBool(row.is_default as number),
     archivedAt: row.archived_at as number | null,
     useGlobalMemory: fromBool(row.use_global_memory as number),
+    browserAllowedSites: sitesFromRow(row.browser_allowed_sites),
   }),
 };
+
+/**
+ * The stored site list, or none when the column holds anything but a JSON
+ * array of strings. A synced row never went through the profiles route; the
+ * broker parses every entry again before matching it (browser-sites.ts), and
+ * this only keeps a malformed row from breaking every read of the profile.
+ */
+function sitesFromRow(text: unknown): string[] {
+  if (typeof text !== 'string') return [];
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 export class SqliteProfileRepo implements ProfileRepo {
   private readonly crud: SqliteCrudRepo<Profile>;
