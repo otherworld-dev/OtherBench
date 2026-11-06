@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { normaliseHost } from '@otherbench/core/domain/browser-hosts.js';
+import { MAX_BROWSER_ALLOWED_SITES, parseAllowedSites } from '@otherbench/core/domain/browser-sites.js';
 import type { MediaChoice, MediaPolicy, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
@@ -24,7 +25,25 @@ interface ProfileBody {
   toolPolicy?: unknown;
   isDefault?: unknown;
   useGlobalMemory?: unknown;
+  browserAllowedSites?: unknown;
   archivedAt?: unknown;
+}
+
+/**
+ * The browser's site list (Profile.browserAllowedSites): sites its browser
+ * may use without a card. Each entry is checked and made canonical by core's
+ * `parseAllowedSite`; the first bad one is refused with a 400 naming it as typed.
+ */
+function parseAllowedSitesBody(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+    throw new HTTPException(400, { message: '"browserAllowedSites" must be a list of website names.' });
+  }
+  if (value.length > MAX_BROWSER_ALLOWED_SITES) {
+    throw new HTTPException(400, { message: `"browserAllowedSites" can hold at most ${MAX_BROWSER_ALLOWED_SITES} sites.` });
+  }
+  const parsed = parseAllowedSites(value as string[]);
+  if (!parsed.ok) throw new HTTPException(400, { message: `"${parsed.entry.trim()}" ${parsed.problem}.` });
+  return parsed.sites;
 }
 
 function parseParams(value: unknown): ModelParams {
@@ -205,6 +224,7 @@ export function profilesRoutes(container: Container): Hono {
       toolPolicy: parseToolPolicy(container, body.toolPolicy),
       isDefault: optionalBoolean(body.isDefault, 'isDefault', false),
       useGlobalMemory: optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true),
+      browserAllowedSites: body.browserAllowedSites === undefined ? [] : parseAllowedSitesBody(body.browserAllowedSites),
       archivedAt: null,
     });
     return c.json(created, 201);
@@ -231,6 +251,7 @@ export function profilesRoutes(container: Container): Hono {
     if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(container, body.toolPolicy, existing.toolPolicy);
     if (body.isDefault !== undefined) patch.isDefault = optionalBoolean(body.isDefault, 'isDefault', false);
     if (body.useGlobalMemory !== undefined) patch.useGlobalMemory = optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true);
+    if (body.browserAllowedSites !== undefined) patch.browserAllowedSites = parseAllowedSitesBody(body.browserAllowedSites);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
