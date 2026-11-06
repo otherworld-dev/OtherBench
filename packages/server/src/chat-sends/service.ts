@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_CHAIN_DEPTH, MAX_SENDS_PER_CHAIN, MAX_TARGETS_PER_TURN, isSettled } from '@otherbench/core/domain/chat-sends.js';
+import { MAX_CHAIN_DEPTH, MAX_SENDS_PER_CHAIN, MAX_TARGETS_PER_TURN, deliveredText, isSettled, type ChatSendStatus } from '@otherbench/core/domain/chat-sends.js';
 import type { TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import { workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
 import type { ChatMessenger, ChatTargetInfo, SendOutcome, SendTarget } from '@otherbench/core/ports/chat-messenger.js';
@@ -9,6 +9,7 @@ import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
+import { chatTip } from '../routes/chats.js';
 
 export interface ChatSendDeps {
   store: Store;
@@ -56,6 +57,8 @@ export class ChatSendService implements ChatMessenger {
   private readonly now: () => number;
   private readonly generateId: () => string;
   private readonly pending = new Set<Promise<void>>();
+  /** Chats a turn is being started in by this service right now: one at a time per chat. */
+  private readonly starting = new Set<string>();
   private off: (() => void) | null = null;
 
   constructor(deps: ChatSendDeps) {
@@ -193,10 +196,84 @@ export class ChatSendService implements ChatMessenger {
     this.deps.emit({ type: 'chat-sends-changed', chatIds: [...new Set(chatIds)] });
   }
 
-  /** Starts what can start in `chatId`. */
-  private drain(_chatId: string): void {}
+  /** Keeps a delivery or resume in `pending` until it settles, for `idle()`. */
+  private track(work: Promise<void>): void {
+    const tracked = work.catch((err: unknown) => console.error('[ChatSendService]', err)).finally(() => this.pending.delete(tracked));
+    this.pending.add(tracked);
+  }
 
-  private onReplyEnded(_replyId: string, _status: MessageStatus): void {}
+  /** Every chat with a message waiting to go out gets another look. Called whenever a reply ends anywhere. */
+  private drainAll(): void {
+    for (const chatId of new Set(this.store.chatSends.unsettled().filter((r) => r.status === 'queued').map((r) => r.toChatId))) this.drain(chatId);
+  }
+
+  /**
+   * Starts the oldest message waiting for `chatId`, if the chat is free: no reply running, none of the user's
+   * own messages waiting, and nothing else being started there by this service. A chat that has gone fails
+   * everything waiting for it.
+   */
+  private drain(chatId: string): void {
+    if (this.starting.has(chatId)) return;
+    const queued = this.store.chatSends.byToChat(chatId).filter((r) => r.status === 'queued');
+    if (queued.length === 0) return;
+    const chat = this.store.chats.get(chatId);
+    if (!chat) {
+      for (const row of queued) this.settle(row.id, 'failed', null, 'The chat was deleted before the message could go out.');
+      return;
+    }
+    if (this.isBusy(chatId)) return;
+    this.starting.add(chatId);
+    this.track(this.deliver(queued[0]!, chat).finally(() => this.starting.delete(chatId)));
+  }
+
+  /** One message into its chat as a new turn, marked as from the chat that sent it. A failure settles it as failed. */
+  private async deliver(row: ChatSend, chat: Chat): Promise<void> {
+    let replyId: string;
+    try {
+      const from = this.store.chats.get(row.fromChatId);
+      const fromTitle = from?.title ?? 'a chat that has since been deleted';
+      const appName = from?.appId ? (this.store.apps.get(from.appId)?.name ?? null) : null;
+      const folder = this.deps.resolveWorkspace(chat.workspace);
+      if (folder.status === 'unresolved') throw new Error(workspaceUnresolvedMessage(folder));
+      const profile = await this.deps.resolveProfile(chat.profileId);
+      const now = this.store.chats.get(chat.id);
+      if (!now) throw new Error('The chat was deleted before the message could go out.');
+      const parentId = chatTip(this.store, now.id, now.headMessageId);
+      // Stopped (or settled some other way) while the profile resolved: nothing goes out.
+      if (this.store.chatSends.get(row.id)?.status !== 'queued') return;
+      const result = await this.deps.startTurn({
+        chatId: now.id,
+        parentId,
+        userParts: [
+          { type: 'chat-link', kind: 'from', chats: [{ chatId: row.fromChatId, title: fromTitle }], sendIds: [row.id] },
+          { type: 'text', text: deliveredText({ title: fromTitle, chatId: row.fromChatId, appName }, row.text) },
+        ],
+        profiles: [profile],
+      });
+      replyId = result.assistantMessageIds[0]!;
+    } catch (err) {
+      this.settle(row.id, 'failed', null, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    this.store.chatSends.update(row.id, { status: 'running', toReplyId: replyId });
+    this.changed([row.fromChatId, row.toChatId]);
+    // A reply that ended before the row named it (a fast model) is ended here.
+    const status = this.store.messages.get(replyId)?.status;
+    if (status !== undefined && status !== 'streaming') this.onReplyEnded(replyId, status);
+  }
+
+  /** Marks one send settled, once: a row already settled is left as it is. */
+  private settle(id: string, status: ChatSendStatus, text: string | null, reason: string | null): void {
+    const row = this.store.chatSends.get(id);
+    if (!row || isSettled(row.status)) return;
+    this.store.chatSends.update(id, { status, replyText: text, reason, finishedAt: this.now() });
+    this.changed([row.fromChatId, row.toChatId]);
+  }
+
+  private onReplyEnded(_replyId: string, _status: MessageStatus): void {
+    // After the notes service and the app events have heard it, so a chat's own waiting messages go first.
+    setImmediate(() => this.drainAll());
+  }
 
   /** The rows of every send from or to `chatId`, newest first, at most 200. */
   sendsOf(chatId: string): ChatSend[] {

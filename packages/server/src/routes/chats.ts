@@ -7,6 +7,7 @@ import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@otherbench/core/domain/export.js';
 import { projectParentOf } from '@otherbench/core/domain/projects.js';
 import { tickOffAt } from '@otherbench/core/domain/overview.js';
+import { extendToTip } from '@otherbench/core/domain/tree.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
@@ -136,6 +137,24 @@ export function collectMessageTree(store: Store, chatId: string): CanonMessage[]
     queue.push(...store.messages.children(message.id));
   }
   return result;
+}
+
+/**
+ * The end of a chat's active branch (`extendToTip` from its head), which a new turn continues from: a finished reply,
+ * or null for an empty chat. Throws, saying what to do, when the chat ends anywhere a turn can't follow on from.
+ * Scheduled runs and chat-to-chat sends both start their turns here.
+ */
+export function chatTip(store: Store, chatId: string, headId: string | null): string | null {
+  const messages = collectMessageTree(store, chatId);
+  if (messages.length === 0) return null;
+  if (headId === null) throw new Error('This chat has messages but no current one to continue from. Open it and pick a reply.');
+  const tip = extendToTip(messages, headId).at(-1) ?? messages.find((m) => m.id === headId);
+  if (!tip) throw new Error("This chat's current message is missing. Open it and pick a reply.");
+  if (tip.role !== 'assistant') {
+    throw new Error('This chat ends in a message with no reply kept (an unpicked compare, or a message with no answer). Pick a reply in the chat first.');
+  }
+  if (tip.status === 'streaming') throw new Error('A reply is still being written in this chat.');
+  return tip.id;
 }
 
 /** Starting a chat in an app, or moving one into it, opens the app in the Code sidebar. Only a closed app is written. */

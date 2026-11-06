@@ -18,7 +18,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
-import { collectMessageTree } from '../routes/chats.js';
+import { chatTip, collectMessageTree } from '../routes/chats.js';
 
 export interface ScheduleLimits {
   maxConcurrent: number;
@@ -391,18 +391,9 @@ export class ScheduleService {
     return { chatId: chat.id, parentId: this.tipOf(chat.id, chat.headMessageId) };
   }
 
-  /** The end of the chat's active branch (`extendToTip` from its head), which must be a finished reply; null for an empty chat. */
+  /** The end of the chat's active branch, which must be a finished reply; null for an empty chat (routes/chats.ts `chatTip`). */
   private tipOf(chatId: string, headId: string | null): string | null {
-    const messages = collectMessageTree(this.store, chatId);
-    if (messages.length === 0) return null;
-    if (headId === null) throw new Error('This chat has messages but no current one to continue from. Open it and pick a reply.');
-    const tip = extendToTip(messages, headId).at(-1) ?? messages.find((m) => m.id === headId);
-    if (!tip) throw new Error("This chat's current message is missing. Open it and pick a reply.");
-    if (tip.role !== 'assistant') {
-      throw new Error('This chat ends in a message with no reply kept (an unpicked compare, or a message with no answer). Pick a reply in the chat, then the schedule can run.');
-    }
-    if (tip.status === 'streaming') throw new Error('A reply is still being written in this chat.');
-    return tip.id;
+    return chatTip(this.store, chatId, headId);
   }
 
   /**

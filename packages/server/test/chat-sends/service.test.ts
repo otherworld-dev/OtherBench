@@ -226,3 +226,62 @@ describe('ChatSendService: sending', () => {
   });
 });
 
+
+/** The parts of the user message a reply answers. */
+const userPartsOf = (replyId: string) => store.messages.get(store.messages.get(replyId)!.parentId!)!.parts;
+
+describe('ChatSendService: delivering', () => {
+  it('starts a turn in an idle chat, marked as from the sender, with the delivered text', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'Add the button' }]);
+    const row = store.chatSends.byFromMessage(r)[0]!;
+    expect(row.status).toBe('running');
+    expect(row.toReplyId).toBe(latestReply('B'));
+    const parts = userPartsOf(row.toReplyId!);
+    expect(parts[0]).toEqual({ type: 'chat-link', kind: 'from', chats: [{ chatId: 'A', title: 'Chat A' }], sendIds: [row.id] });
+    expect(parts[1]).toMatchObject({ type: 'text', text: expect.stringContaining('Add the button') });
+    expect((parts[1] as { text: string }).text).toContain('"Chat A" (chat A)');
+    expect(events).toContainEqual({ type: 'chat-sends-changed', chatIds: expect.arrayContaining(['A', 'B']) });
+  });
+
+  it('waits while the target has a reply running, and goes out when it ends', async () => {
+    const busy = await reply('B', 'my own work');
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'later please' }]);
+    expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'queued', toReplyId: null });
+    await finish(busy, 'done with mine');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('running'));
+    const parent = store.messages.get(store.chatSends.byFromMessage(r)[0]!.toReplyId!)!.parentId!;
+    // It follows on from the reply that was running, not beside it.
+    expect(store.messages.get(parent)!.parentId).toBe(busy);
+  });
+
+  it("waits while the user's own messages are waiting to go out in the target", async () => {
+    waitingNotes.add('B');
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('queued');
+  });
+
+  it('sends two messages to the same chat one after the other', async () => {
+    const ra = await reply('A');
+    const rc = await reply('C');
+    await send('A', ra, [{ chatId: 'B', text: 'from A' }]);
+    await send('C', rc, [{ chatId: 'B', text: 'from C' }]);
+    const [fromA] = store.chatSends.byFromMessage(ra);
+    const [fromC] = store.chatSends.byFromMessage(rc);
+    expect(fromA!.status).toBe('running');
+    expect(fromC!.status).toBe('queued');
+    await finish(fromA!.toReplyId!, 'did A');
+    await vi.waitFor(() => expect(store.chatSends.get(fromC!.id)!.status).toBe('running'));
+  });
+
+  it('fails a send whose target chat was deleted before it could go out', async () => {
+    const busy = await reply('B');
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    store.chats.delete('B');
+    await finish(busy, 'gone');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'failed', reason: expect.stringMatching(/deleted/) }));
+  });
+});
