@@ -1,5 +1,6 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react';
+import { type JSX, type ReactNode } from 'react';
 import type { Part, SubagentStatus } from '@otherbench/core/types/messages.js';
+import { useNow } from '../lib/useNow.js';
 
 type SubagentPart = Extract<Part, { type: 'subagent' }>;
 
@@ -39,18 +40,6 @@ export function toolGist(name: string, args: unknown): string {
   return `${name} "${line.length > GIST_MAX ? `${line.slice(0, GIST_MAX - 1)}…` : line}"`;
 }
 
-/** The time now, every second while `live`: a running card's clock. */
-function useNow(live: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [live]);
-  return now;
-}
-
 export interface SubagentCardProps {
   part: SubagentPart;
   /** Whether the reply it belongs to is still streaming. */
@@ -73,7 +62,8 @@ export function SubagentCard({ part, replyStreaming, awaitingApproval, children 
   const status = subagentDisplayStatus(part.status, replyStreaming);
   const waiting = awaitingApproval && status === 'running';
   const working = status === 'running' || status === 'queued' || status === 'background';
-  const now = useNow(working && typeof part.startedAt === 'number');
+  // A running card's clock, every second. One that has just started reads 0s (formatDuration floors at 0) until the next tick.
+  const now = useNow(working && typeof part.startedAt === 'number' ? 1000 : null);
   const calls = (part.parts ?? []).filter((p): p is Extract<Part, { type: 'tool-call' }> => p.type === 'tool-call');
   const lastCall = calls.at(-1);
   const ended = typeof part.finishedAt === 'number' ? part.finishedAt : working ? now : null;

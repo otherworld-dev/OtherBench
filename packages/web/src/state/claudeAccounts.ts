@@ -10,14 +10,17 @@ import { api } from './api.js';
 interface ClaudeAccountsState {
   /** Main first. Empty until the first `load`. */
   accounts: AccountView[];
+  /** When `accounts` was read (0 until the first `load`): the time an account's `limitedUntil` is told against, so a view of them changes only when they do. */
+  loadedAt: number;
   load(): Promise<void>;
 }
 
 /** The Claude accounts this machine can run a chat on (Settings → Claude accounts). */
 export const useClaudeAccounts = create<ClaudeAccountsState>((set) => ({
   accounts: [],
+  loadedAt: 0,
   async load() {
-    set({ accounts: (await api.claude.accounts.list()).accounts });
+    set({ accounts: (await api.claude.accounts.list()).accounts, loadedAt: Date.now() });
   },
 }));
 

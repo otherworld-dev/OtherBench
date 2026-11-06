@@ -169,19 +169,24 @@ export function MachinesPanel(): JSX.Element {
   const [selfName, setSelfName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<PeerView | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const [next, open] = await Promise.all([api.peers.overview(), api.peers.currentPairing()]);
-      setOverview(next);
-      setPairing(open);
-      setNow(Date.now());
-    } catch (err) {
-      console.error('[otherbench-web] failed to load machines:', err);
-      setError(failure(err));
-    }
-  }, []);
+  // Its state is set in the callbacks, after the read: none of it synchronously in the effect that polls.
+  const refresh = useCallback(
+    (): Promise<void> =>
+      Promise.all([api.peers.overview(), api.peers.currentPairing()]).then(
+        ([next, open]) => {
+          setOverview(next);
+          setPairing(open);
+          setNow(Date.now());
+        },
+        (err: unknown) => {
+          console.error('[otherbench-web] failed to load machines:', err);
+          setError(failure(err));
+        }
+      ),
+    []
+  );
 
   useEffect(() => {
     void refresh();
