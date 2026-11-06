@@ -1180,7 +1180,7 @@ describe('the sandbox agent, private destinations', () => {
     ],
     ['finds nothing', async () => []],
   ])('refuses a name whose lookup %s, without asking OtherBench', async (_name, lookup) => {
-    const h = harness({}, { lookup: lookup as Lookup });
+    const h = harness({}, { lookup: lookup });
     await h.init();
     await expect(h.ask({ host: 'nowhere.example.com', port: 443 })).resolves.toBe(false);
     expect(asksSent(h)).toEqual([]);

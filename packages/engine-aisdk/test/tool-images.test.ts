@@ -216,7 +216,7 @@ describe('which stored images are replayed', () => {
   it('loads at most three images for a repeated id, one of them in the prompt, and notes the older mentions', async () => {
     const load = vi.fn(async (_ref: { attachmentId: string }) => png());
     const out = await toModelMessages(screenshots(['a', 'b', 'c', 'd', 'a']), CAPS, never, { chatId: 'c', load });
-    expect(load.mock.calls.map((c) => (c[0] as { attachmentId: string }).attachmentId)).toEqual(['a', 'd', 'c']);
+    expect(load.mock.calls.map((c) => (c[0]).attachmentId)).toEqual(['a', 'd', 'c']);
     const outputs = toolOutputs(out);
     expect(outputs).toEqual([
       withNote(EARLIER_SCREENSHOT_NOTE),

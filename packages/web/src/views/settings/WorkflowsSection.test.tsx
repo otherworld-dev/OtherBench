@@ -147,7 +147,7 @@ describe('WorkflowsSection', () => {
     expect(review).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Workflow name')).toHaveValue('portrait');
-    const promptSelect = screen.getByLabelText('Input for Prompt') as HTMLSelectElement;
+    const promptSelect = screen.getByLabelText<HTMLSelectElement>('Input for Prompt');
     expect(promptSelect.selectedOptions[0]?.textContent).toBe('6 · CLIPTextEncode · text');
     // Wired inputs are not offered.
     expect(screen.queryByRole('option', { name: /· model$/ })).toBeNull();
@@ -225,7 +225,7 @@ describe('WorkflowsSection', () => {
     expect(within(row).queryByText(/^Length/)).toBeNull();
     await user.click(within(row).getByRole('button', { name: 'Add' }));
     expect(screen.getByLabelText('Workflow name')).toHaveValue('z_image · image');
-    expect((screen.getByLabelText('Input for Prompt') as HTMLSelectElement).selectedOptions[0]?.textContent).toBe('6 · CLIPTextEncode · text');
+    expect(screen.getByLabelText<HTMLSelectElement>('Input for Prompt').selectedOptions[0]?.textContent).toBe('6 · CLIPTextEncode · text');
     expect(create).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Save workflow' }));
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'z_image · image', graph })));

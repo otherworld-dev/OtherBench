@@ -292,7 +292,7 @@ describe('computer use routes and the peer listener', () => {
         id: 'prof', name: 'P', description: null, colour: null, connectionId: 'conn', modelId: 'mock-standard', systemPrompt: null, params: {},
         toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true }, isDefault: false, archivedAt: null,
       });
-      const chat = real.store.chats.create({ id: 'c9', title: 'Held', profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null } as never);
+      const chat = real.store.chats.create({ id: 'c9', title: 'Held', profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
       const sent: string[] = [];
       const unregister = real.peers!.openEventStream('node-pc', (event, data) => sent.push(`${event} ${JSON.stringify(data)}`), () => {});
       const seen: string[] = [];

@@ -666,7 +666,7 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     }
     const status = last && last.status >= 400 && last.status < 600 ? last.status : 502;
     const body = typeof last?.body === 'object' && last.body !== null ? last.body : { error: 'The other machine could not stop computer use.' };
-    return c.json(body as object, status as 404);
+    return c.json(body, status as 404);
   });
 
   /**

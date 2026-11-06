@@ -104,7 +104,7 @@ function bodyString(body: unknown, field: string): string | undefined {
 }
 
 function errorMessageOf(res: Response, body: unknown): string {
-  if (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string') {
+  if (body && typeof body === 'object' && 'error' in body && typeof (body).error === 'string') {
     return (body as { error: string }).error;
   }
   return res.statusText || `HTTP ${res.status}`;

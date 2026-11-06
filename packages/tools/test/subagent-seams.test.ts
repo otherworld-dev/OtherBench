@@ -280,7 +280,7 @@ describe("a sub-agent's grants", () => {
   });
 
   const grant = (id: string, profileId: string, toolName: string, source: Grant['source'], scope: 'chat' | 'always', constraint: Grant['constraint'] = null): Grant =>
-    ({ id, chatId: scope === 'chat' ? 'chat-1' : null, profileId, toolName, source, scope, constraint, expiresAt: null }) as Grant;
+    ({ id, chatId: scope === 'chat' ? 'chat-1' : null, profileId, toolName, source, scope, constraint, expiresAt: null });
   /** Every kind of grant the sub-agent's calls could use: a chat one and an always one for the write, an exact command, and a sandbox host. */
   const grantsFor = (profileId: string): Grant[] => [
     grant(`${profileId}-write-chat`, profileId, 'write_file', 'fs', 'chat'),

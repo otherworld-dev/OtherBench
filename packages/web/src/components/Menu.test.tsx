@@ -149,7 +149,7 @@ describe('Menu', () => {
     function stubRects(rects: Record<string, Partial<DOMRect>>): void {
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
         const r = rects[this.getAttribute('aria-label') ?? this.firstElementChild?.getAttribute('aria-label') ?? ''] ?? {};
-        return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}), ...r } as DOMRect;
+        return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}), ...r };
       });
     }
 

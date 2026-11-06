@@ -121,11 +121,11 @@ describe('OtherBenchOAuthProvider in sign-in mode', () => {
 
     expect(provider.redirectUrl).toBe(REDIRECT);
     expect(provider.clientMetadata).toEqual(clientMetadataFor(REDIRECT));
-    expect(await provider.state()).toBe('state-1');
+    expect(provider.state()).toBe('state-1');
     expect(await provider.tokens()).toBeUndefined();
 
-    await provider.saveCodeVerifier('verifier-1');
-    expect(await provider.codeVerifier()).toBe('verifier-1');
+    provider.saveCodeVerifier('verifier-1');
+    expect(provider.codeVerifier()).toBe('verifier-1');
 
     await provider.redirectToAuthorization(new URL('https://auth.example.com/authorize?x=1'));
     expect(seen.map((u) => u.href)).toEqual(['https://auth.example.com/authorize?x=1']);
@@ -458,7 +458,7 @@ describe('helpers', () => {
 
   it('issuerOf prefers the metadata issuer, else the authorization server URL', () => {
     expect(issuerOf({ authorizationServerUrl: 'https://a.example/', authorizationServerMetadata: { issuer: 'https://a.example' } } as unknown as OAuthDiscoveryState)).toBe('https://a.example');
-    expect(issuerOf({ authorizationServerUrl: 'https://a.example/' } as OAuthDiscoveryState)).toBe('https://a.example/');
+    expect(issuerOf({ authorizationServerUrl: 'https://a.example/' })).toBe('https://a.example/');
     expect(issuerOf(undefined)).toBeUndefined();
   });
 

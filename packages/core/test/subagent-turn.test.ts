@@ -13,7 +13,7 @@ const finish: EngineEvent = { type: 'finish', usage: USAGE, finishReason: 'stop'
 
 const readFile: ToolSpec = { name: 'read_file', description: '', parameters: {}, risk: 'read', source: 'fs', execute: async () => 'text' };
 const artifact: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute: async () => null };
-const subagentTool: ToolSpec = { name: 'subagent', description: 'Start a sub-agent.', parameters: SUBAGENT_TOOL_PARAMETERS as unknown as Record<string, unknown>, risk: 'read', source: 'subagent', execute: runSubagentTool };
+const subagentTool: ToolSpec = { name: 'subagent', description: 'Start a sub-agent.', parameters: SUBAGENT_TOOL_PARAMETERS, risk: 'read', source: 'subagent', execute: runSubagentTool };
 
 function connection(id: string, over: Partial<Connection> = {}): Connection {
   return { id, name: id, kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null, ...over };

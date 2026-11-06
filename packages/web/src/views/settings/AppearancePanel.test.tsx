@@ -14,7 +14,7 @@ afterEach(cleanup);
 describe('AppearancePanel', () => {
   it('lists the five steps and defaults to 100%', () => {
     render(<AppearancePanel />);
-    const select = screen.getByRole('combobox', { name: 'Text size' }) as HTMLSelectElement;
+    const select = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Text size' });
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['85%', '100%', '115%', '130%', '150%']);
     expect(select.value).toBe('100');
   });

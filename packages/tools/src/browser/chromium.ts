@@ -520,7 +520,7 @@ class PageSession implements BrowserSession {
         return this.page.mouse.wheel(0, event.dy);
       }
       case 'key':
-        return this.page.keyboard.press(event.key as Parameters<Page['keyboard']['press']>[0]);
+        return this.page.keyboard.press(event.key);
       case 'text':
         return this.page.keyboard.insertText(event.text);
     }

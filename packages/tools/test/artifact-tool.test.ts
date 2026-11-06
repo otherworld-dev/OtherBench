@@ -13,7 +13,7 @@ describe('the artifact tool', () => {
     store.chats.create({ id: 'c1', title: 'C', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     store.messages.create({ id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
     store.messages.create({ id: 'a1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null });
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never);
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp);
     const cards: unknown[] = [];
     provider.onApprovalEvent((e) => cards.push(e));
 

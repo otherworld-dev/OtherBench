@@ -672,7 +672,7 @@ describe('ClaudeCodeChatEngine and Auto switched while Claude Code runs (as in V
         for await (const msg of prompt) {
           if (options.abortController?.signal.aborted) return;
           n += 1;
-          yield* turn({ options, prompt: msg as SDKUserMessage, n, mode: () => mode });
+          yield* turn({ options, prompt: msg, n, mode: () => mode });
         }
       })();
       return Object.assign(gen, {
@@ -1818,7 +1818,8 @@ describe('ClaudeCodeChatEngine relayed generate_image (spec 2026-10-24-media-cla
       },
     });
     const s = server();
-    let call: Promise<unknown> | null = null;
+    // Cast, not annotated: set inside the generator, which narrowing would miss.
+    let call = null as Promise<unknown> | null;
     const { query } = fakeQuery(async function* ({ options }) {
       yield init('sess-1');
       await preCall(options, { prompt: 'a red fox' }, 'toolu_1');
@@ -2089,7 +2090,7 @@ describe('ClaudeCodeChatEngine: the browser beside the sandboxed shell, relayed 
     expect(calls).toHaveLength(1);
     expect(s.names()).toEqual(['browser', 'nextcloud__deck_add', 'propose_plan', 'run_command']);
     // Each call was approved as what it is, with the reply's plan gate in its context.
-    expect(a.requestApproval.mock.calls.map((c) => [(c[0] as ToolSpec).name, (c[0] as ToolSpec).source])).toEqual([
+    expect(a.requestApproval.mock.calls.map((c) => [(c[0]).name, (c[0]).source])).toEqual([
       ['run_command', 'sandbox'],
       ['browser', 'browser'],
       ['mcp__nextcloud__deck_add', 'mcp'],
@@ -2112,7 +2113,7 @@ describe('ClaudeCodeChatEngine: the browser beside the sandboxed shell, relayed 
 
     // The question went to the user as a card and came back on the input; the plan card opened the gate.
     expect(decisions.ask).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow', updatedInput: { ...QUESTIONS, answers: { 'Which colour?': 'Blue' } } } });
-    expect(a.askUser.mock.calls.map((c) => (c[1] as { kind: string }).kind)).toEqual(['question', 'plan']);
+    expect(a.askUser.mock.calls.map((c) => (c[1]).kind)).toEqual(['question', 'plan']);
     expect(plan.approved).toBe(true);
     expect(JSON.stringify(results.plan)).toContain('The user approved the plan.');
     e.dispose();

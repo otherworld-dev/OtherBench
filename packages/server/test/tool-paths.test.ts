@@ -103,7 +103,7 @@ function world(): World {
     },
   };
   const media = { backendFor: async () => ({ backend, label: 'Fake', applies: { negativePrompt: true, seed: true, size: true, frames: true }, defaultNegativePrompt: null, workflowDefaults: false }), limitsFor: async () => null, freeGpu: async () => {} };
-  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver, browser, media });
+  const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), mcp, { computer: driver, browser, media });
   const w: World = { store, driver, driverCalls, factory, generated, browser, provider, cards: [], onCard: () => ({ choice: 'once' }), tickets: new ApprovalTickets() };
   provider.onApprovalEvent((e) => {
     if (e.type !== 'request') return;

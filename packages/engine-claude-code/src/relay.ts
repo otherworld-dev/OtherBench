@@ -156,7 +156,7 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
   return {
     name,
     description: spec.description,
-    inputSchema: spec.parameters as Record<string, unknown>,
+    inputSchema: spec.parameters,
     // An MCP server's tools wait for tool search; the browser, the computer and the sandboxed shell are few and always there.
     alwaysLoad: spec.source !== 'mcp',
     call: async (args, call) => {

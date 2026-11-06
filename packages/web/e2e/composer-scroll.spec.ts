@@ -67,7 +67,7 @@ test('a message sent while a reply runs goes out without the thread collapsing o
     const el = document.querySelector('[data-testid="thread-scroll"]') as HTMLElement;
     w.__lowest = { height: el.scrollHeight, top: el.scrollTop };
     const tick = (): void => {
-      const now = document.querySelector('[data-testid="thread-scroll"]') as HTMLElement | null;
+      const now = document.querySelector<HTMLElement>('[data-testid="thread-scroll"]');
       if (now) w.__lowest = { height: Math.min(w.__lowest.height, now.scrollHeight), top: Math.min(w.__lowest.top, now.scrollTop) };
       requestAnimationFrame(tick);
     };

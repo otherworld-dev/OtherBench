@@ -305,12 +305,12 @@ export function loadPaneState(key: string = PANE_STATE_STORAGE_KEY): PaneState {
     const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : []);
     const count = paneCount(layout);
     const stored = Array.isArray(parsed.panes) ? parsed.panes : [];
-    const panes = Array.from({ length: count }, (_, i) => (typeof stored[i] === 'string' ? (stored[i] as string) : null));
+    const panes = Array.from({ length: count }, (_, i) => (typeof stored[i] === 'string' ? (stored[i]) : null));
     const focusedPane = typeof parsed.focusedPane === 'number' && parsed.focusedPane >= 0 && parsed.focusedPane < count ? parsed.focusedPane : 0;
     const sizes: Record<string, number[]> = {};
     if (parsed.sizes && typeof parsed.sizes === 'object' && !Array.isArray(parsed.sizes)) {
       for (const [key, value] of Object.entries(parsed.sizes)) {
-        if (Array.isArray(value) && value.length >= 2 && value.every((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) sizes[key] = value as number[];
+        if (Array.isArray(value) && value.length >= 2 && value.every((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) sizes[key] = value;
       }
     }
     const maximised = parsed.maximised === true && count > 1;

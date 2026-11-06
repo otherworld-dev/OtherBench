@@ -16,7 +16,7 @@ const NEW_HLC = '9999999999999-0000-peer';
 
 const tickRow = (over: Record<string, unknown> = {}, hlc = OLD_HLC): ChangeRow => {
   const row = { id: 'a1#7', app_id: 'a1', number: 7, through: '2026-10-01T00:00:00Z', updated_at: 1, ...over };
-  return { tbl: 'issue_tick', id: row.id as string, op: 'upsert', hlc, row };
+  return { tbl: 'issue_tick', id: row.id, op: 'upsert', hlc, row };
 };
 
 const stored = (n: ReturnType<typeof node>) => n.db.prepare("SELECT through, hlc FROM issue_tick WHERE id = 'a1#7'").get() as { through: string; hlc: string };

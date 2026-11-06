@@ -61,7 +61,7 @@ describe('openDeckCard', () => {
     const original = window.matchMedia;
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: query === NARROW_BREAKPOINT, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
-    })) as unknown as typeof window.matchMedia;
+    }));
     try {
       useOtherBenchStore.setState({ mode: 'code', inspectorCollapsed: true, inspectorOverlayOpen: false });
       await openDeckCard(967);

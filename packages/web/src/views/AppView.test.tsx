@@ -165,7 +165,7 @@ describe('AppView, creating (spec 2026-10-20-code-tab-design, "Creating an app")
 
   it('lists sub-projects as "Parent / Child" in Linked chat project', () => {
     render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
-    const options = Array.from((screen.getByRole('combobox', { name: 'Linked chat project' }) as HTMLSelectElement).options).map((o) => o.textContent);
+    const options = Array.from(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Linked chat project' }).options).map((o) => o.textContent);
     expect(options).toEqual(['None', 'Planning', 'Planning / Design']);
   });
 

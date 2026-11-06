@@ -423,7 +423,7 @@ describe('StreamRegistry', () => {
     expect(buffer.events.map((e) => e.type)).toEqual(['text-delta', 'subagent', 'subagent', 'subagent', 'subagent', 'subagent', 'status']);
     const rebuilt = buffer.events
       .filter((e): e is TurnEvent & { type: 'subagent' } => e.type === 'subagent')
-      .reduce<Part[]>((parts, e) => applySubagentEvent(parts, e.callId, e.event as SubagentEvent), []);
+      .reduce<Part[]>((parts, e) => applySubagentEvent(parts, e.callId, e.event), []);
     expect(rebuilt).toEqual([part]);
   });
 
@@ -631,7 +631,7 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
     const store = new InMemoryStore();
     let approvalListener: ((event: ToolApprovalEvent) => void) | null = null;
     const toolProvider = { onApprovalEvent: (cb: (event: ToolApprovalEvent) => void) => { approvalListener = cb; return () => {}; } } as unknown as ToolProvider;
-    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) } as ChatEngine, { toolProvider });
+    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) }, { toolProvider });
     const registry = new StreamRegistry(runner, store);
     const got: unknown[] = [];
     registry.subscribe('c1', (e) => got.push(e));
@@ -703,7 +703,7 @@ describe('StreamRegistry and generation progress', () => {
     const store = new InMemoryStore();
     let approvalListener: ((event: ToolApprovalEvent) => void) | null = null;
     const toolProvider = { onApprovalEvent: (cb: (event: ToolApprovalEvent) => void) => { approvalListener = cb; return () => {}; } } as unknown as ToolProvider;
-    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) } as ChatEngine, { toolProvider });
+    const runner = new TurnRunner(store, { stream: async function* () {}, listModels: async () => [], testConnection: async () => ({ ok: true, message: '', latencyMs: 0 }) }, { toolProvider });
     const registry = new StreamRegistry(runner, store);
     registry.registerTurn('c1', ['m1']);
     const got: unknown[] = [];

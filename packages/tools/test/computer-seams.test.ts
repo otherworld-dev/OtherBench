@@ -26,7 +26,7 @@ const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'off', shell:
 const row = (id: string, name: string, toolPolicy: ToolPolicy): Profile => ({ id, name, description: null, colour: null, connectionId: 'conn-1', modelId: 'model-1', systemPrompt: null, params: {}, toolPolicy, isDefault: false, archivedAt: null });
 const resolve = (p: Profile): ResolvedProfile => ({ ...p, connection, apiKey: null, model: null });
 const appGrant = (scope: 'always' | 'chat' = 'always'): Grant =>
-  ({ id: `g-${scope}`, chatId: scope === 'chat' ? 'chat-1' : null, profileId: 'p-main', toolName: 'computer', source: 'computer', scope, constraint: { app: FAKE_COMPUTER_APP.path }, expiresAt: null }) as Grant;
+  ({ id: `g-${scope}`, chatId: scope === 'chat' ? 'chat-1' : null, profileId: 'p-main', toolName: 'computer', source: 'computer', scope, constraint: { app: FAKE_COMPUTER_APP.path }, expiresAt: null });
 const isError = (r: unknown, code?: string): boolean =>
   typeof r === 'object' && r !== null && (r as { error?: unknown }).error === true && (code === undefined || (r as { code?: unknown }).code === code);
 const messageOf = (r: unknown): string => String((r as { message?: unknown }).message);

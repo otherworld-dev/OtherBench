@@ -24,7 +24,7 @@ const isError = (r: unknown, code?: string): boolean =>
   typeof r === 'object' && r !== null && (r as { error?: unknown }).error === true && (code === undefined || (r as { code?: unknown }).code === code);
 const messageOf = (r: unknown): string => String((r as { message?: unknown }).message);
 const siteGrant = (id: string, host: string, profileId = 'p-main', scope: 'always' | 'chat' = 'always'): Grant =>
-  ({ id, chatId: scope === 'chat' ? 'chat-1' : null, profileId, toolName: 'browser', source: 'browser', scope, constraint: { host }, expiresAt: null }) as Grant;
+  ({ id, chatId: scope === 'chat' ? 'chat-1' : null, profileId, toolName: 'browser', source: 'browser', scope, constraint: { host }, expiresAt: null });
 
 function setup(o: { answer?: ApprovalChoice['choice']; grants?: Grant[] } = {}) {
   const store = new InMemoryStore();

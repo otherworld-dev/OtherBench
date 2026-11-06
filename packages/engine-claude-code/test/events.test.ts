@@ -25,8 +25,8 @@ describe('SdkEventMapper on recorded turns', () => {
   it('tool turn: tool-call/tool-result pairs with names, then finish', () => {
     const msgs = fixture('tool-turn');
     const events = run(msgs);
-    const calls = events.filter((e) => e.type === 'tool-call') as Extract<MappedEvent, { type: 'tool-call' }>[];
-    const results = events.filter((e) => e.type === 'tool-result') as Extract<MappedEvent, { type: 'tool-result' }>[];
+    const calls = events.filter((e) => e.type === 'tool-call');
+    const results = events.filter((e) => e.type === 'tool-result');
     expect(calls.map((c) => c.name)).toEqual(['Read', 'Bash', 'Edit']);
     expect(results).toHaveLength(3);
     for (const r of results) expect(calls.find((c) => c.id === r.id)?.name).toBe(r.name);

@@ -584,7 +584,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           ref={sectionRef}
           aria-label={chat.title}
           {...(tint ? { 'data-account': pinned } : {})}
-          style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0', ...(tint ? { '--account-colour': tint } : {}) } as CSSProperties}
+          style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0', ...(tint ? { '--account-colour': tint } : {}) }}
           // Focusable (not by Tab), so a click on the thread's text keeps Ctrl+F in this chat.
           tabIndex={-1}
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden outline-none"

@@ -597,7 +597,7 @@ describe('parsing a whole action', () => {
     for (const input of actions) {
       const result = parseAction(input, { reserved: [] });
       if (!result.ok || !('text' in result.action || 'coordinate' in result.action)) throw new Error(`Expected ${JSON.stringify(input)} to parse`);
-      const args = describedCallArgs(result.action as never, target);
+      const args = describedCallArgs(result.action, target);
       expect(parseAction(args, { reserved: [] }), JSON.stringify(input)).toEqual({ ok: true, action: result.action });
       expect(actionSummary(args)).not.toMatch(/\?$/);
     }

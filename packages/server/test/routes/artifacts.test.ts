@@ -148,7 +148,7 @@ describe('office files', () => {
   });
 
   it("404s another chat's artifact or an unknown version, and 422s a source that can't be made", async () => {
-    container.store.chats.create({ id: 'c2', title: 'Other', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null } as never);
+    container.store.chats.create({ id: 'c2', title: 'Other', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     expect((await app().request('/api/chats/c2/artifacts/sheet/versions/s1/file')).status).toBe(404);
     expect((await app().request('/api/chats/c1/artifacts/sheet/versions/nope/file')).status).toBe(404);
     const broken = await app().request('/api/chats/c1/artifacts/sheet/versions/s2/file');

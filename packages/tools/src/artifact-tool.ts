@@ -18,7 +18,7 @@ export function artifactTool(store: Store, liveTools?: () => ReadonlyMap<string,
   return {
     name: ARTIFACT_TOOL,
     description: ARTIFACT_TOOL_DESCRIPTION,
-    parameters: ARTIFACT_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+    parameters: ARTIFACT_TOOL_PARAMETERS,
     risk: 'read',
     source: 'artifact',
     execute: async (args, ctx) => runArtifactCommand(store, { chatId: ctx.chatId, messageId: ctx.messageId, ...(liveTools ? { liveTools } : {}) }, args),

@@ -227,7 +227,7 @@ export class SdkEventMapper {
         }
         if (m['subtype'] !== 'init') return [];
         const servers = (m['mcp_servers'] as { name: string; status: string }[] | undefined) ?? [];
-        return [{ type: 'init', sessionId: String(m['session_id']), tools: (m['tools'] as string[] | undefined) ?? [], mcpServers: servers.map(({ name, status }) => ({ name, status })), permissionMode: typeof m['permissionMode'] === 'string' ? (m['permissionMode'] as string) : null }];
+        return [{ type: 'init', sessionId: String(m['session_id']), tools: (m['tools'] as string[] | undefined) ?? [], mcpServers: servers.map(({ name, status }) => ({ name, status })), permissionMode: typeof m['permissionMode'] === 'string' ? (m['permissionMode']) : null }];
       }
       case 'stream_event': {
         if (m['parent_tool_use_id'] !== null) return [];
@@ -323,7 +323,7 @@ export class SdkEventMapper {
     const written = num(u['cache_creation_input_tokens']);
     return [{
       type: 'finish',
-      finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason'] as string) : 'stop',
+      finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason']) : 'stop',
       usage: { tokensIn: num(u['input_tokens']) + cached + written, tokensOut: num(u['output_tokens']), tokensCached: cached, tokensCacheWrite: written, tokensReasoning: 0 },
     }];
   }

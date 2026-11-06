@@ -1268,7 +1268,7 @@ describe('Thread in a long chat', () => {
     Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 150 });
     const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
       const top = this.id.startsWith('msg-') ? drawn().indexOf(this.id.slice(4)) * 100 - scroller.scrollTop : 0;
-      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) };
     });
     try {
       fireEvent.scroll(scroller);

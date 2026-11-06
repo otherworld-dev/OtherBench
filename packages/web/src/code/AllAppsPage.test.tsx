@@ -226,8 +226,8 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
   ];
 
   function setupFolders(over: { apps?: App[]; folders?: AppFolder[] } = {}) {
-    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
-    mockedFolderPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().appFolders.find((f) => f.id === id)!, ...body }) as AppFolder);
+    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }));
+    mockedFolderPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().appFolders.find((f) => f.id === id)!, ...body }));
     setup(over.apps ?? filed, [], over.folders ?? [work, games]);
     render(<AllAppsPage />);
     return user();
@@ -387,7 +387,7 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
     const u = setupFolders();
     await openCardMenu(u, 'A');
     const menu = screen.getByRole('menu', { name: 'App actions' });
-    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent!.replace('▸', ''))).toEqual(['Open', 'Close app', 'Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent.replace('▸', ''))).toEqual(['Open', 'Close app', 'Rename', 'Edit…', 'Move to folder…', 'Move up', 'Move down', 'Delete…']);
     // The ⋯ button doesn't open the app.
     expect(useOtherBenchStore.getState().activeChatId).toBe(ALL_APPS_TAB_ID);
   });
@@ -414,7 +414,7 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
     await openCardMenu(u, 'G');
     await u.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
     const submenu = screen.getByRole('menu', { name: 'Move to folder…' });
-    expect(within(submenu).getAllByRole('menuitemradio').map((i) => [i.textContent!.replace('✓', '').trim(), i.getAttribute('aria-checked')])).toEqual([
+    expect(within(submenu).getAllByRole('menuitemradio').map((i) => [i.textContent.replace('✓', '').trim(), i.getAttribute('aria-checked')])).toEqual([
       ['No folder', 'true'],
       ['Games', 'false'],
       ['Work', 'false'],

@@ -1013,7 +1013,7 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
             chatId, afterMessageId, profileId, notice: 'Carried on after the helper reported back.', unattended: false,
             // eslint-disable-next-line require-yield -- the turn only tries to start computer use, as its first tool call would.
             run: async function* () {
-              resolve((await pc.container.computer!.ensureSession(chatId, 'Held')) as { ok: boolean; reason?: string });
+              resolve((await pc.container.computer!.ensureSession(chatId, 'Held')));
             },
             decline: () => reject(new Error('the self-started turn was declined')),
           },

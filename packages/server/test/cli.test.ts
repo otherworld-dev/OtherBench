@@ -180,15 +180,15 @@ describe('parseServeArgs', () => {
 
 describe('assertServeSecurity', () => {
   it('throws NonLoopbackWithoutTokenError for a non-loopback host with no token', () => {
-    expect(() => assertServeSecurity({ host: '0.0.0.0', token: null } as never)).toThrow(NonLoopbackWithoutTokenError);
+    expect(() => assertServeSecurity({ host: '0.0.0.0', token: null })).toThrow(NonLoopbackWithoutTokenError);
   });
 
   it('does not throw for a non-loopback host with a token', () => {
-    expect(() => assertServeSecurity({ host: '0.0.0.0', token: 'secret' } as never)).not.toThrow();
+    expect(() => assertServeSecurity({ host: '0.0.0.0', token: 'secret' })).not.toThrow();
   });
 
   it('does not throw for a loopback host with no token', () => {
-    expect(() => assertServeSecurity({ host: '127.0.0.1', token: null } as never)).not.toThrow();
+    expect(() => assertServeSecurity({ host: '127.0.0.1', token: null })).not.toThrow();
   });
 
   it('throws AnnounceWithoutTokenError for --announce with no token, even on loopback', () => {

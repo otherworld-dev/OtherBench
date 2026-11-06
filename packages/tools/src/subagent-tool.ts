@@ -15,7 +15,7 @@ export function subagentTool(store: Store, policy?: ToolPolicy): ToolSpec {
   return {
     name: SUBAGENT_TOOL_NAME,
     description: subagentToolDescription(eligibleSubagentProfiles(store), policy),
-    parameters: SUBAGENT_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+    parameters: SUBAGENT_TOOL_PARAMETERS,
     risk: 'read',
     source: 'subagent',
     execute: runSubagentTool,

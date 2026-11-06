@@ -631,7 +631,7 @@ describe('when the server ends a session itself', () => {
     const driver = new DialogDriver();
     const sessions = new ComputerSessions(driver, { emit: () => {}, cancelChat: () => {} });
     // The provider is given the sessions, not the driver: that is what wires the tool's stopped hook to them.
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} }, { computer: sessions });
     const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true, artifacts: false, recall: false };
     const tool = (await provider.listTools(policy)).find((t) => t.name === 'computer')!;
     const abort = new AbortController();
@@ -1166,7 +1166,7 @@ describe.each([
     // Read lazily: the runner is made after the sessions, as in the container.
     const holder: { runner?: TurnRunner } = {};
     const sessions = new ComputerSessions(driver, { emit: (e) => bus.emit(e), cancelChat: (chatId) => cancelChatReplies(bus, holder.runner!, chatId) });
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} }, { computer: sessions });
     const runner = new TurnRunner(store, screenshotEngine(waitsForTheTool), { toolProvider: provider });
     holder.runner = runner;
     bus.attach(runner, store);

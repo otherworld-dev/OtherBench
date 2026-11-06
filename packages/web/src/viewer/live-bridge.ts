@@ -171,7 +171,7 @@ export function useLiveBridge(opts: {
       frame: () => (live ? latest.current.frameRef.current : null),
       loads: () => latest.current.loadsRef.current ?? 0,
       allowed: () => latest.current.allowed,
-      fresh: latest.current.freshRef as { current: Set<string> | null },
+      fresh: latest.current.freshRef,
       call: (callId, params, fresh) => api.artifacts.live.call(chatId, artifactId, versionId, callId, { params, ...(fresh ? { fresh: true } : {}) }),
       onOutcome: (callId, outcome) => latest.current.onOutcome(callId, outcome),
     });

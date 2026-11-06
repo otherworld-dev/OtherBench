@@ -48,7 +48,7 @@ function randomPolicy(next: () => number): ToolPolicy {
   };
   const optional = <K extends keyof ToolPolicy>(key: K): Partial<ToolPolicy> => {
     const f = flag();
-    return f.value === undefined ? {} : ({ [key]: f.value } as Partial<ToolPolicy>);
+    return f.value === undefined ? {} : ({ [key]: f.value });
   };
   const runs = pick([undefined, 'host', 'sandbox', 'sandbox'] as const);
   const hosts = pick([undefined, undefined, 'list', 'empty'] as const);
@@ -174,7 +174,7 @@ function grantsFor(profileId: string, prefix: string): Grant[] {
     // Computer grants for both apps, and an app grant made for another source: none may count for a sub-agent.
     always('computer-excel', 'computer', 'computer', { app: EXCEL }),
     chat('computer-notepad', 'computer', 'computer', { app: NOTEPAD }),
-    always('browser-with-app', 'browser', 'browser', { app: EXCEL } as Grant['constraint']),
+    always('browser-with-app', 'browser', 'browser', { app: EXCEL }),
   ];
 }
 

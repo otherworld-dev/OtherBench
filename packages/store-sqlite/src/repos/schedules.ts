@@ -241,6 +241,6 @@ export class SqliteScheduleRepo implements ScheduleRepo {
   }
 
   private row(id: string): Record<string, unknown> | undefined {
-    return this.db.prepare('SELECT * FROM schedule WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return this.db.prepare('SELECT * FROM schedule WHERE id = ?').get(id);
   }
 }

@@ -568,7 +568,7 @@ class InMemoryCrudRepo<T extends { id: string }> {
     if (!current) {
       throw new Error(`Not found: ${id}`);
     }
-    const updated = { ...current, ...patch } as T;
+    const updated = { ...current, ...patch };
     this.rows.set(id, structuredClone(updated));
     return structuredClone(updated);
   }

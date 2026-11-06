@@ -65,7 +65,7 @@ describe('message pool pruning', () => {
   it('prunes on a chat switch, not as a reply streams', () => {
     // Loaded without being shown (registered replies, say): nothing is pruned until a switch.
     for (let i = 0; i <= KEPT_RECENT_CHATS + 2; i++) store().registerMessage(message(`c${i}`, { status: 'streaming', role: 'assistant' }));
-    store().applyTurnEvent({ type: 'text-delta', messageId: 'c0-m', text: 'more' } as Parameters<ReturnType<typeof store>['applyTurnEvent']>[0]);
+    store().applyTurnEvent({ type: 'text-delta', messageId: 'c0-m', text: 'more' });
     expect(loadedChats()).toHaveLength(KEPT_RECENT_CHATS + 3);
     store().setActiveChatId('c0');
     expect(loadedChats()).toHaveLength(KEPT_RECENT_CHATS + 1);

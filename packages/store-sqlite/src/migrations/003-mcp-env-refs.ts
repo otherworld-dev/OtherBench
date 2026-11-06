@@ -58,7 +58,7 @@ function droppedKeyNames(rawEnvRefs: string): string[] {
   try {
     const parsed = JSON.parse(rawEnvRefs) as unknown;
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
-    return Object.keys(parsed as Record<string, unknown>);
+    return Object.keys(parsed);
   } catch {
     return [];
   }

@@ -72,7 +72,7 @@ function parseEntry(name: string, raw: unknown): ClaudeDesktopServer {
   if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === 'string'))) return unsupported("Its arguments aren't a list of text.");
   const env = stringRecord(raw['env']);
   if ('bad' in env) return unsupported(`Its env value for "${env.bad}" isn't text.`);
-  return { ...base, transport: 'stdio', command: raw['command'], args: (args as string[] | undefined) ?? [], env: env.ok, supported: true };
+  return { ...base, transport: 'stdio', command: raw['command'], args: (args) ?? [], env: env.ok, supported: true };
 }
 
 /** The servers in Claude Desktop's config at `path`; `found: false` when there is no file to read there. */

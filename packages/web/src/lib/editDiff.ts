@@ -131,7 +131,7 @@ function bareName(name: string): string {
 }
 
 function str(o: Record<string, unknown>, ...keys: string[]): string | null {
-  for (const k of keys) if (typeof o[k] === 'string') return o[k] as string;
+  for (const k of keys) if (typeof o[k] === 'string') return o[k];
   return null;
 }
 

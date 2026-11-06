@@ -9,7 +9,7 @@ function setup(initial = 'Old') {
   const onCommit = vi.fn();
   const onCancel = vi.fn();
   const utils = render(<InlineNameInput initial={initial} label="Chat title" onCommit={onCommit} onCancel={onCancel} />);
-  return { ...utils, onCommit, onCancel, user: userEvent.setup(), input: screen.getByRole('textbox', { name: 'Chat title' }) as HTMLInputElement };
+  return { ...utils, onCommit, onCancel, user: userEvent.setup(), input: screen.getByRole<HTMLInputElement>('textbox', { name: 'Chat title' }) };
 }
 
 describe('InlineNameInput', () => {

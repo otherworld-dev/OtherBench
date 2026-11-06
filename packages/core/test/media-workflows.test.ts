@@ -349,8 +349,8 @@ describe('workflowShapeKey', () => {
 
   it('ignores primitive values and tells a different graph apart', () => {
     const other = structuredClone(zimage);
-    (other['58']!.inputs as Record<string, unknown>)['value'] = 'a different prompt';
-    (other['57:3']!.inputs as Record<string, unknown>)['seed'] = 99;
+    (other['58']!.inputs)['value'] = 'a different prompt';
+    (other['57:3']!.inputs)['seed'] = 99;
     expect(workflowShapeKey(other)).toBe(workflowShapeKey(zimage));
     other['999'] = { class_type: 'Note', inputs: {} };
     expect(workflowShapeKey(other)).not.toBe(workflowShapeKey(zimage));

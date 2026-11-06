@@ -68,7 +68,7 @@ export class SqliteProjectRepo implements ProjectRepo {
   }
 
   update(id: string, patch: Partial<Omit<Project, 'id'>>): Project {
-    return this.crud.update(id, toStoredWorkspace(patch, this.selfId()) as Partial<Omit<Project, 'id'>>);
+    return this.crud.update(id, toStoredWorkspace(patch, this.selfId()));
   }
 
   /**

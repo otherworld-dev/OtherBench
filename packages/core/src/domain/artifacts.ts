@@ -174,7 +174,7 @@ export function runArtifactCommand(
 ): ArtifactOutcome {
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return fail('bad_args', 'Expected an object of arguments.');
   const a = args as Record<string, unknown>;
-  const str = (key: string): string | undefined => (typeof a[key] === 'string' ? (a[key] as string) : undefined);
+  const str = (key: string): string | undefined => (typeof a[key] === 'string' ? (a[key]) : undefined);
   const onBranch = branchOf(store, ctx.messageId);
   const tooBig = (content: string): boolean => Buffer.byteLength(content, 'utf8') > MAX_ARTIFACT_BYTES;
   const TOO_BIG = `The content is over ${MAX_ARTIFACT_BYTES} bytes (1 MB): trim it or split it into more than one artifact.`;

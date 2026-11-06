@@ -297,7 +297,7 @@ describe('the shell is the source of truth: what the server believed is dropped 
   for (const [label, call] of [
     ['a screenshot', (s: ComputerSessions) => s.screenshot('c').then(() => 'done', (e: Error) => e.message)],
     ['the cursor', (s: ComputerSessions) => s.cursorPosition('c').then(() => 'done', (e: Error) => e.message)],
-    ['a target', (s: ComputerSessions) => s.target('c', 'foreground').then((t) => ('refuse' in t ? (t.refuse as string) : 'done'), (e: Error) => e.message)],
+    ['a target', (s: ComputerSessions) => s.target('c', 'foreground').then((t) => ('refuse' in t ? (t.refuse) : 'done'), (e: Error) => e.message)],
     ['an action', (s: ComputerSessions) => s.act('c', TYPE, EXPECT).then((a) => (a.ok ? 'done' : a.reason))],
   ] as const) {
     it(`a token the shell says is not its live session, on ${label}: the session is ended, and the next call needs a new start with a new token`, async () => {

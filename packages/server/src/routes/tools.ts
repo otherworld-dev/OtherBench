@@ -206,11 +206,11 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   if (setKeys === 0) return null;
   if (setKeys > 1) throw new HTTPException(400, { message: '"constraint" must set only one key.' });
   return {
-    pathPrefix: pathPrefix as string | undefined,
-    commandPrefix: commandPrefix as string | undefined,
-    commandExact: commandExact as string | undefined,
-    ...(host !== undefined ? { host: host as string } : {}),
-    ...(app !== undefined ? { app: app as string } : {}),
+    pathPrefix: pathPrefix,
+    commandPrefix: commandPrefix,
+    commandExact: commandExact,
+    ...(host !== undefined ? { host: host } : {}),
+    ...(app !== undefined ? { app: app } : {}),
   };
 }
 
@@ -231,7 +231,7 @@ export function parseAskReply(body: unknown): AskReply {
   if (b['answers'] !== undefined) {
     const answers = b['answers'];
     if (!Array.isArray(answers) || !answers.every((a) => typeof a === 'string')) throw new HTTPException(400, { message: '"answers" must be a list of strings.' });
-    return { answers: answers as string[] };
+    return { answers: answers };
   }
   if (b['declined'] !== undefined) {
     if (b['declined'] !== true) throw new HTTPException(400, { message: '"declined" must be true.' });
@@ -358,7 +358,7 @@ export function toolsRoutes(container: Container): Hono {
     if (!Array.isArray(profileIds) || !profileIds.every((id) => typeof id === 'string')) {
       throw new HTTPException(400, { message: '"profileIds" must be a list of profile ids.' });
     }
-    const profiles = [...new Set(profileIds as string[])].map((id) => {
+    const profiles = [...new Set(profileIds)].map((id) => {
       const profile = container.store.profiles.get(id);
       if (!profile) throw new HTTPException(400, { message: `There is no profile "${id}".` });
       return profile;
@@ -370,7 +370,7 @@ export function toolsRoutes(container: Container): Hono {
     const imported: string[] = [];
     const importedIds: string[] = [];
     const skipped: { name: string; reason: string }[] = [];
-    for (const name of body.names as string[]) {
+    for (const name of body.names) {
       const s = read.servers.find((x) => x.name === name);
       if (!s) skipped.push({ name, reason: "It isn't in Claude Desktop's config." });
       else if (existing.has(name)) skipped.push({ name, reason: `OtherBench already has a server called "${name}".` });

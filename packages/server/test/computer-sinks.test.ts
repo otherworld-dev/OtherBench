@@ -95,7 +95,7 @@ describe('screen-derived text at every place a computer reply puts it', () => {
     const bus = new AppEventBus();
     const driver = new FakeComputerDriver();
     const sessions = new ComputerSessions(driver, { emit: (e) => bus.emit(e), cancelChat: () => {} });
-    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} } as never, { computer: sessions });
+    const provider = new OtherBenchToolProvider(store, new PermissionBroker(store), { listFor: () => [], refresh: async () => {}, shutdown: async () => {} }, { computer: sessions });
     const engine = callingEngine([
       { args: { action: 'screenshot' } },
       // A window whose title is the attack, and a program built under a name that is one.

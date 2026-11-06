@@ -202,7 +202,7 @@ describe('the computer-use approval card', () => {
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
     // One "asks every time" line, not two.
     expect(screen.queryByTestId('computer-high-risk')).toBeNull();
-    expect(card().textContent!.split('asks every time').length - 1).toBe(1);
+    expect(card().textContent.split('asks every time').length - 1).toBe(1);
   });
 
   it('keeps a non-ASCII path once-only even when the arguments call it ordinary and not a file view', () => {
@@ -211,7 +211,7 @@ describe('the computer-use approval card', () => {
     expect(screen.queryByTestId('approval-chat')).toBeNull();
     expect(screen.queryByTestId('approval-always')).toBeNull();
     expect(screen.getByTestId('computer-app-unusual')).toBeInTheDocument();
-    expect(card().textContent!.split('asks every time').length - 1).toBe(1);
+    expect(card().textContent.split('asks every time').length - 1).toBe(1);
   });
 
   it('shows the window title on its own labelled line, as one clean line in a <bdi>, and nowhere else', () => {
@@ -230,7 +230,7 @@ describe('the computer-use approval card', () => {
 
   it('cuts a long window title to one bounded line', () => {
     render(<ApprovalPrompt request={request(described(EXCEL, { appTitle: 'x'.repeat(500) }))} onResolve={vi.fn()} />);
-    const title = screen.getByTestId('computer-window-title').querySelector('bdi')!.textContent!;
+    const title = screen.getByTestId('computer-window-title').querySelector('bdi')!.textContent;
     expect(Array.from(title).length).toBeLessThanOrEqual(81);
     expect(title.endsWith('\u2026')).toBe(true);
   });
@@ -247,7 +247,7 @@ describe('the computer-use approval card', () => {
     expect(screen.getByTestId('approval-summary')).not.toHaveTextContent('SECRET');
     expect(screen.getByTestId('computer-headline')).not.toHaveTextContent('SECRET');
     for (const b of buttons()) expect(b).not.toHaveTextContent('SECRET');
-    expect(card().textContent!.split('SECRET').length - 1).toBe(1);
+    expect(card().textContent.split('SECRET').length - 1).toBe(1);
   });
 
   it('builds its summary from the action, never from the request summary', () => {

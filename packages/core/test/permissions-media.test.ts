@@ -10,7 +10,7 @@ const VIDEO: ToolSpec = { name: 'generate_video', description: '', parameters: {
 const OTHER: ToolSpec = { name: 'generate_audio', description: '', parameters: {}, risk: 'execute', source: 'media', execute: async () => null };
 
 function policy(over: Partial<ToolPolicy> = {}): ToolPolicy {
-  return { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'c1', model: 'm1' } }, ...over } as ToolPolicy;
+  return { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate', media: { image: { connectionId: 'c1', model: 'm1' } }, ...over };
 }
 
 function ctx(over: Partial<ToolContext> = {}): ToolContext {

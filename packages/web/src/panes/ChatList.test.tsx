@@ -670,7 +670,7 @@ describe('ChatList pinned chat in two places', () => {
     expect(mainOf('chat-row-c1')).toHaveAttribute('aria-current', 'true');
     const word = screen.getByTestId('chat-status-c1').textContent;
     expect(word).toBeTruthy();
-    expect(screen.getByTestId('pinned-status-c1')).toHaveTextContent(word!);
+    expect(screen.getByTestId('pinned-status-c1')).toHaveTextContent(word);
     expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('2');
     // A folded group's heading sums its chats' status: the pinned one once.
     act(() => setGroupCollapsed('p-a', true));
@@ -1883,7 +1883,7 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     fireEvent.contextMenu(screen.getByTestId('pinned-row-pin').querySelector('[data-row-main]')!);
     await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Move to project…' }));
     const items = screen.getAllByRole('menuitemradio');
-    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['OtherBench', 'Desktop', 'Sync', 'PhD', 'No project']);
+    expect(items.map((i) => i.textContent.replace('✓', '').trim())).toEqual(['OtherBench', 'Desktop', 'Sync', 'PhD', 'No project']);
     // Sub-projects sit one step in.
     expect(items.map((i) => i.querySelector('.pl-3') !== null)).toEqual([false, true, true, false, false]);
   });
@@ -2130,7 +2130,7 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
   });
 
   it("an app's menu offers Rename, Edit…, Close app and Delete…; Rename saves the new name", async () => {
-    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+    mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }));
     const user = setup({ mode: 'code' });
     await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
     const menu = screen.getByRole('menu', { name: 'App actions' });
@@ -2171,7 +2171,7 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
 
     beforeEach(() => {
       useToasts.setState({ toasts: [] });
-      mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }) as App);
+      mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }));
     });
 
     function lastToast() {

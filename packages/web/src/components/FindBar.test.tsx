@@ -25,7 +25,7 @@ describe('FindBar', () => {
 
   it('takes the focus with its text selected when it opens', () => {
     bar();
-    const box = screen.getByRole('textbox', { name: 'Find in this chat' }) as HTMLInputElement;
+    const box = screen.getByRole<HTMLInputElement>('textbox', { name: 'Find in this chat' });
     expect(box).toHaveFocus();
     expect([box.selectionStart, box.selectionEnd]).toEqual([0, 3]);
   });

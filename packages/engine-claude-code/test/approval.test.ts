@@ -190,7 +190,7 @@ describe('createGate with the browser, the sandboxed shell and the ask path on o
     // A look-alike on another server is Claude Code's own MCP tool, not OtherBench's browser: no ticket.
     expect(await gate('mcp__otherbench__browser', { command: 'open', url: 'evil.test' })).toEqual({ allow: true });
 
-    expect(requestApproval.mock.calls.map((c) => [(c[0] as ToolSpec).name, (c[0] as ToolSpec).source])).toEqual([
+    expect(requestApproval.mock.calls.map((c) => [(c[0]).name, (c[0]).source])).toEqual([
       ['run_command', 'sandbox'],
       ['browser', 'browser'],
       ['AskUserQuestion', 'agent'],
@@ -491,7 +491,7 @@ describe('auto mode gate', () => {
 
   it('a requestApproval that throws in auto mode makes the hook DENY, never an empty result', async () => {
     const requestApproval = vi.fn(async (..._a: unknown[]) => { throw new Error('store down'); });
-    const gate = createGate({ approvals: { requestApproval: requestApproval as never }, policy, ctx: ctx(), autoMode: true });
+    const gate = createGate({ approvals: { requestApproval: requestApproval }, policy, ctx: ctx(), autoMode: true });
     const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
     expect(out).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
     expect(out).not.toEqual({});
@@ -505,7 +505,7 @@ describe('auto mode gate', () => {
 
   it('only an outcome with deferred === true defers', async () => {
     const odd = vi.fn(async (..._a: unknown[]) => ({ allowed: false as const, reason: 'no', deferred: false }));
-    const gate = createGate({ approvals: { requestApproval: odd as never }, policy, ctx: ctx(), autoMode: true });
+    const gate = createGate({ approvals: { requestApproval: odd }, policy, ctx: ctx(), autoMode: true });
     expect(await gate('Bash', { command: 'ls' }, undefined, { mayDefer: true })).toEqual({ allow: false, reason: 'no' });
   });
 
