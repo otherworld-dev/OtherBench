@@ -13,7 +13,7 @@ import {
   isUnattendedRun,
   screenContentError,
 } from '@otherbench/core/domain/computer-apps.js';
-import { allowedWhilePlanning, isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@otherbench/core/domain/permissions.js';
+import { allowedWhilePlanning, auditGrantedBy, isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@otherbench/core/domain/permissions.js';
 import { PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { UserAsks } from '@otherbench/core/domain/user-asks.js';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
@@ -340,10 +340,6 @@ function summarizeResult(result: unknown): string {
     return `ok (${fieldCount} field${fieldCount === 1 ? '' : 's'})`;
   }
   return 'ok';
-}
-
-function describeGrantedBy(decision: Extract<ReturnType<PermissionBroker['decide']>, { kind: 'allow' }>): string {
-  return decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy;
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,7 +1120,7 @@ export class OtherBenchToolProvider implements ToolProvider {
       const denied = deniedAuth(decision.reason, decision.unattended === true);
       return decision.unattended === true ? denied : quoting(tool, denied);
     }
-    if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
+    if (decision.kind === 'allow') return { ok: true, grantedBy: auditGrantedBy(decision) };
 
     const { request } = decision;
     // The turn already ended: nobody is there to answer and an abort listener

@@ -150,7 +150,7 @@ describe('the browser in a scheduled run', () => {
   });
 
   it('says what the refusal tells the model about the browser, and each half of it is true', async () => {
-    expect(UNATTENDED_REASON).toContain('The browser needs an Always grant for each website it opens or acts on; with "Ask on changes" it can read a page that is already open without one.');
+    expect(UNATTENDED_REASON).toContain(`The browser needs an Always grant for each website it opens or acts on, or the website on the profile's site list; with "Ask on changes" it can read a page that is already open without one.`);
     const unattended = ctx({ unattended: true });
     // "an Always grant for each website it opens or acts on": without one both are refused, with one both run.
     const none = setup();
@@ -204,14 +204,17 @@ interface TurnOptions {
   unattended?: boolean;
   answer?: ApprovalChoice['choice'];
   grants?: Grant[];
+  /** The parent's and the other profile's browser site lists. */
+  parentSites?: string[];
+  otherSites?: string[];
 }
 
 async function turn(o: TurnOptions = {}) {
   const store = new InMemoryStore();
   store.connections.create(connection);
-  const main = row('p-main', 'Main', policy({ subagents: true, ...o.parent }));
+  const main = { ...row('p-main', 'Main', policy({ subagents: true, ...o.parent })), ...(o.parentSites ? { browserAllowedSites: o.parentSites } : {}) };
   store.profiles.create(main);
-  const other = o.other ? row('p-other', 'Other', policy({ subagents: true, ...o.other })) : null;
+  const other = o.other ? { ...row('p-other', 'Other', policy({ subagents: true, ...o.other })), ...(o.otherSites ? { browserAllowedSites: o.otherSites } : {}) } : null;
   if (other) store.profiles.create(other);
   const factory = new FakeFactory();
   const proxy = fakeProxy();
@@ -376,6 +379,22 @@ describe("a sub-agent and the model's browser", () => {
     expect(isError(r.seen.results[1])).toBe(false);
     expect(r.cards).toEqual([]);
     expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['deny:unattended', 'grant:g-main']);
+  });
+
+  it("uses its parent's profile's site list, in a scheduled run too, and never the one of the profile it runs as", async () => {
+    const r = await turn({
+      unattended: true,
+      other: {},
+      parentSites: ['example.com'],
+      otherSites: ['other.test.example'],
+      subCalls: [openOf('https://example.com/'), { command: 'click', ref: 'e3' }, openOf('https://other.test.example/')],
+    });
+    expect(isError(r.seen.results[0])).toBe(false);
+    expect(isError(r.seen.results[1])).toBe(false);
+    // The chosen profile's list is not the parent's: that site needs a card, which nobody can answer here.
+    expect(isError(r.seen.results[2], 'approval_unavailable')).toBe(true);
+    expect(r.cards).toEqual([]);
+    expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['site_list:example.com', 'site_list:example.com', 'deny:unattended']);
   });
 
   it("shares the chat's one browser with the reply that started it: same page, same holder", async () => {
