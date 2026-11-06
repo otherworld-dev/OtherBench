@@ -806,3 +806,16 @@ describe('createGate and the helpers of a reply', () => {
     expect((requestApproval.mock.calls[0]![3] as ToolContext).shownSubagent).toEqual(tag);
   });
 });
+
+describe('createGate: a helper sending work to other chats', () => {
+  it('asks the background tasks who made a message_chats call with no word from Claude Code, as for a generation', async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ allowed: true });
+    const backgroundOwner = vi.fn(async (id: string) => (id === 'bg' ? { callId: 'task-0', label: 'earlier helper' } : null));
+    const relayChats = { relay: { name: 'message_chats', description: '', parameters: {}, risk: 'execute' as const, source: 'chats' as const, execute: async () => null } };
+    const policy: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' };
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: { chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal }, helpers: new HelperRegistry(), backgroundOwner });
+    await gate('mcp__otherbench_x__message_chats', {}, undefined, { own: relayChats, toolUseId: 'bg' });
+    expect(backgroundOwner).toHaveBeenCalledWith('bg', true);
+    expect((requestApproval.mock.calls[0]![3] as ToolContext).shownSubagent).toEqual({ callId: 'task-0', label: 'earlier helper', parentProfileId: 'p' });
+  });
+});

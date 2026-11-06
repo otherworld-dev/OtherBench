@@ -65,6 +65,12 @@ describe('ChatSendCard', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 
+  it('says when the replies were not passed back because this chat was cleared', async () => {
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [send({ status: 'replied', resumedAs: 'none' })] });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    await waitFor(() => expect(screen.getByTestId('chat-send-dropped')).toHaveTextContent(/not passed back/));
+  });
+
   it('opens the chat a row names', async () => {
     vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [send()] });
     const open = vi.fn();

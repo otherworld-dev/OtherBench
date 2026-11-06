@@ -271,7 +271,8 @@ export function createGate(deps: {
       // for the background tasks to learn whose call it is before it's decided.
       const toolUseId = opts?.toolUseId;
       const agentId = opts?.agentId;
-      const media = relay?.source === 'media';
+      // A generation or a send to other chats (which no helper may make either) waits to learn whose call it is.
+      const media = relay?.source === 'media' || relay?.source === 'chats';
       let helper = deps.helpers?.ownerOf(toolUseId) ?? null;
       if (helper === null && toolUseId !== undefined && (agentId !== undefined || media)) helper = (await deps.backgroundOwner?.(toolUseId, agentId === undefined)) ?? null;
       // A helper's call nothing can name yet keeps the helper a between-replies context names, else is "a helper".

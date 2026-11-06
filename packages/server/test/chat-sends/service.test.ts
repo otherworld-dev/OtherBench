@@ -514,3 +514,164 @@ describe('ChatSendService: shutting down', () => {
     expect(unsettled).not.toHaveBeenCalled();
   });
 });
+
+describe('ChatSendService: review fixes', () => {
+  const settled = async (): Promise<void> => {
+    await flush();
+    await service.idle();
+    await flush();
+    await service.idle();
+  };
+
+  it('Stop on the card keeps the sender quiet even when one chat had already replied', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }, { chatId: 'C', text: 'y' }]);
+    await finish(r, 'Sent.');
+    await finish(workerOf(r, 'B'), 'B done');
+    service.stop(r);
+    await vi.waitFor(() => expect(store.messages.get(workerOf(r, 'C'))!.status).toBe('cancelled'));
+    await settled();
+    expect(repliesIn('A')).toBe(1);
+    expect(store.chatSends.byFromMessage(r).find((s) => s.toChatId === 'C')).toMatchObject({ status: 'stopped' });
+  });
+
+  it('Stop on the sender reply itself keeps it quiet even when one chat had already replied', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }, { chatId: 'C', text: 'y' }]);
+    await finish(workerOf(r, 'B'), 'B done');
+    runner.cancel(r);
+    await vi.waitFor(() => expect(store.messages.get(workerOf(r, 'C'))!.status).toBe('cancelled'));
+    await settled();
+    expect(repliesIn('A')).toBe(1);
+  });
+
+  it('Stop on the card keeps a chat further down quiet too, when one of its own sends had replied', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    const b1 = workerOf(r, 'B');
+    await send('B', b1, [{ chatId: 'C', text: 'c' }, { chatId: 'D', text: 'd' }]);
+    await finish(b1, 'Asked C and D.');
+    await finish(workerOf(b1, 'D'), 'D done');
+    service.stop(r);
+    await vi.waitFor(() => expect(store.messages.get(workerOf(b1, 'C'))!.status).toBe('cancelled'));
+    await settled();
+    expect(repliesIn('B')).toBe(1);
+    expect(repliesIn('A')).toBe(1);
+  });
+
+  it('Stop on the card after every reply came back, while the sender was busy, still keeps it quiet', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    const mine = await reply('A', 'something else meanwhile');
+    await finish(workerOf(r, 'B'), 'done');
+    service.stop(r);
+    await finish(mine, 'ok');
+    await settled();
+    expect(repliesIn('A')).toBe(2);
+    expect(service.waitingChatIds()).toEqual([]);
+  });
+
+  it('a regenerated reply can send: it is not a compare turn', async () => {
+    const first = await reply('A');
+    await finish(first, 'first try');
+    const userId = store.messages.get(first)!.parentId!;
+    const again = store.messages.create({ id: 'regen', chatId: 'A', parentId: userId, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: { profileId: 'p1', profileName: 'Mock', connectionId: 'conn', modelId: 'm', regenerated: true } });
+    expect('sent' in (await send('A', again.id, [{ chatId: 'B', text: 'x' }]))).toBe(true);
+  });
+
+  it('a send waiting on the notes of the user goes out once they clear, with no reply ending anywhere', async () => {
+    service.dispose();
+    service = build({ retryMs: 20 });
+    service.start();
+    waitingNotes.add('B');
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('queued');
+    waitingNotes.delete('B');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('running'));
+  });
+
+  it('after a restart, a group that had all come back but not resumed its sender resumes it', async () => {
+    service.dispose();
+    const now = Date.now();
+    store.messages.create({ id: 'ua', chatId: 'A', parentId: null, role: 'user', parts: [{ type: 'text', text: 'go' }], status: 'complete', error: null, producedBy: null, createdAt: now });
+    store.messages.create({ id: 'ra', chatId: 'A', parentId: 'ua', role: 'assistant', parts: [{ type: 'text', text: 'Sent.' }], status: 'complete', error: null, producedBy: { profileId: 'p1', profileName: 'Mock', connectionId: 'conn', modelId: 'm' }, createdAt: now + 1 });
+    store.chats.update('A', { headMessageId: 'ua' });
+    store.chatSends.create({ id: 's1', chainId: 'ra', depth: 1, fromChatId: 'A', fromMessageId: 'ra', toChatId: 'B', createdChat: false, text: 'x', status: 'replied', toReplyId: 'gone', replyText: 'done', reason: null, resumedAs: null });
+    service = build();
+    service.start();
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+  });
+
+  it('after a restart, a chat in the middle of a chain whose reply was lost does not resume for nobody', async () => {
+    service.dispose();
+    const now = Date.now();
+    const mk = (id: string, chatId: string, parentId: string | null, role: 'user' | 'assistant', status: 'complete' | 'error', at: number) =>
+      store.messages.create({ id, chatId, parentId, role, parts: [{ type: 'text', text: id }], status, error: status === 'error' ? { kind: 'unknown', message: 'OtherBench stopped.', retryable: true } : null, producedBy: role === 'assistant' ? { profileId: 'p1', profileName: 'Mock', connectionId: 'conn', modelId: 'm' } : null, createdAt: at });
+    mk('ua', 'A', null, 'user', 'complete', now);
+    mk('ra', 'A', 'ua', 'assistant', 'complete', now + 1);
+    mk('ub', 'B', null, 'user', 'complete', now + 2);
+    mk('rb', 'B', 'ub', 'assistant', 'error', now + 3);
+    mk('uc', 'C', null, 'user', 'complete', now + 4);
+    mk('rc', 'C', 'uc', 'assistant', 'error', now + 5);
+    for (const [chat, head] of [['A', 'ua'], ['B', 'ub'], ['C', 'uc']] as const) store.chats.update(chat, { headMessageId: head });
+    store.chatSends.create({ id: 'ab', chainId: 'ra', depth: 1, fromChatId: 'A', fromMessageId: 'ra', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: now });
+    store.chatSends.create({ id: 'bc', chainId: 'ra', depth: 2, fromChatId: 'B', fromMessageId: 'rb', toChatId: 'C', createdChat: false, text: 'y', status: 'running', toReplyId: 'rc', replyText: null, reason: null, resumedAs: null, createdAt: now + 1 });
+    service = build();
+    service.start();
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+    await settled();
+    expect(repliesIn('B')).toBe(1);
+  });
+
+  it('tells the sender, from its own side, that a chat it sent to was deleted while waiting on others', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    const b1 = workerOf(r, 'B');
+    await send('B', b1, [{ chatId: 'C', text: 'y' }]);
+    await finish(b1, 'Asked C.');
+    store.chats.delete('B');
+    await finish(workerOf(b1, 'C'), 'C done');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'dropped', reason: expect.stringMatching(/chat it was sent to was deleted/) }));
+  });
+
+  it('a send stays queued, not failed, when the target gets busy while its profile is read', async () => {
+    let raced = false;
+    service.dispose();
+    service = build({
+      resolveProfile: async (id) => {
+        if (!raced) {
+          raced = true;
+          await reply('B', 'the user got there first');
+        }
+        return resolveP(id);
+      },
+    });
+    service.start();
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('queued');
+    await finish(latestReply('B')!, 'mine done');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('running'));
+  });
+
+  it('a Stop that lands while the target turn is starting stops that turn', async () => {
+    let r = '';
+    service.dispose();
+    service = build({
+      startTurn: async (input) => {
+        if (input.chatId === 'B') service.stop(r);
+        return startTurn(turnDeps, input);
+      },
+    });
+    service.start();
+    r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await settled();
+    expect(store.chatSends.byFromMessage(r)[0]!.status).toBe('stopped');
+    await vi.waitFor(() => expect(store.messages.get(latestReply('B')!)!.status).toBe('cancelled'));
+  });
+});

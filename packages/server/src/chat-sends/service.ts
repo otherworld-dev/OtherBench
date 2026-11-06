@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_CHAIN_DEPTH, MAX_SENDS_PER_CHAIN, MAX_TARGETS_PER_TURN, cutReply, deliveredText, isSettled, repliesText, type ChatSendStatus } from '@otherbench/core/domain/chat-sends.js';
+import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import type { TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import { workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
 import type { ChatMessenger, ChatTargetInfo, SendOutcome, SendTarget } from '@otherbench/core/ports/chat-messenger.js';
@@ -34,6 +35,11 @@ export interface ChatSendDeps {
   emit: (e: AppEvent) => void;
   now?: () => number;
   generateId?: () => string;
+  /**
+   * How often (ms) waiting work gets another look even when no reply ends: a chat can come free without one
+   * (the user's waiting notes handed back, say). Default 5000.
+   */
+  retryMs?: number;
 }
 
 const NEW_CHAT_TITLE_MAX = 60;
@@ -45,8 +51,11 @@ export const STOPPED_FROM_CARD = 'Stopped from the send card.';
 export const SENDER_STOPPED = 'The chat that sent this was stopped.';
 /** What a chat is told when the work it passed on was stopped from that chat's own card. */
 const PASSED_ON_STOPPED = 'The chat it was sent to stopped the work it had passed on.';
-/** Stops that mean "don't carry on": a group stopped for one of these closes without resuming its sender. */
+/** Stops that mean "don't carry on": a send stopped for one of these never comes back as "failed". */
 const NO_RESUME_REASONS: ReadonlySet<string> = new Set([STOPPED_FROM_CARD, SENDER_STOPPED]);
+/** What a chat is told when the chat it sent to can't take its own replies any more, from the sender's side. */
+const TARGET_DELETED = 'The chat it was sent to was deleted before it finished.';
+const TARGET_CLEARED = 'The chat it was sent to was cleared (/clear or /compact) before it finished.';
 
 /** What a reply ended by saying: its text after its last tool call, the part a sender wants back. */
 function finalText(parts: readonly Part[]): string {
@@ -89,6 +98,7 @@ export class ChatSendService implements ChatMessenger {
   private off: (() => void) | null = null;
   /** Set by dispose: a follow-up queued just before (a reply that ended as the server closed) then does nothing. */
   private disposed = false;
+  private retry: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: ChatSendDeps) {
     this.deps = deps;
@@ -106,18 +116,30 @@ export class ChatSendService implements ChatMessenger {
     this.off = this.deps.turnRunner.on((e) => {
       if (e.type === 'status' && e.status !== undefined && e.status !== 'streaming') this.onReplyEnded(e.messageId, e.status);
     });
-    for (const row of this.store.chatSends.unsettled()) {
-      if (row.status !== 'running' || row.toReplyId === null || this.deps.turnRunner.runningInfo(row.toReplyId) !== null) continue;
+    for (const { id } of this.store.chatSends.unsettled()) {
+      // Read again: handling an earlier row may have settled this one (a chain's lower rows, stopped from above).
+      const row = this.store.chatSends.get(id);
+      if (!row || row.status !== 'running' || row.toReplyId === null || this.deps.turnRunner.runningInfo(row.toReplyId) !== null) continue;
       const stored = this.store.messages.get(row.toReplyId)?.status;
       this.onReplyEnded(row.toReplyId, stored === undefined || stored === 'streaming' ? 'error' : stored);
     }
+    // Groups that had all come back but not yet gone to their sender (it was busy) when the server stopped.
+    for (const fromMessageId of new Set(this.store.chatSends.unresumed().map((r) => r.fromMessageId))) this.maybeResume(fromMessageId);
     this.drainAll();
+    this.retry = setInterval(() => {
+      if (this.disposed) return;
+      this.drainAll();
+      this.resumeDue();
+    }, this.deps.retryMs ?? 5000);
+    this.retry.unref?.();
   }
 
   /** Stop on the send card of reply `fromMessageId`: everything it started stops, down the chain, and it doesn't resume. */
   stop(fromMessageId: string): void {
     this.stopTree(fromMessageId, STOPPED_FROM_CARD);
-    this.maybeResume(fromMessageId);
+    // Closed now, whatever already came back: the sender doesn't carry on. A chat above it is told its work was stopped.
+    this.closeGroup(fromMessageId);
+    this.settleServed(fromMessageId, 'stopped', PASSED_ON_STOPPED);
   }
 
   /** The chats with sends of theirs still out, or back and waiting to resume them: the "waiting on chats" status. */
@@ -143,14 +165,39 @@ export class ChatSendService implements ChatMessenger {
       }
       if (row.reason === null) this.store.chatSends.update(row.id, { reason });
       if (row.toReplyId === null) continue;
-      if (this.deps.turnRunner.runningInfo(row.toReplyId) !== null) this.deps.turnRunner.cancel(row.toReplyId);
       this.stopTree(row.toReplyId, reason);
-      this.maybeResume(row.toReplyId);
+      // Nothing below resumes either, even where some of its sends had already replied.
+      this.closeGroup(row.toReplyId);
+      if (this.deps.turnRunner.runningInfo(row.toReplyId) !== null) {
+        // Its reply settles the row as it ends (`onReplyEnded`), keeping this reason.
+        this.deps.turnRunner.cancel(row.toReplyId);
+      } else {
+        // Its reply had already ended, waiting on sends of its own: nothing else will settle the row.
+        this.settle(row.id, 'stopped', null, reason);
+      }
+    }
+  }
+
+  /** Marks a group of sends handled with no resume (`resumedAs: 'none'`), and takes it off the due list. */
+  private closeGroup(fromMessageId: string): void {
+    const group = this.store.chatSends.byFromMessage(fromMessageId);
+    for (const row of group) if (row.resumedAs === null) this.store.chatSends.update(row.id, { resumedAs: NO_RESUME });
+    if (group[0]) this.changed([group[0].fromChatId]);
+    this.due.delete(fromMessageId);
+  }
+
+  /** Settles the sends reply `replyId` was working on for other chats (a row Stop marked keeps its own reason), whose senders may then be due. */
+  private settleServed(replyId: string, status: ChatSendStatus, reason: string): void {
+    for (const row of this.store.chatSends.byToReply(replyId).filter((r) => !isSettled(r.status))) {
+      this.settle(row.id, status, null, row.reason ?? reason);
+      this.maybeResume(row.fromMessageId);
     }
   }
 
   dispose(): void {
     this.disposed = true;
+    if (this.retry !== null) clearInterval(this.retry);
+    this.retry = null;
     this.off?.();
     this.off = null;
   }
@@ -172,7 +219,8 @@ export class ChatSendService implements ChatMessenger {
   async send(ctx: ToolContext, targets: SendTarget[]): Promise<SendOutcome> {
     const replyRow = this.store.messages.get(ctx.messageId);
     if (!replyRow || replyRow.chatId !== ctx.chatId) return { refused: 'This reply is not one OtherBench knows, so it cannot message other chats.' };
-    if (replyRow.parentId !== null && this.store.messages.children(replyRow.parentId).filter((m) => m.role === 'assistant').length > 1) {
+    // A regenerated reply is a sibling too, but not a compare (`isCompareSet`).
+    if (replyRow.parentId !== null && isCompareSet(this.store.messages.children(replyRow.parentId))) {
       return { refused: "Compare turns can't message other chats. Ask the user to pick one reply and continue from it." };
     }
     const { chainId, depth } = this.chainOf(ctx.messageId);
@@ -314,9 +362,11 @@ export class ChatSendService implements ChatMessenger {
       const profile = await this.deps.resolveProfile(chat.profileId);
       const now = this.store.chats.get(chat.id);
       if (!now) throw new Error('The chat was deleted before the message could go out.');
-      const parentId = chatTip(this.store, now.id, now.headMessageId);
       // Stopped (or settled some other way) while the profile resolved: nothing goes out.
       if (this.store.chatSends.get(row.id)?.status !== 'queued') return;
+      // The user started something there meanwhile: it stays queued and goes when that ends.
+      if (this.isBusy(now.id)) return;
+      const parentId = chatTip(this.store, now.id, now.headMessageId);
       const result = await this.deps.startTurn({
         chatId: now.id,
         parentId,
@@ -329,6 +379,11 @@ export class ChatSendService implements ChatMessenger {
       replyId = result.assistantMessageIds[0]!;
     } catch (err) {
       this.settle(row.id, 'failed', null, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    // Stopped while its turn was starting: that turn is stopped too, and the row keeps its stop.
+    if (this.store.chatSends.get(row.id)?.status !== 'queued') {
+      this.deps.turnRunner.cancel(replyId);
       return;
     }
     this.store.chatSends.update(row.id, { status: 'running', toReplyId: replyId });
@@ -353,7 +408,11 @@ export class ChatSendService implements ChatMessenger {
    */
   private onReplyEnded(replyId: string, status: MessageStatus): void {
     const out = this.store.chatSends.byFromMessage(replyId);
-    if (status !== 'complete' && out.some((r) => !isSettled(r.status))) this.stopTree(replyId, SENDER_STOPPED);
+    if (status !== 'complete' && out.length > 0) {
+      // It won't carry on, so neither does anything it sent, even what already replied.
+      this.stopTree(replyId, SENDER_STOPPED);
+      this.closeGroup(replyId);
+    }
     if (status === 'complete' && out.some((r) => r.resumedAs === null)) {
       // Its sends' replies may already all be in (a fast target): then it is due now that it has ended.
       this.maybeResume(replyId);
@@ -365,6 +424,8 @@ export class ChatSendService implements ChatMessenger {
         for (const row of serving) {
           if (status === 'complete') this.settle(row.id, 'replied', cutReply(text), null);
           else if (status === 'cancelled') this.settle(row.id, 'stopped', null, row.reason ?? 'The reply was stopped before it finished.');
+          // Stopped from above (a restart reconciles a stopped reply as an error): a stop, not a failure.
+          else if (row.reason !== null && NO_RESUME_REASONS.has(row.reason)) this.settle(row.id, 'stopped', null, row.reason);
           else this.settle(row.id, 'failed', text === '' ? null : cutReply(text), message?.error?.message ?? 'The reply ended with an error.');
           this.maybeResume(row.fromMessageId);
         }
@@ -388,34 +449,26 @@ export class ChatSendService implements ChatMessenger {
     if (group.length === 0 || group.some((r) => !isSettled(r.status) || r.resumedAs !== null)) return;
     // The sending reply itself must have ended first: its chat isn't free until then anyway.
     if (this.store.messages.get(fromMessageId)?.status === 'streaming') return;
-    if (group.every((r) => r.status === 'stopped' && r.reason !== null && NO_RESUME_REASONS.has(r.reason))) {
-      this.close(fromMessageId, 'stopped', PASSED_ON_STOPPED);
-      return;
-    }
     const sender = this.store.chats.get(group[0]!.fromChatId);
     if (!sender) {
-      this.close(fromMessageId, 'dropped', 'The chat that sent this was deleted.');
+      this.close(fromMessageId, 'dropped', TARGET_DELETED);
       return;
     }
     if (lineAfter({ store: this.store }, sender.headMessageId, fromMessageId)) {
-      this.close(fromMessageId, 'dropped', 'The chat that sent this was cleared (/clear or /compact) before the replies came back.');
+      this.close(fromMessageId, 'dropped', TARGET_CLEARED);
       return;
     }
     this.due.add(fromMessageId);
     this.resumeDue();
   }
 
-  /** Marks a group handled with no resume, and ends whatever its sending reply was working on for another chat. */
+  /**
+   * Closes a group with no resume, and ends whatever its sending reply was working on for another chat, with
+   * `reason` as that chat is told it (from its side: the chat it sent to).
+   */
   private close(fromMessageId: string, status: ChatSendStatus, reason: string): void {
-    const group = this.store.chatSends.byFromMessage(fromMessageId);
-    for (const row of group) this.store.chatSends.update(row.id, { resumedAs: NO_RESUME });
-    if (group[0]) this.changed([group[0].fromChatId]);
-    this.due.delete(fromMessageId);
-    for (const row of this.store.chatSends.byToReply(fromMessageId).filter((r) => !isSettled(r.status))) {
-      // A row Stop already marked keeps its own reason, so a stop from the card above stays a stop from the card.
-      this.settle(row.id, status, null, row.reason ?? reason);
-      this.maybeResume(row.fromMessageId);
-    }
+    this.closeGroup(fromMessageId);
+    this.settleServed(fromMessageId, status, reason);
   }
 
   /** Starts every due resume whose chat is free. */
@@ -446,6 +499,12 @@ export class ChatSendService implements ChatMessenger {
     try {
       const sentAs = this.store.messages.get(fromMessageId)?.producedBy?.profileId ?? chat.profileId;
       const profile = await this.deps.resolveProfile(sentAs).catch(() => this.deps.resolveProfile(chat.profileId));
+      // Closed (stopped, cleared) or busy again while the profile resolved: closed stays closed, busy waits its turn.
+      if (this.store.chatSends.byFromMessage(fromMessageId).some((r) => r.resumedAs !== null)) return;
+      if (this.isBusy(chat.id)) {
+        this.due.add(fromMessageId);
+        return;
+      }
       let parentId: string | null;
       try {
         parentId = chatTip(this.store, chat.id, this.store.chats.get(chat.id)?.headMessageId ?? null);
@@ -464,7 +523,7 @@ export class ChatSendService implements ChatMessenger {
       });
       replyId = result.assistantMessageIds[0]!;
     } catch (err) {
-      this.close(fromMessageId, 'failed', `The chat that sent this couldn't carry on: ${err instanceof Error ? err.message : String(err)}`);
+      this.close(fromMessageId, 'failed', `The chat it was sent to couldn't carry on: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
     for (const row of group) this.store.chatSends.update(row.id, { resumedAs: replyId });

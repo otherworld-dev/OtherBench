@@ -1290,6 +1290,8 @@ export interface ChatSendRepo {
   byToChat(chatId: string): ChatSend[];
   /** The rows still queued or running. */
   unsettled(): ChatSend[];
+  /** Settled rows whose group hasn't gone back to its sender (`resumedAs` null): what a restart must pick up. */
+  unresumed(): ChatSend[];
 }
 
 export interface Store {

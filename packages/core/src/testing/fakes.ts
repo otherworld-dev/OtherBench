@@ -975,6 +975,9 @@ class InMemoryChatSendRepo implements ChatSendRepo {
   unsettled(): ChatSend[] {
     return this.where((s) => s.status === 'queued' || s.status === 'running');
   }
+  unresumed(): ChatSend[] {
+    return this.where((s) => s.resumedAs === null && s.status !== 'queued' && s.status !== 'running');
+  }
 }
 
 class InMemoryAppRepo implements AppRepo {

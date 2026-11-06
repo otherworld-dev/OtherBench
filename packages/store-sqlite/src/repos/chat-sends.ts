@@ -95,6 +95,11 @@ export class SqliteChatSendRepo implements ChatSendRepo {
     return this.where('to_chat_id', chatId);
   }
 
+  unresumed(): ChatSend[] {
+    const rows = this.db.prepare("SELECT * FROM chat_send WHERE resumed_as IS NULL AND status NOT IN ('queued', 'running') ORDER BY created_at ASC, rowid ASC").all() as Record<string, unknown>[];
+    return rows.map(toSend);
+  }
+
   unsettled(): ChatSend[] {
     const rows = this.db.prepare("SELECT * FROM chat_send WHERE status IN ('queued', 'running') ORDER BY created_at ASC, rowid ASC").all() as Record<string, unknown>[];
     return rows.map(toSend);

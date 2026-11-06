@@ -46,6 +46,8 @@ export function ChatSendCard({ chatId, fromMessageId }: { chatId: string; fromMe
 
   if (sends === null || sends.length === 0) return null;
   const out = sends.some((s) => !isSettled(s.status));
+  // Closed with no resume and not by a Stop: the sender was cleared (or couldn't carry on), so the replies went nowhere.
+  const dropped = !out && sends.some((s) => s.resumedAs === 'none') && !sends.some((s) => s.status === 'stopped');
   const stop = (): void => {
     setStopping(true);
     api.chatSends
@@ -84,6 +86,11 @@ export function ChatSendCard({ chatId, fromMessageId }: { chatId: string; fromMe
           );
         })}
       </ul>
+      {dropped && (
+        <p data-testid="chat-send-dropped" className="mt-1 text-[var(--text-muted)]">
+          The replies were not passed back to this chat: it was cleared, or couldn&rsquo;t carry on, before they came.
+        </p>
+      )}
     </div>
   );
 }

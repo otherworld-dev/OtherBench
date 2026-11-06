@@ -503,6 +503,14 @@ export function runStoreContract(
         expect(store.chatSends.byToChat('C').map((s) => s.id)).toEqual(['s2', 's3']);
       });
 
+      it('unresumed lists settled rows whose group has not gone back to its sender, oldest first', () => {
+        store.chatSends.create({ ...row({ id: 'a', status: 'replied' }), createdAt: 1 });
+        store.chatSends.create({ ...row({ id: 'b', status: 'running' }), createdAt: 2 });
+        store.chatSends.create({ ...row({ id: 'c', status: 'failed', resumedAs: 'r9' }), createdAt: 3 });
+        store.chatSends.create({ ...row({ id: 'd', status: 'stopped' }), createdAt: 4 });
+        expect(store.chatSends.unresumed().map((s) => s.id)).toEqual(['a', 'd']);
+      });
+
       it('unsettled lists only queued and running rows, oldest first', () => {
         store.chatSends.create({ ...row({ id: 'b', status: 'running' }), createdAt: 2 });
         store.chatSends.create({ ...row({ id: 'a' }), createdAt: 1 });
