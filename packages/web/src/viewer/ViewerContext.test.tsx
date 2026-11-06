@@ -67,8 +67,11 @@ describe('a path mentioned in a chat, in the desktop app', () => {
     viewerActionsFor('c1').showPath('\\\\evil.example\\share\\setup.exe');
     viewerActionsFor('c1').showPath('//evil.example/share/setup.exe');
     viewerActionsFor('c1').showPath('\\\\?\\UNC\\evil.example\\share\\setup.exe');
+    viewerActionsFor('c1').showPath('\\??\\UNC\\evil.example\\share\\setup.exe');
+    viewerActionsFor('c1').showPath('/??/UNC/evil.example/share/setup.exe');
+    // At most three toasts show at once, the latest.
     await waitFor(() => expect(useToasts.getState().toasts).toHaveLength(3));
-    expect(useToasts.getState().toasts[0]?.text).toBe("\\\\evil.example\\share\\setup.exe is on another computer, so it isn't shown from a chat.");
+    expect(useToasts.getState().toasts[2]?.text).toBe("/??/UNC/evil.example/share/setup.exe isn't a file on this computer, so it isn't shown from a chat.");
     expect(revealPath).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
   });

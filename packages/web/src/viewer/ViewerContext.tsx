@@ -36,8 +36,11 @@ const LINE_REF = /:\d+(?:[-:]\d+)?$/;
 /** A drive (`C:\`) or a root (`/`). */
 const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/])/;
 
-/** A share (`\\host\share`, `//host/share`) or a `\\?\` / `\\.\` device path. */
-const NETWORK = /^[\\/]{2}/;
+/**
+ * Not a plain path on this machine: a share (`\\host\share`, `//host/share`), or a device path (`\\?\`, `\\.\`,
+ * `\??\`), which Windows passes on as written and so can reach a share too. No Windows file name holds a `?`.
+ */
+const NOT_LOCAL = /^[\\/]{2}|\?/;
 
 /**
  * Selects a path mentioned in `chatId`'s messages in Explorer, never opening
@@ -50,8 +53,8 @@ const NETWORK = /^[\\/]{2}/;
  */
 export async function revealMentioned(chatId: string, mentioned: string): Promise<void> {
   const path = mentioned.replace(LINE_REF, '');
-  if (NETWORK.test(path)) {
-    toast({ text: `${mentioned} is on another computer, so it isn't shown from a chat.`, tone: 'error' });
+  if (NOT_LOCAL.test(path)) {
+    toast({ text: `${mentioned} isn't a file on this computer, so it isn't shown from a chat.`, tone: 'error' });
     return;
   }
   try {
