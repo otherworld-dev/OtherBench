@@ -349,7 +349,7 @@ describe('unattendedWarnings', () => {
 
   // Integration with the model's browser: it asks once per website, on both engines, with or without a folder.
   it('says a new website is refused for a profile with the browser on, on either engine and in a clean chat', () => {
-    const line = "The browser asks before each new website, so using a site is refused unless a grant already covers it (an Always grant, or one for the schedule's own chat).";
+    const line = "The browser asks before each new website, so using a site is refused unless the profile's site list or a grant already covers it (an Always grant, or one for the schedule's own chat).";
     expect(unattendedWarnings(policy({ browser: true }), 'anthropic', true)).toEqual([line]);
     expect(unattendedWarnings(policy({ browser: true }), 'claude_code', true)).toEqual([line]);
     expect(unattendedWarnings(policy({ browser: true }), 'claude_code', false)).toEqual([line]);

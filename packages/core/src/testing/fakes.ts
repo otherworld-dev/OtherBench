@@ -93,7 +93,7 @@ import { asksUser, QUESTION_TAIL } from '../domain/overview.js';
 import { UserAsks } from '../domain/user-asks.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
-import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
+import { auditGrantedBy, isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
 import type { MediaWorkflow } from '../domain/media-workflows.js';
 import { compareApps, compareAppFolders } from '../domain/apps.js';
 import { compareProjects } from '../domain/projects.js';
@@ -471,7 +471,7 @@ export class FakeToolProvider implements ToolProvider {
     ctx: ToolContext
   ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_unavailable'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
-    if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
+    if (decision.kind === 'allow') return { ok: true, grantedBy: auditGrantedBy(decision) };
 
     const { request } = decision;
     // The turn already ended: nobody can answer, so drop the request and raise no card.
@@ -625,7 +625,7 @@ class InMemoryProfileRepo implements ProfileRepo {
     private readonly onDelete: (profileId: string) => void = () => {}
   ) {}
   create(p: Profile): Profile {
-    return this.repo.create({ ...p, useGlobalMemory: p.useGlobalMemory ?? true });
+    return this.repo.create({ ...p, useGlobalMemory: p.useGlobalMemory ?? true, browserAllowedSites: p.browserAllowedSites ?? [] });
   }
   get(id: string): Profile | null {
     return this.repo.get(id);
