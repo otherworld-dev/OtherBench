@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
+import { isHandoverRequest } from '@otherbench/core/domain/handover.js';
 import { notePart, notesToParts } from '@otherbench/core/domain/notes.js';
 import type { TurnInput, TurnResult, TurnRunner } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine, SelfStart } from '@otherbench/core/ports/chat-engine.js';
@@ -272,9 +273,9 @@ export class NotesService {
     if (input.profileIds.length !== 1 || input.profileIds[0] !== reply.producedBy?.profileId) return null;
     // A scheduled run's rules aren't the person's.
     if (this.turnRunner.runningInfo(reply.id)?.unattended !== false) return null;
-    // A /compact's reply has nowhere for a note to land.
+    // A /compact's reply has nowhere for a note to land, and a note read mid-handover would end up in the fresh chat's summary.
     const asked = reply.parentId ? this.store.messages.get(reply.parentId) : null;
-    if (asked && contextLineOf(asked) !== null) return null;
+    if (asked && (contextLineOf(asked) !== null || isHandoverRequest(asked))) return null;
     // A note never overtakes one already waiting for the reply to end.
     if (this.waitingIn(input.chatId).some((h) => h.note.path === 'wait')) return null;
     return reply;

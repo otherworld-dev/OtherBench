@@ -1,13 +1,13 @@
 import type { JSX, ReactNode } from 'react';
 
 /**
- * The line a /clear or /compact leaves in the thread: a thin rule with a small
+ * The line a /clear, /compact or a handover to a fresh chat leaves in the thread: a thin rule with a small
  * muted label, and a compact's focus under it. `id` is the DOM id the outline's
  * "Go to" scrolls to; `aside` sits at the line's right end, outside the
  * separator (whose children are presentational), e.g. the branch switcher.
  */
-export function ContextLine({ kind, focus, at, id, aside }: { kind: 'clear' | 'compact'; focus?: string; at: number; id?: string; aside?: ReactNode }): JSX.Element {
-  const label = kind === 'clear' ? 'Context cleared' : 'Context compacted';
+export function ContextLine({ kind, focus, at, id, aside }: { kind: 'clear' | 'compact' | 'handover'; focus?: string; at: number; id?: string; aside?: ReactNode }): JSX.Element {
+  const label = kind === 'clear' ? 'Context cleared' : kind === 'compact' ? 'Context compacted' : 'Handover to a fresh chat';
   const time = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
     <div id={id} data-context-line={kind} className="my-2 flex items-start gap-2 text-xs text-[var(--text-muted)]">

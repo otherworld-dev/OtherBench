@@ -111,6 +111,10 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
       return `*${part.text}*`;
     case 'context':
       return part.kind === 'clear' ? '*/clear*' : `*/compact${part.focus ? ` ${part.focus}` : ''}*`;
+    case 'handover-request':
+      return '*Handover to a fresh chat*';
+    case 'handover':
+      return `*${part.direction === 'to' ? 'Continued in' : 'Continued from'} ${part.title}*`;
     case 'context-summary':
       return `**Summary of the conversation so far:**
 

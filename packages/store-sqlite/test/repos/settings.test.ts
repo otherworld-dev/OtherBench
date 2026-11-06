@@ -14,6 +14,13 @@ describe('SqliteSettingsRepo', () => {
     expect(repo.get()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: 'p1' });
   });
 
+  it('defaults the fresh chat card on at 300k tokens and keeps a new threshold', () => {
+    const repo = new SqliteSettingsRepo(freshDb());
+    expect(repo.get()).toMatchObject({ handoverEnabled: true, handoverThresholdTokens: 300_000 });
+    repo.update({ handoverThresholdTokens: 500_000, handoverEnabled: false });
+    expect(repo.get()).toMatchObject({ handoverEnabled: false, handoverThresholdTokens: 500_000 });
+  });
+
   it('a corrupt row falls back to the default for that key and is logged, not thrown', () => {
     const db = freshDb();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

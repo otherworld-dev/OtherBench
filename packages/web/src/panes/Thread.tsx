@@ -675,6 +675,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         message={m}
                         framed
                         showAllText={m.id === unfoldId}
+                        offerHandover={!compare && m.id === displayPath[displayPath.length - 1]?.id}
                         otherVariantsCount={compare ? siblings.length - 1 : 0}
                         onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                         pendingApprovals={extras[m.id]?.pendingApprovals ?? []}

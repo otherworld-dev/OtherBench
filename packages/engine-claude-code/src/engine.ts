@@ -7,6 +7,7 @@ import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/d
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
 import { CLEAR_ON_ITS_OWN, contextLineOf, isClearName, NOTHING_TO_COMPACT, type CommandRow } from '@otherbench/core/domain/context-lines.js';
+import { HANDOVER_PROMPT, NOTHING_TO_HAND_OVER } from '@otherbench/core/domain/handover.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { createPlanGate, PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
@@ -669,8 +670,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean, images.blocks);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
-        // A /compact has nothing to compact in a new session: runTurn refuses it, without this notice.
-        if (compactFocus(req) === null) yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so OtherBench started a new Claude Code session with this chat's history." };
+        // A /compact has nothing to compact in a new session, nor a handover anything to hand over: runTurn refuses them, without this notice.
+        if (compactFocus(req) === null && req.handover !== true) yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so OtherBench started a new Claude Code session with this chat's history." };
         yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean, images.blocks);
       }
     } finally {
@@ -701,6 +702,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const compacting = compactFocus(req) !== null;
     if (compacting && plan.mode !== 'continue') {
       yield { type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_COMPACT } };
+      return 'done';
+    }
+    // A handover summary needs the session that holds the chat: a new one would see only the clipped history.
+    if (req.handover === true && plan.mode !== 'continue') {
+      yield { type: 'error', error: { kind: 'unknown', retryable: false, message: NOTHING_TO_HAND_OVER } };
       return 'done';
     }
     if (sendsClear(req)) {
@@ -792,6 +798,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         policy: profile.toolPolicy,
         ctx: gateCtx,
         claudeFolders: this.claudeFolders(req.workspaceRoot, account),
+        ...(req.handover === true ? { handover: true } : {}),
         autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
         helpers,
         // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
@@ -1296,6 +1303,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private userContent(req: EngineRequest, fresh: boolean, images: ContentBlock[]): ContentBlock[] {
     const focus = compactFocus(req);
     if (focus !== null) return [{ type: 'text', text: focus ? `/compact ${focus}` : '/compact' }];
+    if (req.handover === true) return [{ type: 'text', text: HANDOVER_PROMPT }];
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
     const first = last?.parts.find((p) => p.type === 'text');

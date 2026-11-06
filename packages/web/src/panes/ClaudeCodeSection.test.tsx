@@ -34,6 +34,15 @@ describe('ClaudeCodeSection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Copy resume command' }));
     expect(writeText).toHaveBeenCalledWith('cd "E:\\Git\\proj" && claude --resume new-session');
   });
+  it('switches the fresh chat card on and off for the chat', async () => {
+    const patch = vi.mocked(api.chats.patch).mockReset().mockResolvedValue({ id: 'c1' } as never);
+    useOtherBenchStore.setState({ messages: { a: msg('a', 1, 's') }, chats: [{ id: 'c1', handoverSuggest: true }] as never });
+    render(<ClaudeCodeSection chatId="c1" />);
+    const box = screen.getByLabelText('Suggest a fresh chat when this gets big');
+    expect(box).toBeChecked();
+    await userEvent.click(box);
+    expect(patch).toHaveBeenLastCalledWith('c1', { handoverSuggest: false });
+  });
   it('groups MCP tools into one line per server, collapsed until clicked', async () => {
     const tools = [
       'Read', 'Edit', 'Bash',

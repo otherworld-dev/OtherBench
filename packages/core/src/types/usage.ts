@@ -9,6 +9,12 @@ export interface Usage {
    */
   tokensCacheWrite?: number;
   tokensReasoning: number;
+  /**
+   * How much context the reply's last model call read (input plus cache read
+   * and written), its own agent's only. Absent where the engine doesn't say.
+   * What a long chat costs per call, unlike `tokensIn`, which sums every call.
+   */
+  contextTokens?: number;
 }
 
 /**

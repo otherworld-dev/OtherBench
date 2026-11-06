@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@otherbench/core/domain/turn.js';
 import { CLEAR_ON_ITS_OWN, contextLineOf, contextPart, NOTHING_TO_COMPACT, parseContextCommand, type ParsedCommand } from '@otherbench/core/domain/context-lines.js';
+import { HANDOVER_NO_REGENERATE, isHandoverRequest } from '@otherbench/core/domain/handover.js';
 import type { Part } from '@otherbench/core/types/messages.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
@@ -359,6 +360,7 @@ export function turnsRoutes(container: Container): Hono {
     }
     const parent = message.parentId ? container.store.messages.get(message.parentId) : null;
     if (parent && contextLineOf(parent)?.kind === 'compact') return c.json({ error: COMPACT_NO_REGENERATE }, 409);
+    if (parent && isHandoverRequest(parent)) return c.json({ error: HANDOVER_NO_REGENERATE }, 409);
     // With no profileId given, the reply's own profile, skipping one that has
     // since been archived: then the chat's profile, then the app default.
     const live = (id: string | null | undefined): string | null =>
