@@ -32,6 +32,7 @@ import { appMenuItems, chatMenuItems, groupSortItem, projectMenuItems } from './
 import {
   AGE_BUCKET_LABELS,
   allGroups,
+  appSiblings,
   bucketRuns,
   buildCodeSidebar,
   buildSidebar,
@@ -40,9 +41,12 @@ import {
   liveApps,
   moveProjectPatches,
   moveTarget,
+  placeAppPatches,
   placeChatPatches,
   placeProjectPatches,
   projectSiblings,
+  shownAppSiblings,
+  sidebarAppBeforeId,
   type CodeSidebarGroup,
   type SidebarGroup,
 } from './sidebar/model.js';
@@ -94,7 +98,9 @@ interface Section {
  * Pinned section and no reordering by hand: a pinned app chat leads its group.
  * Only open apps are listed (plan 2026-11-04-open-apps), under an All apps
  * entry that opens the page holding every app, where apps are opened, filed in
- * folders and ordered. A heading's × (or its menu's Close app) closes an app,
+ * folders and ordered. An app's heading also drags (or its menu's Move up /
+ * Move down steps it) past the shown apps of its own folder, leaving closed
+ * ones where they are. A heading's × (or its menu's Close app) closes an app,
  * with Undo in a toast; a closed app still shows while one of its chats is on a
  * card or running, saying so under its heading, and a search finds chats in
  * closed apps too.
@@ -129,6 +135,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const openAllApps = useOtherBenchStore((s) => s.openAllApps);
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
   const upsertApp = useOtherBenchStore((s) => s.upsertApp);
+  const setApps = useOtherBenchStore((s) => s.setApps);
   const removeApp = useOtherBenchStore((s) => s.removeApp);
   const codeMode = mode === 'code';
   const collapsedGroups = useCollapsedGroups();
@@ -156,6 +163,9 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // The project heading being dragged, and the sibling heading it's over: where a drop would place it.
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [projectDrop, setProjectDrop] = useState<{ projectId: string; position: DropPosition } | null>(null);
+  // Likewise an app's heading in Code mode, among the shown apps beside it.
+  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
+  const [appDrop, setAppDrop] = useState<{ appId: string; position: DropPosition } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -190,6 +200,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   // A closed app still shows while one of its chats is on a card or running (plan 2026-11-04-open-apps).
   const live = useMemo(() => liveApps(chats, (c) => chatStatus(c, activity, now)), [chats, activity, now]);
   const codeSidebar = useMemo(() => buildCodeSidebar(chats, apps, appFolders, matches, live), [chats, apps, appFolders, matches, live]);
+  const shownAppIds = useMemo(() => new Set(codeSidebar.groups.flatMap((g) => (g.app ? [g.app.id] : []))), [codeSidebar]);
   const archived = codeMode ? codeSidebar.archived : sidebar.archived;
   const otherMode = codeMode ? codeSidebar.otherMode : sidebar.otherMode;
   const menuApp = appMenu ? (apps.find((a) => a.id === appMenu.appId) ?? null) : null;
@@ -738,6 +749,50 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     focusLater(headingSelector(app.id), LIST_SELECTOR);
   }
 
+  /** Sends app order PATCHes one by one; on a failure says so and shows the server's apps, since part may have landed. */
+  async function sendAppOrder(patches: { id: string; sortOrder: number }[], focusId: string): Promise<void> {
+    setError(null);
+    try {
+      for (const { id, sortOrder } of patches) upsertApp(await api.apps.patch(id, { sortOrder }));
+    } catch (err) {
+      console.error('[otherbench-web] failed to reorder apps:', err);
+      setError(errorText(err, "Couldn't reorder the apps"));
+      try {
+        setApps(await api.apps.list());
+      } catch {
+        // the error line above already says something went wrong.
+      }
+    }
+    focusLater(headingSelector(focusId), LIST_SELECTOR);
+  }
+
+  /**
+   * Puts an app just above or below shown app `targetId` of the same folder (a heading drop, or Move up / Move down).
+   * Its closed siblings keep their order; filing into another folder stays on the All apps page.
+   */
+  async function placeApp(movingId: string, targetId: string, position: DropPosition): Promise<void> {
+    const beforeId = sidebarAppBeforeId(apps, appFolders, movingId, targetId, position);
+    if (beforeId === undefined) return;
+    const patches = placeAppPatches(appSiblings(apps, movingId, appFolders), movingId, beforeId);
+    if (patches.length > 0) await sendAppOrder(patches, movingId);
+  }
+
+  /** The app's place among the shown apps beside it, for the menu's Move up / Move down; null while searching. */
+  function appPlace(appId: string): { index: number; count: number } | null {
+    if (searching) return null;
+    const shown = shownAppSiblings(apps, appId, appFolders, shownAppIds);
+    const index = shown.findIndex((a) => a.id === appId);
+    return index === -1 ? null : { index, count: shown.length };
+  }
+
+  /** Steps an app past the shown app above (-1) or below (+1) it. */
+  async function moveApp(appId: string, dir: -1 | 1): Promise<void> {
+    const shown = shownAppSiblings(apps, appId, appFolders, shownAppIds);
+    const index = shown.findIndex((a) => a.id === appId);
+    const neighbour = index === -1 ? undefined : shown[index + dir];
+    if (neighbour) await placeApp(appId, neighbour.id, dir === -1 ? 'before' : 'after');
+  }
+
   /** The close toast's Undo. Says so in a toast of its own if it fails: the sidebar's error line may be long gone. */
   async function reopenApp(appId: string, name: string): Promise<void> {
     try {
@@ -897,12 +952,31 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   }
 
   /**
-   * The app-only props of a Code mode group heading. Its heading doesn't drag: apps are ordered and filed on the All
-   * apps page. An open app's heading has a × that closes it; a closed one (shown because a chat is live, or found by a
-   * search) has none.
+   * The app-only props of a Code mode group heading. Its heading drags among the shown apps of its folder (or the top
+   * level), as a project heading does among its siblings; filing into folders is on the All apps page. An open app's
+   * heading has a × that closes it; a closed one (shown because a chat is live, or found by a search) has none.
    */
   function appGroupProps(app: App): Partial<ProjectGroupProps> {
+    const target = draggingAppId !== null && draggingAppId !== app.id && shownAppSiblings(apps, app.id, appFolders, shownAppIds).some((a) => a.id === draggingAppId);
     return {
+      reorder: {
+        draggable: !searching,
+        onDragStart: () => setDraggingAppId(app.id),
+        onDragEnd: () => {
+          setDraggingAppId(null);
+          setAppDrop(null);
+        },
+        target,
+        indicator: target && appDrop?.appId === app.id ? appDrop.position : null,
+        onOver: (position) => setAppDrop({ appId: app.id, position }),
+        onLeave: () => setAppDrop((current) => (current?.appId === app.id ? null : current)),
+        onDrop: (position) => {
+          const moving = draggingAppId;
+          setDraggingAppId(null);
+          setAppDrop(null);
+          if (moving) void placeApp(moving, app.id, position);
+        },
+      },
       ...(app.open ? { onClose: () => void closeApp(app), closeLabel: `Close ${app.name}` } : {}),
       onOpen: () => openAppHome(app.id),
       openTitle: "Open the app's home",
@@ -1253,9 +1327,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               edit: () => openAppPage({ mode: 'edit', appId: menuApp.id, returnFocus: headingSelector(menuApp.id) }),
               close: () => void closeApp(menuApp),
               keep: () => void keepApp(menuApp),
+              move: (dir) => void moveApp(menuApp.id, dir),
               requestDelete: () => setDeletingAppId(menuApp.id),
             },
-            menuApp.open
+            menuApp.open,
+            appPlace(menuApp.id)
           )}
           onClose={(reason) => {
             setAppMenu(null);
