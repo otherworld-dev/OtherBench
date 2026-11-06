@@ -196,6 +196,12 @@ export interface Profile {
   archivedAt: number | null;
   /** Whether chats on this profile get global memory (spec 2026-10-08-global-memory-design). Absent means on. */
   useGlobalMemory?: boolean;
+  /**
+   * Websites this profile's browser may use without a card, in chats, scheduled runs and the chat's sub-agents
+   * (`example.com` exactly, or `*.example.com` for its subdomains, not the name itself). Canonical, checked by
+   * `parseAllowedSite` (browser-sites.ts). A grant source the broker consults; never a way past the proxy. Absent = none.
+   */
+  browserAllowedSites?: string[];
 }
 
 export interface ResolvedProfile extends Profile {

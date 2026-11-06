@@ -616,6 +616,25 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByText(/example\.com/)).toBeInTheDocument();
   });
 
+  it("says the profile's browser site list applies, above the chat's grants, only while the browser is on and the list holds something", async () => {
+    const browsing = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
+    const { unmount } = render(
+      <Inspector chat={makeChat()} profile={makeProfile({ toolPolicy: browsing, browserAllowedSites: ['example.com', '*.example.org'] })} collapsed={false} onToggleCollapsed={vi.fn()} />
+    );
+    const note = within(grantsSection()).getByTestId('profile-site-list');
+    expect(note).toHaveTextContent('The profile’s site list also applies: the browser uses these sites without asking, scheduled runs included.');
+    expect(note).toHaveTextContent('example.com, *.example.org');
+    // It shows beside an empty grant list too: the list is a grant of its own.
+    expect(await within(grantsSection()).findByText('No grants issued in this chat yet.')).toBeInTheDocument();
+    unmount();
+
+    for (const profile of [makeProfile({ toolPolicy: browsing, browserAllowedSites: [] }), makeProfile({ toolPolicy: { ...browsing, browser: false }, browserAllowedSites: ['example.com'] }), makeProfile()]) {
+      const r = render(<Inspector chat={makeChat()} profile={profile} collapsed={false} onToggleCollapsed={vi.fn()} />);
+      expect(within(grantsSection()).queryByTestId('profile-site-list')).toBeNull();
+      r.unmount();
+    }
+  });
+
   it('shows the program a computer-use grant is for, in full, so two apps can be told apart', async () => {
     mockedGrantsList.mockResolvedValue([
       { id: 'g5', chatId: null, profileId: null, toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE' }, expiresAt: null },
@@ -711,6 +730,13 @@ describe('Inspector audit trail', () => {
     expect(within(within(list).getByTestId('audit-r1')).getByTestId('audit-decided-on')).toHaveTextContent('on Laptop');
     expect(within(within(list).getByTestId('audit-h1')).queryByTestId('audit-decided-on')).toBeNull();
     useOtherBenchStore.setState({ machines: null });
+  });
+
+  it('labels a call the profile site list allowed, with the entry in the tooltip', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 's1', chatId: 'chat-1', messageId: 'm1', toolName: 'browser', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'site_list:*.example.org', createdAt: 1000 }]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(within(list).getByTestId('audit-s1')).getByText('profile site list')).toHaveAttribute('title', 'site_list:*.example.org');
   });
 
   it('labels a live artifact call', async () => {

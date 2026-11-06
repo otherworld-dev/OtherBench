@@ -455,6 +455,28 @@ describe('sync (Task 50)', () => {
     expect(b.store.globalMemory.versions()).toHaveLength(1);
   });
 
+  it("a profile's browser site list travels with the profile, the later edit winning, and an empty list stays empty", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    s.both();
+    expect(b.store.profiles.get('p1')!.browserAllowedSites).toEqual([]);
+
+    a.store.profiles.update('p1', { browserAllowedSites: ['example.com', '*.example.org'] });
+    s.both();
+    for (const n of [a, b]) expect(n.store.profiles.get('p1')!.browserAllowedSites).toEqual(['example.com', '*.example.org']);
+
+    // Profiles merge as whole rows: the newer edit, here on the other machine, stands on both.
+    b.store.profiles.update('p1', { browserAllowedSites: ['docs.example.net'] });
+    s.both();
+    for (const n of [a, b]) expect(n.store.profiles.get('p1')!.browserAllowedSites).toEqual(['docs.example.net']);
+
+    b.store.profiles.update('p1', { browserAllowedSites: [] });
+    s.both();
+    for (const n of [a, b]) expect(n.store.profiles.get('p1')!.browserAllowedSites).toEqual([]);
+  });
+
   it("app notes travel with their app; the mirror time and the history stay home, and a bad row is refused", () => {
     const a = node('a');
     const b = node('b');

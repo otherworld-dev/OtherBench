@@ -132,6 +132,29 @@ describe('POST /api/profiles', () => {
     expect((await post({ ...base, browserBlockedHosts: Array.from({ length: 200 }, (_, i) => `s${i}.test`) })).status).toBe(201);
   });
 
+  it("keeps the browser's site list, canonical, empty when left out, and refuses a bad entry naming it", async () => {
+    const send = (method: 'POST' | 'PATCH', path: string, body: unknown) =>
+      app().request(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const plain = await send('POST', '/api/profiles', basicProfileBody);
+    const { id, browserAllowedSites } = (await plain.json()) as { id: string; browserAllowedSites: unknown };
+    expect(browserAllowedSites).toEqual([]);
+
+    const patched = await send('PATCH', `/api/profiles/${id}`, { browserAllowedSites: [' Example.COM ', '*.Example.org', 'example.com', 'bücher.example'] });
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { browserAllowedSites: unknown }).browserAllowedSites).toEqual(['example.com', '*.example.org', 'xn--bcher-kva.example']);
+    // A PATCH that leaves it out keeps it.
+    const renamed = await send('PATCH', `/api/profiles/${id}`, { name: 'Renamed' });
+    expect(((await renamed.json()) as { browserAllowedSites: unknown }).browserAllowedSites).toEqual(['example.com', '*.example.org', 'xn--bcher-kva.example']);
+
+    for (const bad of ['https://example.com', 'example.com/path', 'example.com:443', '*.com', '*.co.uk', 'com', '8.8.8.8', '::1', 'localhost', '*.localhost', 'printer.local', 'a.*.example.com', '']) {
+      const res = await send('POST', '/api/profiles', { ...basicProfileBody, browserAllowedSites: [bad] });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain(`"${bad}"`);
+    }
+    expect((await send('POST', '/api/profiles', { ...basicProfileBody, browserAllowedSites: 'example.com' })).status).toBe(400);
+    expect((await send('POST', '/api/profiles', { ...basicProfileBody, browserAllowedSites: Array.from({ length: 201 }, (_, i) => `s${i}.example.com`) })).status).toBe(400);
+  });
+
   it('refuses a blocked-site entry that is not a plain hostname or IP address, naming it', async () => {
     const post = (entry: string) =>
       app().request('/api/profiles', {

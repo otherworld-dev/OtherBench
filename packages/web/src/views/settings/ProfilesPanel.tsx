@@ -113,6 +113,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [computer, setComputer] = useState(profile?.toolPolicy.computer ?? false);
   const computerUse = useComputerUseAvailable();
   const [blockedSites, setBlockedSites] = useState((profile?.toolPolicy.browserBlockedHosts ?? []).join('\n'));
+  // The browser's site list (Profile.browserAllowedSites): sites used without a card, scheduled runs included.
+  const [allowedSites, setAllowedSites] = useState((profile?.browserAllowedSites ?? []).join('\n'));
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -227,6 +229,15 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             .filter((s) => s.length > 0),
         }
       : {};
+    // Likewise only while Browser is on; left out, the server keeps the saved list.
+    const allowed: Pick<CreateProfileBody, 'browserAllowedSites'> = browser
+      ? {
+          browserAllowedSites: allowedSites
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        }
+      : {};
 
     const body: CreateProfileBody = {
       name: name.trim(),
@@ -254,6 +265,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           },
       isDefault,
       useGlobalMemory,
+      ...allowed,
     };
 
     setSaving(true);
@@ -608,6 +620,25 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         {browser && (
           <div className="mt-2 flex w-full flex-col gap-1 text-xs text-[var(--text)]">
             <p className="text-[var(--text-muted)]">The model's own browser, kept apart from your everyday one. Asks before each new website.</p>
+            <label className="flex flex-col gap-1">
+              <span>
+                Sites it may use without asking{' '}
+                <span className="text-[var(--text-muted)]">(one per line; example.com is that name only, *.example.com its subdomains but not example.com itself)</span>
+              </span>
+              <textarea
+                aria-label="Sites it may use without asking"
+                rows={3}
+                value={allowedSites}
+                onChange={(e) => setAllowedSites(e.target.value)}
+                placeholder="example.com"
+                className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 font-mono text-xs text-[var(--text)]"
+              />
+            </label>
+            <p data-testid="browser-allowed-sites-warning" className="text-[var(--warn)]">
+              The browser opens and acts on these sites without asking you first, in scheduled runs and sub-agents too. List only sites you
+              trust the model to use on its own. Local and private addresses stay refused whatever is listed. Profiles sync, so this list
+              applies on your paired machines as well.
+            </p>
             <label className="flex flex-col gap-1">
               <span>
                 Blocked sites <span className="text-[var(--text-muted)]">(one per line; each also blocks its subdomains)</span>

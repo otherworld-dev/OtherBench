@@ -40,6 +40,7 @@ import { MIGRATION_038_SCHEDULE_TIME_LIMIT } from './038-schedule-time-limit.js'
 import { MIGRATION_039_PUSH_SUBSCRIPTIONS } from './039-push-subscriptions.js';
 import { MIGRATION_040_APP_OPEN } from './040-app-open.js';
 import { MIGRATION_041_APP_NOTES } from './041-app-notes.js';
+import { MIGRATION_042_PROFILE_BROWSER_SITES } from './042-profile-browser-sites.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -86,6 +87,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_039_PUSH_SUBSCRIPTIONS,
   MIGRATION_040_APP_OPEN,
   MIGRATION_041_APP_NOTES,
+  MIGRATION_042_PROFILE_BROWSER_SITES,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

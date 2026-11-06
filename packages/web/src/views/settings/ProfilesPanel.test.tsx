@@ -361,6 +361,72 @@ describe('ProfilesPanel', () => {
     expect('browserBlockedHosts' in sent).toBe(false);
   });
 
+  it('takes the sites the browser may use without asking, with a plain warning, and sends them one per line', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Researcher');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    expect(screen.queryByLabelText('Sites it may use without asking')).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    const box = screen.getByLabelText('Sites it may use without asking');
+    expect(box).toHaveValue('');
+    // The label says what a wildcard covers, apex excluded, and the warning says it applies with nobody watching.
+    expect(screen.getByText(/\*\.example\.com its subdomains but not example\.com itself/)).toBeInTheDocument();
+    expect(screen.getByTestId('browser-allowed-sites-warning')).toHaveTextContent('without asking you first, in scheduled runs and sub-agents too');
+    expect(screen.getByTestId('browser-allowed-sites-warning')).toHaveTextContent('Local and private addresses stay refused');
+    await user.type(box, 'example.com{enter}{enter} *.example.org ');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ browserAllowedSites: ['example.com', '*.example.org'] })));
+    // The list is the profile's own field, not part of its tool policy.
+    expect('browserAllowedSites' in (mockedCreate.mock.calls[0]![0].toolPolicy as object)).toBe(false);
+  });
+
+  it("pre-fills the site list when editing, and doesn't send it once Browser is unticked", async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', browser: true }, browserAllowedSites: ['example.com', '*.example.org'] }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByLabelText('Sites it may use without asking')).toHaveValue('example.com\n*.example.org');
+
+    // With Browser unticked the box is gone and the list is left out, so the server keeps the saved one.
+    await user.type(screen.getByLabelText('Sites it may use without asking'), '{enter}https://not a host');
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    expect(screen.queryByLabelText('Sites it may use without asking')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    expect('browserAllowedSites' in mockedPatch.mock.calls[0]![1]).toBe(false);
+  });
+
+  it('sends the edited site list on save', async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', browser: true }, browserAllowedSites: ['example.com'] }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.type(screen.getByLabelText('Sites it may use without asking'), '{enter}*.example.org');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    expect(mockedPatch.mock.calls[0]![1]).toMatchObject({ browserAllowedSites: ['example.com', '*.example.org'] });
+  });
+
   it('shows why the server refused a blocked site (400), in the form', async () => {
     useOtherBenchStore.getState().setConnections([makeConnection()]);
     useOtherBenchStore.getState().setModels([makeModel()]);

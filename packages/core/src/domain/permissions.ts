@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
+import { siteListEntryFor } from './browser-sites.js';
 import { cardLine } from './card-text.js';
 import {
   actionSummary,
@@ -34,10 +35,21 @@ import { PLAN_REFUSAL } from './thread-tools.js';
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 
 export type Decision =
-  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox'; grantId?: string }
+  /** `site_list`: the profile's browser site list covers the call's website; `siteEntry` is the entry that did. */
+  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox' | 'site_list'; grantId?: string; siteEntry?: string }
   /** `plan`: refused while the reply's plan waits. `unattended`: refused because nobody is there (computer use). */
   | { kind: 'deny'; reason: string; plan?: true; unattended?: true; code?: 'not_approved' }
   | { kind: 'ask'; request: ApprovalRequest };
+
+/**
+ * How an allow is written to the audit trail: `grant:<id>` for a stored grant,
+ * `site_list:<entry>` for the profile's browser site list (the Inspector shows
+ * "profile site list"), otherwise the bare `grantedBy`.
+ */
+export function auditGrantedBy(decision: Extract<Decision, { kind: 'allow' }>): string {
+  if (decision.grantedBy === 'site_list') return `site_list:${decision.siteEntry ?? ''}`;
+  return decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy;
+}
 
 export interface PermissionBrokerOptions {
   /** Hard cap on simultaneously pending approvals; the oldest is evicted past it. Default 200. */
@@ -170,6 +182,10 @@ function isShellTool(tool: ToolSpec): boolean {
  * card under ask_on_mutate; its grants are always pinned to one `host`, by
  * the same rules as the sandbox's network grants (`alwaysConstraintFor`,
  * every-key matching, the canonical host) and never interchangeable with them.
+ * After those refusals, and before the stored grants, it consults one more
+ * grant source: the profile's site list (`Profile.browserAllowedSites`,
+ * browser-sites.ts), audited as `site_list:<entry>`. The list only skips the
+ * card; nothing it holds turns a refusal into an allow.
  *
  * Computer use (`source: 'computer'`) is refused outright in an unattended
  * run; its looking actions (`screenshot`, `cursor_position`, `wait`) skip the
@@ -289,6 +305,12 @@ export class PermissionBroker {
       if (policy.approvalMode === 'ask_on_mutate' && BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '')) {
         return { kind: 'allow', grantedBy: 'auto_read' };
       }
+      // The profile's site list: a standing grant for the websites it names,
+      // under either approval mode, attended or not. Only reached once every
+      // refusal above has passed, so it never lifts the plan gate, a blocked
+      // site or a local or private address; and the proxy never reads it.
+      const siteEntry = this.siteListEntry(stringField(args, 'host'), ctx);
+      if (siteEntry !== null) return { kind: 'allow', grantedBy: 'site_list', siteEntry };
     }
 
     // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, AskUserQuestion)
@@ -720,6 +742,17 @@ export class PermissionBroker {
     }
   }
 
+  /**
+   * The entry of the reply's profile's browser site list that covers `host`,
+   * or null. Read fresh from the store on every call, like the grants, so an
+   * edit to the list applies to the very next call. The profile is
+   * `ctx.profileId`, the one grants are matched under: for a sub-agent that is
+   * its parent reply's profile, never the one it runs as.
+   */
+  private siteListEntry(host: string | null, ctx: ToolContext): string | null {
+    return siteListEntryFor(host, this.store.profiles.get(ctx.profileId)?.browserAllowedSites ?? []);
+  }
+
   private findMatchingGrant(tool: ToolSpec, args: unknown, ctx: ToolContext): Grant | null {
     const now = Date.now();
     for (const grant of this.store.grants.list()) {
@@ -770,7 +803,7 @@ export const UNATTENDED_REASON =
   'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
   'To let it run unattended, allow it ahead of time with an Always grant. Shell commands run unattended in the sandbox ' +
   '(a profile whose shell runs there, with "Ask on changes"); a host the sandbox needs must be on that profile\'s list or have an Always grant. ' +
-  'The browser needs an Always grant for each website it opens or acts on; with "Ask on changes" it can read a page that is already open without one.';
+  'The browser needs an Always grant for each website it opens or acts on, or the website on the profile\'s site list; with "Ask on changes" it can read a page that is already open without one.';
 
 /**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go
