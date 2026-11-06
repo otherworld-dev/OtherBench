@@ -1098,7 +1098,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           {codeMode && <AllAppsEntry active={activeChatId === ALL_APPS_TAB_ID} count={apps.length} onOpen={openAllApps} />}
 
           {(needsYou.here.length > 0 || needsYou.elsewhere.length > 0) && (
-            <div className="mb-1.5" data-testid="group-needs-you">
+            // A rule under the list: its rows are copies, and without one they ran on into the groups below.
+            <div className="mb-2 border-b border-[var(--border-strong)] pb-2" data-testid="group-needs-you">
               <h2 className="label-caps flex justify-between px-2 pb-1 text-[var(--warn)]">
                 <span>Needs you</span>
                 <span className="font-normal tabular-nums">{needsYou.here.length}</span>
