@@ -63,9 +63,9 @@ describe('chatMenuItems and apps (spec 2026-10-20-code-tab-design, Goal 8)', () 
 });
 
 describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
-  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), close: vi.fn(), keep: vi.fn(), requestDelete: vi.fn() });
+  const appHandlers = () => ({ rename: vi.fn(), edit: vi.fn(), close: vi.fn(), keep: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
 
-  it('the app menu has Close app and no Move up / Move to folder…, each item calling its handler', () => {
+  it('the app menu has Close app and no Move to folder…, each item calling its handler', () => {
     const h = appHandlers();
     const items = appMenuItems(h);
     expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Close app', 'Delete…']);
@@ -76,6 +76,17 @@ describe('appMenuItems (the Code sidebar, plan 2026-11-04-open-apps)', () => {
     expect(h.close).toHaveBeenCalled();
     expect(h.requestDelete).toHaveBeenCalled();
     expect(h.keep).not.toHaveBeenCalled();
+  });
+
+  it("with the app's place among the shown apps beside it, Move up / Move down, off at either end", () => {
+    const h = appHandlers();
+    const items = appMenuItems(h, true, { index: 0, count: 2 });
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Edit…', 'Close app', 'Move up', 'Move down', 'Delete…']);
+    expect(items[3]!.disabled).toBe(true);
+    expect(items[4]!.disabled).toBe(false);
+    items[4]!.onSelect!();
+    expect(h.move).toHaveBeenCalledWith(1);
+    expect(appMenuItems(h, true, { index: 1, count: 2 })[4]!.disabled).toBe(true);
   });
 
   it('a closed app (shown because a chat is live, or found by a search) has Keep in sidebar where Close app was', () => {
