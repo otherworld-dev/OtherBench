@@ -1638,8 +1638,11 @@ LET, LAMBDA, its helpers, GROUPBY and PIVOTBY aren't supported in phase 1.
 The text that is checked is the text that is written: `formulaForFile` gives
 the exact `<f>` content, and the renderer rewrites each `<f>` from it because
 the library alters some characters (the .xlsx test reads it back and compares).
-Formulas aren't calculated by OtherBench; the workbook asks Excel to calculate on
-open. An attached file's text is the user's, fenced, and may carry
+The workbook asks Excel to calculate everything on open. Formulas in a small
+subset also get a cached value (`office/formula-values.ts`, see the Office
+bullet under Known gaps) so viewers that don't calculate show something; the
+evaluator only reads the spec and its tokens come from core's `formulaTokens`,
+so it calculates the text that is written. An attached file's text is the user's, fenced, and may carry
 instructions the model follows: the approval gate is unchanged.
 
 **Live artifacts can read MCP data while a page is open** (spec
@@ -2766,15 +2769,47 @@ this on startup.
   2026-10-12, with throwaway files and not the final writers, had Excel 16
   compute SUM, IF with `<`, `&` and quotes, and a reference into a sheet name
   with a space; Word showed Heading 1 and a table; PowerPoint opened a deck.
-  The spreadsheet writes formulas with no cached values and asks Excel to
-  calculate on open, so a downloaded file opens in Protected View, where Excel
-  doesn't recalculate, and viewers that don't calculate (Outlook, Explorer or
-  Finder preview panes, phone viewers, Drive previews) show formula cells
-  empty or 0. By hand, once: ask a Claude Code profile and an API profile for a
+  The spreadsheet asks Excel to calculate on open (`fullCalcOnLoad`), and a
+  downloaded file opens in Protected View, where Excel doesn't recalculate, as
+  do viewers that don't calculate (Outlook, Explorer or Finder preview panes,
+  phone viewers, Drive previews). Those show a formula's cached value, which
+  `server/src/office/formula-values.ts` writes for a subset (`<v>`, with
+  `t="b"` for TRUE/FALSE and `t="str"` for text):
+  - Cached: number, text and TRUE/FALSE literals; `+ - * / ^ %`, unary `+`
+    and `-`, `&`, `= <> < <= > >=`; references to cells, ranges, whole
+    columns and rows, on the same or another sheet, `$` or not, quoted or
+    non-ASCII sheet names; dates in cells (as their serial numbers); SUM,
+    AVERAGE, MIN, MAX, COUNT, COUNTA, IF, AND, OR, NOT, ROUND, ROUNDUP,
+    ROUNDDOWN and ABS, with Excel's rules for empty cells, text and TRUE/FALSE
+    in a reference against typed arguments, and IF working out only the
+    branch it takes. Numbers are written with 15 significant digits, as Excel
+    shows them, so `=0.1+0.2` is written 0.3.
+  - Still not cached (as before, the cell shows empty or 0 until Excel
+    calculates): every other function (VLOOKUP, XLOOKUP, TEXT, LEN, DATE and
+    so on), array constants, the intersection operator, and anything that
+    uses them; results that are errors (#DIV/0!, #VALUE!, #N/A); circular
+    references and anything that depends on one, a branch IF doesn't take
+    included; text in arithmetic (`="3"+1`, which Excel converts by locale);
+    ordering text that isn't plain letters and digits, and comparing non-ASCII
+    text that isn't identical; numbers that compare, round or turn into text
+    differently at full precision and at 15 digits (`=0.1+0.2=0.3`,
+    `ROUNDUP(0.1+0.2,1)`), numbers below 0.001 or from 10^15 in `&`, and sums
+    that cancel to almost nothing (`=0.5-0.4-0.1`, which Excel may show as
+    0); text with spaces at its ends or a line break. A workbook that uses
+    OFFSET, or `:` next to a function (`A1:INDEX(...)`), gets no cached values
+    at all, as its references can't be known from the text, and so does one
+    whose dependencies come to more than two million; past ten million cells
+    read while calculating, the formulas still to do are left uncached.
+  - The rules follow Microsoft's documentation and Excel's known behaviour
+    but haven't been checked against Excel itself: after Enable Editing, the
+    values Excel calculates should be the cached ones.
+
+  By hand, once: ask a Claude Code profile and an API profile for a
   one-page memo, a budget with a formula on a second sheet that refers to the
   first, and a five-slide deck; download each and open it.
-  - Excel: click Enable Editing first; before that, formula cells may look
-    empty or 0 (note what a preview pane shows). No repair prompt; formulas show values, not `#NAME?` or `#REF!`,
+  - Excel: before Enable Editing, and in a preview pane, the cached formulas
+    (the budget's SUM and cross-sheet reference) should show their values and
+    the rest may look empty or 0; then click Enable Editing. No repair prompt; formulas show values, not `#NAME?` or `#REF!`,
     including newer functions (XLOOKUP, FILTER, SORT and the ten whose
     `_xlfn.` prefix was set from memory, not Microsoft's list: XMATCH,
     VALUETOTEXT, ARRAYTOTEXT, PERCENTOF, TRIMRANGE, REGEXTEST, REGEXEXTRACT,

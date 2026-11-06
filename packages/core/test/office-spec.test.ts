@@ -4,6 +4,7 @@ import {
   checkOfficeContent,
   columnName,
   formulaForFile,
+  formulaTokens,
   isOfficeKind,
   MAX_DOCUMENT_CHARS,
   MAX_DOCUMENT_INDENT,
@@ -472,6 +473,27 @@ describe('formulaForFile', () => {
       expect(unprefixed(written).length, f).toBe(unprefixed(f.slice(1)).length);
     }
   });
+});
+
+describe('formulaTokens', () => {
+  it("gives the tokens of formulaForFile's text, calls with their file names and references with their sheet", () => {
+    const tokens = formulaTokens("=sum('Q3''s costs'!B4, xlookup(1,A1:A3,B1:B3))", NAMES)!;
+    expect(tokens.map((t) => t.text).join('')).toBe(text("=sum('Q3''s costs'!B4, xlookup(1,A1:A3,B1:B3))"));
+    expect(tokens.filter((t) => t.kind === 'call').map((t) => t.text)).toEqual(['SUM(', '_xlfn.XLOOKUP(']);
+    expect(tokens.find((t) => t.kind === 'reference')).toEqual({ kind: 'reference', text: "'Q3''s costs'!B4", sheet: "'Q3''s costs'!" });
+    expect(tokens.filter((t) => t.kind === 'space')).toHaveLength(1);
+  });
+
+  it('gives null for a formula formulaForFile refuses', () => {
+    expect(formulaTokens('=SUM(', NAMES)).toBeNull();
+    expect(formulaTokens('=WEBSERVICE("x")', NAMES)).toBeNull();
+  });
+
+  function text(formula: string): string {
+    const written = formulaForFile(formula, NAMES);
+    if (!written.ok) throw new Error(written.error);
+    return written.text;
+  }
 });
 
 describe('office-spec helpers', () => {

@@ -364,7 +364,7 @@ function bareNameProblem(word: string, text: string, end: number, sheetNames: Re
   return `uses the name "${shorten(word)}", which isn't a cell reference, a function call, TRUE or FALSE (OtherBench's spreadsheets have no named ranges)`;
 }
 
-type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator';
+export type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator';
 
 /** One token of a formula: what it is, where it starts, its text as given, and its text as written to the file (only a call's differs). */
 interface Token {
@@ -576,11 +576,31 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
  * ignoring case.
  */
 export function formulaForFile(formula: string, sheetNames: ReadonlySet<string>): { ok: true; text: string } | { ok: false; error: string } {
-  return writeFormula(formula, new Set([...sheetNames].map((name) => name.toLowerCase())));
+  const written = writeFormula(formula, new Set([...sheetNames].map((name) => name.toLowerCase())));
+  return written.ok ? { ok: true, text: written.text } : written;
+}
+
+/** One token of a formula's file text, as `formulaTokens` gives it. */
+export interface FormulaToken {
+  kind: TokenKind;
+  /** The token's text in the file: a call is its canonical name with Excel's prefix, any whitespace, and "(". */
+  text: string;
+  /** For a sheet-qualified reference, the sheet part as written, "!" included. */
+  sheet?: string;
+}
+
+/**
+ * The tokens of exactly the text formulaForFile writes for `formula`, or null
+ * when it can't be written. The .xlsx writer's evaluator reads these, so what
+ * it calculates is what the file holds.
+ */
+export function formulaTokens(formula: string, sheetNames: ReadonlySet<string>): FormulaToken[] | null {
+  const written = writeFormula(formula, new Set([...sheetNames].map((name) => name.toLowerCase())));
+  return written.ok ? written.tokens.map((t) => ({ kind: t.kind, text: t.out, ...(t.sheet !== undefined ? { sheet: t.sheet } : {}) })) : null;
 }
 
 /** formulaForFile with `lowerNames` already lower-cased, so parseSpreadsheet doesn't redo it for every cell. */
-function writeFormula(formula: string, lowerNames: ReadonlySet<string>): { ok: true; text: string } | { ok: false; error: string } {
+function writeFormula(formula: string, lowerNames: ReadonlySet<string>): { ok: true; text: string; tokens: Token[] } | { ok: false; error: string } {
   const shown = formula.startsWith('=') ? formula : `=${formula}`;
   const failed = (problem: string) => ({ ok: false as const, error: `"${shorten(shown)}" ${problem}` });
   const tokens = readFormula(shown.slice(1), lowerNames, 2);
@@ -588,9 +608,10 @@ function writeFormula(formula: string, lowerNames: ReadonlySet<string>): { ok: t
   const text = tokens.map((t) => t.out).join('');
   if (text.length > MAX_FORMULA_CHARS) return failed(`is over ${MAX_FORMULA_CHARS} characters once Excel's function prefixes are added`);
   const again = readFormula(text, lowerNames, 1);
-  const same = typeof again !== 'string' && again.length === tokens.length && again.every((t, k) => t.kind === tokens[k]!.kind && t.out === tokens[k]!.out);
-  if (!same) return failed("couldn't be written exactly as it was checked");
-  return { ok: true, text };
+  if (typeof again === 'string' || again.length !== tokens.length || !again.every((t, k) => t.kind === tokens[k]!.kind && t.out === tokens[k]!.out)) {
+    return failed("couldn't be written exactly as it was checked");
+  }
+  return { ok: true, text, tokens: again };
 }
 
 function checkFormula(formula: string, path: string, sheetNames: ReadonlySet<string>): void {
@@ -669,7 +690,7 @@ function cell(c: unknown, path: string, sheetNames: ReadonlySet<string>): Cell {
 }
 
 /** The first character in `text` that a writer would take out or that XML 1.0 can't hold, as "U+XXXX", or undefined. One scan, no backtracking. */
-function lostCharacter(text: string): string | undefined {
+export function lostCharacter(text: string): string | undefined {
   const lost = (DISCOURAGED_XML.exec(text) ?? XML_UNSAFE.exec(text))?.[0];
   return lost === undefined ? undefined : `U+${lost.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
 }
