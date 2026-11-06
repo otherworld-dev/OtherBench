@@ -447,6 +447,11 @@ export interface OtherBenchState {
   closeSchedules(): void;
   /** Bumped by every schedule event, so the overlay re-reads the list. */
   schedulesVersion: number;
+  /** Bumped by every chat-to-chat send event (spec 2026-11-06-chat-to-chat-design), so a send card re-reads its sends. */
+  chatSendsVersion: number;
+  /** The chats with sends of theirs still out: the "Waiting on chats" status. Read on connect and on every send event. */
+  waitingOnChats: string[];
+  setWaitingOnChats(chatIds: string[]): void;
   /**
    * Bumped whenever a paired machine's schedules may read differently: it said what they are, it became reachable
    * or unreachable, a machine was paired or removed, or the app stream reconnected. The overlay's section for them re-reads.

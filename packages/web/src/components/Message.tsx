@@ -19,6 +19,8 @@ import { EditDiff } from './EditDiff.js';
 import { GeneratedMedia, GenerationFailure, generationFailure, GenerationProgress, hasGeneratedMedia, isGenerationTool } from './GeneratedMedia.js';
 import { BrowserHandoverCard } from './BrowserHandoverCard.js';
 import { GenerationCard } from './GenerationCard.js';
+import { ChatLinkBadge } from './ChatLinkBadge.js';
+import { ChatSendCard } from './ChatSendCard.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { TextWithNoteOffers } from './AppNoteCards.js';
 import { hasNoteOffer } from '@otherbench/core/domain/app-notes.js';
@@ -535,8 +537,13 @@ interface RenderContext {
  * A sub-agent is a card where its part sits, with its own parts rendered inside.
  * Two or more tool groups and sub-agent cards in a row fold together into one `ActivityFold`.
  */
+/** The `message_chats` tool, by its own name or as Claude Code calls the relayed one (`mcp__otherbench_<hex>__message_chats`). */
+const CHAT_SENDS_TOOL_NAME = /^(?:mcp__otherbench_[0-9a-f]+__)?message_chats$/;
+
 function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   const { scope } = ctx;
+  // A reply's sends to other chats show as one card, whatever number of calls made them (spec 2026-11-06-chat-to-chat-design).
+  let sendCardShown = false;
   const out: { el: JSX.Element; activity?: Activity; diff?: boolean }[] = [];
   let run: ToolPart[] = [];
   let runStart = 0;
@@ -604,6 +611,14 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
         // The reason stays visible outside the fold; the full result stays inside it.
         const failure = generationFailure(p.result);
         if (failure) addCard(<GenerationFailure key={`failure-${p.id}`} failure={failure} />);
+      }
+      if (p.type === 'tool-result' && !p.isError && CHAT_SENDS_TOOL_NAME.test(p.name) && scope && !sendCardShown) {
+        sendCardShown = true;
+        addCard(
+          <div key={`chat-sends-${p.id}`} data-testid="chat-send-card-slot">
+            <ChatSendCard chatId={scope.chatId} fromMessageId={scope.messageId} />
+          </div>
+        );
       }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
@@ -939,6 +954,9 @@ export function Message({
           </span>
         )}
       </div>
+
+      {/* A message another chat's agent wrote: which chat sent it, or which chats replied. */}
+      {isUser && !editing && message.parts.map((p, i) => (p.type === 'chat-link' ? <ChatLinkBadge key={`chat-link-${i}`} part={p} /> : null))}
 
       {isUser && editing ? (
         <MessageEditor message={message} editing={editing} />

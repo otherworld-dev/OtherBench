@@ -25,6 +25,12 @@ function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
 describe('ApprovalPrompt', () => {
   afterEach(cleanup);
 
+  it('offers no "Always" for messaging other chats: it is asked once per chat', () => {
+    render(<ApprovalPrompt request={request({ toolName: 'message_chats', source: 'chats', risk: 'execute', summary: 'Let this chat send work to other chats' })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-chat')).toBeInTheDocument();
+    expect(screen.queryByTestId('approval-always')).not.toBeInTheDocument();
+  });
+
   it("names the sub-agent whose tool call is asking", () => {
     render(<ApprovalPrompt request={request({ subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p-main' } })} onResolve={vi.fn()} />);
     expect(screen.getByTestId('approval-subagent')).toHaveTextContent(/^Sub-agent: First helper$/);

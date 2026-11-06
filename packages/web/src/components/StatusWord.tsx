@@ -12,6 +12,7 @@ const STATUS_WORDS: Record<ChatStatus, string> = {
   failed: 'Failed',
   'your-turn': 'Your turn',
   working: 'Replying',
+  'waiting-chats': 'Waiting on chats',
   background: 'Background',
 };
 
@@ -26,6 +27,7 @@ const STATUS_TOOLTIPS: Record<ChatStatus, string> = {
   failed: 'The reply failed',
   'your-turn': 'Finished: over to you',
   working: 'Writing a reply',
+  'waiting-chats': 'Sent work to other chats: carries on when they reply',
   background: 'Background tasks are running',
 };
 
@@ -43,6 +45,7 @@ const STATUS_STYLES: Record<ChatStatus, string> = {
   failed: `${PILL} bg-[var(--danger)] text-[var(--bg)]`,
   'your-turn': `${PILL} text-[var(--warn)] ring-1 ring-inset ring-[var(--warn)]`,
   working: 'text-[var(--accent)]',
+  'waiting-chats': 'text-[var(--accent)]',
   background: 'text-[var(--text-muted)]',
 };
 

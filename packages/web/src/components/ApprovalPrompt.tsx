@@ -253,15 +253,18 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
             >
               {labels.chat}
             </button>
-            <button
-              type="button"
-              data-testid="approval-always"
-              disabled={pending}
-              onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
-              className="btn px-2 py-1"
-            >
-              {labels.always}
-            </button>
+            {/* Messaging other chats is asked once per chat (spec 2026-11-06-chat-to-chat-design): no "Always". */}
+            {request.source !== 'chats' && (
+              <button
+                type="button"
+                data-testid="approval-always"
+                disabled={pending}
+                onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
+                className="btn px-2 py-1"
+              >
+                {labels.always}
+              </button>
+            )}
           </>
         )}
       </div>

@@ -92,6 +92,8 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
       case 'context':
       case 'image':
       case 'file':
+      // Only ever on a user message (spec 2026-11-06-chat-to-chat-design), which is never streamed.
+      case 'chat-link':
         break;
     }
   }

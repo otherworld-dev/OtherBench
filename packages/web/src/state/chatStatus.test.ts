@@ -31,6 +31,17 @@ const finished = (over: Partial<Chat> = {}): Pick<Chat, 'id' | 'archivedAt' | 'd
   id: 'c', archivedAt: null, dealtWithAt: null, head: { chatId: 'c', role: 'assistant', status: 'complete', createdAt: NOW - 60_000 }, ...over,
 });
 
+describe('chatStatus: waiting on other chats', () => {
+  it('says a chat whose sends are still out is waiting on chats, which is neither needs-you nor live', () => {
+    const waiting = activity({ waitingChats: new Set(['c']) });
+    expect(chatStatus(finished(), waiting, NOW)).toBe('waiting-chats');
+    expect(isNeedsYou('waiting-chats')).toBe(false);
+    expect(isLive('waiting-chats')).toBeNull();
+    // A card or a reply running still says so first.
+    expect(chatStatus(finished(), activity({ waitingChats: new Set(['c']), working: new Set(['c']) }), NOW)).toBe('working');
+  });
+});
+
 describe('chatStatus', () => {
   it("is the user's turn with background tasks running when the reply asks them something, until it's ticked off", () => {
     const asking = finished({ head: { chatId: 'c', role: 'assistant', status: 'complete', createdAt: NOW - 60_000, asks: true } });

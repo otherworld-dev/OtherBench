@@ -67,8 +67,8 @@ beforeEach(() => {
 
 describe('chat-to-chat routes', () => {
   it('GET /api/chats/:id/sends lists the sends from and to a chat, newest first', async () => {
-    row('s1', { createdAt: 1 } as never);
-    row('s2', { fromChatId: 'B', toChatId: 'A', createdAt: 2 } as never);
+    row('s1', { createdAt: 1 });
+    row('s2', { fromChatId: 'B', toChatId: 'A', createdAt: 2 });
     const res = await call('/api/chats/A/sends');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sends: ChatSend[] };

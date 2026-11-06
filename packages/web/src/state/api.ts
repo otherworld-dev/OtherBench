@@ -1,4 +1,4 @@
-import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, AppNotesVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { App, AppFolder, AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, ChatSend, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, AppNotesVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { CheckpointLoader, MediaWorkflow } from '@otherbench/core/domain/media-workflows.js';
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
@@ -978,6 +978,16 @@ export const api = {
   usage: {
     /** Omit `chatId` for the global (every-chat) rollup the usage/pricing settings view shows. */
     get: (chatId?: string) => request<UsageRollup>(`/usage${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''}`),
+  },
+
+  /** Chats that message each other (spec 2026-11-06-chat-to-chat-design): local to the server machine. */
+  chatSends: {
+    /** Every send from or to the chat, newest first. */
+    forChat: (chatId: string) => request<{ sends: ChatSend[] }>(`/chats/${encodeURIComponent(chatId)}/sends`),
+    /** The chats with sends of theirs still out. */
+    waiting: () => request<{ chatIds: string[] }>('/chat-sends/waiting'),
+    /** The send card's Stop: everything that reply sent stops, and it doesn't carry on. */
+    stop: (fromMessageId: string) => post<{ sends: ChatSend[] }>(`/chat-sends/${encodeURIComponent(fromMessageId)}/stop`),
   },
 
   /** Scheduled tasks: local to the server machine. Run now answers 409 with a reason when it can't start. */

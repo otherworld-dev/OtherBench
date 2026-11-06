@@ -42,6 +42,14 @@ export function refreshAfterSync(): void {
     .catch((err: unknown) => console.error('[otherbench-web] failed to reload after a sync:', err));
 }
 
+/** The chats with sends still out (spec 2026-11-06-chat-to-chat-design), for their status word. */
+function refreshWaitingOnChats(): void {
+  api.chatSends
+    .waiting()
+    .then(({ chatIds }) => useOtherBenchStore.getState().setWaitingOnChats(chatIds))
+    .catch((err: unknown) => console.error('[otherbench-web] failed to read the chats waiting on others:', err));
+}
+
 let readingApps = false;
 let readAppsAgain = false;
 
@@ -114,12 +122,14 @@ export function useAppEvents(): void {
         // And what paired machines said meanwhile (replies running, cards waiting, a session controlling one): the
         // `peer-activity` events that would have re-read it may have been missed too.
         refreshMachines();
+        refreshWaitingOnChats();
       },
       onEvent: (event) => {
         applyAppEvent(event);
         emitAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
         if (event.type === 'apps-changed') refreshApps();
+        if (event.type === 'chat-sends-changed') refreshWaitingOnChats();
         if (event.type === 'settings-changed') refreshFeatures();
         if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[otherbench-web] failed to show a notification:', err));

@@ -1038,3 +1038,28 @@ describe('Message user notes', () => {
     });
   });
 });
+
+describe('Message and chats that message each other', () => {
+  afterEach(cleanup);
+
+  it('puts "From <chat>" over a message another chat sent', () => {
+    const parts: Part[] = [
+      { type: 'chat-link', kind: 'from', chats: [{ chatId: 'A', title: 'Planning' }], sendIds: ['s1'] },
+      { type: 'text', text: 'Add the button' },
+    ];
+    render(<Message message={base({ role: 'user', producedBy: null, parts })} />);
+    expect(screen.getByTestId('chat-link')).toHaveTextContent('From Planning');
+  });
+
+  it('shows the send card under a message_chats result, by its own name or as Claude Code relays it, once per reply', () => {
+    const sendCall = (id: string, name: string): Part[] => [
+      { type: 'tool-call', id, name, args: { command: 'send' } },
+      { type: 'tool-result', id, name, result: '{"sent":[]}', isError: false },
+    ];
+    const { unmount } = render(<Message message={base({ parts: [...sendCall('t1', 'message_chats'), ...sendCall('t2', 'message_chats')] })} />);
+    expect(screen.getAllByTestId('chat-send-card-slot')).toHaveLength(1);
+    unmount();
+    render(<Message message={base({ parts: sendCall('t3', 'mcp__otherbench_0123456789abcdef__message_chats') })} />);
+    expect(screen.getAllByTestId('chat-send-card-slot')).toHaveLength(1);
+  });
+});

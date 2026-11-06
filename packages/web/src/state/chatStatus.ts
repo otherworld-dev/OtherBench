@@ -12,15 +12,18 @@ export type CardStatus = 'approve' | 'answer' | 'plan' | 'generate' | 'browser' 
 
 /**
  * What a chat wants or is doing, as the word on its row: a card waits on the user, a finished reply (`your-turn`,
- * or `failed`) hasn't been answered or ticked off, a reply is being written, or only background tasks are running.
+ * or `failed`) hasn't been answered or ticked off, a reply is being written, it sent work to other chats and waits
+ * for their replies (`waiting-chats`), or only background tasks are running.
  */
-export type ChatStatus = CardStatus | 'failed' | 'your-turn' | 'working' | 'background';
+export type ChatStatus = CardStatus | 'failed' | 'your-turn' | 'working' | 'waiting-chats' | 'background';
 
 /** The chats with a card pending (and what it asks), with a reply running, and with background tasks running. */
 export interface ChatActivity {
   waiting: ReadonlyMap<string, CardStatus>;
   working: ReadonlySet<string>;
   background: ReadonlySet<string>;
+  /** The chats waiting on work they sent to other chats (spec 2026-11-06-chat-to-chat-design). */
+  waitingChats?: ReadonlySet<string>;
   /** Since when each chat in `waiting` has waited on its first card, where known: the Needs you order. */
   since?: ReadonlyMap<string, number>;
 }
@@ -40,6 +43,8 @@ export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' 
   const card = activity.waiting.get(chat.id);
   if (card) return card;
   if (activity.working.has(chat.id)) return 'working';
+  // Its replies come back by themselves, so it isn't the user's turn yet.
+  if (activity.waitingChats?.has(chat.id)) return 'waiting-chats';
   const background = activity.background.has(chat.id);
   if (!chatNeedsYou(chat, chat.head ?? null, false, now - CHAT_NEED_WINDOW_MS, background)) return background ? 'background' : null;
   return chat.head?.status === 'error' ? 'failed' : 'your-turn';
@@ -47,7 +52,7 @@ export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' 
 
 /** Whether a status means the chat has stopped until the user acts. */
 export function isNeedsYou(status: ChatStatus | null): boolean {
-  return status !== null && status !== 'working' && status !== 'background';
+  return status !== null && status !== 'working' && status !== 'background' && status !== 'waiting-chats';
 }
 
 /** A chat stopped on a card: only answering it clears it, so it has no tick (the reply it holds up would land after the tick). */
@@ -99,6 +104,8 @@ export function useChatActivity(): ChatActivity {
   const running = useOtherBenchStore((s) => s.appRunningTurns);
   const machines = useOtherBenchStore((s) => s.machines);
   const backgroundChats = useOtherBenchStore((s) => s.appBackgroundChats);
+  const waitingOnChats = useOtherBenchStore((s) => s.waitingOnChats);
+  const waitingChats = useMemo(() => new Set(waitingOnChats), [waitingOnChats]);
   const waiting = useMemo(() => {
     const cards = new Map<string, CardStatus>();
     for (const id of chatsWaitingElsewhere(machines)) cards.set(id, 'waiting');
@@ -112,7 +119,7 @@ export function useChatActivity(): ChatActivity {
     for (const p of Object.values(pending)) if (p.at !== undefined) first.set(p.chatId, Math.min(first.get(p.chatId) ?? p.at, p.at));
     return first;
   }, [pending, machines]);
-  return useMemo(() => ({ waiting, working, background, since }), [waiting, working, background, since]);
+  return useMemo(() => ({ waiting, working, background, waitingChats, since }), [waiting, working, background, waitingChats, since]);
 }
 
 const CARD_STATUS: Record<NonNullable<PendingApprovalSummary['kind']> | 'tool', CardStatus> = {

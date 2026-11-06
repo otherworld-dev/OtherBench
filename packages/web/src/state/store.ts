@@ -403,6 +403,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         case 'schedule-run-started':
         case 'schedule-run-finished':
           return { schedulesVersion: state.schedulesVersion + 1 };
+        case 'chat-sends-changed':
+          return { chatSendsVersion: state.chatSendsVersion + 1 };
         case 'peer-schedules':
         case 'peer-status':
         case 'peers-changed':
@@ -873,6 +875,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
   closeSchedules: () => set({ schedulesPage: null }),
   schedulesVersion: 0,
+  chatSendsVersion: 0,
+  waitingOnChats: [],
+  setWaitingOnChats: (chatIds) => set({ waitingOnChats: chatIds }),
   peerSchedulesVersion: 0,
 }));
 

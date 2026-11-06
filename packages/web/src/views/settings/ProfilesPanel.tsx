@@ -83,6 +83,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [artifacts, setArtifacts] = useState(profile?.toolPolicy.artifacts ?? true);
   // Recall (spec 2026-10-09-recall-design): on unless the profile turned it off.
   const [recall, setRecall] = useState(profile?.toolPolicy.recall ?? true);
+  // Messaging other chats (spec 2026-11-06-chat-to-chat-design): on unless the profile turned it off.
+  const [chatMessages, setChatMessages] = useState(profile?.toolPolicy.chatMessages ?? true);
+  // Written only once it is off or the profile already says, so a profile that never touched it reads as it did.
+  const chatMessagesField = !chatMessages || profile?.toolPolicy.chatMessages !== undefined ? { chatMessages } : {};
   // Where run_command runs (spec 2026-10-12-sandbox-design): this machine, or the sandbox.
   const [shellRuns, setShellRuns] = useState<ShellRuns>(profile?.toolPolicy.shellRuns ?? 'host');
   const [hostsText, setHostsText] = useState((profile?.toolPolicy.sandboxHosts ?? DEFAULT_SANDBOX_HOSTS).join('\n'));
@@ -250,7 +254,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, agentUserSettings, artifacts, recall, browser, computer, ...blocked, ...sandboxFields, ...mediaFields }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, agentUserSettings, artifacts, recall, ...chatMessagesField, browser, computer, ...blocked, ...sandboxFields, ...mediaFields }
         : {
             fs,
             shell,
@@ -258,6 +262,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             mcpServerIds,
             artifacts,
             recall,
+            ...chatMessagesField,
             browser,
             computer,
             ...blocked,
@@ -517,6 +522,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           <label className="flex items-center gap-1.5 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label="Search past chats" checked={recall} onChange={(e) => setRecall(e.target.checked)} />
             Search past chats
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title="Lets this profile's chats send work to other chats (another app's chat, say), which start on it by themselves. Asks once in each chat.">
+            <input type="checkbox" aria-label="Message other chats" checked={chatMessages} onChange={(e) => setChatMessages(e.target.checked)} />
+            Message other chats
           </label>
           {!isClaudeCode && (
             <label className="flex items-center gap-1.5 text-xs text-[var(--text)]" title={SUBAGENTS_HELP}>

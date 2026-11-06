@@ -36,7 +36,7 @@ export function chatsTool(messenger: ChatMessenger): ToolSpec {
   return {
     name: CHAT_SENDS_TOOL,
     description: CHAT_SENDS_TOOL_DESCRIPTION,
-    parameters: CHAT_SENDS_TOOL_PARAMETERS as unknown as Record<string, unknown>,
+    parameters: CHAT_SENDS_TOOL_PARAMETERS,
     risk: 'execute',
     source: 'chats',
     describeCall: async (args) => ({ args: typeof args === 'object' && args !== null && !Array.isArray(args) ? { ...(args as Record<string, unknown>) } : {}, risk: 'execute' }),
