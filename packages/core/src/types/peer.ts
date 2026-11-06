@@ -1,3 +1,5 @@
+import type { ScheduleRunStatus } from '../domain/schedule.js';
+
 /**
  * A paired machine (v2 spec §3). Stored on each side after pairing; never
  * synced. The token this machine issued to it is kept only as a hash, and
@@ -34,4 +36,50 @@ export interface PeerInfo {
   platform: string;
   /** The OtherBench build it runs (`0.2.0-beta.7`); absent from builds before the updater. */
   appVersion?: string;
+}
+
+/**
+ * One schedule as a machine tells its paired machines, on the `schedules` announcement of `/peer/events`: what a row
+ * in the Schedules view shows, and nothing else. Never the prompt, the warnings or the run in progress, and nothing a
+ * paired machine could use to run, change or stop it: schedules are read-only across machines.
+ */
+export interface PeerScheduleSummary {
+  id: string;
+  name: string;
+  /** The rule in words (`describeRule`), as the machine that holds it says it. */
+  describe: string;
+  /** Its IANA zone, the one its next run is shown in. */
+  timezone: string;
+  enabled: boolean;
+  /** Null while paused. */
+  nextRunAt: number | null;
+  /** Its stored rule couldn't be read there, so it never runs until it is edited there. */
+  invalid: boolean;
+  /** Ids only: the receiving machine names them from its own synced rows. */
+  target: { kind: 'chat'; chatId: string } | { kind: 'project'; projectId: string };
+  profileId: string;
+  /** Its runs use Claude Code's auto mode: the schedule opts in and its profile is a Claude Code one. */
+  autoMode: boolean;
+  timeLimitMinutes: number | null;
+  /** A run of it is being set up or written there now. */
+  running: boolean;
+  lastRun: { status: ScheduleRunStatus; startedAt: number; chatId: string | null } | null;
+}
+
+/** A paired machine's schedule as this machine's own UI reads it: names from this machine's synced rows, null where the row isn't here. */
+export interface PeerScheduleRow extends PeerScheduleSummary {
+  targetName: string | null;
+  profileName: string | null;
+}
+
+/**
+ * A paired machine's schedules (`GET /api/peers/schedules`). `schedules` is empty unless the machine is reachable
+ * and has said what they are (`shared`): an older build never says, and an unreachable one's last list may be stale.
+ */
+export interface PeerSchedules {
+  nodeId: string;
+  name: string;
+  status: 'unknown' | 'reachable' | 'unreachable';
+  shared: boolean;
+  schedules: PeerScheduleRow[];
 }

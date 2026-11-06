@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { shortFingerprint } from '@otherbench/core/domain/pairing.js';
 import type { Container } from '../container.js';
+import type { PeerSchedules } from '@otherbench/core/types/peer.js';
+import { namedPeerSchedules } from '../peer/schedules.js';
 import { PeerError, type PeerService } from '../peer/service.js';
 import { requireNonEmptyString } from '../validation.js';
 import { LOCATION_NAME_MAX } from './locations.js';
@@ -57,6 +59,20 @@ export function peersRoutes(container: Container): Hono {
         return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? null, versionMismatch: sync?.versionMismatch ?? null, activeChats: peers.activeChats(p.nodeId), backgroundChats: peers.backgroundChats(p.nodeId), waitingChats: peers.waitingChats(p.nodeId), waitingSince: peers.waitingSince(p.nodeId), computerSessions: peers.computerSessions(p.nodeId) };
       }),
     });
+  });
+
+  /**
+   * Each paired machine's schedules, as it last said on its `/peer/events` stream, named from this machine's synced
+   * rows: for the Schedules view, read-only. None while a machine isn't reachable, so its last list is never shown
+   * stale. Nothing here, or on the peer listener, runs or changes a schedule on another machine.
+   */
+  app.get('/schedules', (c) => {
+    const peers = service(container);
+    const out: PeerSchedules[] = peers.list().map((p) => {
+      const said = peers.schedules(p.nodeId);
+      return { nodeId: p.nodeId, name: p.name, status: peers.status(p.nodeId).status, shared: said !== null, schedules: said ? namedPeerSchedules(container.store, said) : [] };
+    });
+    return c.json(out);
   });
 
   /** Shows a code (starting the peer listener) for the other machine to enter. */

@@ -13,7 +13,9 @@ import type { MessageStatus } from './messages.js';
  * (`PeerService.activity`): the ids of the chats with a reply running, with
  * background tasks, waiting on a card (and since when), and controlling this
  * computer with their last action, whole each time; it arrives here as
- * `peer-activity`, and `GET /api/peers` carries it. Synced rows arrive by
+ * `peer-activity`, and `GET /api/peers` carries it. Its schedules go the same way as the `schedules`
+ * announcement, whole each time they change, and arrive as `peer-schedules` (`GET /api/peers/schedules`,
+ * read-only). Synced rows arrive by
  * sync (`sync-applied`). Grants, the audit trail and MCP health have no route
  * on the peer listener, so their events stay on the machine they happen on.
  */
@@ -37,6 +39,8 @@ export type AppEvent =
   | { type: 'sync-applied'; nodeId: string; changed: number }
   /** A paired machine said which of its chats have a reply running: re-read the list (#790). */
   | { type: 'peer-activity'; nodeId: string }
+  /** A paired machine said what its schedules are now (read-only here): re-read `GET /api/peers/schedules`. */
+  | { type: 'peer-schedules'; nodeId: string }
   /** A schedule was made, changed or deleted: re-read the list (spec 2026-10-12-scheduled-tasks-design). */
   | { type: 'schedules-changed' }
   /** A scheduled run's reply has started. */

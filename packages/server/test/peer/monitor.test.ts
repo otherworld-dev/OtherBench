@@ -49,9 +49,10 @@ describe('PeerMonitor', () => {
 
     pc.service.announce('changes-available', { seq: 7 });
 
-    // Its running replies come first, right after the hello (none here).
+    // Its running replies come first, right after the hello, then its schedules (none of either here).
     await expect.poll(() => heard).toEqual([
       { nodeId: 'node-PC', event: 'activity', data: { chatIds: [], backgroundChatIds: [], waitingChatIds: [], waitingSince: {}, githubLogin: null, computerSessions: [] } },
+      { nodeId: 'node-PC', event: 'schedules', data: { schedules: [] } },
       { nodeId: 'node-PC', event: 'changes-available', data: { seq: 7 } },
     ]);
   });

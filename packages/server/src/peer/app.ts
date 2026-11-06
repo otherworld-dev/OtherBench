@@ -83,6 +83,8 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     return sseStream((sink) => {
       sink.send('hello', service.info());
       sink.send('activity', service.activity());
+      // What its Schedules rows show, read-only: there is no schedules route on this listener.
+      sink.send('schedules', service.schedulesAnnouncement());
       const unregister = service.openEventStream(peer.nodeId, (event, data) => sink.send(event, data), () => sink.close());
       const keepalive = setInterval(() => sink.comment('keepalive'), deps.keepaliveMs ?? STREAM_KEEPALIVE_MS);
       return () => {
