@@ -1,38 +1,16 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, formatInZone, timeLimitText, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { formatInZone, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { api, ApiError } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { PeerSchedulesSection } from './schedules/PeerSchedules.js';
 import { ScheduleEditor } from './schedules/ScheduleEditor.js';
+import { nextRunText, STATUS_LABEL, timeLimitSuffix } from './schedules/rowText.js';
 
 /** How often the open overlay re-reads the list, on top of every schedule event. */
 export const SCHEDULES_POLL_MS = 30_000;
-
-const STATUS_LABEL: Record<ScheduleRun['status'], string> = {
-  running: 'Running',
-  complete: 'Complete',
-  error: 'Failed',
-  cancelled: 'Stopped',
-  timed_out: 'Timed out',
-  not_started: "Didn't run",
-};
-
-function untilText(at: number, now: number): string {
-  const minutes = Math.round((at - now) / 60_000);
-  if (minutes < 1) return 'in under a minute';
-  if (minutes < 60) return `in ${minutes} min`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `in ${hours} h`;
-  return `in ${Math.round(hours / 24)} days`;
-}
-
-function nextRunText(s: ScheduleView, now: number): string {
-  if (!s.enabled || s.nextRunAt === null) return 'Paused';
-  if (s.nextRunAt <= now) return 'Due now';
-  return `${formatInZone(s.nextRunAt, s.timezone, 'long')} (${s.timezone}), ${untilText(s.nextRunAt, now)}`;
-}
 
 function triggerText(run: ScheduleRun, timezone: string): string {
   if (run.trigger === 'manual') return 'By hand';
@@ -97,6 +75,7 @@ interface SchedulesViewProps {
  * The Scheduled overlay (spec 2026-10-12-scheduled-tasks-design §5): every
  * schedule on this machine, with Run now, Pause/Resume, Edit, History and
  * Delete. Re-reads the list on open, on every schedule event and every 30 s.
+ * Below them, each paired machine's schedules, read-only (`PeerSchedulesSection`).
  */
 export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Element {
   const version = useOtherBenchStore((s) => s.schedulesVersion);
@@ -223,7 +202,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                   <p className="text-[var(--text-muted)]">
                     {s.target.kind === 'chat' ? `Chat: ${s.targetName}` : `New chat each run in ${s.targetName}`} · {profileName(s.profileId)}
                     {runsInAuto(s) && ' · Auto mode'}
-                    {s.timeLimitMinutes === null ? ' · No time limit' : s.timeLimitMinutes !== DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES && ` · Time limit ${timeLimitText(s.timeLimitMinutes)}`}
+                    {timeLimitSuffix(s.timeLimitMinutes)}
                   </p>
                   <p data-testid="schedule-next">Next run: {nextRunText(s, now)}</p>
                   {s.lastRun && (
@@ -271,6 +250,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
               ))}
             </ul>
           )}
+          <PeerSchedulesSection now={now} onOpen={open} />
         </div>
       </div>
 

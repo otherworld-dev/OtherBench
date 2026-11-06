@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScheduleView } from '@otherbench/core/ports/store.js';
+import type { PeerScheduleRow, PeerSchedules } from '@otherbench/core/types/peer.js';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
 
 vi.mock('../state/api.js', () => ({
@@ -17,6 +18,7 @@ vi.mock('../state/api.js', () => ({
   api: {
     schedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), runs: vi.fn(), run: vi.fn() },
     turns: { cancel: vi.fn() },
+    peers: { schedules: vi.fn() },
   },
 }));
 
@@ -30,6 +32,7 @@ const run = vi.mocked(api.schedules.run);
 const create = vi.mocked(api.schedules.create);
 const runs = vi.mocked(api.schedules.runs);
 const cancel = vi.mocked(api.turns.cancel);
+const peerSchedules = vi.mocked(api.peers.schedules);
 
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
@@ -45,6 +48,7 @@ const connection: Connection = { id: 'conn', name: 'Mock', kind: 'mock', baseUrl
 beforeEach(() => {
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ profiles: [profile], connections: [connection] });
+  peerSchedules.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -354,6 +358,110 @@ describe('SchedulesView', () => {
         await vi.advanceTimersByTimeAsync(SCHEDULES_POLL_MS * 3);
       });
       expect(list).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("the paired machine's schedules", () => {
+    function peerRow(over: Partial<PeerScheduleRow> = {}): PeerScheduleRow {
+      return {
+        id: 'ps1', name: 'Nightly backup', describe: 'Every day at 02:00', timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T01:00:00Z'), invalid: false,
+        target: { kind: 'chat', chatId: 'pc-chat' }, profileId: 'pc-profile', autoMode: false, timeLimitMinutes: 30, running: false, lastRun: null,
+        targetName: 'Backups', profileName: 'Claude', ...over,
+      };
+    }
+    function machine(over: Partial<PeerSchedules> = {}): PeerSchedules {
+      return { nodeId: 'node-pc', name: 'PC', status: 'reachable', shared: true, schedules: [peerRow()], ...over };
+    }
+
+    it('shows them in their own section, marked as running there, with what a row shows and no way to change them', async () => {
+      list.mockResolvedValue([view()]);
+      peerSchedules.mockResolvedValue([
+        machine({
+          schedules: [
+            peerRow({ lastRun: { status: 'error', startedAt: Date.now() - 5 * 60_000, chatId: 'pc-chat' }, timeLimitMinutes: 120, autoMode: true }),
+            peerRow({ id: 'ps2', name: 'Monthly', enabled: false, nextRunAt: null, target: { kind: 'project', projectId: 'pr' }, targetName: null, profileName: null }),
+          ],
+        }),
+      ]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      const section = await screen.findByTestId('peer-schedules-node-pc');
+      expect(within(section).getByRole('heading')).toHaveTextContent('On PC · runs there');
+      expect(section).toHaveTextContent('To run, edit, pause or delete one, do it in OtherBench on PC.');
+      const row = within(section).getByTestId('peer-schedule-row-ps1');
+      expect(row).toHaveTextContent('Nightly backup');
+      expect(row).toHaveTextContent('Every day at 02:00');
+      expect(row).toHaveTextContent('Chat: Backups · Claude · Auto mode · Time limit 2 hours');
+      expect(within(row).getByTestId('schedule-next')).toHaveTextContent('Tuesday 13 October 2099, 02:00 (Europe/London)');
+      expect(within(row).getByTestId('schedule-last')).toHaveTextContent('Last run: Failed');
+      // Not synced here: said so, not left blank.
+      const other = within(section).getByTestId('peer-schedule-row-ps2');
+      expect(other).toHaveTextContent('New chat each run in a project not on this machine yet · a profile not on this machine yet');
+      expect(within(other).getByTestId('schedule-next')).toHaveTextContent('Next run: Paused');
+      // Read-only: only Open, for the last run's chat; none of the local row's buttons.
+      expect(within(section).getAllByRole('button').map((b) => b.textContent)).toEqual(['Open']);
+      for (const name of ['Run now', 'Pause', 'Resume', 'Edit', 'History', 'Delete…', 'Stop']) expect(within(section).queryByRole('button', { name })).not.toBeInTheDocument();
+      // The local row keeps its own.
+      expect(within(screen.getByTestId('schedule-row-s1')).getByRole('button', { name: 'Run now' })).toBeInTheDocument();
+    });
+
+    it("opens the last run's chat here", async () => {
+      const onClose = vi.fn();
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ schedules: [peerRow({ lastRun: { status: 'complete', startedAt: Date.now(), chatId: 'pc-chat' } })] })]);
+      render(<SchedulesView onClose={onClose} />);
+      fireEvent.click(await within(await screen.findByTestId('peer-schedule-row-ps1')).findByRole('button', { name: 'Open' }));
+      expect(useOtherBenchStore.getState().activeChatId).toBe('pc-chat');
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("says the machine isn't reachable instead of showing rows", async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ status: 'unreachable', shared: false, schedules: [] })]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      const section = await screen.findByTestId('peer-schedules-node-pc');
+      expect(within(section).getByTestId('peer-schedules-unreachable')).toHaveTextContent('PC isn’t reachable, so its schedules can’t be shown.');
+      expect(within(section).queryByTestId('peer-schedule-row-ps1')).not.toBeInTheDocument();
+    });
+
+    it("says when the machine has none, or is an older build that doesn't share them", async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ schedules: [] }), machine({ nodeId: 'node-old', name: 'Old', shared: false, schedules: [] })]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      expect(await screen.findByTestId('peer-schedules-node-pc')).toHaveTextContent('PC has no schedules.');
+      expect(screen.getByTestId('peer-schedules-node-old')).toHaveTextContent('Old doesn’t share its schedules.');
+    });
+
+    it("shows nothing when no machine is paired, or the list can't be read", async () => {
+      list.mockResolvedValue([]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      await screen.findByText(/No schedules yet/);
+      await waitFor(() => expect(peerSchedules).toHaveBeenCalled());
+      expect(screen.queryByTestId('peer-schedules')).not.toBeInTheDocument();
+      cleanup();
+      peerSchedules.mockClear();
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      peerSchedules.mockRejectedValue(new Error('Pairing is not available on this server.'));
+      render(<SchedulesView onClose={vi.fn()} />);
+      await screen.findByText(/No schedules yet/);
+      await waitFor(() => expect(quiet).toHaveBeenCalled());
+      expect(screen.queryByTestId('peer-schedules')).not.toBeInTheDocument();
+      quiet.mockRestore();
+    });
+
+    it('re-reads them when the machine says they changed or its reachability changes, and leaves the local list alone', async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine()]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      await screen.findByTestId('peer-schedule-row-ps1');
+      await waitFor(() => expect(list).toHaveBeenCalled());
+      const listed = list.mock.calls.length;
+      peerSchedules.mockResolvedValue([machine({ status: 'unreachable', shared: false, schedules: [] })]);
+      act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'peer-status', nodeId: 'node-pc', status: 'unreachable', since: 1 }));
+      expect(await screen.findByTestId('peer-schedules-unreachable')).toBeInTheDocument();
+      peerSchedules.mockResolvedValue([machine({ schedules: [peerRow({ name: 'Renamed there' })] })]);
+      act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'peer-schedules', nodeId: 'node-pc' }));
+      expect(await screen.findByText('Renamed there')).toBeInTheDocument();
+      expect(list.mock.calls.length).toBe(listed);
     });
   });
 });

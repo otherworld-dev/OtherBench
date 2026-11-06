@@ -13,7 +13,7 @@ import {
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ComputerSessionSummary } from '@otherbench/core/types/events.js';
-import type { Peer, PeerInfo, PublicPeer } from '@otherbench/core/types/peer.js';
+import type { Peer, PeerInfo, PeerScheduleSummary, PublicPeer } from '@otherbench/core/types/peer.js';
 import { isIP } from 'node:net';
 import type { Hono } from 'hono';
 import type { AppEventBus } from '../stream/events.js';
@@ -22,6 +22,7 @@ import type { IdentityStore } from './identity.js';
 import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
 import { PairingSessions } from './pairing.js';
+import { peerSchedulesOf } from './schedules.js';
 import type { Syncer } from './syncer.js';
 
 /** How long the machine entering a code waits for the other's answer: long enough to derive a key, too short to crack one. */
@@ -188,6 +189,11 @@ export class PeerService {
   private readonly loginByPeer = new Map<string, string | null>();
   /** The chats controlling each paired machine (computer use), as it last said. */
   private readonly computerByPeer = new Map<string, ComputerSessionSummary[]>();
+  /** This machine's schedules as told to its peers (attached by the container), and the last list sent, to send only a change. */
+  private schedulesHere: () => PeerScheduleSummary[] = () => [];
+  private schedulesSent: string | null = null;
+  /** Each paired machine's schedules, as it last said; absent until it says (an older build never does). Read-only. */
+  private readonly schedulesByPeer = new Map<string, PeerScheduleSummary[]>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -218,6 +224,14 @@ export class PeerService {
           this.loginByPeer.set(nodeId, typeof said?.githubLogin === 'string' ? said.githubLogin : null);
           this.computerByPeer.set(nodeId, computerSessionsOf(said?.computerSessions));
           options.events?.emit({ type: 'peer-activity', nodeId });
+        }
+        if (event === 'schedules') {
+          // Not a list at all: what it said before stands.
+          const said = peerSchedulesOf(data);
+          if (said !== null) {
+            this.schedulesByPeer.set(nodeId, said);
+            options.events?.emit({ type: 'peer-schedules', nodeId });
+          }
         }
       },
     });
@@ -279,6 +293,38 @@ export class PeerService {
       waitingSince: this.waitingSinceHere(), githubLogin: this.githubLoginHere(),
       computerSessions: this.computerHere().map((s) => (s.lastAction === undefined ? { chatId: s.chatId } : { chatId: s.chatId, lastAction: s.lastAction })),
     };
+  }
+
+  /** Where this machine's schedules come from, as its peers are told them (`ownSchedules`). */
+  attachSchedules(source: () => PeerScheduleSummary[]): void {
+    this.schedulesHere = source;
+    this.schedulesSent = null;
+  }
+
+  /**
+   * What this machine tells its peers about its schedules, whole: what each row shows, never the prompt. Sent straight
+   * after a `/peer/events` stream's hello and again whenever it changes (`announceSchedulesIfChanged`), as its own
+   * event rather than in `activity`, which goes out on every reply and card.
+   */
+  schedulesAnnouncement(): { schedules: PeerScheduleSummary[] } {
+    return { schedules: this.schedulesHere() };
+  }
+
+  /** Tells every peer this machine's schedules if they differ from what it last told them. Cheap to call often. */
+  announceSchedulesIfChanged(): void {
+    const now = this.schedulesAnnouncement();
+    const text = JSON.stringify(now);
+    if (text === this.schedulesSent) return;
+    this.schedulesSent = text;
+    this.announce('schedules', now);
+  }
+
+  /**
+   * `nodeId`'s schedules, as it last said: null while it isn't reachable (its last list may be stale) and until it
+   * says (an older build never does). For showing only: nothing here can run or change one there.
+   */
+  schedules(nodeId: string): PeerScheduleSummary[] | null {
+    return this.status(nodeId).status === 'reachable' ? (this.schedulesByPeer.get(nodeId) ?? null) : null;
   }
 
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
@@ -557,6 +603,7 @@ export class PeerService {
     this.waitingSinceByPeer.delete(peer.nodeId);
     this.loginByPeer.delete(peer.nodeId);
     this.computerByPeer.delete(peer.nodeId);
+    this.schedulesByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------

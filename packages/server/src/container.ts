@@ -62,6 +62,7 @@ import { createMediaHost } from './media.js';
 import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { ScheduleService } from './schedule/service.js';
+import { ownSchedules } from './peer/schedules.js';
 import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
@@ -657,7 +658,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     appVersion: options.appVersion ?? appVersion(),
     ...(options.streamTimings ? { monitor: { idleTimeoutMs: options.streamTimings.idleTimeoutMs } } : {}),
   });
-  const syncer = new Syncer({ store, secrets, blobStore, peers, events });
+  // A local change to a synced row may have deleted a schedule with it (its chat, project or profile).
+  const syncer = new Syncer({ store, secrets, blobStore, peers, events, onLocalChanges: () => peers.announceSchedulesIfChanged() });
   peers.attachSyncer(syncer);
   // Which of this machine's own chats have a reply running, and which have
   // background tasks running, for paired machines' "also active" hint (#790)
@@ -831,6 +833,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     emit: (e) => events.emit(e),
+  });
+  // What paired machines are told of this machine's schedules (read-only there), told again whenever a row they
+  // show could have changed: a schedule made, edited, deleted or run, or its chat, project or profile deleted here
+  // (a synced change, seen by the syncer's change check) or by a paired machine (a sync applied).
+  peers.attachSchedules(() => ownSchedules(store, container.schedules));
+  events.subscribe((e) => {
+    if (e.type === 'schedules-changed' || e.type === 'schedule-run-started' || e.type === 'schedule-run-finished' || e.type === 'chat-deleted' || e.type === 'sync-applied') {
+      peers.announceSchedulesIfChanged();
+    }
   });
   try {
     container.schedules.start();

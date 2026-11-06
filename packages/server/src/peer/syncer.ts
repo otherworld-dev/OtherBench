@@ -65,6 +65,8 @@ export interface SyncerOptions {
   batchSize?: number;
   fallbackMs?: number;
   changeCheckMs?: number;
+  /** Called after this machine's own changes are announced (the container re-checks its schedules then). */
+  onLocalChanges?: () => void;
 }
 
 /**
@@ -137,6 +139,7 @@ export class Syncer {
     if (seq <= this.announcedSeq) return;
     this.announcedSeq = seq;
     this.options.peers.announce('changes-available', { seq });
+    this.options.onLocalChanges?.();
   }
 
   /** `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines). */

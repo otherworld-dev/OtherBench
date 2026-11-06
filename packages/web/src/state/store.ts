@@ -335,12 +335,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       return { machines, chatReloads };
     }),
   applyAppHello: (hello) =>
-    set({
+    set((state) => ({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
       appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
       computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction, c.startedFrom)])),
       appBackgroundChats: Object.fromEntries((hello.backgroundChats ?? []).filter((c) => c.count > 0).map((c) => [c.chatId, c.count])),
-    }),
+      // A paired machine's schedules may have changed while this stream was down.
+      peerSchedulesVersion: state.peerSchedulesVersion + 1,
+    })),
   applyAppEvent: (event) => {
     announceAccountEvent(event, (id) => get().chats.find((c) => c.id === id)?.title);
     reloadOnAccountEvent(event);
@@ -401,6 +403,10 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         case 'schedule-run-started':
         case 'schedule-run-finished':
           return { schedulesVersion: state.schedulesVersion + 1 };
+        case 'peer-schedules':
+        case 'peer-status':
+        case 'peers-changed':
+          return { peerSchedulesVersion: state.peerSchedulesVersion + 1 };
         case 'computer-session': {
           const next = { ...state.computerSessions };
           if (event.active) {
@@ -867,6 +873,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
   closeSchedules: () => set({ schedulesPage: null }),
   schedulesVersion: 0,
+  peerSchedulesVersion: 0,
 }));
 
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
