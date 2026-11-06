@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => true), openFolder: vi.fn(async () => true), revealPath: vi.fn(async () => true) }));
+vi.mock('../desktop/bridge.js', () => ({ isDesktop: vi.fn(() => true), openFolder: vi.fn(async () => true), revealPath: vi.fn(async () => true), fileManager: () => 'Explorer' }));
 
 import { isDesktop, openFolder, revealPath } from '../desktop/bridge.js';
 import { DirTree, type LoadDir } from './FileTree.js';

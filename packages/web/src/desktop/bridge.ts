@@ -173,6 +173,12 @@ export async function openInBrowser(url: string): Promise<void> {
   await openUrl(url);
 }
 
+/** What the desktop shell calls the system file manager. */
+export function fileManager(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  return ua.includes('Windows') ? 'Explorer' : ua.includes('Mac') ? 'Finder' : 'the file manager';
+}
+
 /** Shows a file selected in Explorer, never opening it. False in a browser, which can't. */
 export async function revealPath(path: string): Promise<boolean> {
   if (!isDesktop()) return false;
