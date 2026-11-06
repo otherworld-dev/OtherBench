@@ -707,6 +707,26 @@ function GrantsSection({ chatId, profileId }: { chatId: string; profileId: strin
 }
 
 /**
+ * The chat's profile's browser site list, above its grants: a standing grant the broker consults for every browser
+ * call (PermissionBroker.decide), so someone checking what the browser may do without asking sees it here. Shown only
+ * while the profile has the browser on and the list holds something. It is changed in the profile, as it applies to
+ * every chat on it. Profiles sync, so unlike the grants below it is the same on every paired machine.
+ */
+function ProfileSiteList({ profile }: { profile: Profile | null }): JSX.Element | null {
+  const sites = profile?.browserAllowedSites ?? [];
+  if (profile?.toolPolicy.browser !== true || sites.length === 0) return null;
+  return (
+    <div data-testid="profile-site-list" className="mb-2 text-xs">
+      <p className="text-[var(--text-muted)]">
+        The profile&rsquo;s site list also applies: the browser uses {sites.length === 1 ? 'this site' : 'these sites'} without asking, scheduled runs
+        included. Change it in the profile.
+      </p>
+      <p className="mt-1 break-all font-mono">{sites.join(', ')}</p>
+    </div>
+  );
+}
+
+/**
  * Above Tool grants, MCP servers and Audit trail for a chat that runs on a paired machine. Those are kept on each
  * machine and never sync, and the peer link has no route to read them (it is limited to running and stopping a
  * chat), so what the sections show is this machine's own, kept live by this machine's events; the other machine's
@@ -734,6 +754,7 @@ function formatAuditTime(createdAt: number, now: number): string {
 function grantedByLabel(grantedBy: string): string {
   if (grantedBy.startsWith('grant:')) return 'grant';
   if (grantedBy.startsWith('live:')) return 'live artifact';
+  if (grantedBy.startsWith('site_list:')) return 'profile site list';
   switch (grantedBy) {
     case 'auto_read': return 'auto-read';
     case 'policy': return 'policy';
@@ -1033,7 +1054,14 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
 
       <Section title="Tool grants">
         <ElsewhereNote chat={chat} what="These are this machine's grants, which apply only when it runs here; that machine's aren't shown." />
-        {chat ? <GrantsSection chatId={chat.id} profileId={chat.profileId} /> : <EmptyState>No chat selected.</EmptyState>}
+        {chat ? (
+          <>
+            <ProfileSiteList profile={profile} />
+            <GrantsSection chatId={chat.id} profileId={chat.profileId} />
+          </>
+        ) : (
+          <EmptyState>No chat selected.</EmptyState>
+        )}
       </Section>
 
       <Section title="MCP servers">

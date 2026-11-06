@@ -284,6 +284,8 @@ export interface CreateProfileBody {
   isDefault?: boolean;
   /** Absent means on. */
   useGlobalMemory?: boolean;
+  /** Websites the browser may use without asking (`example.com`, `*.example.com`). Absent on create = none; on PATCH = unchanged. */
+  browserAllowedSites?: string[];
 }
 
 /** `PATCH /api/profiles/:id`: any `CreateProfileBody` field, and only the `toolPolicy` fields to change (the server keeps the rest). */
