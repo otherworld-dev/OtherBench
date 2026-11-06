@@ -42,7 +42,9 @@ describe('Toaster', () => {
       for (const n of [1, 2, 3, 4]) toast({ tone: 'ok', text: `t${n}` });
     });
     expect(screen.getAllByTestId('toast').map((t) => t.textContent)).toEqual(['t2×', 't3×', 't4×']);
-    act(() => vi.advanceTimersByTime(TOAST_MS));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_MS);
+    });
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
   });
 

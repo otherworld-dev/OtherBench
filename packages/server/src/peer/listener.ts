@@ -76,7 +76,7 @@ export class PeerListener {
     let port = requested;
     try {
       for (const host of this.hosts) {
-        const server = createServer({ key: keyPem, cert: certPem, requestCert: true, rejectUnauthorized: false, minVersion: 'TLSv1.3' }, listener);
+        const server = createServer({ key: keyPem, cert: certPem, requestCert: true, rejectUnauthorized: false, minVersion: 'TLSv1.3' }, (req, res) => void listener(req, res));
         await new Promise<void>((resolve, reject) => {
           server.once('error', reject);
           server.listen(port, host, () => {

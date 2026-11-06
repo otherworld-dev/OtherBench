@@ -74,7 +74,7 @@ export function NotesTab({ app }: { app: App }): JSX.Element {
             {copy.url && (
               <>
                 {' '}
-                <button type="button" onClick={() => openInBrowser(copy.url!)} className="underline hover:text-[var(--text)]">
+                <button type="button" onClick={() => void openInBrowser(copy.url!).catch((err: unknown) => console.error('[otherbench-web] failed to open the Collectives copy:', err))} className="underline hover:text-[var(--text)]">
                   Open
                 </button>
               </>

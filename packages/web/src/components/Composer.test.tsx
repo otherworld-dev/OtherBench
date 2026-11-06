@@ -1591,12 +1591,16 @@ describe('Composer focus', () => {
 
   it('coming back to the window puts the cursor in the box, from nowhere or from a button', () => {
     render(<Composer chat={makeChat()} />);
-    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
     expect(box()).toHaveFocus();
 
     const button = outside('<button type="button">Chat a</button>');
     button.focus();
-    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
     expect(box()).toHaveFocus();
   });
 
@@ -1604,19 +1608,25 @@ describe('Composer focus', () => {
     render(<Composer chat={makeChat()} />);
     const search = outside('<input type="search" aria-label="Search">');
     search.focus();
-    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
     expect(search).toHaveFocus();
 
     const cancel = outside('<div role="dialog"><button type="button">Cancel</button></div>').querySelector('button')!;
     cancel.focus();
-    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
     expect(cancel).toHaveFocus();
   });
 
   it("coming back doesn't focus the box of a chat that isn't the active one", () => {
     useOtherBenchStore.getState().setActiveChatId('chat-2');
     render(<Composer chat={makeChat()} />);
-    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
     expect(box()).not.toHaveFocus();
   });
 });

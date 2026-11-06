@@ -2,21 +2,32 @@
   "name": "otherbench",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
-  "workspaces": ["packages/*", "desktop"],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "desktop"
+  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -b",
     "typecheck:tests": "tsc -b && node scripts/typecheck-tests.mjs",
+    "check:conflicts": "node scripts/check-conflict-markers.mjs",
+    "lint": "tsc -b && eslint .",
     "test": "node scripts/vitest.mjs run",
     "test:watch": "node scripts/vitest.mjs",
     "dev": "npm run dev -w @otherbench/server",
     "serve": "node packages/server/dist/cli.js serve"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^2.1.0",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.62.1",
     "@types/node": "^24.0.0",
-    "@playwright/test": "1.62.1"
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^2.1.0"
   }
 }

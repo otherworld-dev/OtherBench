@@ -1,0 +1,36 @@
+// A deliberately small rule set: only rules that find real bugs, not style.
+// `tsc` strict mode already covers what most "recommended" sets would add.
+// The type-aware rules read each package's tsconfig.test.json (src, tests
+// and e2e together) and resolve other packages through their built `dist`
+// types, so run `tsc -b` first, as `npm run lint` does.
+import { defineConfig } from 'eslint/config';
+import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
+
+export default defineConfig(
+  { ignores: ['**/dist/**', '**/node_modules/**', 'desktop/**', '**/*.js', '**/*.mjs', '**/*.cjs'] },
+  {
+    files: ['packages/*/{src,test,e2e}/**/*.{ts,tsx}'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { project: ['packages/*/tsconfig.test.json'], tsconfigRootDir: import.meta.dirname },
+    },
+    // Off: the code has disables for rules this set doesn't run (no-console and others).
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    plugins: { '@typescript-eslint': tseslint.plugin },
+    rules: {
+      // A promise nobody awaits loses its error: an unhandled rejection in the
+      // server, or a test assertion (`expect(...).rejects`) that never runs.
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+    },
+  },
+  {
+    files: ['packages/web/{src,test,e2e}/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
+    },
+  },
+);

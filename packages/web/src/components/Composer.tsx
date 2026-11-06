@@ -257,6 +257,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       if (taken.some((n) => n.text.trim().length > 0)) caretTo.current = 'end';
       textareaRef.current?.focus();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when notes come back, not when browsing history; the draft it keeps is this render's.
   }, [returnedCount, chat.id]);
 
   // Text handed to this chat's box from outside (an issue's "Start a chat on
@@ -272,6 +273,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     setBrowsing(null);
     caretTo.current = 'end';
     textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when text is handed over, not when browsing history; the draft it keeps is this render's.
   }, [hasPrefill, chat.id]);
 
   // A chat just made (the "+", a start box) puts the cursor here, so typing can start at once.

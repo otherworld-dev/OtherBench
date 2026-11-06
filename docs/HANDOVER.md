@@ -2685,8 +2685,7 @@ this on startup.
   about 0.15 s slower, and the parsed export is held twice, in the worker
   and the main thread, until the worker is stopped. `planClaudeImport` and
   the preview's checks against the database still run on the main thread
-<<<<<<< HEAD
-  after the read.
+  after the read; the checks of chats already here yield every 50 chats.
 - **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys.
   iOS and Android trust of the hand-made CA is checked only on real devices.
   **Web Push and the phone layout have not run on a real phone.** Not
@@ -2706,15 +2705,8 @@ this on startup.
   device can clear "showing" while another tab still shows. Phone layout:
   Code mode, the Code panel overlay, the Inspector overlay and the viewer
   were not reworked for 390 px (they open, at the narrow-window layout);
-  the Overview's rows and the chat header's buttons are smaller than 44 px. Sessions now survive a restart and Settings lists the
-=======
-  after the read; the checks of chats already here yield every 50 chats.
-- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
-  no Web Push for approvals, and no phone layout work beyond the sidebar
-  footer wrapping so Sign out stays reachable (the spec's §7 lists the other
-  gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
-  on real devices. Sessions now survive a restart and Settings lists the
->>>>>>> dev
+  the Overview's rows and the chat header's buttons are smaller than 44 px.
+  Sessions now survive a restart and Settings lists the
   signed-in devices (see *Sessions* under Remote access), but the list shows
   the address a device signed in from, not the one it was last seen at, and
   signing one device out doesn't forget its remembered-device cookie (that

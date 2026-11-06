@@ -67,11 +67,13 @@ export function PlanUsageMeter({ busy, account }: { busy: boolean; account: stri
     void load(false);
     const timer = setInterval(() => void load(false), PLAN_USAGE_POLL_MS);
     return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load is a fresh closure each render; a new account is what restarts the poll.
   }, [account]);
 
   useEffect(() => {
     if (wasBusy.current && !busy) void load(true);
     wasBusy.current = busy;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load is a fresh closure each render; a reply ending is what triggers the refresh.
   }, [busy]);
 
   if (!usage) return null;

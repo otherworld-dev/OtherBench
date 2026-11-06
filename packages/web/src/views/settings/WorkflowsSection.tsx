@@ -208,7 +208,8 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
     };
   }, [connectionId, media, loader]);
 
-  const inputs = useMemo(() => (draft ? primitiveInputs(draft.graph) : []), [draft?.graph]);
+  const graph = draft?.graph;
+  const inputs = useMemo(() => (graph ? primitiveInputs(graph) : []), [graph]);
 
   async function handleFile(file: File): Promise<void> {
     setImportError(null);
