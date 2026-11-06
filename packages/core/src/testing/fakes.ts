@@ -71,6 +71,9 @@ import type {
   ProjectRepo,
   PushSubscriptionRecord,
   PushSubscriptionRepo,
+  ChatSend,
+  ChatSendPatch,
+  ChatSendRepo,
   RemoteSession,
   RemoteSessionRepo,
   SettingsRepo,
@@ -922,6 +925,58 @@ class InMemoryPushSubscriptionRepo implements PushSubscriptionRepo {
   }
 }
 
+class InMemoryChatSendRepo implements ChatSendRepo {
+  private readonly rows = new Map<string, ChatSend>();
+  private order = 0;
+  private readonly seq = new Map<string, number>();
+  create(s: Omit<ChatSend, 'createdAt' | 'finishedAt'> & { createdAt?: number }): ChatSend {
+    const { createdAt, ...rest } = s;
+    const row: ChatSend = { ...rest, createdAt: createdAt ?? Date.now(), finishedAt: null };
+    this.rows.set(row.id, row);
+    this.seq.set(row.id, this.order++);
+    return { ...row };
+  }
+  get(id: string): ChatSend | null {
+    const row = this.rows.get(id);
+    return row ? { ...row } : null;
+  }
+  update(id: string, patch: ChatSendPatch): ChatSend {
+    const row = this.rows.get(id);
+    if (!row) throw new Error(`No chat send ${id}.`);
+    const next: ChatSend = { ...row };
+    for (const [key, value] of Object.entries(patch) as [keyof ChatSendPatch, unknown][]) if (value !== undefined) Object.assign(next, { [key]: value });
+    this.rows.set(id, next);
+    return { ...next };
+  }
+  private where(pred: (s: ChatSend) => boolean): ChatSend[] {
+    return [...this.rows.values()]
+      .filter(pred)
+      .sort((a, b) => a.createdAt - b.createdAt || (this.seq.get(a.id) ?? 0) - (this.seq.get(b.id) ?? 0))
+      .map((s) => ({ ...s }));
+  }
+  byFromMessage(messageId: string): ChatSend[] {
+    return this.where((s) => s.fromMessageId === messageId);
+  }
+  byToReply(replyId: string): ChatSend[] {
+    return this.where((s) => s.toReplyId === replyId);
+  }
+  byResumedAs(replyId: string): ChatSend[] {
+    return this.where((s) => s.resumedAs === replyId);
+  }
+  byChain(chainId: string): ChatSend[] {
+    return this.where((s) => s.chainId === chainId);
+  }
+  byFromChat(chatId: string): ChatSend[] {
+    return this.where((s) => s.fromChatId === chatId);
+  }
+  byToChat(chatId: string): ChatSend[] {
+    return this.where((s) => s.toChatId === chatId);
+  }
+  unsettled(): ChatSend[] {
+    return this.where((s) => s.status === 'queued' || s.status === 'running');
+  }
+}
+
 class InMemoryAppRepo implements AppRepo {
   private readonly repo = new InMemoryCrudRepo<App>();
   constructor(
@@ -1692,6 +1747,7 @@ export class InMemoryStore implements Store {
   readonly schedules: ScheduleRepo;
   readonly remoteSessions: RemoteSessionRepo;
   readonly pushSubscriptions: PushSubscriptionRepo;
+  readonly chatSends: ChatSendRepo = new InMemoryChatSendRepo();
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {

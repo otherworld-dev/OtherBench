@@ -471,6 +471,47 @@ export function runStoreContract(
       });
     });
 
+    describe('chat sends', () => {
+      const row = (over: Record<string, unknown> = {}) => ({
+        id: 's1', chainId: 'r0', depth: 1, fromChatId: 'A', fromMessageId: 'r0', toChatId: 'B', createdChat: false,
+        text: 'do it', status: 'queued' as const, toReplyId: null, replyText: null, reason: null, resumedAs: null, ...over,
+      });
+
+      it('create and get round-trip every field', () => {
+        const made = store.chatSends.create({ ...row({ createdChat: true }), createdAt: 1000 });
+        expect(made).toEqual({ ...row({ createdChat: true }), createdAt: 1000, finishedAt: null });
+        expect(store.chatSends.get('s1')).toEqual(made);
+        expect(store.chatSends.get('nope')).toBeNull();
+      });
+
+      it('update sets only the fields it is given', () => {
+        store.chatSends.create(row());
+        const updated = store.chatSends.update('s1', { status: 'replied', toReplyId: 'rb', replyText: 'ok', finishedAt: 2000 });
+        expect(updated).toMatchObject({ status: 'replied', toReplyId: 'rb', replyText: 'ok', finishedAt: 2000, reason: null, resumedAs: null, text: 'do it' });
+        expect(store.chatSends.update('s1', { resumedAs: 'r9' })).toMatchObject({ status: 'replied', resumedAs: 'r9' });
+      });
+
+      it('finds rows by sending reply, by working reply, by resume, by chain and by sender, oldest first', () => {
+        store.chatSends.create({ ...row({ id: 's2', toChatId: 'C', toReplyId: 'rc' }), createdAt: 20 });
+        store.chatSends.create({ ...row({ id: 's1', toReplyId: 'rb', resumedAs: 'r5' }), createdAt: 10 });
+        store.chatSends.create({ ...row({ id: 's3', chainId: 'x', fromChatId: 'B', fromMessageId: 'rb', toChatId: 'C', depth: 2 }), createdAt: 30 });
+        expect(store.chatSends.byFromMessage('r0').map((s) => s.id)).toEqual(['s1', 's2']);
+        expect(store.chatSends.byToReply('rc').map((s) => s.id)).toEqual(['s2']);
+        expect(store.chatSends.byResumedAs('r5').map((s) => s.id)).toEqual(['s1']);
+        expect(store.chatSends.byChain('r0').map((s) => s.id)).toEqual(['s1', 's2']);
+        expect(store.chatSends.byFromChat('B').map((s) => s.id)).toEqual(['s3']);
+        expect(store.chatSends.byToChat('C').map((s) => s.id)).toEqual(['s2', 's3']);
+      });
+
+      it('unsettled lists only queued and running rows, oldest first', () => {
+        store.chatSends.create({ ...row({ id: 'b', status: 'running' }), createdAt: 2 });
+        store.chatSends.create({ ...row({ id: 'a' }), createdAt: 1 });
+        store.chatSends.create({ ...row({ id: 'c', status: 'replied' }), createdAt: 3 });
+        store.chatSends.create({ ...row({ id: 'd', status: 'dropped' }), createdAt: 4 });
+        expect(store.chatSends.unsettled().map((s) => s.id)).toEqual(['a', 'b']);
+      });
+    });
+
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
         return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };
