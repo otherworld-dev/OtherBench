@@ -50,4 +50,22 @@ describe('SqliteScheduleRepo', () => {
       store.close();
     }
   });
+  it('points a chat schedule at another chat, and refuses a project schedule', () => {
+    const db = freshDb();
+    const store = new SqliteStore(db);
+    try {
+      seedChatChain(db, { connectionId: 'c1', modelId: 'm1', profileId: 'p1', chatId: 'chat1' });
+      db.prepare(`INSERT INTO chat (id, title, profile_id, pinned, created_at, updated_at) VALUES ('chat2', 'Next', 'p1', 0, 1000, 1000)`).run();
+      db.prepare(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj1', 'P', 1, 1)`).run();
+      const base = { name: 'S', prompt: 'p', profileId: 'p1', timezone: 'UTC', enabled: true, nextRunAt: 5, rule: { cadence: 'daily', time: '08:00' } } as const;
+      store.schedules.create({ ...base, id: 's1', target: { kind: 'chat', chatId: 'chat1' } });
+      store.schedules.create({ ...base, id: 's2', target: { kind: 'project', projectId: 'proj1' } });
+      store.schedules.retarget('s1', 'chat2');
+      expect(store.schedules.get('s1')!.target).toEqual({ kind: 'chat', chatId: 'chat2' });
+      expect(() => store.schedules.retarget('s2', 'chat2')).toThrow();
+      expect(store.schedules.get('s2')!.target).toEqual({ kind: 'project', projectId: 'proj1' });
+    } finally {
+      store.close();
+    }
+  });
 });

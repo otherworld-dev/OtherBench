@@ -1640,6 +1640,13 @@ class InMemoryScheduleRepo implements ScheduleRepo {
     return this.runRows.some((x) => x.run.chatId === chatId && x.run.createdChat);
   }
 
+  retarget(id: string, chatId: string): void {
+    const current = this.rows.get(id);
+    if (!current) throw new Error(`schedule: not found: ${id}`);
+    if (current.target.kind !== 'chat') throw new Error(`schedule: ${id} runs in a project, not a chat`);
+    this.rows.set(id, { ...current, target: { kind: 'chat', chatId }, updatedAt: Date.now() });
+  }
+
   /** Mirrors schedule.chat_id's ON DELETE CASCADE and schedule_run.chat_id's ON DELETE SET NULL. */
   chatDeleted(chatId: string): void {
     for (const s of [...this.rows.values()]) if (s.target.kind === 'chat' && s.target.chatId === chatId) this.delete(s.id);

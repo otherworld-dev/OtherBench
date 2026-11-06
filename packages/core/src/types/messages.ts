@@ -63,6 +63,10 @@ export type Part =
   | { type: 'context'; kind: 'clear' | 'compact'; focus?: string }
   /** The summary a compact reply carries; it stands in for everything above the compact line. */
   | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
+  /** A user message asking the chat's Claude Code session for a handover summary (spec 2026-11-06-fresh-chat-handover-design); the engine sends its fixed prompt. */
+  | { type: 'handover-request' }
+  /** A link between a chat and the fresh chat it was handed over to (`to`, on the old chat's summary) or from (`from`, on the new chat's first message). */
+  | { type: 'handover'; direction: 'to' | 'from'; chatId: string; title: string }
   /**
    * A sub-agent this reply started: one an API profile started with the
    * `subagent` tool, or a helper Claude Code started with its Task or Agent
