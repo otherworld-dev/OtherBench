@@ -222,7 +222,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
     setEditing(false);
     setError(null);
     setLocalWorkspaceRoot(undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- draft is intentionally NOT synced on every keystroke of chat.workspaceRoot's own updater below.
+    // The draft is intentionally NOT synced on every keystroke of chat.workspaceRoot's own updater below.
   }, [chat.id]);
 
   const displayedWorkspaceRoot = localWorkspaceRoot !== undefined ? localWorkspaceRoot : chat.workspaceRoot;
@@ -849,7 +849,7 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
   useEffect(() => {
     setRollup(null);
     setFailed(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately chatId-only, see comment above.
+    // Deliberately chatId-only, see comment above.
   }, [chatId]);
 
   useEffect(() => {
@@ -869,7 +869,7 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- statusSignal is the deliberate re-fetch trigger described above.
+    // statusSignal is the deliberate re-fetch trigger described above.
   }, [chatId, statusSignal]);
 
   const empty = rollup !== null && rollup.profiles.length === 0 && rollup.totalCancelledCount === 0 && rollup.totalUnmeasuredErrorCount === 0;

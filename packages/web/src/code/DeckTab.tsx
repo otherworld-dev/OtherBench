@@ -382,7 +382,7 @@ function CardView({
     return () => {
       cancelled = true;
     };
-    // onBoardChanged is a fresh closure each render; only these say the card needs fetching again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onBoardChanged is a fresh closure each render; only these say the card needs fetching again.
   }, [cardId, reload, cacheDeckCard, forgetDeckCard]);
 
   /**

@@ -120,7 +120,7 @@ function OverviewWindow(): JSX.Element {
           <button
             type="button"
             data-testid="dock-toggle"
-            onClick={() => dock('overview').catch((err: unknown) => console.error('[otherbench-web] failed to dock the Overview:', err))}
+            onClick={() => void dock('overview').catch((err: unknown) => console.error('[otherbench-web] failed to dock the Overview:', err))}
             aria-label="Put the Overview back in the main window"
             title="Put the Overview back in the main window"
             className="btn px-1.5 py-0.5"

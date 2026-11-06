@@ -73,10 +73,11 @@ export function SandboxPanel(): JSX.Element {
 
   // The newest progress line stays in view.
   const logLength = status?.log?.length ?? 0;
+  const lastLogLine = status?.log?.[logLength - 1];
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [logLength, status?.log?.[logLength - 1]]);
+  }, [logLength, lastLogLine]);
 
   // Set up, Repair and Remove take their own button away when the state changes; keep keyboard focus on the panel.
   const state = status?.state ?? null;

@@ -101,7 +101,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const setViewerOpen = useViewerStore((s) => s.setOpen);
   const setViewerShare = useViewerStore((s) => s.setShare);
   const [draftShare, setDraftShare] = useState<number | null>(null);
-  const viewerActions = useMemo(() => (chat ? viewerActionsFor(chat.id) : null), [chat?.id]);
+  const chatId = chat?.id ?? null;
+  const viewerActions = useMemo(() => (chatId ? viewerActionsFor(chatId) : null), [chatId]);
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Which turn's tab strip has been manually reopened from its "⤺ N other
   // variants" chip, identified by the shared `parentId` of its sibling set
@@ -117,7 +118,6 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   // user message beside the variants.
   const [shownVariantId, setShownVariantId] = useState<string | null>(null);
 
-  const chatId = chat?.id ?? null;
   const chatMessages = useMemo(
     () => (chatId ? Object.values(messages).filter((m) => m.chatId === chatId) : []),
     [messages, chatId]
@@ -336,6 +336,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     // Moving off the bottom stops the thread following new text before the scroll event says so.
     nearBottomRef.current = endRef.current === null && el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     if (!nearBottomRef.current) setShowJump(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per Next/Previous; the query and owner it reads are this render's.
   }, [findGoing]);
   useLayoutEffect(() => {
     if (!findOpen) showFindHighlight(findOwner, null);
