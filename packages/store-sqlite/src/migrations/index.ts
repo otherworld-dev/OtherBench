@@ -41,6 +41,7 @@ import { MIGRATION_039_PUSH_SUBSCRIPTIONS } from './039-push-subscriptions.js';
 import { MIGRATION_040_APP_OPEN } from './040-app-open.js';
 import { MIGRATION_041_APP_NOTES } from './041-app-notes.js';
 import { MIGRATION_042_PROFILE_BROWSER_SITES } from './042-profile-browser-sites.js';
+import { MIGRATION_043_FRESH_CHAT_HANDOVER } from './043-fresh-chat-handover.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -88,6 +89,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_040_APP_OPEN,
   MIGRATION_041_APP_NOTES,
   MIGRATION_042_PROFILE_BROWSER_SITES,
+  MIGRATION_043_FRESH_CHAT_HANDOVER,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
