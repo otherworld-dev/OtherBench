@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
+import { flushSync } from 'react-dom';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
@@ -51,6 +52,18 @@ interface FindState {
   chatId: string | null;
   query: string;
   at: { messageId: string; occurrence: number } | null;
+}
+
+/** The thread of a chat with no head, or none drawn yet: one array, so it doesn't redraw what depends on it. */
+const NO_MESSAGES: CanonMessage[] = [];
+
+/** The path to `headId`, or null when it can't be drawn yet: not loaded, or a parent on the way missing. */
+function pathOrNull(messages: CanonMessage[], headId: string): CanonMessage[] | null {
+  try {
+    return activePath(messages, headId);
+  } catch {
+    return null;
+  }
 }
 
 /** A drawn message in this thread's scroller. Not by `document.getElementById`: two panes can show the same chat. */
@@ -125,23 +138,17 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   useBrowserAutoOpen(chatId, chatMessages, viewer.open);
   // The viewer bar's Browser button: shown once the model has used the browser in this chat.
   const browserUsed = useMemo(() => chatMessages.some((m) => m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser')), [chatMessages]);
-  // The path last drawn for this chat. The head can move to a message the store hasn't loaded yet (a message sent
+  // The head last drawn for this chat. The head can move to a message the store hasn't loaded yet (a message sent
   // while a reply ran goes out on the server, and the chat's new head arrives before its messages): until they
-  // arrive the thread keeps showing this, rather than going blank for a moment, which scrolled a long chat to the top.
-  const lastPathRef = useRef<{ chatId: string | null; path: CanonMessage[] }>({ chatId: null, path: [] });
-  const path = useMemo(() => {
-    if (!chat?.headMessageId) return [];
-    const held = lastPathRef.current.chatId === chatId ? lastPathRef.current.path : [];
-    if (!chatMessages.some((m) => m.id === chat.headMessageId)) return held;
-    try {
-      return activePath(chatMessages, chat.headMessageId);
-    } catch {
-      return held; // an inconsistent/partially-loaded slice -- keep what was shown rather than throw.
-    }
-  }, [chat?.headMessageId, chatMessages, chatId]);
-  useLayoutEffect(() => {
-    lastPathRef.current = { chatId, path };
-  }, [chatId, path]);
+  // arrive the thread keeps showing the path to this one, rather than going blank for a moment, which scrolled a
+  // long chat to the top. Only the head is kept, so it changes once per new message, not with every streamed chunk.
+  const headId = chat?.headMessageId ?? null;
+  const freshPath = useMemo(() => (headId === null ? null : pathOrNull(chatMessages, headId)), [chatMessages, headId]);
+  const [drawnHead, setDrawnHead] = useState<{ chatId: string | null; headId: string } | null>(null);
+  if (freshPath !== null && headId !== null && (drawnHead?.chatId !== chatId || drawnHead.headId !== headId)) setDrawnHead({ chatId, headId });
+  const heldHeadId = freshPath === null && headId !== null && drawnHead?.chatId === chatId ? drawnHead.headId : null;
+  const heldPath = useMemo(() => (heldHeadId === null ? null : pathOrNull(chatMessages, heldHeadId)), [chatMessages, heldHeadId]);
+  const path = headId === null ? NO_MESSAGES : (freshPath ?? heldPath ?? NO_MESSAGES);
 
   const displayPath = useMemo(() => {
     if (path.length === 0) return [];
@@ -160,10 +167,11 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const drawn: DrawnWindow = drawnFrom?.chatId === chatId ? clampWindow(drawnFrom, displayPath.length, THREAD_WINDOW) : { start: latestStart, end: null };
   const { start, end } = drawn;
   if (displayPath.length > 0 && drawnFrom?.chatId !== chatId) setDrawnFrom({ chatId, start, end: null });
+  // The window as last committed, for the scroll handler and the layout effects below (see the effect after drawLater).
   const startRef = useRef(start);
-  startRef.current = start;
   const endRef = useRef(end);
-  endRef.current = end;
+  const drawEarlierRef = useRef<() => void>(() => undefined);
+  const drawLaterRef = useRef<() => void>(() => undefined);
   /** Draws whatever it takes for message `index` on the path to be drawn. */
   const drawTo = (index: number): void => {
     const next = windowFor(drawn, Math.min(index, displayPath.length - 1), displayPath.length, THREAD_WINDOW);
@@ -212,14 +220,18 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     keepPlaceRef.current = first && el ? { id: first.id, y: el.getBoundingClientRect().top } : null;
     setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW), end });
   };
-  const drawEarlierRef = useRef(drawEarlier);
-  drawEarlierRef.current = drawEarlier;
   // Drawing later messages puts them below the reader, so nothing they're reading moves.
   const drawLater = (): void => {
     if (end !== null) setDrawnFrom({ chatId, start, end: end + THREAD_WINDOW });
   };
-  const drawLaterRef = useRef(drawLater);
-  drawLaterRef.current = drawLater;
+  // Declared before the layout effects that read these, so they see this render's window. A scroll event comes
+  // between commits, so the handler always sees the window that is on screen.
+  useLayoutEffect(() => {
+    startRef.current = start;
+    endRef.current = end;
+    drawEarlierRef.current = drawEarlier;
+    drawLaterRef.current = drawLater;
+  });
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const before = keepPlaceRef.current;
@@ -230,21 +242,18 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [start]);
 
   // A prompt picked in the conversation outline: draw back to it first if it's earlier than what's drawn, then go there.
-  const [goingTo, setGoingTo] = useState<string | null>(null);
+  // The draw is committed at once (flushSync), so the message is on the page to scroll to straight after.
   const goTo = (messageId: string): void => {
     const at = displayPath.findIndex((m) => m.id === messageId);
-    if (at !== -1) drawTo(at);
-    setGoingTo(messageId);
-  };
-  useLayoutEffect(() => {
-    if (!goingTo) return;
-    setGoingTo(null);
-    document.getElementById(`msg-${goingTo}`)?.scrollIntoView({ block: 'start' });
+    flushSync(() => {
+      if (at !== -1) drawTo(at);
+    });
+    document.getElementById(`msg-${messageId}`)?.scrollIntoView({ block: 'start' });
     if (endRef.current !== null) {
       nearBottomRef.current = false;
       setShowJump(true);
     }
-  }, [goingTo]);
+  };
 
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
   const openCompare = openVariants.length > 1 && isCompareSet(openVariants);
@@ -270,8 +279,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const findReturnRef = useRef<HTMLElement | null>(null);
   const lastFindQueryRef = useRef('');
-  const findOwner = useRef({}).current;
-  const [findGoing, setFindGoing] = useState<FindMatch | null>(null);
+  // This thread's find highlight, told apart from another pane's on the same chat.
+  const [findOwner] = useState(() => ({}));
 
   /** The first message on the path at least partly in view, for find to start from as a browser's does. */
   const firstInView = (): number => {
@@ -282,24 +291,48 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const at = seen ? searchPath.findIndex((m) => `msg-${m.id}` === seen.id) : -1;
     return Math.max(0, at);
   };
-  const showMatch = (match: FindMatch): void => {
-    // A compare reply at the end is drawn whenever the end of the path is.
-    drawTo(match.index);
-    setFindGoing(match);
+  /**
+   * Shows `match` of `query`: the find state and the draw are committed at once (flushSync), so the message is on
+   * the page, unfolded if the match is past its fold, to highlight and scroll to straight after.
+   */
+  const showMatch = (query: string, match: FindMatch): void => {
+    flushSync(() => {
+      setFind({ chatId, query, at: { messageId: match.messageId, occurrence: match.occurrence } });
+      // A compare reply at the end is drawn whenever the end of the path is.
+      drawTo(match.index);
+    });
+    const el = scrollRef.current;
+    const article = drawnMessage(el, match.messageId);
+    if (!el || !article) return;
+    const range = locateMatch(findRoots(article), query, match.occurrence);
+    showFindHighlight(findOwner, range);
+    // jsdom has no layout for a Range; there the message is scrolled to instead.
+    const box = range && typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+    if (box && (box.width > 0 || box.height > 0)) {
+      const view = el.getBoundingClientRect();
+      // Left where it is when it's already in view (clear of the find bar), else put a third of the way down.
+      if (box.top < view.top + 48 || box.bottom > view.bottom - 16) el.scrollTop += box.top - view.top - el.clientHeight / 3;
+    } else {
+      article.scrollIntoView({ block: 'center' });
+    }
+    // Moving off the bottom stops the thread following new text before the scroll event says so.
+    nearBottomRef.current = endRef.current === null && el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    if (!nearBottomRef.current) setShowJump(true);
   };
   const search = (query: string): void => {
     lastFindQueryRef.current = query;
     const found = query === findQuery ? matches : findMatches(searchPath, query);
     const first = found[firstMatchFrom(found, firstInView())];
-    setFind({ chatId, query, at: first ? { messageId: first.messageId, occurrence: first.occurrence } : null });
-    if (first) showMatch(first);
-    else showFindHighlight(findOwner, null);
+    if (first) {
+      showMatch(query, first);
+      return;
+    }
+    setFind({ chatId, query, at: null });
+    showFindHighlight(findOwner, null);
   };
   const stepFind = (delta: 1 | -1): void => {
     const next = matches[stepMatch(matches.length, findIndex, delta)];
-    if (!next) return;
-    setFind({ chatId, query: findQuery, at: { messageId: next.messageId, occurrence: next.occurrence } });
-    showMatch(next);
+    if (next) showMatch(findQuery, next);
   };
   const openFind = (): void => {
     if (findOpen) {
@@ -317,52 +350,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     (back?.isConnected ? back : sectionRef.current)?.focus();
   };
   useLayoutEffect(() => {
-    if (!findGoing) return;
-    setFindGoing(null);
-    const el = scrollRef.current;
-    const article = drawnMessage(el, findGoing.messageId);
-    if (!el || !article) return;
-    const range = locateMatch(findRoots(article), findQuery, findGoing.occurrence);
-    showFindHighlight(findOwner, range);
-    // jsdom has no layout for a Range; there the message is scrolled to instead.
-    const box = range && typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
-    if (box && (box.width > 0 || box.height > 0)) {
-      const view = el.getBoundingClientRect();
-      // Left where it is when it's already in view (clear of the find bar), else put a third of the way down.
-      if (box.top < view.top + 48 || box.bottom > view.bottom - 16) el.scrollTop += box.top - view.top - el.clientHeight / 3;
-    } else {
-      article.scrollIntoView({ block: 'center' });
-    }
-    // Moving off the bottom stops the thread following new text before the scroll event says so.
-    nearBottomRef.current = endRef.current === null && el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-    if (!nearBottomRef.current) setShowJump(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per Next/Previous; the query and owner it reads are this render's.
-  }, [findGoing]);
-  useLayoutEffect(() => {
     if (!findOpen) showFindHighlight(findOwner, null);
   }, [findOpen, findOwner]);
   useEffect(() => () => showFindHighlight(findOwner, null), [findOwner]);
 
-  // Jump to latest from messages drawn far back draws the end of the chat afresh, then goes to its bottom.
-  const [pinAfterDraw, setPinAfterDraw] = useState(false);
+  // Jump to latest from messages drawn far back draws the end of the chat afresh (committed at once), then goes to its bottom.
   const jumpToLatest = (): void => {
     const el = scrollRef.current;
     if (!el) return;
     nearBottomRef.current = true;
     setShowJump(false);
-    if (end !== null) {
-      setDrawnFrom({ chatId, start: latestStart, end: null });
-      setPinAfterDraw(true);
-      return;
-    }
+    if (end !== null) flushSync(() => setDrawnFrom({ chatId, start: latestStart, end: null }));
     el.scrollTop = el.scrollHeight;
   };
-  useLayoutEffect(() => {
-    if (!pinAfterDraw) return;
-    setPinAfterDraw(false);
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [pinAfterDraw]);
 
   // Messages sent while a reply runs, waiting at the end of the thread.
   const waitingNotes = useOtherBenchStore((s) => (chatId ? s.chatNotes[chatId] : undefined));
@@ -433,6 +433,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     // The server records landing on a compare variant as keeping it; mirror that.
     const target = chatMessages.find((m) => m.id === messageId);
     if (target?.role === 'assistant' && target.parentId && isCompareSet(childrenOf(chatMessages, target.parentId))) {
+      // eslint-disable-next-line react-hooks/purity -- runs after the server's answer, never in render; the compiler assumes the branch switcher's onSelect, built inside the messages' .map, may run while rendering.
       markKept(messageId, Date.now());
     }
     return true;
