@@ -285,3 +285,122 @@ describe('ChatSendService: delivering', () => {
     await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'failed', reason: expect.stringMatching(/deleted/) }));
   });
 });
+
+/** The text of the user message a reply answers. */
+const userTextOf = (replyId: string): string => userPartsOf(replyId).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
+/** The reply working on the one send from `fromReply` to `toChat`. */
+const workerOf = (fromReply: string, toChat: string): string => store.chatSends.byFromMessage(fromReply).find((r) => r.toChatId === toChat)!.toReplyId!;
+const repliesIn = (chatId: string): number => collectMessageTree(store, chatId).filter((m) => m.role === 'assistant').length;
+
+describe('ChatSendService: replies and resuming', () => {
+  it('resumes the sender once, after every chat it sent to has replied, with all the replies in order', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'button' }, { chatId: 'C', text: 'route' }]);
+    await finish(r, 'Sent.');
+    await finish(workerOf(r, 'B'), 'Added the button.');
+    expect(repliesIn('A')).toBe(1);
+    await finish(workerOf(r, 'C'), 'Added the route.');
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+    const resumed = latestReply('A')!;
+    const parts = userPartsOf(resumed);
+    expect(parts[0]).toMatchObject({ type: 'chat-link', kind: 'replies', chats: [{ chatId: 'B', status: 'replied' }, { chatId: 'C', status: 'replied' }] });
+    const text = userTextOf(resumed);
+    expect(text.indexOf('Added the button.')).toBeGreaterThan(-1);
+    expect(text.indexOf('Added the button.')).toBeLessThan(text.indexOf('Added the route.'));
+    expect(store.chatSends.byFromMessage(r).every((row) => row.resumedAs === resumed)).toBe(true);
+    // It continues from the sending reply.
+    expect(store.messages.get(store.messages.get(resumed)!.parentId!)!.parentId).toBe(r);
+  });
+
+  it('waits for the sender to finish its own reply before resuming it', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(workerOf(r, 'B'), 'done');
+    expect(repliesIn('A')).toBe(1);
+    await finish(r, 'Sent.');
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+  });
+
+  it('resumes once when the same reply is reported ended twice', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    const worker = workerOf(r, 'B');
+    await finish(worker, 'done');
+    (service as unknown as { onReplyEnded(id: string, s: string): void }).onReplyEnded(worker, 'complete');
+    await flush();
+    await service.idle();
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+    await flush();
+    await service.idle();
+    expect(repliesIn('A')).toBe(2);
+  });
+
+  it("passes on a failed reply as failed, with the error, and still resumes the sender", async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    engine.push(workerOf(r, 'B'), { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+    expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'failed', reason: expect.stringContaining('boom') });
+    expect(userTextOf(latestReply('A')!)).toContain('boom');
+  });
+
+  it('waits for a chat that sends on, and passes up its answer after it resumes, not its "I asked" reply', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'whole feature' }]);
+    await finish(r, 'Sent.');
+    const b1 = workerOf(r, 'B');
+    await send('B', b1, [{ chatId: 'C', text: 'your part' }]);
+    expect(store.chatSends.byFromMessage(b1)[0]).toMatchObject({ depth: 2, chainId: r });
+    await finish(b1, 'I asked C.');
+    expect(repliesIn('A')).toBe(1);
+    await finish(workerOf(b1, 'C'), 'C did its part.');
+    await vi.waitFor(() => expect(repliesIn('B')).toBe(2));
+    const b2 = latestReply('B')!;
+    expect(store.chatSends.byFromMessage(r)[0]!.toReplyId).toBe(b2);
+    await finish(b2, 'Feature done, with C.');
+    await vi.waitFor(() => expect(repliesIn('A')).toBe(2));
+    const text = userTextOf(latestReply('A')!);
+    expect(text).toContain('Feature done, with C.');
+    expect(text).not.toContain('I asked C.');
+  });
+
+  it('stops a chain at 3 hops', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    const b = workerOf(r, 'B');
+    await send('B', b, [{ chatId: 'C', text: 'x' }]);
+    const c = workerOf(b, 'C');
+    await send('C', c, [{ chatId: 'D', text: 'x' }]);
+    const d = workerOf(c, 'D');
+    expect(store.chatSends.byFromMessage(c)[0]!.depth).toBe(3);
+    addChat('E');
+    expect(refusal(await send('D', d, [{ chatId: 'E', text: 'x' }]))).toMatch(/3/);
+  });
+
+  it('stops a chain at 10 sends in all', async () => {
+    const r = await reply('A');
+    for (let i = 0; i < 10; i++) {
+      store.chatSends.create({ id: `old${i}`, chainId: r, depth: 1, fromChatId: 'A', fromMessageId: `elsewhere${i}`, toChatId: 'B', createdChat: false, text: 'x', status: 'replied', toReplyId: null, replyText: null, reason: null, resumedAs: null });
+    }
+    expect(refusal(await send('A', r, [{ chatId: 'B', text: 'x' }]))).toMatch(/ask the user/);
+  });
+
+  it('refuses sending back to a chat that is waiting on this one', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    expect(refusal(await send('B', workerOf(r, 'B'), [{ chatId: 'A', text: 'x' }]))).toMatch(/waiting/);
+  });
+
+  it('drops the replies when the sender was cleared after it sent', async () => {
+    const r = await reply('A');
+    await send('A', r, [{ chatId: 'B', text: 'x' }]);
+    await finish(r, 'Sent.');
+    const clear = store.messages.create({ id: 'clear-1', chatId: 'A', parentId: r, role: 'user', parts: [{ type: 'context', kind: 'clear' }], status: 'complete', error: null, producedBy: null });
+    store.chats.update('A', { headMessageId: clear.id });
+    await finish(workerOf(r, 'B'), 'done');
+    await vi.waitFor(() => expect(store.chatSends.byFromMessage(r)[0]).toMatchObject({ status: 'replied', resumedAs: 'none' }));
+    expect(repliesIn('A')).toBe(1);
+  });
+});
