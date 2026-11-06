@@ -51,6 +51,7 @@ the known gaps, the integration notes and the deviations.
 - [Overview](features/overview.md)
 - [Claude accounts](features/claude-accounts.md)
 - [App notes](features/app-notes.md)
+- [Fresh chat handover](features/fresh-chat-handover.md)
 
 ## What is NOT built
 

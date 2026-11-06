@@ -309,6 +309,8 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'notice':
       case 'context':
       case 'context-summary':
+      case 'handover-request':
+      case 'handover':
       case 'subagent':
       case 'user-note':
         // Not valid content for a user turn; defensively dropped rather
@@ -362,6 +364,9 @@ async function assistantContentFromParts(
       case 'context':
       case 'context-summary':
       case 'notice':
+      // A handover link says where the chat went, not anything the model said.
+      case 'handover-request':
+      case 'handover':
         // Dropped entirely, same reasoning as `reasoning`: a capability-
         // fallback disclosure describes what OTHERBENCH did, not something the
         // model said, so replaying it as this message's own content in a
