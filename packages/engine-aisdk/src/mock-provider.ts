@@ -356,6 +356,12 @@ export class MockChatEngine implements ChatEngine {
       return;
     }
 
+    const send = /#send[ \t]+(\S+)[ \t]+([^\r\n]+)/.exec(prompt);
+    if (send) {
+      yield* this.streamSendTurn(req, send[1]!, send[2]!.trim(), tokensIn);
+      return;
+    }
+
     const recall = /#recall[ \t]+([^\r\n]*)/.exec(prompt);
     if (recall) {
       yield* this.streamRecallTurn(req, recall[1]!.trim(), tokensIn);
@@ -605,6 +611,27 @@ export class MockChatEngine implements ChatEngine {
       yield { type: 'text-delta', text: chunk };
     }
     if (req.signal.aborted) return;
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /**
+   * `#send <chatId | app:Name> <text>` (spec 2026-11-06-chat-to-chat-design): one `message_chats` send through the
+   * real tool when offered, then "Sent." and the end of the turn, as a model is told to do.
+   */
+  private async *streamSendTurn(req: EngineRequest, target: string, text: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-send-${randomUUID()}`;
+    const message = target.startsWith('app:') ? { app: target.slice('app:'.length), text } : { chatId: target, text };
+    const args = { command: 'send', messages: [message] };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'message_chats', args };
+    const tool = req.tools.find((t) => t.name === 'message_chats');
+    const ctx = toolContextFor(req, req.signal, callId);
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No message_chats tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'message_chats', result: JSON.stringify(result), isError };
+    const answer = isError ? `Sending didn't work: ${JSON.stringify(result)}` : 'Sent.';
+    yield { type: 'text-delta', text: answer };
     yield finishEvent(tokensIn, estimateTokens(answer));
   }
 

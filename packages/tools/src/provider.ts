@@ -18,6 +18,8 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool, liveToolRisks } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
+import { chatsTool } from './chats-tool.js';
+import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import { cardLine } from '@otherbench/core/domain/card-text.js';
 import { COMPUTER_LIMITS, COMPUTER_OFF_REASON, COMPUTER_UNATTENDED_REASON, isUnattendedRun, screenContentError } from '@otherbench/core/domain/computer-apps.js';
 import { allowedWhilePlanning, isDeferrableInAutoMode, PermissionBroker, type Decision } from '@otherbench/core/domain/permissions.js';
@@ -94,6 +96,8 @@ export interface OtherBenchToolProviderOptions {
   computer?: ComputerDriver;
   /** Where image and video generation finds its backends (server/src/media.ts). Without it, no profile gets the media tools. */
   media?: MediaHost;
+  /** Sending work to other chats (spec 2026-11-06-chat-to-chat-design): the server's ChatSendService. Without it, no profile gets `message_chats`. */
+  chats?: ChatMessenger;
 }
 
 const BUILTIN_FS_TOOLS: ToolSpec[] = fsTools;
@@ -184,6 +188,7 @@ export class OtherBenchToolProvider implements ToolProvider {
   private readonly browser: BrowserManager | null;
   private readonly computer: ComputerDriver | null;
   private readonly media: MediaHost | null;
+  private readonly chats: ChatMessenger | null;
 
   constructor(
     private readonly store: Store,
@@ -209,6 +214,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     this.browser = options.browser ?? null;
     this.computer = options.computer ?? null;
     this.media = options.media ?? null;
+    this.chats = options.chats ?? null;
   }
 
   onApprovalEvent(cb: (event: ToolApprovalEvent) => void): () => void {
@@ -232,6 +238,8 @@ export class OtherBenchToolProvider implements ToolProvider {
     if (policy.artifacts !== false) raw.push(artifactTool(this.store, () => liveToolRisks(this.relayMcpTools(policy.mcpServerIds))));
     // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
     if (policy.recall !== false) raw.push(recallTool(this.store));
+    // Sending work to other chats (spec 2026-11-06-chat-to-chat-design): on unless the profile turns it off.
+    if (policy.chatMessages !== false && this.chats) raw.push(chatsTool(this.chats));
     // Thread tools (spec 2026-10-12-thread-cards-design): offered to every
     // profile; TurnRunner drops propose_plan when the chat's Plan mode is off,
     // and all three for a model that can't use tools.
@@ -294,6 +302,7 @@ export class OtherBenchToolProvider implements ToolProvider {
     const specs: ToolSpec[] = [];
     if (policy.browser === true && this.browser) specs.push(this.relayed(browserTool(this.browser, policy, (ctx, input) => this.askUser(ctx, input))));
     if (policy.computer === true && this.computer?.available()) specs.push(this.relayed(computerTool(this.computer, this.store)));
+    if (policy.chatMessages !== false && this.chats) specs.push(this.relayed(chatsTool(this.chats)));
     // The generators have no describeCall of their own (an API model's gate needs none). This one
     // copies the model's arguments, which is what turns on the ticket and the identity check:
     // `runRelayedCall` runs only that object. The broker still decides on it (a card, or the
@@ -514,7 +523,9 @@ export class OtherBenchToolProvider implements ToolProvider {
     }
     // Never in a scheduled run, unless its schedule allows auto mode: nobody
     // is there, so the call is refused below rather than handed on.
-    if (decision.kind === 'ask' && opts.deferAsk === true && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
+    // Sending work to other chats is the exception (spec 2026-11-06-chat-to-chat-design): it asks once per chat in
+    // auto mode too, as Adam chose, since text planted in this chat could otherwise set other chats working unasked.
+    if (decision.kind === 'ask' && opts.deferAsk === true && call.tool.source !== 'chats' && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
       // Auto mode: no card, no event and nothing stored -- the pending
       // request is dropped unanswered. A Claude Code tool goes to its
       // classifier. One of OtherBench's own (relayed, artifact, recall, plan)

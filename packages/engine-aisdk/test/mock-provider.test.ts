@@ -266,6 +266,19 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#send trigger', () => {
+    it('#send sends the rest of the line to the chat or app through the real tool, then ends with "Sent."', async () => {
+      const execute = vi.fn(async () => ({ sent: [{ sendId: 's1', chatId: 'c2', title: 'Web', app: null, createdChat: false, queued: false }], note: 'Sent.' }));
+      const tool: ToolSpec = { name: 'message_chats', description: '', parameters: {}, risk: 'execute', source: 'chats', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#send c2 add the button', { tools: [tool] })));
+      expect(execute).toHaveBeenCalledWith({ command: 'send', messages: [{ chatId: 'c2', text: 'add the button' }] }, expect.objectContaining({ chatId: 'chat-1' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'message_chats', isError: false }));
+      expect(events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('')).toBe('Sent.');
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#send app:Server add the route', { tools: [tool] })));
+      expect(execute).toHaveBeenLastCalledWith({ command: 'send', messages: [{ app: 'Server', text: 'add the route' }] }, expect.anything());
+    });
+  });
+
   describe('#run trigger', () => {
     const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
 
