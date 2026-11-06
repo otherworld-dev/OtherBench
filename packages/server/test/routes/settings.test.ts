@@ -120,7 +120,7 @@ describe('/api/settings', () => {
     container.events!.subscribe((e) => seen.push(e.type));
     const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false });
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000 });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: false });
     expect(seen).toEqual(['settings-changed']);

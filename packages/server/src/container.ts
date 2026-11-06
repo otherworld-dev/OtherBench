@@ -39,6 +39,7 @@ import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endS
 import { acquireDbLock } from './db-lock.js';
 import { ClaudeLoginRunner } from './claude-accounts/login.js';
 import { ClaudeAccountService } from './claude-accounts/service.js';
+import { HandoverService } from './handover/service.js';
 import { attachAccountSwitcher } from './claude-accounts/switcher.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
@@ -153,6 +154,8 @@ export interface Container {
    * without one.
    */
   claudeAccounts?: ClaudeAccountService;
+  /** Hands a big Claude Code chat over to a fresh chat (spec 2026-11-06-fresh-chat-handover-design). Always set by `createContainer`. */
+  handover?: HandoverService;
   /** Signs those accounts in and out, and reads who is signed in, through the bundled Claude Code CLI. Always set by `createContainer`. */
   claudeLogin?: ClaudeLoginRunner;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
@@ -891,6 +894,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     onLoginChanged: () => container.peers?.announceActivity(),
   });
   container.overview = overview;
+  container.handover = new HandoverService(container);
   container.peers?.setGithubLogin(() => overview.githubLogin());
   try {
     overview.start();

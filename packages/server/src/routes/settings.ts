@@ -20,9 +20,15 @@ interface SettingsBody {
   githubEnabled?: unknown;
   nextcloudEnabled?: unknown;
   peerComputerControl?: unknown;
+  handoverEnabled?: unknown;
+  handoverThresholdTokens?: unknown;
 }
 
 const FEATURES = ['githubEnabled', 'nextcloudEnabled'] as const;
+
+/** The fresh chat card's threshold, in tokens per call: below 50k it would ask about ordinary chats, above 2M no model reaches it. */
+export const HANDOVER_THRESHOLD_MIN = 50_000;
+export const HANDOVER_THRESHOLD_MAX = 2_000_000;
 
 /** Sets the Memory model back to "Project default" when `profileId` was it -- for a profile just archived or deleted. */
 export function clearMemoryProfile(store: Store, profileId: string): void {
@@ -67,6 +73,17 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
       if (typeof value !== 'boolean') throw new HTTPException(400, { message: `"${key}" must be true or false.` });
       patch[key] = value;
     }
+    if (body.handoverEnabled !== undefined) {
+      if (typeof body.handoverEnabled !== 'boolean') throw new HTTPException(400, { message: '"handoverEnabled" must be true or false.' });
+      patch.handoverEnabled = body.handoverEnabled;
+    }
+    if (body.handoverThresholdTokens !== undefined) {
+      const n = body.handoverThresholdTokens;
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < HANDOVER_THRESHOLD_MIN || n > HANDOVER_THRESHOLD_MAX) {
+        throw new HTTPException(400, { message: `"handoverThresholdTokens" must be a whole number from ${HANDOVER_THRESHOLD_MIN} to ${HANDOVER_THRESHOLD_MAX}.` });
+      }
+      patch.handoverThresholdTokens = n;
+    }
     // Whether paired machines may start and approve computer use here (peer/forward.ts reads it on every call).
     if (body.peerComputerControl !== undefined) {
       if (typeof body.peerComputerControl !== 'boolean') throw new HTTPException(400, { message: '"peerComputerControl" must be true or false.' });
@@ -99,7 +116,8 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
     }
     const before = container.store.settings.get();
     const after = container.store.settings.update(patch);
-    if (before.peerComputerControl !== after.peerComputerControl && !FEATURES.some((key) => before[key] !== after[key])) {
+    const handoverChanged = before.handoverEnabled !== after.handoverEnabled || before.handoverThresholdTokens !== after.handoverThresholdTokens;
+    if ((before.peerComputerControl !== after.peerComputerControl || handoverChanged) && !FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });
     }
     if (FEATURES.some((key) => before[key] !== after[key])) {
