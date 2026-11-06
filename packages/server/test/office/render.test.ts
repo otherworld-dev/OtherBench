@@ -374,6 +374,68 @@ describe('renderOfficeFile: spreadsheet', () => {
     expect(written[13]).toContain('\r\n');
   }, 30_000);
 
+  /** Each formula cell of a sheet's XML: its reference, its t (or null), its formula text and its cached value (or null). */
+  function formulaCells(xml: string): { r: string; t: string | null; f: string; v: string | null }[] {
+    return [...xml.matchAll(/<c ([^>]*)><f>([\s\S]*?)<\/f>(?:<v>([\s\S]*?)<\/v>)?<\/c>/g)].map((m) => ({
+      r: /\br="([^"]+)"/.exec(m[1]!)![1]!,
+      t: /\bt="([^"]+)"/.exec(m[1]!)?.[1] ?? null,
+      f: unescapeXml(m[2]!),
+      v: m[3] === undefined ? null : unescapeXml(m[3]),
+    }));
+  }
+
+  it('writes a cached value for the formulas it can calculate, typed as Excel types them, and still asks Excel to calculate on open', async () => {
+    const source = {
+      sheets: [
+        {
+          name: 'Costs',
+          rows: [
+            ['Item', 'Cost'],
+            ['Widgets', 12],
+            ['Gadgets', 30.5],
+            ['Total', '=SUM(B2:B3)'],
+            ['Big?', '=B4>40'],
+            ['Label', { formula: '="Total: "&B4', bold: true }],
+            ['Noise', '=0.1+0.2'],
+            ['Lookup', '=VLOOKUP("Widgets",A2:B3,2,FALSE)'],
+            ['Error', '=1/0'],
+            ['Guard', '=IF(B9=0,"",1)'],
+          ],
+        },
+        { name: 'Données à part', rows: [['Double', "='Costs'!B4*2"], ['Uses lookup', '=Costs!B8+1']] },
+      ],
+    };
+    const bytes = await renderOfficeFile('spreadsheet', JSON.stringify(source), 'Cached');
+    expect(part(bytes, 'xl/workbook.xml')).toContain('fullCalcOnLoad="1"');
+    const costs = formulaCells(part(bytes, 'xl/worksheets/sheet1.xml'));
+    expect(costs).toEqual([
+      { r: 'B4', t: null, f: 'SUM(B2:B3)', v: '42.5' },
+      { r: 'B5', t: 'b', f: 'B4>40', v: '1' },
+      { r: 'B6', t: 'str', f: '"Total: "&B4', v: 'Total: 42.5' },
+      { r: 'B7', t: null, f: '0.1+0.2', v: '0.3' },
+      { r: 'B8', t: null, f: 'VLOOKUP("Widgets",A2:B3,2,FALSE)', v: null },
+      { r: 'B9', t: null, f: '1/0', v: null },
+      { r: 'B10', t: null, f: 'IF(B9=0,"",1)', v: null },
+    ]);
+    expect(formulaCells(part(bytes, 'xl/worksheets/sheet2.xml'))).toEqual([
+      { r: 'B1', t: null, f: "'Costs'!B4*2", v: '85' },
+      { r: 'B2', t: null, f: 'Costs!B8+1', v: null },
+    ]);
+    // The B6 style the library gave the cell is kept beside the type.
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toMatch(/<c r="B6" s="\d+" t="str"><f>/);
+    // OtherBench's own reader sees the values, as a viewer would.
+    const text = extractOfficeText(bytes)!;
+    for (const line of ['Total,42.5', 'Big?,TRUE', 'Label,Total: 42.5', 'B4: =SUM(B2:B3) (value 42.5)', "B1: ='Costs'!B4*2 (value 85)", 'B8: =VLOOKUP("Widgets",A2:B3,2,FALSE)\n']) {
+      expect(text, line).toContain(line);
+    }
+  }, 30_000);
+
+  it('writes a cached text value with markup and non-ASCII characters escaped so it reads back exactly', async () => {
+    const source = { sheets: [{ name: 'S', rows: [['a < b & "c"', 'Café 😀', '=A1&" "&B1']] }] };
+    const [cell] = formulaCells(part(await renderOfficeFileInProcess('spreadsheet', JSON.stringify(source), 'T'), 'xl/worksheets/sheet1.xml'));
+    expect(cell).toEqual({ r: 'C1', t: 'str', f: 'A1&" "&B1', v: 'a < b & "c" Café 😀' });
+  });
+
   it("won't write a formula formulaForFile refuses, with its message (a spec that never went through parseSpreadsheet)", async () => {
     const spec = { sheets: [{ name: 'S', rows: [['=SUM(']] }] };
     const refused = formulaForFile('=SUM(', new Set(['S']));
