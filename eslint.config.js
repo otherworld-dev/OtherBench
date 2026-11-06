@@ -8,7 +8,8 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/node_modules/**', 'desktop/**', '**/*.js', '**/*.mjs', '**/*.cjs'] },
+  // .claude/ holds agents' worktrees, each a full copy of the repo: walking them runs eslint out of memory.
+  { ignores: ['**/dist/**', '**/node_modules/**', 'desktop/**', '.claude/**', '**/*.js', '**/*.mjs', '**/*.cjs'] },
   {
     files: ['packages/*/{src,test,e2e}/**/*.{ts,tsx}'],
     languageOptions: {
