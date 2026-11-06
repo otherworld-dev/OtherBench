@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DECLINED_QUESTION, UNATTENDED_QUESTION } from '@otherbench/core/domain/thread-tools.js';
+import { HANDOVER_NO_TOOLS } from '@otherbench/core/domain/handover.js';
 import type { AskInput, AskOutcome, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { canUseToolFor, createGate, denialText, isDriveLetterPosixPath, normaliseAgentArgs, permissionDeniedHook, preToolUseHook } from '../src/approval.js';
@@ -121,6 +122,19 @@ describe('createGate with no folder (a clean chat)', () => {
       expect(await gate(name, { file_path: 'a.txt' })).toEqual({ allow: false, reason: NO_FOLDER });
     }
     expect(requestApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('createGate for a handover summary', () => {
+  it('refuses every call, saying why, without asking or raising a card', async () => {
+    const requestApproval = vi.fn();
+    const askUser = vi.fn();
+    const gate = createGate({ approvals: { requestApproval, askUser }, policy, ctx: ctx(), handover: true });
+    for (const name of ['Read', 'Bash', 'Task', 'AskUserQuestion', 'mcp__otherbench_x__artifact']) {
+      expect(await gate(name, { file_path: 'a.txt' })).toEqual({ allow: false, reason: HANDOVER_NO_TOOLS });
+    }
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(askUser).not.toHaveBeenCalled();
   });
 });
 

@@ -2,6 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import type { HelperRegistry } from './helpers.js';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool, hasShortNameSegment, isSecretAgentPath } from '@otherbench/core/domain/agent-tools.js';
+import { HANDOVER_NO_TOOLS } from '@otherbench/core/domain/handover.js';
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
@@ -193,6 +194,8 @@ export function createGate(deps: {
    * (the sandboxed shell above all) is given them.
    */
   claudeFolders?: readonly ResolvedFolder[];
+  /** A handover summary (spec 2026-11-06-fresh-chat-handover-design): every call is refused, so the reply never waits on a card. */
+  handover?: boolean;
 }): Gate {
   /** AskUserQuestion: the question card, answered through `updatedInput` (spec 2026-10-12-thread-cards-design section 6). */
   const askQuestion = async (input: Record<string, unknown>, signal: AbortSignal): Promise<GateDecision> => {
@@ -207,6 +210,7 @@ export function createGate(deps: {
   };
 
   const decide: Gate = async (toolName, input, callSignal, opts) => {
+    if (deps.handover) return { allow: false, reason: HANDOVER_NO_TOOLS };
     // OtherBench's own tools have no path arguments; each is checked as
     // OtherBench's (the profile's switch, no card), never as an MCP tool. A
     // relayed tool is checked exactly as an API model's call to it would be.

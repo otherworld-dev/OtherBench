@@ -139,6 +139,8 @@ export class SdkEventMapper {
   /** The stream index of the main agent's thinking block still open (-1 when it had none), or null, and when it opened. */
   private thinkingIndex: number | null = null;
   private thinkingSince = 0;
+  /** How much context the reply's own agent's latest model call read (input plus cache read and written), or null before any said. */
+  private lastContext: number | null = null;
   private readonly now: () => number;
 
   constructor(private readonly options: SdkEventMapperOptions = {}) {
@@ -259,6 +261,11 @@ export class SdkEventMapper {
         const out: MappedEvent[] = [];
         const isMain = m['parent_tool_use_id'] === null;
         const helper = this.helperOf(m);
+        if (isMain) {
+          // Each API call's own usage: the last one is what the next call will read again, near enough.
+          const usage = (m['message'] as { usage?: Record<string, unknown> } | undefined)?.usage;
+          if (usage) this.lastContext = num(usage['input_tokens']) + num(usage['cache_read_input_tokens']) + num(usage['cache_creation_input_tokens']);
+        }
         for (const block of blocksOf(m['message'])) {
           if (block.type === 'tool_use') {
             const id = String(block['id']);
@@ -348,7 +355,14 @@ export class SdkEventMapper {
     return [{
       type: 'finish',
       finishReason: typeof m['stop_reason'] === 'string' ? (m['stop_reason']) : 'stop',
-      usage: { tokensIn: num(u['input_tokens']) + cached + written, tokensOut: num(u['output_tokens']), tokensCached: cached, tokensCacheWrite: written, tokensReasoning: 0 },
+      usage: {
+        tokensIn: num(u['input_tokens']) + cached + written,
+        tokensOut: num(u['output_tokens']),
+        tokensCached: cached,
+        tokensCacheWrite: written,
+        tokensReasoning: 0,
+        ...(this.lastContext !== null ? { contextTokens: this.lastContext } : {}),
+      },
     }];
   }
 
