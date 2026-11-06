@@ -98,12 +98,12 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
   useSectionSummary(meta ? `${toolCount} tool${toolCount === 1 ? '' : 's'}` : null);
   if (!meta && !showAccounts) return null;
 
-  async function save(body: { claudeAccount: string | null } | { accountAutoSwitch: boolean }): Promise<void> {
+  async function save(body: { claudeAccount: string | null } | { accountAutoSwitch: boolean } | { handoverSuggest: boolean }): Promise<void> {
     setSaveError(null);
     try {
       upsertChat(await api.chats.patch(chatId, body));
     } catch (err) {
-      console.error('[otherbench-web] failed to change the Claude account:', err);
+      console.error("[otherbench-web] failed to change this chat's Claude Code settings:", err);
       setSaveError(err instanceof Error ? err.message : "Couldn't save. Please try again.");
     }
   }
@@ -148,6 +148,12 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
   return (
     <>
     {accountControls}
+    {/* The fresh chat card (spec 2026-11-06-fresh-chat-handover-design); "Don't ask again for this chat" unticks it. */}
+    <label className="mb-2 flex items-center gap-2 text-xs">
+      <input type="checkbox" checked={chat?.handoverSuggest !== false} onChange={(e) => void save({ handoverSuggest: e.target.checked })} />
+      Suggest a fresh chat when this gets big
+    </label>
+    {!showAccounts && saveError && <p role="alert" className="mb-2 text-xs text-[var(--danger)]">{saveError}</p>}
     <dl className="space-y-1 text-xs">
       <div className="flex gap-2"><dt className="text-[var(--text-muted)]">Backend</dt><dd>{meta.backend === 'claude' || meta.account ? 'Claude login' : meta.backend}</dd></div>
       {meta.account && <div className="flex gap-2"><dt className="sr-only">Account</dt><dd>Account: {replyAccount?.name ?? meta.account}</dd></div>}

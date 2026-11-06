@@ -26,6 +26,8 @@ import {
   togglePanePin as togglePanePinIn,
 } from './panes.js';
 import { announceAccountEvent, reloadOnAccountEvent } from './claudeAccounts.js';
+import { pendingHandovers } from './handover.js';
+import { toast } from '../lib/toasts.js';
 import { prunePool } from './messagePool.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents } from './reducer.js';
 import { forgetInBoth, inMode, inPanesOf, modeOfTab, movedModes, otherMode, paneStateKey, refiled, synced, toastIfNoRoom, withPanes } from './storePanes.js';
@@ -346,6 +348,11 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   applyAppEvent: (event) => {
     announceAccountEvent(event, (id) => get().chats.find((c) => c.id === id)?.title);
     reloadOnAccountEvent(event);
+    if (event.type === 'chat-handed-over') {
+      // The window that asked opens the fresh chat, if it is still showing the old one; any other says so.
+      if (pendingHandovers.delete(event.fromChatId) && get().activeChatId === event.fromChatId) get().setActiveChatId(event.toChatId);
+      else toast({ tone: 'ok', chatId: event.toChatId, text: `Continued in ${event.title}` });
+    }
     set((state) => {
       switch (event.type) {
         case 'chat-created':

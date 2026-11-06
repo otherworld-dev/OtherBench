@@ -99,7 +99,7 @@ describe('SdkEventMapper on synthetic messages', () => {
   it('says nothing of context when no call carried usage', () => {
     const m = new SdkEventMapper();
     const out = m.map({ type: 'result', subtype: 'success', is_error: false, usage: {}, uuid: 'u', session_id: 's' } as unknown as SDKMessage);
-    const finish = out.at(-1) as { usage: Record<string, unknown> };
+    const finish = out.at(-1) as unknown as { usage: Record<string, unknown> };
     expect(finish.usage).not.toHaveProperty('contextTokens');
   });
   it('ignores a stream_event with no event payload instead of throwing', () => {
