@@ -487,6 +487,14 @@ describe('cached formula values: what is left uncached', () => {
 });
 
 describe('cached formula values: size', () => {
+  it('counts the empty rows a range walks over against the budget', () => {
+    // 100 whole-column sums over 200,100 rows with nothing in column B: no cell is read, yet each walks every row.
+    const rows: Cell[][] = [...Array.from({ length: 100 }, (): Cell[] => ['=SUM(B:B)']), ...Array.from({ length: 200_000 }, (): Cell[] => [])];
+    const values = cachedFormulaValues({ sheets: [{ name: 'S', rows }] });
+    expect(values(0, 0, 0)).toEqual(n('0'));
+    expect(values(0, 99, 0)).toBeNull();
+  });
+
   it('works down a long chain of formulas in dependency order, without recursion', () => {
     const rows: Cell[][] = Array.from({ length: 5000 }, (_, r) => [1, r === 0 ? '=A1' : `=B${r}+A${r + 1}`]);
     const summary: SheetSpec = { name: 'Summary', rows: [['=Data!B5000']] };

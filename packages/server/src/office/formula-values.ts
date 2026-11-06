@@ -465,17 +465,26 @@ class Workbook {
     this.results.set(cellKey(f.sheet, f.row, f.col), out);
   }
 
-  private cell(sheet: number, row: number, col: number): Scalar {
+  private step(): void {
     if (++this.steps > EVAL_BUDGET) throw new OutOfBudget();
+  }
+
+  private cell(sheet: number, row: number, col: number): Scalar {
+    this.step();
     const key = cellKey(sheet, row, col);
     if (this.formulaIds.has(key)) return this.results.get(key) ?? UNKNOWN;
     return literal(this.spec.sheets[sheet]?.rows[row]?.[col]);
   }
 
-  /** Every cell of an area that is in the sheet, in row order; past the sheet's rows and a row's cells they're empty. */
+  /**
+   * Every cell of an area that is in the sheet, in row order; past the sheet's rows and a row's cells they're empty.
+   * Each row walked counts against the budget as well as each cell read, or a whole-column range over many short rows
+   * would read nothing and never run out.
+   */
   private *cells(a: Area): Generator<Scalar> {
     const rows = this.spec.sheets[a.sheet]?.rows ?? [];
     for (let r = a.r1; r <= Math.min(a.r2, rows.length - 1); r++) {
+      this.step();
       const row = rows[r] ?? [];
       for (let c = a.c1; c <= Math.min(a.c2, row.length - 1); c++) yield this.cell(a.sheet, r, c);
     }
