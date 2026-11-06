@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { ISSUE_LIST_LIMIT } from '@otherbench/core/domain/apps.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { GithubNotification } from '@otherbench/core/types/overview.js';
@@ -96,7 +97,7 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
   // On focus and after a turn in one of the app's chats, as well as from ↻ (spec "Calls I made").
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
   // Another app or state starts from its last list, or Loading…; a refresh keeps the list showing until the new one arrives.
-  useEffect(() => setError(null), [app.id, repo, state]);
+  if (useChanged([app.id, repo, state])) setError(null);
   useEffect(() => {
     // Nothing to ask gh about: the server would only answer no-github-repo.
     if (!repo) return;

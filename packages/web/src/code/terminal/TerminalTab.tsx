@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type JSX } from 'react';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { TerminalInfo } from '@otherbench/core/types/terminal.js';
 import { api, ApiError } from '../../state/api.js';
@@ -39,16 +39,21 @@ export function TerminalTab({ app }: { app: App }): JSX.Element {
     [app.id]
   );
 
-  const refresh = useCallback(async (): Promise<TerminalInfo[] | null> => {
-    try {
-      const list = await api.terminals.list(app.id);
-      setTerminals(list);
-      return list;
-    } catch (err) {
-      setError(err);
-      return null;
-    }
-  }, [app.id]);
+  // Its state is set in the callbacks, once the list has come: none of it synchronously in the effect that shows the tab.
+  const refresh = useCallback(
+    (): Promise<TerminalInfo[] | null> =>
+      api.terminals.list(app.id).then(
+        (list) => {
+          setTerminals(list);
+          return list;
+        },
+        (err: unknown) => {
+          setError(err);
+          return null;
+        }
+      ),
+    [app.id]
+  );
 
   const create = useCallback(
     async (shell?: string) => {
@@ -91,19 +96,19 @@ export function TerminalTab({ app }: { app: App }): JSX.Element {
   );
 
   // Ctrl+` and Ctrl+Shift+` (useTerminalShortcuts).
-  const latest = useRef({ terminals, create });
-  latest.current = { terminals, create };
+  // Reads this render's list and create without resubscribing.
+  const onTerminalRequest = useEffectEvent((): void => {
+    // Before the list has loaded, the mount above takes it.
+    if (terminals === null) return;
+    const request = useOtherBenchStore.getState().takeTerminalRequest();
+    if (request === null) return;
+    if (request.kind === 'new' || terminals.length === 0) void create();
+    else setFocusToken((n) => n + 1);
+  });
   useEffect(
     () =>
       useOtherBenchStore.subscribe((state, prev) => {
-        if (state.terminalRequest === null || state.terminalRequest === prev.terminalRequest) return;
-        // Before the list has loaded, the mount above takes it.
-        if (latest.current.terminals === null) return;
-        const request = useOtherBenchStore.getState().takeTerminalRequest();
-        if (request === null) return;
-        const { terminals: now, create: make } = latest.current;
-        if (request.kind === 'new' || (now !== null && now.length === 0)) void make();
-        else setFocusToken((n) => n + 1);
+        if (state.terminalRequest !== null && state.terminalRequest !== prev.terminalRequest) onTerminalRequest();
       }),
     []
   );

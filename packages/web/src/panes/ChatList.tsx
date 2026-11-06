@@ -201,12 +201,15 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const projectSchedulesLine = schedulesDeletedLine(useScheduleCount(deletingProjectId ? { kind: 'project', projectId: deletingProjectId } : null));
 
   // The chat under an open menu vanished (deleted or archived from elsewhere): close the menu, keep focus in the list.
-  const menuChatGone = chatMenu !== null && menuChat === null;
-  useEffect(() => {
-    if (!menuChatGone) return;
+  // Closed in the render that finds it gone; the focus, a side effect, waits for the commit (bumped, never reset).
+  const [menuGoneCount, setMenuGoneCount] = useState(0);
+  if (chatMenu !== null && menuChat === null) {
     setChatMenu(null);
-    focusLater(LIST_SELECTOR);
-  }, [menuChatGone]);
+    setMenuGoneCount((n) => n + 1);
+  }
+  useEffect(() => {
+    if (menuGoneCount > 0) focusLater(LIST_SELECTOR);
+  }, [menuGoneCount]);
 
   /**
    * A new chat in a project, an app (Code mode), or neither. `into` names the
@@ -485,6 +488,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   /** Hides the chat from the sidebar (spec §3: reuses `archivedAt`). */
   async function archiveChat(chat: Chat): Promise<void> {
     const next = neighbourSelector(chat.id);
+    // eslint-disable-next-line react-hooks/purity -- runs from the menu's Archive, never in render; the compiler assumes chatMenuItems, called while rendering, may call the actions it is handed.
     const updated = await patchChat(chat, { archivedAt: Date.now() }, "Couldn't archive the chat");
     if (!updated) return;
     if (useOtherBenchStore.getState().activeChatId === chat.id) setActiveChatId(null);

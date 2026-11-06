@@ -25,8 +25,6 @@ export interface SplitterProps {
  */
 export function Splitter({ direction, sizes, index, onResize, onCommit, onReset }: SplitterProps): JSX.Element {
   const drag = useRef<{ start: number; length: number; sizes: number[] } | null>(null);
-  const latest = useRef(sizes);
-  latest.current = sizes;
   const total = sizes.reduce((a, b) => a + b, 0);
   const before = sizes.slice(0, index + 1).reduce((a, b) => a + b, 0);
   const vertical = direction === 'row';
@@ -52,7 +50,8 @@ export function Splitter({ direction, sizes, index, onResize, onCommit, onReset 
     if (!drag.current) return;
     drag.current = null;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
-    onCommit(latest.current);
+    // The handler is this render's, so `sizes` already has the last onResize in it.
+    onCommit(sizes);
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {

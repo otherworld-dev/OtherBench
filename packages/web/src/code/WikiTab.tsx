@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type JSX, type MouseEvent } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { WikiPageNode, WikiTree } from '@otherbench/core/types/nextcloud.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
@@ -47,8 +48,8 @@ export function WikiTab({ app, owner }: { app: App; owner: string }): JSX.Elemen
   const refresh = (): void => setReload((n) => n + 1);
 
   useCodeRefresh(app.id, refresh);
-  useEffect(() => setError(null), [app.id, pagePath]);
-  useEffect(() => setQuery(''), [owner]);
+  if (useChanged([app.id, pagePath])) setError(null);
+  if (useChanged([owner])) setQuery('');
   useEffect(() => {
     // Nothing to ask for: the server would only answer no-wiki-page.
     if (pagePath === null) return;

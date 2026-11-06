@@ -111,9 +111,9 @@ export function ImportPanel(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const running = status?.state === 'running';
 
-  useEffect(() => {
-    if (!profileId) setProfileId(defaultImportProfileId(profiles, connections));
-  }, [profiles, connections, profileId]);
+  // The first suitable profile, once there is one, until another is picked: set in the render that finds it.
+  const defaultProfileId = profileId ? '' : defaultImportProfileId(profiles, connections);
+  if (defaultProfileId) setProfileId(defaultProfileId);
 
   useEffect(() => {
     let cancelled = false;

@@ -4,6 +4,7 @@ import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody, type ToolPolicyBody } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
+import { useChanged } from '../../lib/useChanged.js';
 import { useComputerUseAvailable } from '../../lib/computerUse.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { GenerationSection, generationProblem, type GenerationState } from './GenerationSection.js';
@@ -87,9 +88,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [hostsText, setHostsText] = useState((profile?.toolPolicy.sandboxHosts ?? DEFAULT_SANDBOX_HOSTS).join('\n'));
   // Whether this machine's sandbox is set up; asked only once "in the sandbox" is chosen.
   const [sandboxReady, setSandboxReady] = useState<boolean | null>(null);
+  // Asked afresh each time it's chosen: unknown until the answer comes, so an old "not set up" doesn't show meanwhile.
+  if (useChanged([shell, shellRuns]) && shell && shellRuns === 'sandbox') setSandboxReady(null);
   useEffect(() => {
     if (!shell || shellRuns !== 'sandbox') return;
-    setSandboxReady(null);
     let cancelled = false;
     api.sandbox
       .status()

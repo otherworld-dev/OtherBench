@@ -22,19 +22,22 @@ function messageOf(e: unknown): string {
  */
 export function ClaudeAccountsPanel(): JSX.Element {
   const accounts = useClaudeAccounts((s) => s.accounts);
+  // When they were read: what an account's limit is told against.
+  const loadedAt = useClaudeAccounts((s) => s.loadedAt);
   const load = useClaudeAccounts((s) => s.load);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The sign-in page each account's running sign-in answered with (null: it gave none).
   const [urls, setUrls] = useState<Record<string, string | null>>({});
 
-  const reload = useCallback(async (): Promise<void> => {
-    try {
-      await load();
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(messageOf(e));
-    }
-  }, [load]);
+  // Its state is set in the callbacks, after the read: none of it synchronously in the effect that loads on open.
+  const reload = useCallback(
+    (): Promise<void> =>
+      load().then(
+        () => setLoadError(null),
+        (e: unknown) => setLoadError(messageOf(e))
+      ),
+    [load]
+  );
 
   useEffect(() => {
     void reload();
@@ -87,6 +90,7 @@ export function ClaudeAccountsPanel(): JSX.Element {
           <AccountCard
             key={a.slug}
             account={a}
+            loadedAt={loadedAt}
             url={urls[a.slug] ?? null}
             onSignIn={() => void signIn(a.slug)}
             onSignOut={() => {
@@ -108,6 +112,8 @@ export function ClaudeAccountsPanel(): JSX.Element {
 
 interface CardProps {
   account: AccountView;
+  /** When the account was read, for whether it is still at its limit. */
+  loadedAt: number;
   url: string | null;
   onSignIn(): void;
   onSignOut(): void;
@@ -117,9 +123,9 @@ interface CardProps {
   onCode(code: string): Promise<boolean>;
 }
 
-function AccountCard({ account: a, url, onSignIn, onSignOut, onRemove, onColour, onCode }: CardProps): JSX.Element {
+function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode }: CardProps): JSX.Element {
   const [code, setCode] = useState('');
-  const limited = a.limitedUntil !== null && a.limitedUntil > Date.now();
+  const limited = a.limitedUntil !== null && a.limitedUntil > loadedAt;
   return (
     <li data-testid={`claude-account-${a.slug}`} className="space-y-2 rounded border border-[var(--border)] bg-[var(--bg-raised)] p-3">
       <div className="flex flex-wrap items-center gap-2">

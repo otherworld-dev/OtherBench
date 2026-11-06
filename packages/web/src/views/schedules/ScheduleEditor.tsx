@@ -43,6 +43,8 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     schedule ? draftFromSchedule(schedule) : emptyDraft(prefill ?? null, defaultProfileFor(prefill ?? null, chats, projects, profiles))
   );
   const [draft, setDraft] = useState<ScheduleDraft>(initial);
+  // The preview's "now": taken with each edit, as the runs it lists are worked out again then.
+  const [editedAt, setEditedAt] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const id = useId();
@@ -58,7 +60,10 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     };
   }, []);
 
-  const set = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]): void => setDraft((d) => ({ ...d, [key]: value }));
+  const set = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]): void => {
+    setDraft((d) => ({ ...d, [key]: value }));
+    setEditedAt(Date.now());
+  };
   const timezone = schedule?.timezone ?? browserTimeZone();
   // The target is immutable once made (patchBody ignores it), so it is read-only when editing or opened with a prefill.
   const targetFixed = schedule !== undefined || prefill !== undefined;
@@ -67,7 +72,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   // Auto mode is Claude Code's: offered only for its profiles. A tick left over from another profile is kept, and ignored by the run.
   const offersAuto = connection?.kind === 'claude_code';
   const warnings = profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, targetHasFolder(draft, chats, projects), draft.autoMode) : [];
-  const preview = previewRuns(draft, timezone, Date.now());
+  const preview = previewRuns(draft, timezone, editedAt);
   const profileChoices = profiles.filter((p) => p.archivedAt === null || p.id === draft.profileId);
   const chatChoices = chats.filter((c) => c.archivedAt === null).sort((a, b) => b.createdAt - a.createdAt);
   const targetText =

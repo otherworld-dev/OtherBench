@@ -37,6 +37,12 @@ export default defineConfig(
     rules: {
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'error',
+      // A render reads no clock and no ref, and an effect doesn't set state straight away: each of
+      // those is a stale value on screen or a second render (lib/useChanged.ts, lib/useNow.ts).
+      'react-hooks/purity': 'error',
+      'react-hooks/refs': 'error',
+      'react-hooks/immutability': 'error',
+      'react-hooks/set-state-in-effect': 'error',
     },
   },
 );

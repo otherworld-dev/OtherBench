@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import type { ModelInfo } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
@@ -7,6 +7,7 @@ import { estimateCost } from '@otherbench/core/types/usage.js';
 import { Message } from './Message.js';
 import type { MessageExtras } from '../state/reducer.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { useNow } from '../lib/useNow.js';
 
 /** All-null pricing -- `estimateCost` returns `null` for this, rendered as "—" rather than a misleading $0.00. */
 const UNKNOWN_PRICING: PricingSnapshot = { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
@@ -58,19 +59,14 @@ const frozenLatencyCache = new Map<string, number>();
 
 /** Live-while-streaming, frozen-once-terminal elapsed time since `variant.createdAt`. See `frozenLatencyCache`'s doc for what this is (and isn't) a measurement of. */
 function useLatencyMs(variant: CanonMessage): number | null {
-  const [, tick] = useReducer((n: number) => n + 1, 0);
-
-  useEffect(() => {
-    if (variant.status !== 'streaming') return undefined;
-    const id = setInterval(tick, 500);
-    return () => clearInterval(id);
-  }, [variant.status]);
+  // Ticks every 500ms while streaming; the reading is the last tick's, so a streamed chunk doesn't move it.
+  const now = useNow(variant.status === 'streaming' ? 500 : null);
 
   if (variant.status === 'streaming') {
-    return Date.now() - variant.createdAt;
+    return now - variant.createdAt;
   }
   if (!frozenLatencyCache.has(variant.id)) {
-    frozenLatencyCache.set(variant.id, Date.now() - variant.createdAt);
+    frozenLatencyCache.set(variant.id, now - variant.createdAt);
   }
   return frozenLatencyCache.get(variant.id) ?? null;
 }

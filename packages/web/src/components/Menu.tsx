@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react';
 
 /** One entry of a {@link Menu}. Give `submenu` to make it open a nested menu instead of acting. */
 export interface MenuItem {
@@ -196,8 +196,8 @@ function MenuList({ label, items, isSubmenu, onChoose, onBack, onTab, className,
  */
 export function Menu({ label, items, position, onClose }: MenuProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  // The latest onClose, for the document listeners below without re-adding them.
+  const closeFromOutside = useEffectEvent((reason: MenuCloseReason) => onClose(reason));
   const [placed, setPlaced] = useState(position);
 
   // Keep the whole menu on screen (a right-click near the bottom-right edge),
@@ -217,7 +217,7 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
 
   useEffect(() => {
     const outside = (reason: MenuCloseReason) => (e: Event): void => {
-      if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) onCloseRef.current(reason);
+      if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) closeFromOutside(reason);
     };
     const onPointerDown = outside('pointer');
     const onScroll = outside('dismiss');
@@ -243,11 +243,11 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
         items={items}
         isSubmenu={false}
         onChoose={(item) => {
-          onCloseRef.current('select');
+          onClose('select');
           item.onSelect?.();
         }}
-        onBack={() => onCloseRef.current('dismiss')}
-        onTab={() => onCloseRef.current('dismiss')}
+        onBack={() => onClose('dismiss')}
+        onTab={() => onClose('dismiss')}
       />
     </div>
   );

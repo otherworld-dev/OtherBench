@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { isOfficeKind } from '@otherbench/core/domain/office-spec.js';
 import type { ArtifactVersion } from '@otherbench/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
+import { useChanged } from '../lib/useChanged.js';
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ArtifactDetail, type LiveOutcome, type LiveStatus, type ViewOpened } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -54,10 +55,12 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const stamp = useArtifactsStamp(chatId);
 
   // Each load starts clean, so a failure (a version not synced yet, say) clears on the next change.
-  useEffect(() => {
-    let cancelled = false;
+  if (useChanged([chatId, item.artifactId, stamp, reload])) {
     setError(null);
     setActionError(null);
+  }
+  useEffect(() => {
+    let cancelled = false;
     api.artifacts.get(chatId, item.artifactId).then(
       (d) => !cancelled && setDetail(d),
       (err: unknown) => !cancelled && setError(failure(err))
@@ -98,13 +101,17 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     if (el) loadsRef.current = 0;
   }, []);
 
-  useEffect(() => {
-    if (!versionId || !kind) return;
-    let cancelled = false;
+  // Another version starts from Opening, in the same render, so the last one's content never shows under its name.
+  const versionChanged = useChanged([chatId, item.artifactId, versionId, kind]);
+  if (versionChanged && versionId && kind) {
     setError(null);
     setActionError(null);
     setVersion(null);
     setOpened(null);
+  }
+  useEffect(() => {
+    if (!versionId || !kind) return;
+    let cancelled = false;
     api.artifacts.version(chatId, item.artifactId, versionId).then(
       (v) => !cancelled && setVersion(v),
       (err: unknown) => !cancelled && setError(failure(err))
@@ -121,13 +128,16 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   }, [chatId, item.artifactId, versionId, kind]);
 
   // Each live version's status: which of its calls are allowed here. A new version is a new document in a new frame.
-  useEffect(() => {
+  if (useChanged([chatId, item.artifactId, versionId, live])) {
     setLiveLoad(null);
     setLiveHidden(false);
     setOutcomes(new Map());
     setLatest(null);
     setLeft(false);
     setFrameKey((k) => k + 1);
+  }
+  useEffect(() => {
+    // A ref, so after the commit: the new frame's documents are fresh again only once it says so.
     freshRef.current = null;
     if (!live || !versionId) return;
     let cancelled = false;

@@ -1,10 +1,11 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useState, type JSX } from 'react';
 import type { ApprovalChoice } from '@otherbench/core/ports/tool-provider.js';
 import type { BackgroundHelper } from '@otherbench/core/types/background.js';
 import { ApiError, api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { formatDuration } from './SubagentCard.js';
+import { useNow } from '../lib/useNow.js';
 
 /** What a background task's kind is called beside its name; a helper (`local_agent`) needs no word. */
 const KIND_LABEL: Record<string, string> = { local_bash: 'command', monitor: 'monitor', local_workflow: 'workflow', mcp_task: 'tool' };
@@ -20,13 +21,8 @@ const EMPTY: never[] = [];
 export function BackgroundHelpers({ chatId, onResolveApproval }: { chatId: string; onResolveApproval: (requestId: string, choice: ApprovalChoice) => Promise<void> }): JSX.Element | null {
   const helpers = useOtherBenchStore((s) => s.chatHelpers[chatId] ?? EMPTY);
   const approvals = useOtherBenchStore((s) => s.backgroundApprovals[chatId] ?? EMPTY);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (helpers.length === 0) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [helpers.length]);
+  // Ticks every second while anything runs. A helper that has just appeared reads 0s (formatDuration floors at 0) until the next tick.
+  const now = useNow(helpers.length > 0 ? 1000 : null);
   if (helpers.length === 0 && approvals.length === 0) return null;
   const orphans = approvals.filter((r) => !helpers.some((h) => h.callId !== null && r.subagent?.callId === h.callId));
   return (

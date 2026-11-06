@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import type { McpServer } from '@otherbench/core/ports/store.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
+import { useChanged } from '../../lib/useChanged.js';
 import { useLiveData } from '../../lib/useLiveData.js';
 import { ClaudeDesktopImport } from './ClaudeDesktopImport.js';
 import { McpSignIn } from './McpSignIn.js';
@@ -772,9 +773,9 @@ export function McpServersPanel(): JSX.Element {
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [importing, setImporting] = useState(false);
-  const [selectedConfig, setSelectedConfig] = useState<McpServer | null>(null);
-  const [loadingConfig, setLoadingConfig] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // One server's full config, as loaded or as just saved, or why it couldn't load. It shows only while that
+  // server is the one being edited, so another one's form never shows under its name while it loads.
+  const [loaded, setLoaded] = useState<{ id: string; server: McpServer | null; error: string | null } | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   // Set right before `handleSaved` switches `editingId` to a just-created/
   // -saved server's own id -- that id's full config is already in hand (the
@@ -784,35 +785,34 @@ export function McpServersPanel(): JSX.Element {
   // also flash the form to "Loading…" right after a successful save.
   const skipNextFetch = useRef(false);
 
+  const editingServerId = editingId !== null && editingId !== 'new' ? editingId : null;
+  // Leaving a server drops its config, so coming back to it loads it afresh rather than showing the old one.
+  if (useChanged([editingServerId]) && loaded !== null && loaded.id !== editingServerId) setLoaded(null);
+  const current = loaded !== null && loaded.id === editingServerId ? loaded : null;
+  const selectedConfig = current?.server ?? null;
+  const loadError = current?.error ?? null;
+  const loadingConfig = editingServerId !== null && current === null;
+
   useEffect(() => {
-    if (!editingId || editingId === 'new') {
-      setSelectedConfig(null);
-      setLoadError(null);
-      return;
-    }
+    if (editingServerId === null) return;
     if (skipNextFetch.current) {
       skipNextFetch.current = false;
       return;
     }
     let cancelled = false;
-    setLoadingConfig(true);
-    setLoadError(null);
     api.mcpServers
-      .get(editingId)
+      .get(editingServerId)
       .then((cfg) => {
-        if (!cancelled) setSelectedConfig(cfg);
+        if (!cancelled) setLoaded({ id: editingServerId, server: cfg, error: null });
       })
       .catch((err: unknown) => {
-        console.error(`[otherbench-web] failed to load MCP server ${editingId}:`, err);
-        if (!cancelled) setLoadError(errorMessage(err, 'Failed to load this server -- please try again.'));
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingConfig(false);
+        console.error(`[otherbench-web] failed to load MCP server ${editingServerId}:`, err);
+        if (!cancelled) setLoaded({ id: editingServerId, server: null, error: errorMessage(err, 'Failed to load this server -- please try again.') });
       });
     return () => {
       cancelled = true;
     };
-  }, [editingId]);
+  }, [editingServerId]);
 
   function handleSaved(server: McpServer): void {
     // Only meaningful (and only consumed) when `editingId` is genuinely
@@ -823,14 +823,14 @@ export function McpServersPanel(): JSX.Element {
     // in that case would wrongly skip the fetch for whatever the user
     // selects next.
     if (editingId !== server.id) skipNextFetch.current = true;
-    setSelectedConfig(server);
+    setLoaded({ id: server.id, server, error: null });
     setEditingId(server.id);
     reloadHealth();
   }
 
   function handleDeleted(): void {
     setEditingId(null);
-    setSelectedConfig(null);
+    setLoaded(null);
     reloadHealth();
   }
 

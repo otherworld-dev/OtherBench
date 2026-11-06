@@ -20,6 +20,7 @@ import { remoteUnreachable } from '../state/machines.js';
 import { useUnsentText } from '../state/unsent.js';
 import { factFromMessage } from '@otherbench/core/domain/app-notes.js';
 import { useAppNotesStore } from '../state/appNotes.js';
+import { useChanged } from '../lib/useChanged.js';
 
 /** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
 type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
@@ -131,6 +132,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
   const history = useMemo(() => promptHistory(messages, parentId ?? (storedChat ?? chat).headMessageId), [messages, parentId, storedChat, chat]);
   const [browsing, setBrowsing] = useState<{ index: number; draft: string } | null>(null);
+  // Another chat (or branch) has its own history.
+  if (useChanged([chat.id, parentId])) setBrowsing(null);
   const caretTo = useRef<'start' | 'end' | null>(null);
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -233,6 +236,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (taken.length === 0) return;
     // While a recalled message shows, the draft is the one kept aside, not that message.
     const kept = browsing?.draft;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- takes the notes out of the store's queue, which can only happen once the render is committed; the text and chips are what it hands back.
     setText((draft) => [kept ?? draft, ...taken.map((n) => n.text)].filter((t) => t.trim().length > 0).join('\n\n'));
     setBrowsing(null);
     for (const n of taken) for (const a of n.attachments) returnedAttachmentIds.current.add(a.attachmentId);
@@ -269,6 +273,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     const handed = useOtherBenchStore.getState().takeComposerPrefill(chat.id);
     if (handed === null) return;
     const kept = browsing?.draft;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- takes the text out of the store's queue, which can only happen once the render is committed.
     setText((draft) => [kept ?? draft, handed].filter((t) => t.trim().length > 0).join('\n\n'));
     setBrowsing(null);
     caretTo.current = 'end';
@@ -532,6 +537,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     try {
       const saved = await api.appNotes.addFact(appId, { text: fact, chatId: chat.id });
       setAppNotesView(appId, saved);
+      // eslint-disable-next-line react-hooks/purity -- runs after the save resolves, never in render; the compiler can't tell, through the textarea's onKeyDown, that handleSend only runs from an event.
       addFactCard(chat.id, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, appId, fact: saved.fact, state: 'saved' });
       setText('');
       textareaRef.current?.focus();
@@ -684,8 +690,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     caretTo.current = null;
   }, [text]);
 
-  // Another chat (or branch) has its own history.
-  useEffect(() => setBrowsing(null), [chat.id, parentId]);
 
   function togglePickerProfile(id: string): void {
     setSelectedProfileIds((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));

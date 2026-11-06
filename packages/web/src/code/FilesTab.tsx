@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import { api, type ViewText } from '../state/api.js';
 import { CodeView } from '../viewer/CodeView.js';
@@ -22,7 +23,7 @@ export function FilesTab({ app, chatId }: { app: App; chatId: string | null }): 
   const [shown, setShown] = useState<string | null>(null);
   const loadDir = useCallback<LoadDir>((path) => api.apps.files(app.id, path), [app.id]);
   // Another app's folder, or a chat appearing, starts again from the tree.
-  useEffect(() => setShown(null), [app.id, chatId]);
+  if (useChanged([app.id, chatId])) setShown(null);
 
   const open = (path: string): void => {
     if (chatId !== null) viewerActionsFor(chatId).openPath(path);
@@ -40,10 +41,13 @@ export function FilesTab({ app, chatId }: { app: App; chatId: string | null }): 
 function ReadOnlyFile({ appId, path, onBack }: { appId: string; path: string; onBack: () => void }): JSX.Element {
   const [text, setText] = useState<ViewText | null>(null);
   const [error, setError] = useState<unknown>(null);
-  useEffect(() => {
-    let cancelled = false;
+  // Another file starts from Loading, in the same render, so the last one's text never shows under its name.
+  if (useChanged([appId, path])) {
     setText(null);
     setError(null);
+  }
+  useEffect(() => {
+    let cancelled = false;
     api.apps.text(appId, path).then(
       (r) => !cancelled && setText(r),
       (err: unknown) => !cancelled && setError(err)

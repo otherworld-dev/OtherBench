@@ -20,6 +20,8 @@ const WINDOWS = [
  */
 export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX.Element | null {
   const accounts = useClaudeAccounts((s) => s.accounts);
+  // When the accounts were read: what their "Limited until" is told against.
+  const loadedAt = useClaudeAccounts((s) => s.loadedAt);
   const [readings, setReadings] = useState<Readings>({});
   const slugs = accounts.map((a) => a.slug).join('\n');
   const first = useRef(true);
@@ -63,7 +65,7 @@ export function ClaudeAccountsStrip({ refreshKey }: { refreshKey: number }): JSX
   const hasReading = Object.values(readings).some((r) => r !== null && r !== 'failed');
   if (accounts.length === 0 || (accounts.length === 1 && accounts[0]?.main && !hasReading)) return null;
 
-  const now = Date.now();
+  const now = loadedAt;
   return (
     <div data-testid="claude-accounts-strip" className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
       {accounts.map((a) => {

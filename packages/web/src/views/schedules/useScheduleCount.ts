@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import type { Schedule } from '@otherbench/core/ports/store.js';
+import { useChanged } from '../../lib/useChanged.js';
 import { api } from '../../state/api.js';
 
 /** How many of `schedules` run on `target`: a chat's, or a project's own (not its sub-projects'). */
@@ -24,8 +25,9 @@ export function schedulesDeletedLine(count: number | null): string | null {
 export function useScheduleCount(target: ScheduleTarget | null): number | null {
   const [count, setCount] = useState<number | null>(null);
   const key = target === null ? null : target.kind === 'chat' ? `chat:${target.chatId}` : `project:${target.projectId}`;
+  // Another target goes back to null in the same render, so the last one's count is never said of it.
+  if (useChanged([key])) setCount(null);
   useEffect(() => {
-    setCount(null);
     if (target === null) return;
     let live = true;
     Promise.resolve()

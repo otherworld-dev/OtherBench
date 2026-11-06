@@ -6,6 +6,7 @@ import type { AuditEntry, Chat, Grant } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
+import { useChanged } from '../lib/useChanged.js';
 import { useLiveData } from '../lib/useLiveData.js';
 import { useNow } from '../lib/useNow.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
@@ -218,12 +219,13 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
   // A genuine chat switch resets the form and drops the optimistic override
   // -- but NOT a re-render mid-edit, which would otherwise wipe out whatever
   // the user is currently typing.
-  useEffect(() => {
+  // Done in the render that sees the new chat, so the last chat's form is never drawn under it.
+  if (useChanged([chat.id])) {
     setEditing(false);
     setError(null);
     setLocalWorkspaceRoot(undefined);
     // The draft is intentionally NOT synced on every keystroke of chat.workspaceRoot's own updater below.
-  }, [chat.id]);
+  }
 
   const displayedWorkspaceRoot = localWorkspaceRoot !== undefined ? localWorkspaceRoot : chat.workspaceRoot;
   // A folder that doesn't resolve here (v2 spec §6): say why rather than "no folder".
@@ -515,10 +517,10 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const profileKey = `${profile?.id ?? ''}:${profileIds.join(',')}`;
-  useEffect(() => {
+  if (useChanged([profileKey])) {
     setLocalIds(null);
     setSaveError(null);
-  }, [profileKey]);
+  }
   const onIds = localIds ?? profileIds;
   const summary = mcpSummary(servers, failed, profile ? onIds : null);
   useSectionSummary(summary.text, summary.tone);
@@ -641,7 +643,7 @@ function GrantsSection({ chatId, profileId }: { chatId: string; profileId: strin
   const [localGrants, setLocalGrants] = useState<Grant[] | null>(null);
 
   // A fresh read (or another chat) replaces the optimistic list.
-  useEffect(() => setLocalGrants(null), [chatId, grants]);
+  if (useChanged([chatId, grants])) setLocalGrants(null);
   const shown = localGrants ?? grants;
   useSectionSummary(failed ? "couldn't load" : shown === null ? null : shown.length === 0 ? 'none' : `${shown.length} active`);
 
@@ -867,11 +869,11 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
   // Resets to the "Loading…" state only on a genuine chat switch -- a
   // same-chat re-fetch (triggered by statusSignal below) updates the
   // numbers in place instead of flashing back to a loading state.
-  useEffect(() => {
+  if (useChanged([chatId])) {
     setRollup(null);
     setFailed(false);
     // Deliberately chatId-only, see comment above.
-  }, [chatId]);
+  }
 
   useEffect(() => {
     let cancelled = false;

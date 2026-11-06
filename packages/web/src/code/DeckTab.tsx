@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useEffectEvent, useState, type JSX } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { DeckBoardView, DeckCardDetail, DeckCardSummary, DeckLabel } from '@otherbench/core/types/nextcloud.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -102,7 +103,7 @@ export function DeckTab({ app, owner }: { app: App; owner: string }): JSX.Elemen
 
   // On focus and after a turn in one of the app's chats, as well as from ↻.
   useCodeRefresh(app.id, refresh);
-  useEffect(() => setError(null), [app.id, boardId]);
+  if (useChanged([app.id, boardId])) setError(null);
   useEffect(() => {
     // Nothing to ask for: the server would only answer no-deck-board.
     if (boardId === null) return;
@@ -357,13 +358,12 @@ function CardView({
   // The board to look on first: the card's own once it's known, so a card on another board isn't searched for across every board each time.
   const boardHint = card?.boardId ?? app.deckBoardId;
   // Read when a fetch starts rather than being a dependency, so learning the card's board doesn't fetch it again.
-  const hintRef = useRef(boardHint);
-  hintRef.current = boardHint;
+  const currentHint = useEffectEvent(() => boardHint);
 
   useCodeRefresh(app.id, () => setReload((n) => n + 1));
   useEffect(() => {
     let cancelled = false;
-    api.nextcloud.card(cardId, hintRef.current).then(
+    api.nextcloud.card(cardId, currentHint()).then(
       (r) => {
         if (cancelled) return;
         cacheDeckCard(r);

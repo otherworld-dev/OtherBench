@@ -5,6 +5,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { PinIcon } from '../components/icons.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
+import { useChanged } from '../lib/useChanged.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { streamStatusText } from '../state/machines.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
@@ -93,7 +94,7 @@ export function ConversationStrip({ chat, viewer, onGoTo }: ConversationStripPro
   const [open, setOpen] = useState(readOpen);
   const accountName = useClaudeAccounts((s) => (chat.claudeAccount && chat.claudeAccount !== 'main' ? (s.accounts.find((a) => a.slug === chat.claudeAccount)?.name ?? chat.claudeAccount) : null));
   const [pinError, setPinError] = useState<string | null>(null);
-  useEffect(() => setPinError(null), [chat.id]);
+  if (useChanged([chat.id])) setPinError(null);
 
   const turns = useMemo(() => {
     const chatMessages = Object.values(messages).filter((m) => m.chatId === chat.id);

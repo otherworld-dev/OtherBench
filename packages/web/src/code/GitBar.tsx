@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type RefObject } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { GitStatus } from '@otherbench/core/types/code.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
@@ -53,27 +54,33 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
   // Only the latest fetch may land: a slow one started before a refresh must not overwrite it.
   const seq = useRef(0);
 
-  const load = useCallback(async (): Promise<void> => {
-    if (appId === '') return;
+  // Its state is set in the callbacks, once the status has come: none of it synchronously in the effect below.
+  const load = useCallback((): Promise<void> => {
+    if (appId === '') return Promise.resolve();
     const mine = ++seq.current;
-    try {
-      const next = await api.apps.git.status(appId);
-      if (mine !== seq.current) return;
-      setStatus(next);
-      setPanelStatus(next);
-      setError(null);
-    } catch (err) {
-      if (mine !== seq.current) return;
-      setStatus(null);
-      setError(err);
-    }
+    return api.apps.git.status(appId).then(
+      (next) => {
+        if (mine !== seq.current) return;
+        setStatus(next);
+        setPanelStatus(next);
+        setError(null);
+      },
+      (err: unknown) => {
+        if (mine !== seq.current) return;
+        setStatus(null);
+        setError(err);
+      }
+    );
   }, [appId]);
 
-  useEffect(() => {
+  // Another app starts from nothing, in the same render, so the last app's branch never shows under it.
+  if (useChanged([appId])) {
     setStatus(null);
     setPanelStatus(null);
     setError(null);
     setOpen(null);
+  }
+  useEffect(() => {
     void load();
   }, [load]);
   useCodeRefresh(appId, () => void load());
@@ -98,7 +105,7 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
   const elsewhere = machines !== null && chat.runsOn !== machines.self.id;
   // Until this window knows which machine it is, it can't tell that the chat runs here, so nothing may change git yet.
   const readOnly = machines === null || elsewhere;
-  const closeTo = (ref: RefObject<HTMLButtonElement | null>) => (): void => {
+  const closeTo = (ref: RefObject<HTMLButtonElement | null>): void => {
     setOpen(null);
     ref.current?.focus();
   };
@@ -175,13 +182,13 @@ export function GitBar({ chat, messages }: { chat: Chat; messages: CanonMessage[
           status={panelStatus}
           readOnly={readOnly}
           onChanged={load}
-          onClose={closeTo(branchRef)}
+          onClose={() => closeTo(branchRef)}
           onBusyChange={(b) => {
             panelBusy.current = b;
           }}
         />
       )}
-      {open === 'changed' && <ChangedList files={changed} onOpen={openInFiles} onClose={closeTo(pillRef)} />}
+      {open === 'changed' && <ChangedList files={changed} onOpen={openInFiles} onClose={() => closeTo(pillRef)} />}
     </div>
   );
 }

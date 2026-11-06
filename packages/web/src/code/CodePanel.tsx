@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import { useChanged } from '../lib/useChanged.js';
 import { Menu } from '../components/Menu.js';
 import { Inspector } from '../panes/Inspector.js';
 import { useFeatures } from '../state/features.js';
@@ -92,7 +93,7 @@ export function CodePanel({ collapsed, onToggleCollapsed }: { collapsed: boolean
   }, [collapsed, tabKey]);
 
   // The menu is anchored to the button; close it if the strip changes under it.
-  useEffect(() => setMorePos(null), [fits]);
+  if (useChanged([fits])) setMorePos(null);
 
   const { chat, appId, app } = panelApp(activeChatId, chats, apps);
   const profile = chat ? (profiles.find((p) => p.id === chat.profileId) ?? null) : null;
