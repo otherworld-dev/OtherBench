@@ -12,6 +12,7 @@ import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { translateForNode } from './path-translate.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
+import { isHandoverRequest } from './handover.js';
 import { mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 import { appendDelta, applySubagentEvent } from './parts.js';
 import type { SubagentEvent } from './parts.js';
@@ -535,9 +536,12 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
+      // A handover summary (spec 2026-11-06-fresh-chat-handover-design) uses no tools, so it never plans.
+      const userMessage = this.store.messages.get(userMessageId);
+      const handover = userMessage !== null && isHandoverRequest(userMessage);
       // A self-started reply is held to the chat's plan mode like any other (a fresh, closed gate):
       // nothing changes before a plan is approved, however the turn began.
-      const planMode = chat?.planMode === true;
+      const planMode = chat?.planMode === true && !handover;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -693,6 +697,7 @@ export class TurnRunner {
         ...(unattended ? { unattended: true } : {}),
         ...(effort ? { effort } : {}),
         ...(plan ? { plan } : {}),
+        ...(handover ? { handover: true } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
@@ -887,6 +892,8 @@ export class TurnRunner {
     // ever grows a way to report partial usage before completion.
     if (usage) {
       this.writeUsage(chatId, messageId, profile, usage, this.now() - startedAt);
+      // What the chat's calls read now, for the fresh chat card. A chat deleted mid-reply has nothing to keep it on.
+      if (typeof usage.contextTokens === 'number' && this.store.chats.get(chatId)) this.store.chats.update(chatId, { contextTokens: usage.contextTokens });
     } else if (status === 'cancelled') {
       this.writeUsage(chatId, messageId, profile, ZERO_USAGE, this.now() - startedAt);
     }

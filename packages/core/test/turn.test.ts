@@ -2878,6 +2878,43 @@ describe('TurnRunner.runSelfStarted and plan mode', () => {
   });
 });
 
+describe('TurnRunner and the fresh chat handover', () => {
+  const finish = (contextTokens?: number): EngineEvent => ({
+    type: 'finish',
+    usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, ...(contextTokens !== undefined ? { contextTokens } : {}) },
+    finishReason: 'stop',
+  });
+  const reply = async (store: InMemoryStore, engine: FakeChatEngine, userParts: Part[] = [{ type: 'text', text: 'go' }]) => {
+    const result = await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts, profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+  };
+
+  it("keeps the context size of the reply's last call on the chat, and leaves it when a reply doesn't say", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    await reply(store, new FakeChatEngine([finish(420_000)]));
+    expect(store.chats.get('chat-1')!.contextTokens).toBe(420_000);
+    await reply(store, new FakeChatEngine([finish()]));
+    expect(store.chats.get('chat-1')!.contextTokens).toBe(420_000);
+  });
+
+  it('runs a handover summary with handover set and no plan gate, even in a planning chat', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode: true });
+    const proposePlan = { name: 'propose_plan', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null };
+    const engine = new FakeChatEngine([finish()]);
+    const result = await new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [proposePlan] }) }).run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'handover-request' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    expect(engine.requests[0]!.handover).toBe(true);
+    expect(engine.requests[0]!.plan).toBeUndefined();
+  });
+});
+
 describe('TurnRunner and context lines', () => {
   const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
   function chat(): InMemoryStore {
