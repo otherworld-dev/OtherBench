@@ -15,7 +15,7 @@ import type { AccountView } from '@otherbench/core/types/claude-accounts.js';
 import type { PlanUsage, RecordedUsage } from '@otherbench/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@otherbench/core/types/workspace.js';
 import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
-import type { PublicPeer } from '@otherbench/core/types/peer.js';
+import type { PeerSchedules, PublicPeer } from '@otherbench/core/types/peer.js';
 import type { SandboxStatus } from '@otherbench/core/ports/sandbox.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import type { ReplyNote } from '@otherbench/core/types/notes.js';
@@ -938,6 +938,8 @@ export const api = {
     patch: (nodeId: string, body: { name?: string; addresses?: string[] }) => patch<PublicPeer>(`/peers/${nodeId}`, body),
     remove: (nodeId: string) => request<{ notified: boolean }>(`/peers/${nodeId}`, { method: 'DELETE' }),
     sync: (nodeId: string) => post<{ applied: number }>(`/peers/${nodeId}/sync`),
+    /** Each paired machine's schedules, as it last said: read-only, none while it isn't reachable. */
+    schedules: () => request<PeerSchedules[]>('/peers/schedules'),
   },
 
   /** This machine. */

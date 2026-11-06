@@ -447,4 +447,9 @@ export interface OtherBenchState {
   closeSchedules(): void;
   /** Bumped by every schedule event, so the overlay re-reads the list. */
   schedulesVersion: number;
+  /**
+   * Bumped whenever a paired machine's schedules may read differently: it said what they are, it became reachable
+   * or unreachable, a machine was paired or removed, or the app stream reconnected. The overlay's section for them re-reads.
+   */
+  peerSchedulesVersion: number;
 }
