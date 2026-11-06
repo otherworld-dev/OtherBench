@@ -105,6 +105,8 @@ export class HandoverService {
       claudeAccount: old.claudeAccount ?? null,
       projectId: old.projectId,
       appId: old.appId ?? null,
+      // A chat kept out of memory stays out: its summary is the same content.
+      memoryExcluded: old.memoryExcluded,
       ...(old.effort ? { effort: old.effort } : {}),
       ...(old.folders ? { folders: old.folders } : {}),
     };

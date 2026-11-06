@@ -125,6 +125,13 @@ describe('POST /api/chats/:id/handover', () => {
     expect(container.store.schedules.get('s1')!.target).toEqual({ kind: 'chat', chatId: fresh.id });
   });
 
+  it('keeps a chat kept out of memory out of memory in its fresh chat', async () => {
+    container.store.chats.update('chat-1', { memoryExcluded: true });
+    expect((await post('chat-1', { messageId: 'a1' })).status).toBe(202);
+    const event = await handedOver();
+    expect(container.store.chats.get(event.toChatId)!.memoryExcluded).toBe(true);
+  });
+
   it('runs one handover at a time for a chat', async () => {
     let release!: () => void;
     hold = new Promise<void>((resolve) => (release = resolve));
