@@ -4,6 +4,7 @@ import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
 import { isLive, type ChatStatus, type LiveReason } from '../../state/chatStatus.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
+import type { DropPosition } from './ChatRow.js';
 
 export interface SidebarGroup {
   /** The project's id, or `NO_PROJECT_KEY`. Also the group's collapse-state key. */
@@ -347,6 +348,28 @@ export function appSiblings(apps: App[], appId: string, folders: AppFolder[]): A
   const known = new Set(folders.map((f) => f.id));
   const home = (a: App): string | null => (a.folderId !== null && known.has(a.folderId) ? a.folderId : null);
   return apps.filter((a) => home(a) === home(self)).sort(compareApps);
+}
+
+/**
+ * The apps beside `appId` that the Code sidebar shows (`shown`: its groups' app ids), itself included, in order:
+ * what the sidebar's Move up / Move down and heading drops reorder among. Folders aren't drawn there, so an app only
+ * moves among the shown apps of its own folder (or the top level), and the closed apps between them keep their order.
+ */
+export function shownAppSiblings(apps: App[], appId: string, folders: AppFolder[], shown: ReadonlySet<string>): App[] {
+  return appSiblings(apps, appId, folders).filter((a) => shown.has(a.id));
+}
+
+/**
+ * Where a Code sidebar drop puts app `movingId` among all its siblings, shown or not: the `beforeId` for
+ * `placeAppPatches` (null = the end of its group). Before `targetId` is just above it; after it is straight below
+ * it, ahead of any closed app there. Undefined for the app itself, an unknown app, or one from another folder.
+ */
+export function sidebarAppBeforeId(apps: App[], folders: AppFolder[], movingId: string, targetId: string, position: DropPosition): string | null | undefined {
+  const siblings = appSiblings(apps, movingId, folders);
+  if (movingId === targetId || !siblings.some((a) => a.id === targetId)) return undefined;
+  if (position === 'before') return targetId;
+  const rest = siblings.filter((a) => a.id !== movingId);
+  return rest[rest.findIndex((a) => a.id === targetId) + 1]?.id ?? null;
 }
 
 /**

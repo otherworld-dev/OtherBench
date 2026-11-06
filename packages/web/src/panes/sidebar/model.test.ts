@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatStatus } from '../../state/chatStatus.js';
 import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store.js';
 import { NO_PROJECT_KEY, UNKNOWN_APP_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, allGroups, appChats, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, liveApps, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, titleMatches } from './model.js';
+import { ageBucket, allGroups, appChats, appSiblings, bucketRuns, buildCodeSidebar, buildSidebar, capRows, codeSidebarAppOrder, fileAppPatches, liveApps, folderKey, moveAppPatches, moveFolderPatches, moveProjectPatches, moveTarget, placeAppPatches, placeChatPatches, placeFolderPatches, placeProjectPatches, projectSiblings, shownAppSiblings, sidebarAppBeforeId, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -229,6 +229,39 @@ describe('app folder order helpers', () => {
     expect(fileAppPatches(apps, folders, 'nope', 'f1', null)).toEqual([]);
     expect(fileAppPatches(apps, folders, 't1', 'f1', 'c')).toEqual([]);
     expect(fileAppPatches(apps, folders, 't1', 'gone', null)).toEqual([]);
+  });
+
+  it('shownAppSiblings keeps appSiblings to the apps the sidebar shows', () => {
+    const shown = new Set(['t1', 'lost', 'a']);
+    expect(shownAppSiblings(apps, 't1', folders, shown).map((a) => a.id)).toEqual(['t1', 'lost']);
+    expect(shownAppSiblings(apps, 'a', folders, shown).map((a) => a.id)).toEqual(['a']);
+    expect(shownAppSiblings(apps, 'nope', folders, shown)).toEqual([]);
+  });
+
+  it('sidebarAppBeforeId: before the target is the target; after it is the next sibling, shown or not, or the end', () => {
+    // Top level, all siblings: t1, t2 (closed, say), lost.
+    expect(sidebarAppBeforeId(apps, folders, 'lost', 't1', 'before')).toBe('t1');
+    expect(sidebarAppBeforeId(apps, folders, 'lost', 't1', 'after')).toBe('t2');
+    expect(sidebarAppBeforeId(apps, folders, 't1', 'lost', 'after')).toBeNull();
+    // The moving app is skipped when finding the next one.
+    expect(sidebarAppBeforeId(apps, folders, 't2', 't1', 'after')).toBe('lost');
+  });
+
+  it('sidebarAppBeforeId refuses the app itself, an app from another folder, or an unknown one', () => {
+    expect(sidebarAppBeforeId(apps, folders, 't1', 't1', 'before')).toBeUndefined();
+    expect(sidebarAppBeforeId(apps, folders, 'a', 't1', 'before')).toBeUndefined();
+    expect(sidebarAppBeforeId(apps, folders, 'nope', 't1', 'before')).toBeUndefined();
+    expect(sidebarAppBeforeId(apps, folders, 't1', 'nope', 'before')).toBeUndefined();
+  });
+
+  it('a sidebar drop past a hidden app keeps the hidden ones in their order', () => {
+    // Shown: t1 and lost; t2 is closed between them. Dropping t1 after lost puts it last; t2 keeps its place first.
+    const beforeId = sidebarAppBeforeId(apps, folders, 't1', 'lost', 'after');
+    expect(placeAppPatches(appSiblings(apps, 't1', folders), 't1', beforeId!)).toEqual([
+      { id: 't2', sortOrder: 0 },
+      { id: 'lost', sortOrder: 1 },
+      { id: 't1', sortOrder: 2 },
+    ]);
   });
 
   it('moveFolderPatches and placeFolderPatches renumber the folders', () => {

@@ -2129,12 +2129,12 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
     await waitFor(() => expect(rowIds('group-B')).toEqual(['ca']));
   });
 
-  it("an app's menu offers Rename, Edit…, Close app and Delete…; Rename saves the new name", async () => {
+  it("an app's menu offers Rename, Edit…, Close app, Move up / Move down and Delete…; Rename saves the new name", async () => {
     mockedAppPatch.mockImplementation(async (id, body) => ({ ...useOtherBenchStore.getState().apps.find((a) => a.id === id)!, ...body }));
     const user = setup({ mode: 'code' });
     await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
     const menu = screen.getByRole('menu', { name: 'App actions' });
-    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Close app', 'Delete…']);
+    expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Close app', 'Move up', 'Move down', 'Delete…']);
     await user.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
     const input = screen.getByRole('textbox', { name: 'App name' });
     await user.clear(input);
@@ -2278,7 +2278,14 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'Close Alpha' })).toBeInTheDocument();
       // Nor is there a Close app in its menu: it is closed already, so Keep in sidebar takes its place.
       await user.click(within(screen.getByTestId('group-heading-B')).getByRole('button', { name: 'App actions' }));
-      expect(within(screen.getByRole('menu', { name: 'App actions' })).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Keep in sidebar', 'Delete…']);
+      expect(within(screen.getByRole('menu', { name: 'App actions' })).getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
+        'Rename',
+        'Edit…',
+        'Keep in sidebar',
+        'Move up',
+        'Move down',
+        'Delete…',
+      ]);
     });
 
     it("Keep in sidebar on a closed app's menu opens it: its note and the reason it shows go, the × comes", async () => {
@@ -2326,6 +2333,98 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(useOtherBenchStore.getState().apps.find((a) => a.id === 'B')!.open).toBe(false);
     });
 
+    describe('ordering apps in the sidebar', () => {
+      const appTransfer = (id: string) => ({ types: [PROJECT_DRAG_MIME], getData: (t: string) => (t === PROJECT_DRAG_MIME ? id : ''), setData: vi.fn(), dropEffect: 'none', effectAllowed: 'all' });
+      const nameOf = (id: string) => screen.getByTestId(`group-heading-${id}`).querySelector<HTMLElement>('[data-heading-main]')!;
+
+      /** Drags app `id`'s heading over the top or bottom half of `targetId`'s heading; drops it when `drop`. */
+      function dragApp(id: string, targetId: string, half: 'top' | 'bottom', drop = true): HTMLElement {
+        fireEvent.dragStart(nameOf(id), { dataTransfer: appTransfer(id) });
+        const target = screen.getByTestId(`group-heading-${targetId}`);
+        target.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+        const at = (event: Event): Event => Object.defineProperty(event, 'clientY', { value: half === 'top' ? 105 : 115 });
+        fireEvent(target, at(createEvent.dragOver(target, { dataTransfer: appTransfer(id) })));
+        if (drop) fireEvent(target, at(createEvent.drop(target, { dataTransfer: appTransfer(id) })));
+        return target;
+      }
+
+      const a0 = makeApp({ id: 'A', name: 'Alpha', sortOrder: 0 });
+      const b1 = makeApp({ id: 'B', name: 'Beta', sortOrder: 1 });
+      const g2 = makeApp({ id: 'G', name: 'Gamma', sortOrder: 2 });
+
+      it("dragging an app's heading onto another's top half puts it above, and saves the order", async () => {
+        setup({ mode: 'code', apps: [a0, b1, g2] });
+        expect(nameOf('G')).toHaveAttribute('draggable', 'true');
+        dragApp('G', 'A', 'top');
+        await waitFor(() => expect(headingOrder()).toEqual(['G', 'A', 'B']));
+        expect(mockedAppPatch.mock.calls).toEqual([
+          ['G', { sortOrder: 0 }],
+          ['A', { sortOrder: 1 }],
+          ['B', { sortOrder: 2 }],
+        ]);
+      });
+
+      it('a drop below an app lands straight under it, and the closed apps between keep their order', async () => {
+        // Beta is closed and hidden between Alpha and Gamma.
+        setup({ mode: 'code', apps: [a0, closed(b1), g2] });
+        expect(headingOrder()).toEqual(['A', 'G']);
+        const target = dragApp('A', 'G', 'bottom', false);
+        expect(target).toHaveAttribute('data-drop-position', 'after');
+        fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: appTransfer('A') }), 'clientY', { value: 115 }));
+        await waitFor(() => expect(headingOrder()).toEqual(['G', 'A']));
+        expect(mockedAppPatch.mock.calls).toEqual([
+          ['B', { sortOrder: 0 }],
+          ['G', { sortOrder: 1 }],
+          ['A', { sortOrder: 2 }],
+        ]);
+      });
+
+      it('an app in another folder is not a drop target: filing stays on the All apps page', () => {
+        const folder = { id: 'f1', name: 'Work', sortOrder: 0, createdAt: 1, updatedAt: 1 };
+        setup({ mode: 'code', apps: [{ ...a0, folderId: 'f1' }, b1], appFolders: [folder] });
+        expect(headingOrder()).toEqual(['A', 'B']);
+        const target = dragApp('B', 'A', 'top');
+        expect(target).not.toHaveAttribute('data-drop-position');
+        expect(mockedAppPatch).not.toHaveBeenCalled();
+      });
+
+      it('Move up / Move down in the menu step past the shown app beside it, off at either end', async () => {
+        const user = setup({ mode: 'code', apps: [a0, closed(b1), g2] });
+        const menuItems = () => within(screen.getByRole('menu', { name: 'App actions' })).getAllByRole('menuitem').map((el) => el.textContent);
+        await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+        expect(menuItems()).toEqual(['Rename', 'Edit…', 'Close app', 'Move up', 'Move down', 'Delete…']);
+        expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+        await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+        await waitFor(() => expect(headingOrder()).toEqual(['G', 'A']));
+        expect(mockedAppPatch.mock.calls).toEqual([
+          ['B', { sortOrder: 0 }],
+          ['G', { sortOrder: 1 }],
+          ['A', { sortOrder: 2 }],
+        ]);
+        await waitFor(() => expect(document.activeElement).toBe(nameOf('A')));
+      });
+
+      it('a reorder that fails says so and reloads the apps from the server', async () => {
+        mockedAppPatch.mockRejectedValue(new Error('offline'));
+        vi.mocked(api.apps.list).mockResolvedValue([a0, b1, g2]);
+        setup({ mode: 'code', apps: [a0, b1, g2] });
+        dragApp('G', 'A', 'top');
+        expect(await screen.findByText(/Couldn't reorder the apps/)).toBeInTheDocument();
+        expect(api.apps.list).toHaveBeenCalled();
+        expect(headingOrder()).toEqual(['A', 'B', 'G']);
+      });
+
+      it('headings are not draggable while searching, and the menu has no Move up / Move down', async () => {
+        mockedSearch.mockResolvedValue([]);
+        const user = setup({ mode: 'code', apps: [a0, b1], chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A' })] });
+        await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'sse');
+        await waitFor(() => expect(screen.queryByTestId('group-B')).toBeNull());
+        expect(nameOf('A')).toHaveAttribute('draggable', 'false');
+        await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
+        expect(screen.queryByRole('menuitem', { name: 'Move up' })).toBeNull();
+      });
+    });
+
     it("search shows a closed app's matching chat", async () => {
       mockedSearch.mockResolvedValue([]);
       const user = setup({ mode: 'code', apps: [alpha, closed(beta)], chats: [makeChat({ id: 'ca', title: 'Fix SSE', appId: 'A' }), makeChat({ id: 'cb', title: 'Beta chat', appId: 'B' })] });
@@ -2355,11 +2454,14 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByTestId('no-open-apps')).toBeNull();
     });
 
-    it('the app menu has Close app and no Move up / Move to folder…', async () => {
+    it('the app menu has Close app and no Move to folder…; alone in its folder, Move up / Move down are both off', async () => {
       const user = setup({ mode: 'code', apps: [{ ...alpha, folderId: 'F1' }, beta], appFolders: [makeFolder({ id: 'F1', name: 'Games' })] });
       await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'App actions' }));
       const menu = screen.getByRole('menu', { name: 'App actions' });
-      expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Close app', 'Delete…']);
+      expect(within(menu).getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['Rename', 'Edit…', 'Close app', 'Move up', 'Move down', 'Delete…']);
+      // Beta sits straight below in the sidebar, but it is unfiled: filing is on the All apps page.
+      expect(within(menu).getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+      expect(within(menu).getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
       await user.click(within(menu).getByRole('menuitem', { name: 'Close app' }));
       expect(mockedAppPatch).toHaveBeenCalledWith('A', { open: false });
       await waitFor(() => expect(screen.queryByTestId('group-A')).toBeNull());
@@ -2372,17 +2474,6 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(screen.queryByTestId('group-heading-folder:F1')).toBeNull();
       // One flat list, in All apps order: the folder's apps first, then the unfiled ones.
       expect(headingOrder()).toEqual(['A', 'B', 'G']);
-    });
-
-    it("an app's heading neither drags nor takes a dragged heading: ordering is on the All apps page", () => {
-      setup({ mode: 'code' });
-      const transfer = { types: [PROJECT_DRAG_MIME], getData: (t: string) => (t === PROJECT_DRAG_MIME ? 'B' : ''), setData: vi.fn(), dropEffect: 'none', effectAllowed: 'all' };
-      expect(screen.getByTestId('group-heading-B').querySelector('[data-heading-main]')).toHaveAttribute('draggable', 'false');
-      const target = screen.getByTestId('group-heading-A');
-      fireEvent.dragOver(target, { dataTransfer: transfer });
-      fireEvent.drop(target, { dataTransfer: transfer });
-      expect(target).not.toHaveAttribute('data-drop-position');
-      expect(mockedAppPatch).not.toHaveBeenCalled();
     });
   });
 
