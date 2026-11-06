@@ -8,8 +8,7 @@
 // sign-in and sends no POST: `getOnly` below refuses any other method.
 // Whether a provider accepts OtherBench's loopback redirect
 // (http://127.0.0.1:<port>/oauth/callback) can only be learned by
-// registering, which is Adam's live check (docs/HANDOVER.md, "Sign-in for
-// HTTP MCP servers").
+// registering, which is Adam's live check (docs/features/mcp-sign-in.md).
 //
 // Found (run 2026-10-12):
 //   https://mcp.notion.com/mcp

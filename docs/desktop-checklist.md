@@ -64,7 +64,7 @@ On the PC and the laptop, both on the LAN:
 None of this has been run. The build never moved the mouse, pressed a key or
 captured the screen: the Rust that does so compiles and its state machine is
 tested against a fake desktop, but that is all. It ships switched off. See
-*Computer use* in `docs/HANDOVER.md` for how it is meant to behave.
+`docs/features/computer-use.md` for how it is meant to behave.
 
 **Switch it on** (from this checkout, in PowerShell):
 

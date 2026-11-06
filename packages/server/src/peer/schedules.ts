@@ -4,7 +4,7 @@ import type { Store } from '@otherbench/core/ports/store.js';
 import type { PeerScheduleRow, PeerScheduleSummary } from '@otherbench/core/types/peer.js';
 
 /**
- * Schedules across machines, read-only (docs/HANDOVER.md, "Scheduled tasks"). A machine tells each paired machine
+ * Schedules across machines, read-only (docs/features/scheduled-tasks.md). A machine tells each paired machine
  * what its Schedules rows show on the `schedules` announcement of `/peer/events`, whole each time it changes; the
  * other keeps it per machine and its own UI reads it from `GET /api/peers/schedules`. There is no route on the peer
  * listener for schedules at all, so nothing a paired machine sends can run, change, pause or delete one here.
