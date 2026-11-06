@@ -1,19 +1,85 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}), isDesktop: () => false }));
+vi.mock('../desktop/bridge.js', () => ({
+  openInBrowser: vi.fn(async () => {}),
+  isDesktop: vi.fn(() => false),
+  revealPath: vi.fn(async () => true),
+  fileManager: () => 'Explorer',
+}));
 
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { Message } from '../components/Message.js';
-import { openInBrowser } from '../desktop/bridge.js';
+import { isDesktop, openInBrowser, revealPath } from '../desktop/bridge.js';
+import { useToasts } from '../lib/toasts.js';
+import { api } from '../state/api.js';
 import { useViewerStore, viewerFor } from './state.js';
 import { ViewerContext, viewerActionsFor } from './ViewerContext.js';
 
 const shown = (chatId: string) => viewerFor(useViewerStore.getState().viewers, chatId).history.map((i) => (i.kind === 'file' ? i.path : i.kind === 'artifact' ? i.artifactId : i.kind));
 
 beforeEach(() => useViewerStore.setState({ viewers: {} }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.mocked(isDesktop).mockReturnValue(false);
+  vi.mocked(revealPath).mockReset().mockResolvedValue(true);
+  vi.restoreAllMocks();
+  useToasts.setState({ toasts: [] });
+});
+
+describe('a path mentioned in a chat, in the desktop app', () => {
+  const roots = () =>
+    vi.spyOn(api.view, 'roots').mockResolvedValue({
+      roots: [
+        { path: 'D:\\extra', label: 'extra', access: 'read', workspace: false },
+        { path: 'E:\\Git\\OtherLook', label: 'OtherLook', access: 'write', workspace: true },
+      ],
+    } as never);
+
+  it("selects an absolute path in Explorer, even outside the chat's folders, without its line number, and opens no viewer", async () => {
+    vi.mocked(isDesktop).mockReturnValue(true);
+    const list = roots();
+    const user = userEvent.setup();
+    render(
+      <ViewerContext.Provider value={viewerActionsFor('c1')}>
+        <MarkdownBody text={'Install `E:\\Git\\ol-wt\\update-test\\setup.exe`, see `C:\\src\\app.ts:42`.'} />
+      </ViewerContext.Provider>
+    );
+    await user.click(screen.getByRole('button', { name: 'E:\\Git\\ol-wt\\update-test\\setup.exe' }));
+    await user.click(screen.getByRole('button', { name: 'C:\\src\\app.ts:42' }));
+    await waitFor(() => expect(revealPath).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(revealPath).mock.calls).toEqual([['E:\\Git\\ol-wt\\update-test\\setup.exe'], ['C:\\src\\app.ts']]);
+    expect(list).not.toHaveBeenCalled();
+    expect(shown('c1')).toEqual([]);
+  });
+
+  it("takes a relative path from the chat's workspace", async () => {
+    vi.mocked(isDesktop).mockReturnValue(true);
+    roots();
+    viewerActionsFor('c1').showPath('src/main.ts');
+    await waitFor(() => expect(revealPath).toHaveBeenCalledWith('E:\\Git\\OtherLook\\src\\main.ts'));
+  });
+
+  it('never looks up a network path, which would make Windows connect to that server', async () => {
+    vi.mocked(isDesktop).mockReturnValue(true);
+    const list = roots();
+    viewerActionsFor('c1').showPath('\\\\evil.example\\share\\setup.exe');
+    viewerActionsFor('c1').showPath('//evil.example/share/setup.exe');
+    viewerActionsFor('c1').showPath('\\\\?\\UNC\\evil.example\\share\\setup.exe');
+    await waitFor(() => expect(useToasts.getState().toasts).toHaveLength(3));
+    expect(useToasts.getState().toasts[0]?.text).toBe("\\\\evil.example\\share\\setup.exe is on another computer, so it isn't shown from a chat.");
+    expect(revealPath).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("says so when the file isn't on this machine", async () => {
+    vi.mocked(isDesktop).mockReturnValue(true);
+    vi.mocked(revealPath).mockRejectedValue(new Error('not found'));
+    viewerActionsFor('c1').showPath('E:\\gone.exe');
+    await waitFor(() => expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([["Couldn't find E:\\gone.exe on this machine.", 'error']]));
+  });
+});
 
 describe('opening things from a chat', () => {
   it("shows an artifact call as a card outside the folded tools, which opens it in the chat's viewer", async () => {
@@ -67,7 +133,7 @@ describe('opening things from a chat', () => {
     expect(screen.queryByRole('button', { name: /nope/ })).toBeNull();
   });
 
-  it("opens websites in the default browser and paths in that chat's own panel", async () => {
+  it("opens websites in the default browser and, in a browser (no Explorer), paths in that chat's own panel", async () => {
     const user = userEvent.setup();
     render(
       <>

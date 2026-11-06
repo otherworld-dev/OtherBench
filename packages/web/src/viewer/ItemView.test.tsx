@@ -131,7 +131,7 @@ describe('ItemView, Markdown files', () => {
       return opened({ path, kind: 'image', name: 'arch.png', url: '/view/i/arch.png' });
     });
     vi.mocked(api.view.text).mockResolvedValue({ path: 'C:\\ws\\docs\\README.md', content: '![Architecture](img/arch.png) ![Gone](img/gone.png)\n\n[Next](./sub/next.md) [Up](../top.md) [Site](https://example.com)', truncated: false, size: 1 });
-    const actions = { openPath: vi.fn(), openArtifact: vi.fn() };
+    const actions = { openPath: vi.fn(), showPath: vi.fn(), openArtifact: vi.fn() };
     render(
       <ViewerContext.Provider value={actions}>
         <ItemView chatId="c1" item={item('docs/README.md')} />

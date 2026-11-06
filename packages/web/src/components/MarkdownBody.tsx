@@ -4,7 +4,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import { openDeckCard } from '../code/openDeckCard.js';
-import { openInBrowser } from '../desktop/bridge.js';
+import { fileManager, isDesktop, openInBrowser } from '../desktop/bridge.js';
 import { useFeatures } from '../state/features.js';
 import { isRelativePath, joinPath, looksLikePath } from '../viewer/paths.js';
 import { ViewerImage } from '../viewer/ViewerImage.js';
@@ -210,7 +210,7 @@ export function remarkDeckLinks(): (tree: Root) => void {
 }
 
 /**
- * react-markdown blanks file: URLs by default; OtherBench keeps them, since a click opens them only in the viewer, inside the chat's folders.
+ * react-markdown blanks file: URLs by default; OtherBench keeps them, since a click only ever shows them in Explorer or the viewer, never runs them.
  * A `deck:N` link (from `remarkDeckLinks`) is kept too.
  */
 function urlTransform(url: string): string {
@@ -223,9 +223,9 @@ type FromMarkdown<T extends keyof JSX.IntrinsicElements> = ComponentPropsWithout
 /**
  * Websites open in the default browser, never inside OtherBench, chat or not
  * (the desktop shell's links.rs does the same for anything that asks it for a
- * new window). Inside a chat paths open in the viewer, a viewed file's
- * relative ones from its own folder; other schemes (mailto:) and in-page
- * anchors are left alone.
+ * new window). A path in a message is shown in Explorer (`showPath`); one in
+ * a viewed file opens in the viewer, a relative one from the file's own
+ * folder. Other schemes (mailto:) and in-page anchors are left alone.
  */
 function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'> & { files: MarkdownFiles | undefined }): JSX.Element {
   const viewer = useViewer();
@@ -256,7 +256,8 @@ function Link({ files, node: _node, href, children, ...rest }: FromMarkdown<'a'>
         if (!web && /^[a-z][a-z0-9+.-]*:/i.test(href) && !/^file:/i.test(href)) return;
         e.preventDefault();
         if (web) void openInBrowser(href);
-        else viewer?.openPath(files && isRelativePath(href) ? joinPath(files.base, hrefToPath(href)) : hrefToPath(href));
+        else if (files) viewer?.openPath(isRelativePath(href) ? joinPath(files.base, hrefToPath(href)) : hrefToPath(href));
+        else viewer?.showPath(hrefToPath(href));
       }}
     >
       {children}
@@ -274,15 +275,24 @@ function Image({ files, remote, node: _node, src, alt, ...rest }: FromMarkdown<'
   return <img src={src} alt={alt} {...rest} />;
 }
 
-/** Inline code that looks like a path becomes a button that opens it in the chat's viewer. Code blocks (with a language class) are untouched. */
-function InlineCode({ node: _node, ...props }: FromMarkdown<'code'>): JSX.Element {
+/**
+ * Inline code that looks like a path becomes a button: in a message it shows the file in Explorer (`showPath`, the
+ * viewer in a browser), in a viewed file it opens in the viewer. Code blocks (with a language class) are untouched.
+ */
+function InlineCode({ files, node: _node, ...props }: FromMarkdown<'code'> & { files: MarkdownFiles | undefined }): JSX.Element {
   const viewer = useViewer();
   const text = typeof props.children === 'string' ? props.children : null;
   if (!viewer || props.className || text === null || !looksLikePath(text)) return <code {...props} />;
+  const reveal = !files && isDesktop();
   // A button can't flow across lines as inline text, so a long one fills the message: the chip must be a box to hold it inside.
   return (
     <code {...props} className="inline-block max-w-full">
-      <button type="button" title="Open in the viewer" onClick={() => viewer.openPath(text)} className="cursor-pointer text-left underline decoration-dotted underline-offset-2">
+      <button
+        type="button"
+        title={reveal ? `Show in ${fileManager()}` : 'Open in the viewer'}
+        onClick={() => (files ? viewer.openPath(text) : viewer.showPath(text))}
+        className="cursor-pointer text-left underline decoration-dotted underline-offset-2"
+      >
         {text}
       </button>
     </code>
@@ -343,7 +353,7 @@ export const MarkdownBody = memo(function MarkdownBody({
       pre: CodeBlock,
       a: (props: FromMarkdown<'a'>) => <Link {...props} files={at} />,
       img: (props: FromMarkdown<'img'>) => <Image {...props} files={at} remote={remoteImages} />,
-      code: InlineCode,
+      code: (props: FromMarkdown<'code'>) => <InlineCode {...props} files={at} />,
       section: CopySection,
     };
   }, [chatId, base, remoteImages]);

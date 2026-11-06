@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type JSX, type KeyboardEvent, type MouseEvent } from 'react';
 import { useChanged } from '../lib/useChanged.js';
 import { Menu, type MenuItem } from '../components/Menu.js';
-import { isDesktop, openFolder, revealPath } from '../desktop/bridge.js';
+import { fileManager, isDesktop, openFolder, revealPath } from '../desktop/bridge.js';
 import { isContextMenuKey } from '../panes/sidebar/ChatRow.js';
 import { ApiError, api, type ArtifactSummary, type ViewEntry, type ViewRoot } from '../state/api.js';
 import { useArtifactsStamp } from './stamp.js';
@@ -17,12 +17,6 @@ function failure(err: unknown): string {
  * `path` is the folder's full path, which the right-click menu needs for a root listed as `undefined`.
  */
 export type LoadDir = (path: string | undefined) => Promise<{ path?: string; entries: ViewEntry[] }>;
-
-/** What the desktop shell calls the system file manager. */
-function fileManager(): string {
-  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  return ua.includes('Windows') ? 'Explorer' : ua.includes('Mac') ? 'Finder' : 'the file manager';
-}
 
 /** Right-click (or Shift+F10 / the ContextMenu key) on a row: `entry` is the folder or file under it. */
 type OpenEntryMenu = (entry: { path: string; type: 'dir' | 'file' }, e: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void;

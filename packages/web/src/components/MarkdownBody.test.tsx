@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}) }));
+vi.mock('../desktop/bridge.js', () => ({ openInBrowser: vi.fn(async () => {}), isDesktop: vi.fn(() => true), fileManager: () => 'Explorer' }));
 vi.mock('../code/openDeckCard.js', () => ({ openDeckCard: vi.fn(async () => {}) }));
 vi.mock('rehype-highlight', async (importOriginal) => {
   const real = await importOriginal<typeof import('rehype-highlight')>();
@@ -28,21 +28,42 @@ afterEach(() => {
   vi.mocked(openDeckCard).mockClear();
 });
 
-const inChat = (text: string) => {
-  const actions = { openPath: vi.fn(), openArtifact: vi.fn() };
+const inChat = (text: string, files?: { chatId: string; base: string }) => {
+  const actions = { openPath: vi.fn(), showPath: vi.fn(), openArtifact: vi.fn() };
   render(
     <ViewerContext.Provider value={actions}>
-      <MarkdownBody text={text} />
+      <MarkdownBody text={text} files={files} />
     </ViewerContext.Provider>
   );
   return actions;
 };
 
 describe('MarkdownBody in a chat', () => {
-  it("opens a file:// link in the chat's viewer", async () => {
+  it('shows a file:// link from a message in Explorer', async () => {
     const actions = inChat('See [the log](file:///C:/ws/logs/run%201.txt).');
     await userEvent.setup().click(screen.getByRole('link', { name: 'the log' }));
-    expect(actions.openPath).toHaveBeenCalledWith('C:/ws/logs/run 1.txt');
+    expect(actions.showPath).toHaveBeenCalledWith('C:/ws/logs/run 1.txt');
+    expect(actions.openPath).not.toHaveBeenCalled();
+  });
+
+  it('shows a path in inline code in Explorer, wherever it is', async () => {
+    const actions = inChat('Install `E:\\Git\\ol-wt\\update-test\\OtherLook_0.1.0_x64-setup.exe` over your copy.');
+    const button = screen.getByRole('button', { name: 'E:\\Git\\ol-wt\\update-test\\OtherLook_0.1.0_x64-setup.exe' });
+    expect(button).toHaveAttribute('title', 'Show in Explorer');
+    await userEvent.setup().click(button);
+    expect(actions.showPath).toHaveBeenCalledWith('E:\\Git\\ol-wt\\update-test\\OtherLook_0.1.0_x64-setup.exe');
+    expect(actions.openPath).not.toHaveBeenCalled();
+  });
+
+  it("opens paths in a viewed file in the viewer, as before, a relative link from the file's folder", async () => {
+    const actions = inChat('See `src/app.ts` and [next](sub/next.md).', { chatId: 'c1', base: 'C:\\ws\\docs' });
+    const user = userEvent.setup();
+    const button = screen.getByRole('button', { name: 'src/app.ts' });
+    expect(button).toHaveAttribute('title', 'Open in the viewer');
+    await user.click(button);
+    await user.click(screen.getByRole('link', { name: 'next' }));
+    expect(actions.openPath.mock.calls).toEqual([['src/app.ts'], ['C:\\ws\\docs\\sub\\next.md']]);
+    expect(actions.showPath).not.toHaveBeenCalled();
   });
 
   it('opens a website in the default browser, never inside OtherBench', async () => {
