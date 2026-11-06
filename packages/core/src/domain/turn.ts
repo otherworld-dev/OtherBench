@@ -769,6 +769,8 @@ export class TurnRunner {
               },
             ];
             checkpoint(true);
+            // The chat is that size now (or unknown): the fresh chat card mustn't go on showing the size before the compact.
+            if (this.store.chats.get(chatId)) this.store.chats.update(chatId, { contextTokens: out.postTokens ?? null });
             break;
           case 'text-delta':
             parts = appendDelta(parts, 'text', out.text);

@@ -66,7 +66,7 @@ export type Part =
   /** A user message asking the chat's Claude Code session for a handover summary (spec 2026-11-06-fresh-chat-handover-design); the engine sends its fixed prompt. */
   | { type: 'handover-request' }
   /** A link between a chat and the fresh chat it was handed over to (`to`, on the old chat's summary) or from (`from`, on the new chat's first message). */
-  | { type: 'handover'; direction: 'to' | 'from'; chatId: string; title: string }
+  | { type: 'handover'; direction: 'to' | 'from'; chatId: string; title: string; /** On a `to` link: how many of the chat's schedules moved to the new chat. */ schedulesMoved?: number }
   /**
    * A sub-agent this reply started: one an API profile started with the
    * `subagent` tool, or a helper Claude Code started with its Task or Agent

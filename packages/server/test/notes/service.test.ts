@@ -199,6 +199,11 @@ describe('NotesService', () => {
       const { assistantMessageIds } = await ctx.running(['p1'], { userParts: [{ type: 'context', kind: 'compact' }] });
       return { send: input({ parentId: assistantMessageIds[0]! }), replyIds: assistantMessageIds };
     }],
+    // A note read mid-summary would be answered inside it and carried into the fresh chat as summary.
+    ['the reply is a handover summary', async (ctx) => {
+      const { assistantMessageIds } = await ctx.running(['p1'], { userParts: [{ type: 'handover-request' }] });
+      return { send: input({ parentId: assistantMessageIds[0]! }), replyIds: assistantMessageIds };
+    }],
   ];
 
   it.each(waitCases)('takes the wait path when %s', async (_, arrange) => {

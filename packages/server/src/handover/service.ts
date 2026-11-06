@@ -68,6 +68,8 @@ export class HandoverService {
     try {
       // The profile that wrote the reply: its session is the one that holds the chat.
       const profile = await resolveProfile(this.container, message.producedBy.profileId);
+      // Only Claude Code's engine runs a handover with every tool refused; a profile moved to a model API since would not.
+      if (profile.connection.kind !== 'claude_code') throw new HandoverError(400, "That reply's profile no longer runs on Claude Code, so it can't write the handover.", 'not_a_reply');
       result = await startTurn(this.container, { chatId, parentId: messageId, userParts: [{ type: 'handover-request' }], profiles: [profile] });
     } catch (err) {
       this.running.delete(chatId);
@@ -124,17 +126,17 @@ export class HandoverService {
     });
     store.chats.update(created.id, { headMessageId: firstId });
 
-    store.messages.updateParts(summaryId, [...reply.parts, { type: 'handover', direction: 'to', chatId: created.id, title }]);
-    this.container.streamRegistry.messagesChanged(chatId);
-
-    // A schedule kept on the old chat would keep growing it.
-    let moved = false;
+    // A schedule kept on the old chat would keep growing it, so it goes too, and the old chat's link says so.
+    let moved = 0;
     for (const s of store.schedules.list()) {
       if (s.target.kind !== 'chat' || s.target.chatId !== chatId) continue;
       store.schedules.retarget(s.id, created.id);
-      moved = true;
+      moved += 1;
     }
-    if (moved) this.container.events?.emit({ type: 'schedules-changed' });
+    if (moved > 0) this.container.events?.emit({ type: 'schedules-changed' });
+
+    store.messages.updateParts(summaryId, [...reply.parts, { type: 'handover', direction: 'to', chatId: created.id, title, ...(moved > 0 ? { schedulesMoved: moved } : {}) }]);
+    this.container.streamRegistry.messagesChanged(chatId);
     this.container.events?.emit({ type: 'chat-handed-over', fromChatId: chatId, toChatId: created.id, title });
   }
 

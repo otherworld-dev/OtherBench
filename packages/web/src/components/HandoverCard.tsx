@@ -12,8 +12,9 @@ const BUSY = "Wait for this chat to finish what it's doing first.";
 /**
  * The fresh chat card under a big Claude Code chat's latest reply (spec
  * 2026-11-06-fresh-chat-handover-design): it never blocks anything, and nothing
- * waits on it. The cheap checks come first, so the many replies that get no card
- * never look through the message pool.
+ * waits on it. Only the thread's last message offers it (`offerHandover`), so one
+ * card at most is mounted, and it looks through the message pool only past the
+ * threshold.
  */
 export function HandoverCard({ message }: { message: CanonMessage }): JSX.Element | null {
   const contextTokens = useOtherBenchStore((s) => s.chats.find((c) => c.id === message.chatId)?.contextTokens ?? null);

@@ -46,7 +46,7 @@ describe('the fresh chat card', () => {
   afterEach(cleanup);
 
   it('offers a fresh chat under the latest reply of a big chat, and starts one', async () => {
-    render(<Message message={reply()} />);
+    render(<Message message={reply()} offerHandover />);
     expect(screen.getByTestId('handover-card')).toHaveTextContent('This chat is re-reading ~420k tokens a call. Start a fresh chat with a summary?');
     await userEvent.click(screen.getByRole('button', { name: 'Start fresh chat' }));
     expect(handover).toHaveBeenCalledWith('c1', { messageId: 'a1' });
@@ -55,36 +55,48 @@ describe('the fresh chat card', () => {
 
   it('shows nothing with no measurement, under an earlier reply, when switched off for the chat, or with the setting off', () => {
     setup({ contextTokens: null });
-    const { unmount } = render(<Message message={reply()} />);
+    const { unmount } = render(<Message message={reply()} offerHandover />);
     expect(screen.queryByTestId('handover-card')).toBeNull();
     unmount();
 
     setup({}, [userMsg('u1', null, []), reply(), userMsg('u2', 'a1', [{ type: 'text', text: 'more' }])]);
-    const second = render(<Message message={reply()} />);
+    const second = render(<Message message={reply()} offerHandover />);
     expect(screen.queryByTestId('handover-card')).toBeNull();
     second.unmount();
 
     setup({ handoverSuggest: false });
-    const third = render(<Message message={reply()} />);
+    const third = render(<Message message={reply()} offerHandover />);
     expect(screen.queryByTestId('handover-card')).toBeNull();
     third.unmount();
 
     setup();
     useFeatures.setState({ handoverEnabled: false });
+    render(<Message message={reply()} offerHandover />);
+    expect(screen.queryByTestId('handover-card')).toBeNull();
+  });
+
+  it('is only offered where the thread asks for it, so one card at most is ever mounted', () => {
     render(<Message message={reply()} />);
+    expect(screen.queryByTestId('handover-card')).toBeNull();
+  });
+
+  it("is not offered under a compare turn's reply", () => {
+    const other = reply({ id: 'a2', producedBy: { ...producedBy, profileName: 'Other' } });
+    setup({}, [userMsg('u1', null, []), reply(), other]);
+    render(<Message message={reply()} offerHandover />);
     expect(screen.queryByTestId('handover-card')).toBeNull();
   });
 
   it('waits while the chat is busy', () => {
     useOtherBenchStore.setState({ appRunningTurns: { other: 'c1' } });
-    render(<Message message={reply()} />);
+    render(<Message message={reply()} offerHandover />);
     const start = screen.getByRole('button', { name: 'Start fresh chat' });
     expect(start).toBeDisabled();
     expect(start).toHaveAttribute('title', "Wait for this chat to finish what it's doing first.");
   });
 
   it('asks again at half as much again after Not now, and never after Don\'t ask again', async () => {
-    render(<Message message={reply()} />);
+    render(<Message message={reply()} offerHandover />);
     await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
     expect(update).toHaveBeenCalledWith('c1', { handoverAskAt: 630_000 });
     await userEvent.click(screen.getByRole('button', { name: "Don't ask again for this chat" }));
@@ -94,7 +106,7 @@ describe('the fresh chat card', () => {
   it('comes back under a summary that failed, for the reply it was asked of', async () => {
     const failed = reply({ id: 'a2', parentId: 'h1', status: 'error', error: { kind: 'unknown', message: 'boom', retryable: false }, parts: [] });
     setup({}, [userMsg('u1', null, []), reply(), userMsg('h1', 'a1', [{ type: 'handover-request' }]), failed]);
-    render(<Message message={failed} />);
+    render(<Message message={failed} offerHandover />);
     await userEvent.click(screen.getByRole('button', { name: 'Start fresh chat' }));
     expect(handover).toHaveBeenCalledWith('c1', { messageId: 'a1' });
   });
@@ -102,7 +114,7 @@ describe('the fresh chat card', () => {
   it('is not offered under a summary that finished', () => {
     const done = reply({ id: 'a2', parentId: 'h1' });
     setup({}, [userMsg('u1', null, []), reply(), userMsg('h1', 'a1', [{ type: 'handover-request' }]), done]);
-    render(<Message message={done} />);
+    render(<Message message={done} offerHandover />);
     expect(screen.queryByTestId('handover-card')).toBeNull();
   });
 });
@@ -123,5 +135,10 @@ describe('handover lines', () => {
     render(<Message message={reply({ parts: [{ type: 'text', text: 'Summary.' }, { type: 'handover', direction: 'to', chatId: 'c2', title: 'Rig (continued)' }] })} />);
     await userEvent.click(screen.getByRole('button', { name: 'Continued in Rig (continued)' }));
     expect(setActive).toHaveBeenCalledWith('c2');
+  });
+
+  it('says when the schedules went with it', () => {
+    render(<Message message={reply({ parts: [{ type: 'handover', direction: 'to', chatId: 'c2', title: 'Rig (continued)', schedulesMoved: 2 }] })} />);
+    expect(screen.getByText('Its 2 schedules run there now.')).toBeInTheDocument();
   });
 });

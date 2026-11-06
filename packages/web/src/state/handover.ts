@@ -1,4 +1,5 @@
 import { isHandoverRequest } from '@otherbench/core/domain/handover.js';
+import { isCompareSet } from '@otherbench/core/domain/tree.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 
 /**
@@ -16,6 +17,8 @@ export function handoverTarget(message: CanonMessage, pool: Record<string, Canon
   if (message.role !== 'assistant' || message.status === 'streaming') return null;
   const all = Object.values(pool);
   if (all.some((m) => m.parentId === message.id)) return null;
+  // A compare turn's reply: the server refuses those.
+  if (message.parentId !== null && isCompareSet(all.filter((m) => m.parentId === message.parentId))) return null;
   const parent = message.parentId !== null ? pool[message.parentId] : undefined;
   if (parent && isHandoverRequest(parent)) {
     return message.status === 'complete' ? null : parent.parentId;

@@ -2898,6 +2898,16 @@ describe('TurnRunner and the fresh chat handover', () => {
     expect(store.chats.get('chat-1')!.contextTokens).toBe(420_000);
   });
 
+  it("takes a compact's new size, or forgets the old one, so the card never shows the size before /compact", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, contextTokens: 420_000 });
+    await reply(store, new FakeChatEngine([{ type: 'context-summary', text: 'S', preTokens: 420_000, postTokens: 20_000 }, finish()]));
+    expect(store.chats.get('chat-1')!.contextTokens).toBe(20_000);
+    store.chats.update('chat-1', { contextTokens: 420_000 });
+    await reply(store, new FakeChatEngine([{ type: 'context-summary', text: 'S' }, finish()]));
+    expect(store.chats.get('chat-1')!.contextTokens).toBeNull();
+  });
+
   it('runs a handover summary with handover set and no plan gate, even in a planning chat', async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode: true });

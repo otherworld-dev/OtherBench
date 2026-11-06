@@ -121,7 +121,7 @@ describe('POST /api/chats/:id/handover', () => {
     expect(first).toMatchObject({ role: 'assistant', status: 'complete', parentId: null, producedBy });
     expect(first.parts).toEqual([{ type: 'handover', direction: 'from', chatId: 'chat-1', title: 'Rig' }, { type: 'text', text: SUMMARY }]);
     const summary = container.store.messages.get(assistantMessageIds[0]!)!;
-    expect(summary.parts.at(-1)).toEqual({ type: 'handover', direction: 'to', chatId: fresh.id, title: 'Rig (continued)' });
+    expect(summary.parts.at(-1)).toEqual({ type: 'handover', direction: 'to', chatId: fresh.id, title: 'Rig (continued)', schedulesMoved: 1 });
     expect(container.store.schedules.get('s1')!.target).toEqual({ kind: 'chat', chatId: fresh.id });
   });
 
@@ -194,6 +194,15 @@ describe('POST /api/chats/:id/handover', () => {
     container.store.messages.create({ id: 'u2', chatId: 'chat-1', parentId: 'a1', role: 'user', parts: [{ type: 'text', text: 'next' }], status: 'complete', error: null, producedBy: null });
     expect((await post('chat-1', { messageId: 'a1' })).status).toBe(409);
     expect((await post('chat-1', { messageId: 'u2' })).status).toBe(400);
+  });
+
+  it('refuses when the reply\'s profile now runs on a model API, which has no no-tools gate', async () => {
+    container.store.connections.create({ id: 'api', name: 'API', kind: 'anthropic', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    container.store.profiles.update('p1', { connectionId: 'api' });
+    const res = await post('chat-1', { messageId: 'a1' });
+    expect(res.status).toBe(400);
+    expect(requests).toHaveLength(0);
+    expect(container.handover!.isRunning('chat-1')).toBe(false);
   });
 
   it("can't regenerate the summary reply", async () => {

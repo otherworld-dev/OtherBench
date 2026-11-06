@@ -44,6 +44,9 @@ function HandoverLink({ part }: { part: Extract<Part, { type: 'handover' }> }): 
       <button type="button" className="underline hover:text-[var(--text)]" onClick={() => open(part.chatId)}>
         {label}
       </button>
+      {part.direction === 'to' && part.schedulesMoved !== undefined && part.schedulesMoved > 0 && (
+        <span> {part.schedulesMoved === 1 ? 'Its schedule runs there now.' : `Its ${part.schedulesMoved} schedules run there now.`}</span>
+      )}
     </div>
   );
 }
@@ -839,6 +842,8 @@ export interface MessageProps {
   };
   /** Unfolds a long user message: find in the chat is going to a match in its folded part. */
   showAllText?: boolean;
+  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card. */
+  offerHandover?: boolean;
 }
 
 /** A thinking estimate in a few characters: `850`, `4.2k`, `23k`. */
@@ -887,6 +892,7 @@ export function Message({
   editing,
   framed = false,
   showAllText = false,
+  offerHandover = false,
 }: MessageProps): JSX.Element {
   // A handover's request is a line, like /compact's (spec 2026-11-06-fresh-chat-handover-design).
   if (isHandoverRequest(message)) {
@@ -1018,7 +1024,7 @@ export function Message({
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>
       )}
       <ContinueOnAccount message={message} />
-      <HandoverCard message={message} />
+      {offerHandover && <HandoverCard message={message} />}
 
     </article>
   );
