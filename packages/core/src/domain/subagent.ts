@@ -263,6 +263,8 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   subagents: () => false,
   // On only when both have it on (absent = on, as the policy defines it).
   recall: ({ parent, chosen }) => parent.recall !== false && chosen.recall !== false,
+  // Never: only a chat's own reply may send work to other chats (spec 2026-11-06-chat-to-chat-design).
+  chatMessages: () => false,
   // The browser (spec 2026-10-12-model-browser-design): only when both have it
   // on (absent = off), and only when both blocked lists can be read. A list
   // that isn't a list can't be added to the other, so the browser is off.
@@ -555,7 +557,7 @@ export interface SubagentRunnerDeps {
  * work landed: a sub-agent can't ask anyone anything. `computer` is computer
  * use, which its policy never has on either (`SUBAGENT_POLICY_RULES`).
  */
-const NEVER_FOR_SUBAGENTS: ReadonlySet<string> = new Set(['subagent', 'artifact', 'thread', 'computer']);
+const NEVER_FOR_SUBAGENTS: ReadonlySet<string> = new Set(['subagent', 'artifact', 'thread', 'computer', 'chats']);
 
 const sameName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 

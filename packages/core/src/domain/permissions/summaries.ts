@@ -22,7 +22,31 @@ export function cardSummary(store: Store, tool: ToolSpec, args: unknown): string
         ? browserSummary(args)
         : tool.source === 'computer'
           ? computerSummary(args)
-          : summarize(tool, args);
+          : tool.source === 'chats'
+            ? chatsSummary(store, args)
+            : summarize(tool, args);
+}
+
+/**
+ * A `message_chats` card's line (spec 2026-11-06-chat-to-chat-design). It asks
+ * once per chat, so it says what the answer allows from then on, then this
+ * call's targets by what the store calls them: a chat's title, an app's name
+ * (only when an app has it), never the model's own words.
+ */
+function chatsSummary(store: Store, args: unknown): string {
+  if (stringField(args, 'command') !== 'send') return 'Let this chat send work to other chats (now: list the chats it could send to)';
+  const messages = rawField(args, 'messages');
+  const list = Array.isArray(messages) ? messages : [];
+  const apps = store.apps.list();
+  const names = list.map((m) => {
+    const chatId = stringField(m, 'chatId');
+    if (chatId !== null) return store.chats.get(chatId)?.title ?? 'an unknown chat';
+    const app = stringField(m, 'app');
+    const match = app === null ? undefined : apps.find((a) => a.name.trim().toLowerCase() === app.trim().toLowerCase());
+    return match ? `a new chat in ${match.name}` : 'an unknown app';
+  });
+  const count = list.length === 1 ? '1 other chat' : `${list.length} other chats`;
+  return cardLine(`Let this chat send work to other chats (now: ${count}${names.length > 0 ? `: ${names.join(', ')}` : ''})`, 200);
 }
 
 /** What a recall call will look at, for its card: the query, or the chat's title, or the project. */

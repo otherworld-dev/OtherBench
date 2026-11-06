@@ -207,6 +207,8 @@ const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: SubagentToolPolic
   artifacts: (sub) => sub.artifacts === false,
   recall: (sub, other) => !sub.recall || other.recall !== false,
   subagents: (sub) => sub.subagents === false,
+  // Never: only a chat's own reply sends work to other chats.
+  chatMessages: (sub) => sub.chatMessages === false,
   browser: (sub, other) => !sub.browser || other.browser === true,
   // The other way round from an allowlist: every site the other blocks, the sub-agent blocks too.
   browserBlockedHosts: (sub, other) => (other.browserBlockedHosts ?? []).every((h) => sub.browserBlockedHosts.map(siteKey).includes(siteKey(h))),

@@ -7,6 +7,7 @@
  */
 import { agentPolicyDenial } from '../agent-tools.js';
 import { COMPUTER_OFF_REASON } from '../computer-apps.js';
+import { CHAT_MESSAGES_OFF_REASON } from '../chat-sends.js';
 import type { ToolSpec } from '../../ports/tool-provider.js';
 import { runsShellInSandbox, type ToolPolicy } from '../../types/config.js';
 
@@ -58,6 +59,8 @@ export function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     case 'recall':
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
+    case 'chats':
+      return policy.chatMessages === false ? CHAT_MESSAGES_OFF_REASON : null;
     case 'thread':
       return null;
     case 'subagent':

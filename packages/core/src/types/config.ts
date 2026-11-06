@@ -65,6 +65,7 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * 2026-10-12-computer-use-design).
  * `'media'` is image and video generation through a generation connection
  * (ComfyUI, A1111, an OpenAI-style images API).
+ * `'chats'` is sending work to other chats (spec 2026-11-06-chat-to-chat-design).
  */
 export type ToolSource =
   | 'fs'
@@ -79,7 +80,8 @@ export type ToolSource =
   | 'subagent'
   | 'browser'
   | 'computer'
-  | 'media';
+  | 'media'
+  | 'chats';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -112,6 +114,8 @@ export interface ToolPolicy {
   artifacts?: boolean;
   /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */
   recall?: boolean;
+  /** Send work to other chats (spec 2026-11-06-chat-to-chat-design): the `message_chats` tool, for both engines. Absent = on. */
+  chatMessages?: boolean;
   /** Where `run_command` runs when `shell` is on (spec 2026-10-12-sandbox-design). Absent = 'host'. */
   shellRuns?: ShellRuns;
   /**

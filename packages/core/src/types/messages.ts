@@ -1,4 +1,5 @@
 import type { Usage } from './usage.js';
+import type { ChatSendStatus } from '../domain/chat-sends.js';
 
 /**
  * Where a sub-agent is (spec 2026-10-12-api-subagents-design): waiting for a
@@ -63,6 +64,12 @@ export type Part =
   | { type: 'context'; kind: 'clear' | 'compact'; focus?: string }
   /** The summary a compact reply carries; it stands in for everything above the compact line. */
   | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
+  /**
+   * On a user message another chat's agent wrote (spec 2026-11-06-chat-to-chat-design): `from`, on the message a
+   * chat was sent, names the chat that sent it; `replies`, on the message that brings the replies back, names the
+   * chats that replied. UI-only, like `notice`: engines drop it, and the model reads the text part beside it.
+   */
+  | { type: 'chat-link'; kind: 'from' | 'replies'; chats: { chatId: string; title: string; status?: ChatSendStatus }[]; sendIds: string[] }
   /**
    * A sub-agent this reply started: one an API profile started with the
    * `subagent` tool, or a helper Claude Code started with its Task or Agent

@@ -58,7 +58,9 @@ export function persistAnswer(store: Store, pending: PendingRequest, choice: App
     }
   }
 
-  if (choice.choice === 'chat') {
+  // Sending work to other chats asks once per chat (spec 2026-11-06-chat-to-chat-design): an "always" answer
+  // is kept as this chat's grant, never a global one.
+  if (choice.choice === 'chat' || pending.tool.source === 'chats') {
     // A 'chat' answer for the shell is NOT a blanket grant for the rest of
     // the chat. `{choice:'chat'}` carries no constraint of its own (the UI
     // offers no field for one), so approving `echo hi` this way used to

@@ -20,6 +20,8 @@ import { browserDecision } from './browser.js';
 import { computerDecision } from './computer.js';
 import type { Decision } from './decision.js';
 import { stringField } from './fields.js';
+import { UNATTENDED_REASON } from './modes.js';
+import { SUBAGENT_CHATS_REFUSAL } from '../chat-sends.js';
 
 /** A media call made from inside a sub-agent, or a helper Claude Code's own agent started. */
 export const SUBAGENT_MEDIA_REFUSAL = "Sub-agents can't generate images or video.";
@@ -143,6 +145,16 @@ export function sourceDecision(store: Store, tool: ToolSpec, args: unknown, poli
       if (ctx.subagent || ctx.shownSubagent) return { kind: 'deny', reason: SUBAGENT_MEDIA_REFUSAL };
       if (policy.approvalMode === 'ask_on_mutate') return { kind: 'allow', grantedBy: 'policy' };
       if (confirmPromptsOf(policy) && ctx.unattended !== true) return { kind: 'allow', grantedBy: 'policy' };
+      return null;
+
+    // Sending work to other chats (spec 2026-11-06-chat-to-chat-design): never
+    // from a sub-agent, a Claude Code helper or a scheduled run. Otherwise no
+    // shortcut: like recall it reaches the user's other chats, so it falls
+    // through to the grants, and the card's "for this chat" answer covers the
+    // rest of the chat.
+    case 'chats':
+      if (ctx.subagent || ctx.shownSubagent) return { kind: 'deny', reason: SUBAGENT_CHATS_REFUSAL };
+      if (ctx.unattended === true) return { kind: 'deny', reason: UNATTENDED_REASON, unattended: true };
       return null;
 
     // Nothing of their own before the read pass and the grants: the host

@@ -155,7 +155,7 @@ function parseToolPolicy(container: Container, value: unknown, base: ToolPolicy 
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'agentUserSettings', 'artifacts', 'recall', 'subagents', 'browser', 'computer'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'agentUserSettings', 'artifacts', 'recall', 'chatMessages', 'subagents', 'browser', 'computer'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -182,6 +182,7 @@ function parseToolPolicy(container: Container, value: unknown, base: ToolPolicy 
     ...(typeof v['agentUserSettings'] === 'boolean' ? { agentUserSettings: v['agentUserSettings'] } : base.agentUserSettings !== undefined ? { agentUserSettings: base.agentUserSettings } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
+    ...(typeof v['chatMessages'] === 'boolean' ? { chatMessages: v['chatMessages'] } : base.chatMessages !== undefined ? { chatMessages: base.chatMessages } : {}),
     ...(shellRuns !== undefined ? { shellRuns: shellRuns } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
     ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
     ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),

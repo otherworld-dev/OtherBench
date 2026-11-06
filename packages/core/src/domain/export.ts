@@ -109,6 +109,8 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
       return `**${part.isError ? 'Tool error' : 'Tool result'}:** \`${part.name}\`\n\n${fenced(cut(asText(part.result)))}`;
     case 'notice':
       return `*${part.text}*`;
+    case 'chat-link':
+      return `*${part.kind === 'from' ? 'From' : 'Replies from'} ${part.chats.map((c) => c.title).join(', ')}*`;
     case 'context':
       return part.kind === 'clear' ? '*/clear*' : `*/compact${part.focus ? ` ${part.focus}` : ''}*`;
     case 'context-summary':

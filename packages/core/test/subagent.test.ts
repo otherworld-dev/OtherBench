@@ -176,7 +176,7 @@ describe('subagentPolicy and the sandbox', () => {
   });
 
   it('writes out every ToolPolicy field, with a rule for each', () => {
-    const fields = ['agentMcp', 'agentUserSettings', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'media', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    const fields = ['agentMcp', 'agentUserSettings', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'chatMessages', 'computer', 'fs', 'mcpServerIds', 'media', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
     expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
     for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
       const got = narrowed(parent, chosen);
@@ -203,7 +203,7 @@ describe('subagentPolicy and the sandbox', () => {
     const locked = policy({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
     expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'], browser: true })).toEqual({
       fs: 'off', shell: false, shellRuns: 'sandbox', sandboxHosts: [], mcpServerIds: [], approvalMode: 'always_ask',
-      agentWeb: false, agentMcp: false, agentUserSettings: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [], computer: false,
+      agentWeb: false, agentMcp: false, agentUserSettings: false, artifacts: false, subagents: false, recall: false, chatMessages: false, browser: false, browserBlockedHosts: [], computer: false,
     });
   });
 

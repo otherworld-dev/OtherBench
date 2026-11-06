@@ -552,7 +552,7 @@ export class TurnRunner {
       // whole request over.
       const usable =
         profile.model?.supportsTools === false
-          ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread' && t.source !== 'subagent')
+          ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread' && t.source !== 'subagent' && t.source !== 'chats')
           : listed;
       // Claude Code runs its own sub-agents (Task/Agent); OtherBench's tool is for API profiles only.
       const offered = profile.connection.kind === 'claude_code' ? usable.filter((t) => t.source !== 'subagent') : usable;

@@ -311,6 +311,8 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'context-summary':
       case 'subagent':
       case 'user-note':
+      case 'chat-link':
+        // `chat-link` is the UI's marker on a message another chat sent; the text part beside it carries what the model reads.
         // Not valid content for a user turn; defensively dropped rather
         // than forwarded to the model. `notice` also never legitimately
         // appears on a user message in practice (TurnRunner only ever adds
@@ -362,6 +364,7 @@ async function assistantContentFromParts(
       case 'context':
       case 'context-summary':
       case 'notice':
+      case 'chat-link':
         // Dropped entirely, same reasoning as `reasoning`: a capability-
         // fallback disclosure describes what OTHERBENCH did, not something the
         // model said, so replaying it as this message's own content in a
