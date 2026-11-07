@@ -11,6 +11,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api } from '../state/api.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { startChatFromIssue } from './startChatFromIssue.js';
 
@@ -29,6 +30,7 @@ beforeEach(() => {
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ apps: [app], appsLoaded: true });
   vi.mocked(api.chats.create).mockResolvedValue(created);
+  useFeatures.setState({ deckStartCommand: '', issueStartCommand: '' });
 });
 
 afterEach(() => {
@@ -60,6 +62,24 @@ describe('startChatFromIssue', () => {
   it('an issue with no body leaves just the number, title and URL', async () => {
     await startChatFromIssue(app, { ...issue, body: '   ' });
     expect(useOtherBenchStore.getState().composerPrefills['c9']).toBe('#48 MCP tools vanish on reconnect\nhttps://github.com/otherworld-dev/OtherBench/issues/48');
+  });
+
+  it('with an issue start command set, sends it at once with the issue ref and leaves the box empty', async () => {
+    useFeatures.setState({ issueStartCommand: '/start {issue}' });
+    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [] });
+    await startChatFromIssue(app, issue);
+    expect(api.turns.create).toHaveBeenCalledWith('c9', { parentId: null, parts: [{ type: 'text', text: '/start #48' }], profileIds: ['prof'] });
+    const state = useOtherBenchStore.getState();
+    expect(state.activeChatId).toBe('c9');
+    expect(state.composerPrefills['c9']).toBeUndefined();
+    expect(state.issueViews['c9']).toEqual({ state: 'open', selected: 48 });
+  });
+
+  it("a Deck start command doesn't send for an issue", async () => {
+    useFeatures.setState({ deckStartCommand: '/start {card}' });
+    await startChatFromIssue(app, issue);
+    expect(api.turns.create).not.toHaveBeenCalled();
+    expect(useOtherBenchStore.getState().composerPrefills['c9']).toContain('#48 MCP tools vanish');
   });
 
   it('a failed create opens nothing and rejects', async () => {

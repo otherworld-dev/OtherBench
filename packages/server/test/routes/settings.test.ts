@@ -115,12 +115,30 @@ describe('/api/settings', () => {
     expect(await (await send('PATCH', '/api/settings', {})).json()).toEqual({ ...DEFAULT_APP_SETTINGS, memoryProfileId: null });
   });
 
+  it('start commands start empty; PATCH trims and stores them, tells every window, and empty clears them', async () => {
+    const seen: string[] = [];
+    container.events!.subscribe((e) => seen.push(e.type));
+    const res = await send('PATCH', '/api/settings', { deckStartCommand: '  /start {card} ', issueStartCommand: '/start {issue}' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ deckStartCommand: '/start {card}', issueStartCommand: '/start {issue}' });
+    expect(seen).toEqual(['settings-changed']);
+    await send('PATCH', '/api/settings', { deckStartCommand: '' });
+    expect(container.store.settings.get()).toMatchObject({ deckStartCommand: '', issueStartCommand: '/start {issue}' });
+  });
+
+  it('PATCH refuses a start command that is not a string or is too long, writing nothing', async () => {
+    expect((await send('PATCH', '/api/settings', { deckStartCommand: 5 })).status).toBe(400);
+    expect((await send('PATCH', '/api/settings', { issueStartCommand: 'x'.repeat(501) })).status).toBe(400);
+    expect((await send('PATCH', '/api/settings', { deckStartCommand: '/start', issueStartCommand: null })).status).toBe(400);
+    expect(container.store.settings.get()).toMatchObject({ deckStartCommand: '', issueStartCommand: '' });
+  });
+
   it('GitHub and Nextcloud start on; PATCH turns them off and says so once, to every window', async () => {
     const seen: string[] = [];
     container.events!.subscribe((e) => seen.push(e.type));
     const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000 });
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: false });
     expect(seen).toEqual(['settings-changed']);

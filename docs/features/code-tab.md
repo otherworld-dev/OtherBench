@@ -15,7 +15,7 @@ Spec: `docs/superpowers/specs/2026-10-20-code-tab-design.md`. The sidebar has a 
   - `FilesTab` is the shared `DirTree` over `/apps/:id/files`. With an app chat focused, a file opens in that chat's viewer. Without one, it shows read-only.
   - `AppHome` is the centre view for an `app:` tab: details, New chat, the app's chats and its issues.
   - `GitBar` and `GitPanel` show the branch, ahead/behind, the changed files with their diffs, commit, pull, push, and switching or creating a branch.
-  - `startChatFromIssue` pre-fills the composer with the issue and never sends it.
+  - `startChatFromIssue` pre-fills the composer with the issue and never sends it, unless an issue start command is set in Settings, Features (`issueStartCommand`, e.g. `/start {issue}`; empty by default): then that is sent at once, with `{issue}` as `#<number>`. The Overview's Chat on an issue notification goes through it too.
   - `useCodeRefresh` refreshes on window focus and after `turn-finished` in any of the app's chats. ↻ refreshes by hand. There is no file watcher.
   - `views/AppView.tsx` is the app form. It fills the name from the folder and the GitHub repo from the remotes.
   - Elsewhere:

@@ -9,6 +9,7 @@ import {
   PEER_COMPUTER_CONTROL_NO_DESKTOP_REASON,
   peerComputerControlNeedsHostConfirm,
   peerComputerControlNotConfirmedReason,
+  START_COMMAND_MAX,
 } from '@otherbench/core/domain/settings.js';
 import type { AppSettings, Store } from '@otherbench/core/ports/store.js';
 import { fromTheDesktopApp } from '../computer/desktop-only.js';
@@ -22,9 +23,13 @@ interface SettingsBody {
   peerComputerControl?: unknown;
   handoverEnabled?: unknown;
   handoverThresholdTokens?: unknown;
+  deckStartCommand?: unknown;
+  issueStartCommand?: unknown;
 }
 
 const FEATURES = ['githubEnabled', 'nextcloudEnabled'] as const;
+/** What the Deck and Issues tabs' Chat buttons send first (`fillStartCommand`); empty = send nothing. */
+const START_COMMANDS = ['deckStartCommand', 'issueStartCommand'] as const;
 
 /** The fresh chat card's threshold, in tokens per call: below 50k it would ask about ordinary chats, above 2M no model reaches it. */
 export const HANDOVER_THRESHOLD_MIN = 50_000;
@@ -84,6 +89,14 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
       }
       patch.handoverThresholdTokens = n;
     }
+    for (const key of START_COMMANDS) {
+      const value = body[key];
+      if (value === undefined) continue;
+      if (typeof value !== 'string') throw new HTTPException(400, { message: `"${key}" must be a string.` });
+      const command = value.trim();
+      if (command.length > START_COMMAND_MAX) throw new HTTPException(400, { message: `"${key}" must be at most ${START_COMMAND_MAX} characters.` });
+      patch[key] = command;
+    }
     // Whether paired machines may start and approve computer use here (peer/forward.ts reads it on every call).
     if (body.peerComputerControl !== undefined) {
       if (typeof body.peerComputerControl !== 'boolean') throw new HTTPException(400, { message: '"peerComputerControl" must be true or false.' });
@@ -117,7 +130,8 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
     const before = container.store.settings.get();
     const after = container.store.settings.update(patch);
     const handoverChanged = before.handoverEnabled !== after.handoverEnabled || before.handoverThresholdTokens !== after.handoverThresholdTokens;
-    if ((before.peerComputerControl !== after.peerComputerControl || handoverChanged) && !FEATURES.some((key) => before[key] !== after[key])) {
+    const startCommandsChanged = START_COMMANDS.some((key) => before[key] !== after[key]);
+    if ((before.peerComputerControl !== after.peerComputerControl || handoverChanged || startCommandsChanged) &&!FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });
     }
     if (FEATURES.some((key) => before[key] !== after[key])) {

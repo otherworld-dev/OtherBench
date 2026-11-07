@@ -5,7 +5,30 @@ import type { AppSettings } from '../ports/store.js';
  * this machine turns it on in its desktop app. Defaults are never written out (`update` stores only what it is
  * given), so a database that never set it reads it as off.
  */
-export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = { memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000 };
+export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = {
+  memoryProfileId: null,
+  githubEnabled: true,
+  nextcloudEnabled: true,
+  peerComputerControl: false,
+  handoverEnabled: true,
+  handoverThresholdTokens: 300_000,
+  deckStartCommand: '',
+  issueStartCommand: '',
+};
+
+/** The longest start command the server takes: a slash command and a line of direction, not a prompt. */
+export const START_COMMAND_MAX = 500;
+
+/**
+ * The first message a Chat button sends, from the start command in Settings: `placeholder` (`{card}` or `{issue}`)
+ * becomes `ref` (`d123`, `#45`) wherever it appears, or `ref` goes on the end when the command has none. Null when no
+ * command is set, so the button leaves the card or issue in the box unsent instead.
+ */
+export function fillStartCommand(template: string, placeholder: string, ref: string): string | null {
+  const command = template.trim();
+  if (command === '') return null;
+  return command.includes(placeholder) ? command.split(placeholder).join(ref) : `${command} ${ref}`;
+}
 
 /** What a request that may not turn on "Let paired machines start and approve computer use" is told. */
 export const PEER_COMPUTER_CONTROL_HOST_ONLY_REASON =

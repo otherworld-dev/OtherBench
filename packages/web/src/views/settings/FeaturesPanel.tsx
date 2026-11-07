@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from 'react';
 import type { AppSettings } from '@otherbench/core/ports/store.js';
 import { ApiError, api } from '../../state/api.js';
 import { applyFeatures, refreshFeatures, useFeatures } from '../../state/features.js';
+import { StartCommandsSection } from './StartCommandsSection.js';
 
 type FeatureKey = 'githubEnabled' | 'nextcloudEnabled';
 
@@ -73,6 +74,7 @@ export function FeaturesPanel(): JSX.Element {
           {error}
         </p>
       )}
+      <StartCommandsSection />
     </section>
   );
 }
