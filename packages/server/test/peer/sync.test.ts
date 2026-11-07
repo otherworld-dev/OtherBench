@@ -340,6 +340,34 @@ describe('syncing two machines over the peer listener', () => {
     expect(laptop.store.settings.getValue('sync-version-mismatch:node-PC')).toBeNull();
   });
 
+  it("takes a machine's new name when it renames itself", async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    await pairNodes(pc, laptop);
+    expect(pc.store.peers.get('node-Laptop')!.name).toBe('Laptop');
+
+    laptop.store.nodes.rename('Gigabyte');
+    await pc.syncer.pullFrom('node-Laptop');
+
+    expect(pc.store.peers.get('node-Laptop')!.name).toBe('Gigabyte');
+    expect(pc.events).toContainEqual({ type: 'peers-changed' });
+  });
+
+  it('keeps a name given here until the machine renames itself again', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    await pairNodes(pc, laptop);
+    await pc.syncer.pullFrom('node-Laptop');
+
+    pc.service.rename('node-Laptop', { name: "Adam's laptop" });
+    await pc.syncer.pullFrom('node-Laptop');
+    expect(pc.store.peers.get('node-Laptop')!.name).toBe("Adam's laptop");
+
+    laptop.store.nodes.rename('Gigabyte');
+    await pc.syncer.pullFrom('node-Laptop');
+    expect(pc.store.peers.get('node-Laptop')!.name).toBe('Gigabyte');
+  });
+
   it('a change on one machine reaches the other within a second, by announcement', async () => {
     const pc = syncNode('PC');
     const laptop = syncNode('Laptop');
