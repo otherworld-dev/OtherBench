@@ -707,6 +707,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' ||
       e.type === 'approval-resolved' || e.type === 'computer-session'
     ) peers.announceActivity();
+    // A paired machine's Inspector showing a chat that runs here re-reads that section (`chatToolStateRoutes`).
+    if (e.type === 'mcp-changed') peers.announce('tool-state', { section: 'mcp', chatId: null });
+    if (e.type === 'grants-changed') peers.announce('tool-state', { section: 'grants', chatId: e.chatId });
+    if (e.type === 'audit-changed') peers.announce('tool-state', { section: 'audit', chatId: e.chatId });
   });
 
   // The Code tab's terminals: the PTY loads and the shells are looked for on first use, once, without blocking.

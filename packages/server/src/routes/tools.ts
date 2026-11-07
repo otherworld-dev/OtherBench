@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
-import type { Grant, McpServer } from '@otherbench/core/ports/store.js';
+import type { Chat, Grant, McpServer } from '@otherbench/core/ports/store.js';
 import { mcpServerUrlProblem } from '@otherbench/tools/mcp/url.js';
 import type { Container } from '../container.js';
 import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
@@ -318,6 +318,64 @@ function parseSignInApp(
   return { clientId, secret };
 }
 
+function chatOrThrow(container: Container, chatId: string): Chat {
+  const chat = container.store.chats.get(chatId);
+  if (!chat) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
+  return chat;
+}
+
+/**
+ * Chat-scoped grants for THIS chat, plus every global ('always', chatId: null) grant that this chat's PROFILE could
+ * actually match -- the same two filters PermissionBroker.findMatchingGrant applies (see permissions.ts: grants are
+ * profile-scoped, because tool permission is a per-profile property). Listing a grant belonging to another profile
+ * would show the user a permission that is not in effect here.
+ */
+function grantsForChat(container: Container, chat: Chat): Grant[] {
+  const chatScoped = container.store.grants.list(chat.id);
+  const alwaysScoped = container.store.grants.list().filter((g) => g.chatId === null && (g.profileId === null || g.profileId === chat.profileId));
+  return [...chatScoped, ...alwaysScoped];
+}
+
+/**
+ * The Inspector's Tool grants, MCP servers and Audit trail for one chat: this machine's own, which never sync. The
+ * same routes serve a paired machine over the peer listener (peer/forward.ts's `forwardedApi`) for a chat that runs
+ * here, and this machine's UI reaches them there through `forwardingRoutes` for a chat that runs there, so the
+ * Inspector shows the tools of the machine a chat runs on. Besides reads, only what takes nothing away from the
+ * machine's safety: revoking a grant the chat lists, and reconnecting an MCP server already configured there.
+ */
+export function chatToolStateRoutes(container: Container): Hono {
+  const app = new Hono();
+
+  app.get('/chats/:id/grants', (c) => c.json(grantsForChat(container, chatOrThrow(container, c.req.param('id')))));
+
+  // Only a grant this chat lists, so a chat's route can't reach another chat's grants.
+  app.delete('/chats/:id/grants/:grantId', (c) => {
+    const grantId = c.req.param('grantId');
+    if (!grantsForChat(container, chatOrThrow(container, c.req.param('id'))).some((g) => g.id === grantId)) {
+      throw new HTTPException(404, { message: `Grant "${grantId}" not found for this chat.` });
+    }
+    container.store.grants.delete(grantId);
+    return c.body(null, 204);
+  });
+
+  app.get('/chats/:id/audit', (c) => c.json(container.store.audit.list(chatOrThrow(container, c.req.param('id')).id)));
+
+  app.get('/chats/:id/mcp-servers', (c) => {
+    chatOrThrow(container, c.req.param('id'));
+    return c.json(container.mcpManager.health());
+  });
+
+  app.post('/chats/:id/mcp-servers/:serverId/refresh', async (c) => {
+    chatOrThrow(container, c.req.param('id'));
+    const serverId = c.req.param('serverId');
+    getMcpServerOrThrow(container, serverId);
+    await container.toolProvider.refreshMcp(serverId);
+    return c.body(null, 204);
+  });
+
+  return app;
+}
+
 export function toolsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -560,25 +618,6 @@ export function toolsRoutes(container: Container): Hono {
     return c.body(null, 204);
   });
 
-  // --- grants (Inspector's "active grants" section) -------------------------
-
-  app.get('/chats/:id/grants', (c) => {
-    const chatId = c.req.param('id');
-    const chat = container.store.chats.get(chatId);
-    if (!chat) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
-    // Chat-scoped grants for THIS chat, plus every global ('always', chatId:
-    // null) grant that this chat's PROFILE could actually match -- the same
-    // two filters PermissionBroker.findMatchingGrant applies (see
-    // permissions.ts: grants are profile-scoped, because tool permission is
-    // a per-profile property). Listing a grant belonging to another profile
-    // would show the user a permission that is not in effect here.
-    const chatScoped = container.store.grants.list(chatId);
-    const alwaysScoped = container.store.grants
-      .list()
-      .filter((g) => g.chatId === null && (g.profileId === null || g.profileId === chat.profileId));
-    return c.json([...chatScoped, ...alwaysScoped]);
-  });
-
   app.delete('/grants/:id', (c) => {
     const id = c.req.param('id');
     if (!container.store.grants.get(id)) throw new HTTPException(404, { message: `Grant "${id}" not found.` });
@@ -586,13 +625,7 @@ export function toolsRoutes(container: Container): Hono {
     return c.body(null, 204);
   });
 
-  // --- audit trail ------------------------------------------------------------
-
-  app.get('/chats/:id/audit', (c) => {
-    const chatId = c.req.param('id');
-    if (!container.store.chats.get(chatId)) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
-    return c.json(container.store.audit.list(chatId));
-  });
+  app.route('/', chatToolStateRoutes(container));
 
   // --- approvals --------------------------------------------------------------
 

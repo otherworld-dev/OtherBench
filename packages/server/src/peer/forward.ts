@@ -11,7 +11,7 @@ import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { COMPUTER_NO_SESSION_REASON } from '../computer/sessions.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
-import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
+import { chatToolStateRoutes, parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { PeerError } from './service.js';
@@ -158,12 +158,17 @@ export class PeerInfluence {
   }
 }
 
-/** Forwarded writes that only stop something: they start nothing and put no input into a chat. */
-const PEER_STOPS: readonly RegExp[] = [
+/**
+ * Forwarded writes that put no input into a chat: the stops, which start nothing, and the Inspector's revoking a
+ * grant and reconnecting an MCP server (`chatToolStateRoutes`), which reach no reply.
+ */
+const PEER_NO_INPUT: readonly RegExp[] = [
   /^\/chats\/[^/]+\/stop$/,
   /^\/chats\/[^/]+\/computer\/stop$/,
   /^\/messages\/[^/]+\/cancel$/,
   /^\/chats\/[^/]+\/helpers\/[^/]+\/stop$/,
+  /^\/chats\/[^/]+\/grants\/[^/]+$/,
+  /^\/chats\/[^/]+\/mcp-servers\/[^/]+\/refresh$/,
 ];
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -696,6 +701,28 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     return relayStream(container, c, nodeId, chatId, runs);
   });
 
+  /**
+   * The Inspector's Tool grants, MCP servers and Audit trail (`chatToolStateRoutes`): that machine's, where the chat
+   * runs and uses them. A machine on a build without these routes answers a bare 404, said here as needing an update.
+   */
+  const toolState = async (c: Context, next: Next): Promise<Response | void> => {
+    const chatId = c.req.param('id')!;
+    const nodeId = remoteNode(chatId);
+    if (!nodeId) return next();
+    // The path from `/chats/` on: this app is mounted under `/api`.
+    const res = await forward(container, c, nodeId, c.req.path.slice(c.req.path.indexOf('/chats/')));
+    if (res.status !== 404) return res;
+    const body = (await res.clone().json().catch(() => null)) as unknown;
+    if (typeof body === 'object' && body !== null) return res;
+    const name = container.peers!.peer(nodeId)?.name ?? 'That machine';
+    return c.json({ error: `${name} needs a newer OtherBench to show this.`, kind: 'peer_outdated', nodeId }, 501);
+  };
+  app.get('/chats/:id/grants', toolState);
+  app.delete('/chats/:id/grants/:grantId', toolState);
+  app.get('/chats/:id/audit', toolState);
+  app.get('/chats/:id/mcp-servers', toolState);
+  app.post('/chats/:id/mcp-servers/:serverId/refresh', toolState);
+
   /** Cancel and retry name a reply; the machine running it is known from the turn that started it, or the reply's chat. */
   const messageRoute = (suffix: string) => async (c: Context, next: Next): Promise<Response | void> => {
     const messageId = c.req.param('id')!;
@@ -737,7 +764,9 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
 /**
  * What a paired machine may call on this one's API over the peer listener:
  * running, steering, stopping and watching a chat that runs here, answering
- * its approvals, questions and plans, stopping a reply still running here
+ * its approvals, questions and plans, reading its Inspector's grants, MCP
+ * servers and audit trail (revoking one of its grants, reconnecting an MCP
+ * server already set up here), stopping a reply still running here
  * in a chat moved elsewhere, stopping a computer-use session held here,
  * and, while this machine lets it (`peerComputerControl`, off until turned on in this machine's desktop app),
  * asking to start one here (its own start dialog asks the person here, naming the paired machine). Nothing else --
@@ -766,7 +795,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // let paired machines start computer use: it could reach a reply nobody marked. Reads and stops pass unmarked.
   app.use('*', async (c, next) => {
     const influence = container.peerInfluence;
-    if (READ_METHODS.has(c.req.method) || !influence || PEER_STOPS.some((stop) => stop.test(c.req.path))) return next();
+    if (READ_METHODS.has(c.req.method) || !influence || PEER_NO_INPUT.some((write) => write.test(c.req.path))) return next();
     const chatId = chatOfPeerWrite(container, c.req.path);
     if (chatId === null) {
       if (!container.store.settings.get().peerComputerControl) {
@@ -874,6 +903,8 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   app.route('/', turnsRoutes(container));
   app.route('/', notesRoutes(container));
   app.route('/', commandsRoutes(container));
+  // The Inspector's grants, MCP servers and audit trail for a chat that runs here: this machine's own.
+  app.route('/', chatToolStateRoutes(container));
   app.onError((err, c) => {
     const status = (err as { status?: number }).status;
     if (typeof status === 'number' && status >= 400 && status < 600) return c.json({ error: err.message }, status as 400);

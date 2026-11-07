@@ -320,14 +320,58 @@ describe('Inspector for a chat that runs on another machine', () => {
     peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable' as const, since: 0, lastSyncedAt: null, syncError: null }],
   };
 
-  it("says grants, MCP servers and the audit trail shown are this machine's, not those of the machine it runs on", async () => {
+  it('shows the grants, MCP servers and audit trail of the machine it runs on, read for the chat, and says so', async () => {
     useOtherBenchStore.setState({ machines: paired });
+    mockedMcpList.mockResolvedValue([{ id: 'srv-pc', name: 'PC tools', enabled: true, status: 'ok', toolCount: 2, lastError: null }] as never);
     render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     for (const section of [grantsSection(), mcpHealthSection(), auditSection()]) {
-      expect(within(section).getByTestId('inspector-elsewhere-note')).toHaveTextContent(/^This chat runs on PC\./);
+      expect(within(section).getByTestId('inspector-elsewhere-note')).toHaveTextContent(/^This chat runs on PC\. These are its /);
     }
-    expect(within(grantsSection()).getByTestId('inspector-elsewhere-note')).toHaveTextContent("These are this machine's grants");
-    expect(within(auditSection()).getByTestId('inspector-elsewhere-note')).toHaveTextContent('audited there');
+    expect(await within(mcpHealthSection()).findByText('PC tools')).toBeInTheDocument();
+    // The chat's routes: the server reads them on the machine the chat runs on.
+    expect(mockedMcpList).toHaveBeenCalledWith('chat-1');
+    expect(mockedGrantsList).toHaveBeenCalledWith('chat-1');
+    expect(mockedAuditList).toHaveBeenCalledWith('chat-1');
+  });
+
+  it('re-reads a section when that machine says it changed there, or comes back', async () => {
+    useOtherBenchStore.setState({ machines: paired });
+    render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await waitFor(() => expect(mockedAuditList).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedGrantsList).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedMcpList).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      // Another machine's, or another chat's: not this one's.
+      emitAppEvent({ type: 'peer-tool-state', nodeId: 'node-other', section: 'audit', chatId: 'chat-1' });
+      emitAppEvent({ type: 'peer-tool-state', nodeId: 'node-pc', section: 'audit', chatId: 'chat-2' });
+    });
+    await new Promise((r) => setTimeout(r, LIVE_DEBOUNCE_MS * 2));
+    expect(mockedAuditList).toHaveBeenCalledTimes(1);
+
+    act(() => emitAppEvent({ type: 'peer-tool-state', nodeId: 'node-pc', section: 'audit', chatId: 'chat-1' }));
+    await waitFor(() => expect(mockedAuditList).toHaveBeenCalledTimes(2));
+    act(() => emitAppEvent({ type: 'peer-tool-state', nodeId: 'node-pc', section: 'grants', chatId: null }));
+    await waitFor(() => expect(mockedGrantsList).toHaveBeenCalledTimes(2));
+    act(() => emitAppEvent({ type: 'peer-tool-state', nodeId: 'node-pc', section: 'mcp', chatId: null }));
+    await waitFor(() => expect(mockedMcpList).toHaveBeenCalledTimes(2));
+    expect(mockedAuditList).toHaveBeenCalledTimes(2);
+
+    act(() => emitAppEvent({ type: 'peer-status', nodeId: 'node-pc', status: 'reachable', since: 1 }));
+    await waitFor(() => {
+      expect(mockedMcpList).toHaveBeenCalledTimes(3);
+      expect(mockedGrantsList).toHaveBeenCalledTimes(3);
+      expect(mockedAuditList).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("says why that machine's couldn't be read, in the server's words", async () => {
+    useOtherBenchStore.setState({ machines: paired });
+    mockedMcpList.mockRejectedValue(new ApiError(503, "PC isn't reachable. Connection refused."));
+    mockedAuditList.mockRejectedValue(new ApiError(501, 'PC needs a newer OtherBench to show this.'));
+    render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(mcpHealthSection()).findByText("PC isn't reachable. Connection refused.")).toBeInTheDocument();
+    expect(await within(auditSection()).findByText('PC needs a newer OtherBench to show this.')).toBeInTheDocument();
   });
 
   it('says nothing of the kind for a chat that runs here, or before machines are known', () => {
@@ -506,7 +550,7 @@ describe('Inspector MCP server health', () => {
 
     const user = userEvent.setup();
     await user.click(within(mcpHealthSection()).getByRole('button', { name: 'Refresh Filesystem MCP' }));
-    expect(mockedMcpRefresh).toHaveBeenCalledWith('srv-1');
+    expect(mockedMcpRefresh).toHaveBeenCalledWith('srv-1', 'chat-1');
   });
 
   it('shows a server that needs sign-in, with a pointer to Settings', async () => {
@@ -601,7 +645,7 @@ describe('Inspector tool grants', () => {
 
     const user = userEvent.setup();
     await user.click(within(grantsSection()).getByRole('button', { name: 'Revoke grant for run_command' }));
-    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g2');
+    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g2', 'chat-1');
     // Gone from the DOM right away -- optimistic removal, not "eventually, on the next re-read".
     expect(within(grantsSection()).queryByTestId('grant-g2')).not.toBeInTheDocument();
     expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
@@ -675,7 +719,7 @@ describe('Inspector tool grants', () => {
     const row = await within(grantsSection()).findByTestId('grant-g4');
     expect(row).toHaveTextContent('pypi.org');
     await userEvent.setup().click(within(row).getByRole('button', { name: 'Revoke grant for sandbox_network' }));
-    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g4');
+    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g4', 'chat-1');
   });
 
   it('shows which live artifact call a live grant is for', async () => {

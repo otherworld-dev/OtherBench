@@ -743,9 +743,12 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     ] as const) {
       expect((await onPc(laptop, pc, method, path)).status, `${method} ${path}`).toBe(404);
     }
-    // Nor grants, the audit trail, MCP health, the machine list or the app-wide event stream: none of them is
-    // readable over the listener, which is why their events are not sent to paired machines either.
-    for (const path of [`/api/chats/${chatId}/grants`, `/api/chats/${chatId}/audit`, '/api/mcp-servers', '/api/events', '/api/peers']) {
+    // A chat that runs here has its grants, audit trail and MCP health read for the Inspector (chatToolStateRoutes);
+    // nothing wider: not the MCP server list as such, the machine list or the app-wide event stream.
+    for (const path of [`/api/chats/${chatId}/grants`, `/api/chats/${chatId}/audit`, `/api/chats/${chatId}/mcp-servers`]) {
+      expect((await onPc(laptop, pc, 'GET', path)).status, path).toBe(200);
+    }
+    for (const path of ['/api/mcp-servers', '/api/events', '/api/peers']) {
       expect((await onPc(laptop, pc, 'GET', path)).status, path).toBe(404);
     }
     expect(pc.container.computer!.holder()).toBeNull();
@@ -758,6 +761,10 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     expect(answer.status).toBe(403);
     expect(answer.body).toMatchObject({ kind: 'desktop_only' });
     expect((await onPc(laptop, pc, 'POST', `/api/chats/${chatId}/computer/start`)).status).toBe(403);
+    // The Inspector's writes too, though they only take away: a revoke is refused while the PC is under control.
+    pc.container.store.grants.create({ id: 'g1', chatId, profileId: null, toolName: 'run_command', source: 'shell', scope: 'chat', constraint: null, expiresAt: null });
+    expect((await onPc(laptop, pc, 'DELETE', `/api/chats/${chatId}/grants/g1`)).status).toBe(403);
+    expect(pc.container.store.grants.get('g1')).not.toBeNull();
     expect(pc.container.computer!.holder()).toBe(chatId);
   });
 
