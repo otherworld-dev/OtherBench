@@ -1,7 +1,10 @@
+import { fillStartCommand } from '@otherbench/core/domain/settings.js';
 import type { App } from '@otherbench/core/ports/store.js';
 import type { IssueDetail } from '@otherbench/core/types/code.js';
 import { api } from '../state/api.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { sendStartCommand } from './sendStartCommand.js';
 
 /** What the new chat's box starts with: the issue's number and title, its URL, then its body when it has one. */
 export function issueDraft(issue: IssueDetail): string {
@@ -15,12 +18,15 @@ export function issueDraft(issue: IssueDetail): string {
  * composer. It is never sent: the spec's "Calls I made" has the composer
  * pre-filled so Adam can add direction first. The server gives the chat the
  * app's folder and default profile, as for the sidebar's "+ New chat".
+ * An issue start command in Settings (e.g. `/start {issue}`) replaces the
+ * pre-fill: that command is sent at once instead, as `/start #45`.
  *
  * The chat is put in the store before it is opened, so the pane never shows
  * an id it doesn't know, and the box's text is handed over before that too,
  * so the composer finds it when it mounts. A failed create opens nothing and
- * rejects, for the caller to show. The new chat's Issues view opens on the
- * issue, so the issue is at hand while the chat works on it.
+ * rejects, for the caller to show; a failed send is `sendStartCommand`'s. The
+ * new chat's Issues view opens on the issue, so the issue is at hand while
+ * the chat works on it.
  */
 export async function startChatFromIssue(app: App, issue: IssueDetail): Promise<void> {
   const chat = await api.chats.create({ appId: app.id, title: `#${issue.number} ${issue.title}` });
@@ -28,7 +34,9 @@ export async function startChatFromIssue(app: App, issue: IssueDetail): Promise<
   upsertChat(chat);
   cacheIssue(app.id, issue);
   setIssueView(chat.id, { state: issue.state, selected: issue.number });
-  prefillComposer(chat.id, issueDraft(issue));
+  const command = fillStartCommand(useFeatures.getState().issueStartCommand, '{issue}', `#${issue.number}`);
+  if (command === null) prefillComposer(chat.id, issueDraft(issue));
   // Shown in the pane, not made a tab, as the sidebar's "+ New chat" does.
   setActiveChatId(chat.id);
+  if (command !== null) await sendStartCommand(chat, command);
 }

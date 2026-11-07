@@ -39,7 +39,7 @@ describe('the fresh chat card', () => {
   beforeEach(() => {
     handover.mockReset().mockResolvedValue({ userMessageId: 'u2', assistantMessageIds: ['a2'] });
     update.mockReset().mockResolvedValue({} as never);
-    useFeatures.setState({ github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000 });
+    useFeatures.setState({ github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
     pendingHandovers.clear();
     setup();
   });

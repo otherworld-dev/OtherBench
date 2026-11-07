@@ -5,11 +5,11 @@ import { useFeatures } from '../../state/features.js';
 import { api } from '../../state/api.js';
 import { FreshChatSection } from './FreshChatSection.js';
 
-const settings = { memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000 };
+const settings = { memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' };
 
 describe('FreshChatSection', () => {
   beforeEach(() => {
-    useFeatures.setState({ github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000 });
+    useFeatures.setState({ github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
   });
   afterEach(() => {
     cleanup();

@@ -546,6 +546,13 @@ export interface AppSettings {
   handoverEnabled: boolean;
   /** The context size per call, in tokens, from which the fresh chat card shows. */
   handoverThresholdTokens: number;
+  /**
+   * What a Deck card's "Start a chat on this" sends at once, e.g. `/start {card}` (`{card}` becomes `d123`; without it
+   * the ref goes on the end). Empty, the default, leaves the card in the new chat's box unsent (`fillStartCommand`).
+   */
+  deckStartCommand: string;
+  /** The same for a GitHub issue's, with `{issue}` becoming `#45`. */
+  issueStartCommand: string;
 }
 
 export interface SettingsRepo {

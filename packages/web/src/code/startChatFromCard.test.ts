@@ -10,7 +10,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
   };
 });
 
+import { useToasts } from '../lib/toasts.js';
 import { api } from '../state/api.js';
+import { useFeatures } from '../state/features.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { cardDraft, startChatFromCard } from './startChatFromCard.js';
 
@@ -20,7 +22,7 @@ const card: DeckCardDetail = {
   description: 'A built-in terminal.', boardId: 7, boardTitle: 'OtherBench', stackTitle: 'Doing', createdAt: 1, url: 'https://nc.example/index.php/apps/deck/board/7/card/966',
 };
 const created: Chat = {
-  id: 'c9', title: 'Deck #966 Terminal', profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
+  id: 'c9', title: 'd966 Terminal', profileId: 'prof', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false,
   projectId: null, appId: 'a1', memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
 };
 
@@ -29,6 +31,8 @@ beforeEach(() => {
   useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
   useOtherBenchStore.setState({ apps: [app], appsLoaded: true });
   vi.mocked(api.chats.create).mockResolvedValue(created);
+  useFeatures.setState({ deckStartCommand: '', issueStartCommand: '' });
+  useToasts.setState({ toasts: [] });
 });
 
 afterEach(() => {
@@ -38,7 +42,7 @@ afterEach(() => {
 describe('startChatFromCard', () => {
   it("creates a titled chat, prefills, opens the card in the chat's deck view, never sends", async () => {
     await startChatFromCard(app, card);
-    expect(api.chats.create).toHaveBeenCalledWith({ appId: 'a1', title: 'Deck #966 Terminal' });
+    expect(api.chats.create).toHaveBeenCalledWith({ appId: 'a1', title: 'd966 Terminal' });
     const state = useOtherBenchStore.getState();
     expect(state.chats.map((c) => c.id)).toEqual(['c9']);
     expect(state.activeChatId).toBe('c9');
@@ -51,6 +55,29 @@ describe('startChatFromCard', () => {
 
   it('a card with a blank description leaves just the number, title and URL', () => {
     expect(cardDraft({ ...card, description: '  \n' })).toBe('Deck #966 Terminal\nhttps://nc.example/index.php/apps/deck/board/7/card/966');
+  });
+
+  it('with a Deck start command set, sends it at once with the card ref and leaves the box empty', async () => {
+    useFeatures.setState({ deckStartCommand: '/start {card}' });
+    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: [] });
+    await startChatFromCard(app, card);
+    expect(api.turns.create).toHaveBeenCalledWith('c9', { parentId: null, parts: [{ type: 'text', text: '/start d966' }], profileIds: ['prof'] });
+    const state = useOtherBenchStore.getState();
+    expect(state.activeChatId).toBe('c9');
+    expect(state.composerPrefills['c9']).toBeUndefined();
+    expect(state.deckViews['c9']).toEqual({ stackId: 2, selected: 966 });
+    expect(api.chats.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("a start command that doesn't send stays in the open chat's box, with a toast", async () => {
+    useFeatures.setState({ deckStartCommand: '/start' });
+    vi.mocked(api.turns.create).mockRejectedValue(new Error('The model is unavailable.'));
+    await startChatFromCard(app, card);
+    const state = useOtherBenchStore.getState();
+    expect(state.activeChatId).toBe('c9');
+    expect(state.composerPrefills['c9']).toBe('/start d966');
+    expect(useToasts.getState().toasts.map((t) => t.tone)).toEqual(['error']);
+    expect(useToasts.getState().toasts[0]?.text).toContain('/start d966');
   });
 
   it('a failed create opens nothing and rejects', async () => {

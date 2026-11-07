@@ -5,18 +5,21 @@ import { api } from './api.js';
 
 /**
  * GitHub and Nextcloud on or off on this machine (Settings, Features). Off hides every part of the UI that uses it.
- * Also the fresh chat card's switch and threshold (Settings, Claude accounts), which the card reads on every render.
+ * Also the fresh chat card's switch and threshold (Settings, Claude accounts), which the card reads on every render, and
+ * the start commands the Deck and Issues tabs' Chat buttons send (Settings, Features).
  */
 export interface Features {
   github: boolean;
   nextcloud: boolean;
   handoverEnabled: boolean;
   handoverThresholdTokens: number;
+  deckStartCommand: string;
+  issueStartCommand: string;
 }
 
 /** The last answer, so a window opens with the right tabs rather than flashing the ones that are off. */
 const STORAGE_KEY = 'otherbench.features';
-const ALL_ON: Features = { github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: DEFAULT_HANDOVER_THRESHOLD };
+const ALL_ON: Features = { github: true, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: DEFAULT_HANDOVER_THRESHOLD, deckStartCommand: '', issueStartCommand: '' };
 
 function loadFeatures(): Features {
   try {
@@ -26,6 +29,8 @@ function loadFeatures(): Features {
       nextcloud: raw?.nextcloud !== false,
       handoverEnabled: raw?.handoverEnabled !== false,
       handoverThresholdTokens: typeof raw?.handoverThresholdTokens === 'number' ? raw.handoverThresholdTokens : DEFAULT_HANDOVER_THRESHOLD,
+      deckStartCommand: typeof raw?.deckStartCommand === 'string' ? raw.deckStartCommand : '',
+      issueStartCommand: typeof raw?.issueStartCommand === 'string' ? raw.issueStartCommand : '',
     };
   } catch {
     return ALL_ON;
@@ -35,12 +40,14 @@ function loadFeatures(): Features {
 export const useFeatures = create<Features>(() => loadFeatures());
 
 /** Takes the switches from settings the server sent. */
-export function applyFeatures(settings: Pick<AppSettings, 'githubEnabled' | 'nextcloudEnabled'> & Partial<Pick<AppSettings, 'handoverEnabled' | 'handoverThresholdTokens'>>): void {
+export function applyFeatures(settings: Pick<AppSettings, 'githubEnabled' | 'nextcloudEnabled'> & Partial<Pick<AppSettings, 'handoverEnabled' | 'handoverThresholdTokens' | 'deckStartCommand' | 'issueStartCommand'>>): void {
   const features: Features = {
     github: settings.githubEnabled !== false,
     nextcloud: settings.nextcloudEnabled !== false,
     handoverEnabled: settings.handoverEnabled !== false,
     handoverThresholdTokens: typeof settings.handoverThresholdTokens === 'number' ? settings.handoverThresholdTokens : DEFAULT_HANDOVER_THRESHOLD,
+    deckStartCommand: typeof settings.deckStartCommand === 'string' ? settings.deckStartCommand : '',
+    issueStartCommand: typeof settings.issueStartCommand === 'string' ? settings.issueStartCommand : '',
   };
   useFeatures.setState(features);
   try {

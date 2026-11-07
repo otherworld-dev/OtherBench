@@ -13,7 +13,7 @@ import { FeaturesPanel } from './FeaturesPanel.js';
 
 const mockedGet = vi.mocked(api.settings.get);
 const mockedPatch = vi.mocked(api.settings.patch);
-const settings = (githubEnabled: boolean, nextcloudEnabled: boolean) => ({ memoryProfileId: null, githubEnabled, nextcloudEnabled, peerComputerControl: true, handoverEnabled: true, handoverThresholdTokens: 300_000 });
+const settings = (githubEnabled: boolean, nextcloudEnabled: boolean) => ({ memoryProfileId: null, githubEnabled, nextcloudEnabled, peerComputerControl: true, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -38,7 +38,7 @@ describe('FeaturesPanel', () => {
     expect(mockedPatch).toHaveBeenCalledWith({ githubEnabled: false });
     await waitFor(() => expect(useFeatures.getState().github).toBe(false));
     expect(screen.getByTestId('feature-githubEnabled')).not.toBeChecked();
-    expect(JSON.parse(window.localStorage.getItem('otherbench.features') ?? '{}')).toEqual({ github: false, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000 });
+    expect(JSON.parse(window.localStorage.getItem('otherbench.features') ?? '{}')).toEqual({ github: false, nextcloud: true, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
   });
 
   it("says why when the server won't save it, and leaves the switch as it was", async () => {
@@ -48,5 +48,19 @@ describe('FeaturesPanel', () => {
     await userEvent.setup().click(screen.getByTestId('feature-githubEnabled'));
     expect(await screen.findByRole('alert')).toHaveTextContent('"githubEnabled" must be true or false.');
     expect(screen.getByTestId('feature-githubEnabled')).toBeChecked();
+  });
+
+  it('saves a Deck start command, and only shows the box for a feature that is on', async () => {
+    useFeatures.setState({ github: false, nextcloud: true, deckStartCommand: '', issueStartCommand: '' });
+    mockedGet.mockResolvedValue(settings(false, true));
+    mockedPatch.mockResolvedValue({ ...settings(false, true), deckStartCommand: '/start {card}' });
+    render(<FeaturesPanel />);
+    expect(screen.queryByLabelText('GitHub issue')).toBeNull();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Deck card'), '/start {{card}');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockedPatch).toHaveBeenCalledWith({ deckStartCommand: '/start {card}' });
+    await waitFor(() => expect(useFeatures.getState().deckStartCommand).toBe('/start {card}'));
+    expect(screen.getByLabelText('Deck card')).toHaveValue('/start {card}');
   });
 });
