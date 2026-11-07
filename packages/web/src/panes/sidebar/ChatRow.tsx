@@ -60,7 +60,7 @@ export interface ChatRowProps {
   showPinMarker?: boolean;
   /** Shows an outline pin before the title: the chat is pinned at the top of its project. */
   projectPinMarker?: boolean;
-  /** Shown faint after the title: the chat's project, for rows in Pinned, which sits outside the project groups. */
+  /** Shown faint after the title (under it in Needs you): the chat's project or app, for rows outside their own group. */
   projectName?: string;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
@@ -191,11 +191,25 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             <PinIcon className="h-3 w-3" />
           </span>
         )}
-        <span className={`min-w-0 truncate ${needsYou ? 'font-medium' : ''}`}>{chat.title}</span>
-        {projectName && (
-          <span data-testid="row-project-name" title={projectName} className={`ml-auto max-w-[45%] truncate pl-2 text-xs text-[var(--text-faint)] ${needsYou ? 'min-w-8 shrink-[9]' : 'shrink-0'}`}>
-            <span className="sr-only">, in</span> {projectName}
+        {needsYou ? (
+          // In the Needs you list the home goes on its own line under the title, so neither crowds the other out.
+          <span className="flex min-w-0 flex-col">
+            <span className="min-w-0 truncate font-medium">{chat.title}</span>
+            {projectName && (
+              <span data-testid="row-project-name" title={projectName} className="min-w-0 truncate text-[11px] leading-tight text-[var(--text-faint)]">
+                <span className="sr-only">, in</span> {projectName}
+              </span>
+            )}
           </span>
+        ) : (
+          <>
+            <span className="min-w-0 truncate">{chat.title}</span>
+            {projectName && (
+              <span data-testid="row-project-name" title={projectName} className="ml-auto max-w-[45%] shrink-0 truncate pl-2 text-xs text-[var(--text-faint)]">
+                <span className="sr-only">, in</span> {projectName}
+              </span>
+            )}
+          </>
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
