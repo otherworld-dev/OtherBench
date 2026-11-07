@@ -1073,14 +1073,17 @@ export const api = {
   },
 
   mcpServers: {
-    /** Live health only (status/toolCount/lastError) -- NOT full config (no command/args/url/env/headers). See `get` below for that. */
-    list: () => request<McpServerHealth[]>('/mcp-servers'),
+    /**
+     * Live health only (status/toolCount/lastError) -- NOT full config (no command/args/url/env/headers). See `get` below for that.
+     * With `chatId`, those of the machine the chat runs on (the server asks a paired machine for them), as `refresh` reconnects there.
+     */
+    list: (chatId?: string) => request<McpServerHealth[]>(chatId === undefined ? '/mcp-servers' : `/chats/${chatId}/mcp-servers`),
     /** Full stored config for one server, for the edit form -- `envRefs`/`headerRefs` are reference ids, never the plaintext values they point at. */
     get: (id: string) => request<McpServer>(`/mcp-servers/${id}`),
     create: (body: CreateMcpServerBody) => post<McpServer>('/mcp-servers', body),
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),
-    refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+    refresh: (id: string, chatId?: string) => post<void>(chatId === undefined ? `/mcp-servers/${id}/refresh` : `/chats/${chatId}/mcp-servers/${id}/refresh`),
     /** Starts a browser sign-in (spec 2026-10-12-mcp-oauth-design §6); the caller opens `authorizationUrl`. */
     signIn: (id: string) => post<{ authorizationUrl: string }>(`/mcp-servers/${id}/sign-in`),
     cancelSignIn: (id: string) => post<void>(`/mcp-servers/${id}/sign-in/cancel`),
@@ -1097,9 +1100,13 @@ export const api = {
   },
 
   grants: {
-    /** Chat-scoped grants for `chatId` PLUS every global ('always') grant -- see routes/tools.ts for why both belong in one "active for this chat" view. */
+    /**
+     * Chat-scoped grants for `chatId` PLUS every global ('always') grant -- see routes/tools.ts for why both belong in one
+     * "active for this chat" view. Those of the machine the chat runs on, as are its audit trail's.
+     */
     list: (chatId: string) => request<Grant[]>(`/chats/${chatId}/grants`),
-    revoke: (id: string) => del(`/grants/${id}`),
+    /** With `chatId`, revoked on the machine the chat runs on: only a grant that chat lists. */
+    revoke: (id: string, chatId?: string) => del(chatId === undefined ? `/grants/${id}` : `/chats/${chatId}/grants/${id}`),
   },
 
   audit: {

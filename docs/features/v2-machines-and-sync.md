@@ -63,6 +63,24 @@ desktop app and lets two machines share chats. Built so far:
   listener takes that stop ahead of its "this chat runs elsewhere" check,
   since a stop starts nothing. A reply's own Stop for a reply running here
   is handled here even if its chat has since moved.
+- **The Inspector for a chat on another machine** (`chatToolStateRoutes`
+  in `routes/tools.ts`): Tool grants, MCP servers and Audit trail never
+  sync, so the Inspector reads them through the chat
+  (`GET /api/chats/:id/grants`, `.../audit`, `.../mcp-servers`), and for a
+  chat that runs on a paired machine the server forwards those calls there.
+  The sections show that machine's, under a line naming it. Revoke
+  (`DELETE /api/chats/:id/grants/:grantId`, only a grant that chat lists)
+  and an MCP server's ↻ (`POST /api/chats/:id/mcp-servers/:serverId/refresh`)
+  act there too. Nothing else about MCP servers is reachable from the other
+  machine: adding, editing, signing in and enabling stay in that machine's
+  own Settings. Profiles sync but MCP servers don't (their ids are local),
+  so ticking one of that machine's servers in the Inspector adds its id to
+  the profile, and the chat can use it there. That machine says when any of
+  the three changes with a `tool-state` announcement on `/peer/events`
+  (section and chat id only), which arrives here as `peer-tool-state`; the
+  sections also re-read when it comes back reachable. A machine on an older
+  build answers these routes with a bare 404, which is passed on as 501
+  `peer_outdated` ("PC needs a newer OtherBench to show this.").
 - **Live state between machines** (`peer/service.ts`, `activity()`): each
   machine holds every paired machine's `/peer/events` stream open, and what
   the other needs to see live is the `activity` announcement on it, sent

@@ -12,7 +12,7 @@ import {
 } from '@otherbench/core/domain/pairing.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
-import type { ComputerSessionSummary } from '@otherbench/core/types/events.js';
+import type { ComputerSessionSummary, ToolStateSection } from '@otherbench/core/types/events.js';
 import type { Peer, PeerInfo, PeerScheduleSummary, PublicPeer } from '@otherbench/core/types/peer.js';
 import { isIP } from 'node:net';
 import type { Hono } from 'hono';
@@ -137,6 +137,17 @@ export function computerSessionsOf(said: unknown): ComputerSessionSummary[] {
   return out;
 }
 
+const TOOL_STATE_SECTIONS: readonly ToolStateSection[] = ['mcp', 'grants', 'audit'];
+
+/** A peer's `tool-state` announcement, as far as it is one: a known section and a bounded chat id or null; else null. */
+export function toolStateOf(said: unknown): { section: ToolStateSection; chatId: string | null } | null {
+  if (typeof said !== 'object' || said === null) return null;
+  const { section, chatId } = said as Record<string, unknown>;
+  if (!TOOL_STATE_SECTIONS.includes(section as ToolStateSection)) return null;
+  if (chatId !== null && (typeof chatId !== 'string' || chatId === '' || chatId.length > MAX_COMPUTER_ID)) return null;
+  return { section: section as ToolStateSection, chatId };
+}
+
 /** A peer's `waitingSince`: a finite time for each of `waiting`, the chats it says wait on a card; anything else dropped. */
 function waitingSinceOf(said: unknown, waiting: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -233,6 +244,10 @@ export class PeerService {
             options.events?.emit({ type: 'peer-schedules', nodeId });
           }
         }
+        if (event === 'tool-state') {
+          const change = toolStateOf(data);
+          if (change) options.events?.emit({ type: 'peer-tool-state', nodeId, ...change });
+        }
       },
     });
   }
@@ -278,7 +293,8 @@ export class PeerService {
    * opens gets it straight after its hello): the chats with a reply running (#790's "also active" hint), with
    * background tasks running, and waiting on a card, since when, its `gh` login, and the chats controlling this
    * computer with their last action. Only ids, times, counts and the one-line action summary: never a card's content,
-   * a grant, an audit row or an MCP server, which a paired machine has no route to read.
+   * a grant, an audit row or an MCP server. A paired machine reads those for a chat that runs here, over the peer
+   * listener (`chatToolStateRoutes`), when a `tool-state` announcement says they changed.
    */
   activity(): {
     chatIds: string[];

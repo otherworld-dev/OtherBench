@@ -180,8 +180,9 @@ it whether computer use is on here (the refusal says so), and the
 `activity` announcement now carries the chats controlling this computer
 with their last action (`actionSummary`, the same line as the banner,
 which never holds typed text and is derived from the stored tool call
-that syncs anyway). Grants, the audit trail, MCP health, the computer-use
-status route and `/api/events` are still not on the listener.
+that syncs anyway). The computer-use status route and `/api/events` are
+still not on the listener. Grants, the audit trail and MCP health are
+readable for a chat that runs here since 2026-11-07 (next paragraph but one).
 
 **A paired machine can read this machine's schedules, and do nothing else
 with them.** The `/peer/events` stream carries a `schedules` announcement:
@@ -198,6 +199,25 @@ route on the peer listener, read or write: `/api/schedules` isn't in
 machine can't create, edit, pause, delete, run or stop one here
 (`server/test/peer/schedules.test.ts` calls each path over real TLS and
 checks the store is unchanged).
+
+**A paired machine can read the Inspector's tool state of a chat that runs
+here, and only take things away.** So that the Inspector shows the tools a
+chat actually uses (Adam's call, 2026-11-07), `forwardedApi` mounts
+`chatToolStateRoutes` (`routes/tools.ts`): for a chat that runs here, its
+grants (chat-scoped plus the "always" grants its profile matches), its audit
+trail and this machine's MCP server health (names, transport, status, tool
+counts, errors and a signed-in server's account name; never commands, URLs,
+env, headers or tokens, which `McpServerHealth` doesn't carry and `GET
+/mcp-servers/:id` isn't on the listener). The writes are
+revoking a grant that chat lists and reconnecting an MCP server already set
+up here; neither puts input into a chat, so neither marks it for computer
+use (`PEER_NO_INPUT`). Like every chat route on the listener, a chat that
+doesn't run here is refused (409 `not_here`), and while computer use may be
+in control the two writes are refused unless paired machines may drive it.
+Adding, editing, enabling, deleting or signing in an MCP server, and making
+a grant, are not reachable from a paired machine. This machine announces
+`tool-state` on `/peer/events` when any of the three changes: the section and
+a chat id only. Tested over real TLS in `server/test/peer/tool-state.test.ts`.
 
 **Sign-in mode is the whole UI on the network, by design** (`--public-url`,
 spec 2026-10-12-remote-access). A signed-in browser is the box's user
@@ -694,15 +714,17 @@ this on startup.
   audit trail's "Ns ago" times are redrawn every 10 s without a fetch. What
   is left: a pending MCP sign-in that runs out of time ends with no event,
   so Settings > MCP servers still checks once a second while one is pending
-  (`McpSignIn.tsx`). `/api/events` isn't on the peer listener and none of
-  these three events reaches a paired machine, deliberately: grants, the
-  audit trail and MCP health don't sync and have no route on the peer
-  listener, so a paired machine couldn't read what they announce. For a chat
-  that runs on another machine the Inspector's Tool grants, MCP servers and
-  Audit trail sections therefore show this machine's own (kept live by its
-  own events) under a line saying so ("This chat runs on PC. ..."); showing
-  the other machine's would mean new read routes on the peer listener, which
-  is a decision for Adam, not made here.
+  (`McpSignIn.tsx`). `/api/events` isn't on the peer listener, so none of
+  these three events reaches a paired machine as it is. Instead, for a chat
+  that runs on another machine, the Inspector's Tool grants, MCP servers and
+  Audit trail show that machine's (Adam's call, 2026-11-07): the
+  chat-scoped routes are forwarded there over the peer listener, and that
+  machine announces `tool-state` (section and chat id only) on
+  `/peer/events`, which arrives as `peer-tool-state` (see *v2: machines and
+  sync*). Over the peer listener a paired machine can read these three for
+  a chat that runs on the machine it asks, revoke one of that chat's grants
+  and reconnect an MCP server already set up there; it can't add, edit,
+  enable or sign in an MCP server.
 - **An accepted upload is held in memory, not streamed to disk.** The 25MB
   cap now holds while the body is read (see Attachments above), so an
   oversized upload is refused about a megabyte past the cap. An upload

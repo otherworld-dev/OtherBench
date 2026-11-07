@@ -4,6 +4,7 @@ import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
 import { pathForCard } from '@otherbench/core/domain/computer-apps.js';
 import type { AuditEntry, Chat, Grant } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
+import type { AppEvent, ToolStateSection } from '@otherbench/core/types/events.js';
 import type { McpServerHealth } from '@otherbench/tools/mcp/manager.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { useChanged } from '../lib/useChanged.js';
@@ -77,7 +78,31 @@ function formatCost(cost: number): string {
  * already holds rather than a connection of its own. Every hello (a
  * reconnect) re-reads all three, so a change missed while the stream was down
  * still shows. Settings > MCP servers reads its health list the same way.
+ *
+ * All three are each machine's own and never sync, so for a chat that runs on
+ * a paired machine they're read from there (the server forwards the
+ * chat-scoped routes), as the chat uses that machine's tools. That machine
+ * says when they change (`peer-tool-state`), and coming back reachable
+ * re-reads them too.
  */
+
+/** Whether `event` says the tool state shown for `chat` changed on the paired machine it runs on. */
+function peerToolStateChanged(event: AppEvent, chat: Chat, section: ToolStateSection): boolean {
+  if (event.type === 'peer-tool-state') return event.nodeId === chat.runsOn && event.section === section && (event.chatId === null || event.chatId === chat.id);
+  // Back after being away: whatever changed there meanwhile.
+  return event.type === 'peer-status' && event.nodeId === chat.runsOn && event.status === 'reachable';
+}
+
+/** Why a section couldn't load. For a chat on a paired machine, the server's own words: that machine isn't reachable, or needs an update. */
+function loadFailedText(error: unknown, fallback: string, remote: boolean): string {
+  return remote && error instanceof ApiError ? error.message : fallback;
+}
+
+/** Whether the chat runs on a paired machine rather than this one. */
+function useRunsElsewhere(chat: Chat | null): boolean {
+  const selfId = useOtherBenchStore((s) => s.machines?.self.id ?? null);
+  return chat !== null && selfId !== null && chat.runsOn !== selfId;
+}
 
 // ---------------------------------------------------------------------------
 // Workspace root -- the single setting that unblocks the whole tool runtime.
@@ -506,9 +531,17 @@ function mcpSummary(servers: McpServerHealth[] | null, failed: boolean, onIds: s
  * `toolPolicy.mcpServerIds`, the same list as Settings > Profiles, so a
  * change applies to every chat on the profile. Servers it can't use are
  * dimmed, so a green dot doesn't read as "this chat has these tools".
+ * With a chat, they are the servers of the machine it runs on: profiles sync
+ * but servers don't, so ticking one of that machine's here is what lets the
+ * chat use it there.
  */
-function McpServersSection({ profile }: { profile: Profile | null }): JSX.Element {
-  const { data: servers, failed } = useLiveData(() => api.mcpServers.list(), [], (e) => e.type === 'mcp-changed');
+function McpServersSection({ chat, profile }: { chat: Chat | null; profile: Profile | null }): JSX.Element {
+  const remote = useRunsElsewhere(chat);
+  const { data: servers, failed, error } = useLiveData(
+    () => api.mcpServers.list(chat?.id),
+    [chat?.id, chat?.runsOn],
+    (e) => e.type === 'mcp-changed' || (chat !== null && peerToolStateChanged(e, chat, 'mcp'))
+  );
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
   const upsertProfile = useOtherBenchStore((s) => s.upsertProfile);
   const profileIds = profile?.toolPolicy.mcpServerIds ?? [];
@@ -545,7 +578,7 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
   async function refresh(id: string): Promise<void> {
     setRefreshingIds((s) => new Set(s).add(id));
     try {
-      await api.mcpServers.refresh(id);
+      await api.mcpServers.refresh(id, chat?.id);
     } catch (err) {
       console.error(`[otherbench-web] failed to refresh MCP server ${id}:`, err);
     } finally {
@@ -557,9 +590,9 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
     }
   }
 
-  if (failed) return <EmptyState>Couldn&rsquo;t load MCP server health.</EmptyState>;
+  if (failed) return <EmptyState>{loadFailedText(error, 'Couldn’t load MCP server health.', remote)}</EmptyState>;
   if (servers === null) return <EmptyState>Loading…</EmptyState>;
-  if (servers.length === 0) return <EmptyState>No MCP servers are configured.</EmptyState>;
+  if (servers.length === 0) return <EmptyState>{remote ? 'No MCP servers are configured there.' : 'No MCP servers are configured.'}</EmptyState>;
 
   return (
     <div data-testid="mcp-health" className="space-y-2">
@@ -618,7 +651,7 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
             .filter((s) => s.status === 'needs_auth')
             .map((s) => (
               <p key={s.id} className="text-xs text-[var(--warn)]">
-                {`${s.name}: needs sign-in (Settings > MCP servers).`}
+                {remote ? `${s.name}: needs sign-in (Settings > MCP servers, on that machine).` : `${s.name}: needs sign-in (Settings > MCP servers).`}
               </p>
             ))}
         </div>
@@ -631,13 +664,15 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
  * "Tool grants" -- every grant currently in effect for this chat (chat-scoped + global 'always' grants, see
  * routes/tools.ts), each with a Revoke action that takes effect on the VERY NEXT tool call (no restart -- see
  * PermissionBroker.decide, which reads the grant list fresh every time). Which 'always' grants apply depends on the
- * chat's profile, so a profile change reads the list again.
+ * chat's profile, so a profile change reads the list again. They are the grants of the machine the chat runs on.
  */
-function GrantsSection({ chatId, profileId }: { chatId: string; profileId: string }): JSX.Element {
-  const { data: grants, failed } = useLiveData(
+function GrantsSection({ chat }: { chat: Chat }): JSX.Element {
+  const chatId = chat.id;
+  const remote = useRunsElsewhere(chat);
+  const { data: grants, failed, error } = useLiveData(
     () => api.grants.list(chatId),
-    [chatId, profileId],
-    (e) => e.type === 'grants-changed' && (e.chatId === null || e.chatId === chatId)
+    [chatId, chat.profileId, chat.runsOn],
+    (e) => (e.type === 'grants-changed' && (e.chatId === null || e.chatId === chatId)) || peerToolStateChanged(e, chat, 'grants')
   );
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
   const [localGrants, setLocalGrants] = useState<Grant[] | null>(null);
@@ -650,7 +685,7 @@ function GrantsSection({ chatId, profileId }: { chatId: string; profileId: strin
   async function revoke(id: string): Promise<void> {
     setRevoking((s) => new Set(s).add(id));
     try {
-      await api.grants.revoke(id);
+      await api.grants.revoke(id, chatId);
       // Optimistic removal -- the `grants-changed` the revoke announces
       // re-reads the list too, but only after a round trip and the
       // debounce, and decision #3 requires this to be verifiably
@@ -667,7 +702,7 @@ function GrantsSection({ chatId, profileId }: { chatId: string; profileId: strin
     }
   }
 
-  if (failed) return <EmptyState>Couldn&rsquo;t load grants for this chat.</EmptyState>;
+  if (failed) return <EmptyState>{loadFailedText(error, 'Couldn’t load grants for this chat.', remote)}</EmptyState>;
   if (shown === null) return <EmptyState>Loading…</EmptyState>;
   if (shown.length === 0) return <EmptyState>No grants issued in this chat yet.</EmptyState>;
 
@@ -729,10 +764,8 @@ function ProfileSiteList({ profile }: { profile: Profile | null }): JSX.Element 
 }
 
 /**
- * Above Tool grants, MCP servers and Audit trail for a chat that runs on a paired machine. Those are kept on each
- * machine and never sync, and the peer link has no route to read them (it is limited to running and stopping a
- * chat), so what the sections show is this machine's own, kept live by this machine's events; the other machine's
- * aren't shown, and this says so rather than letting this machine's pass for them.
+ * Above Tool grants, MCP servers and Audit trail for a chat that runs on a paired machine: those are each machine's
+ * own, and what the sections show is that machine's, read from there, so this says whose they are.
  */
 function ElsewhereNote({ chat, what }: { chat: Chat | null; what: string }): JSX.Element | null {
   const machines = useOtherBenchStore((s) => s.machines);
@@ -789,8 +822,15 @@ function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; li
 }
 
 /** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see OtherBenchToolProvider), and duration. Newest first. */
-function AuditSection({ chatId }: { chatId: string }): JSX.Element {
-  const { data: entries, failed } = useLiveData(() => api.audit.list(chatId), [chatId], (e) => e.type === 'audit-changed' && e.chatId === chatId);
+function AuditSection({ chat }: { chat: Chat }): JSX.Element {
+  const chatId = chat.id;
+  const remote = useRunsElsewhere(chat);
+  // The trail of the machine the chat runs on: its calls there are audited there.
+  const { data: entries, failed, error } = useLiveData(
+    () => api.audit.list(chatId),
+    [chatId, chat.runsOn],
+    (e) => (e.type === 'audit-changed' && e.chatId === chatId) || peerToolStateChanged(e, chat, 'audit')
+  );
   // "12s ago" keeps counting with no new entry to redraw it.
   const now = useNow(AUDIT_CLOCK_MS);
   // A call approved from a paired machine says which (the decision's machine, kept by the server).
@@ -800,7 +840,7 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
     failed ? "couldn't load" : entries === null ? null : entries.length === 0 ? 'none' : `${entries.length} call${entries.length === 1 ? '' : 's'}`
   );
 
-  if (failed) return <EmptyState>Couldn&rsquo;t load the audit trail for this chat.</EmptyState>;
+  if (failed) return <EmptyState>{loadFailedText(error, 'Couldn’t load the audit trail for this chat.', remote)}</EmptyState>;
   if (entries === null) return <EmptyState>Loading…</EmptyState>;
   if (entries.length === 0) return <EmptyState>No tool calls recorded in this chat yet.</EmptyState>;
 
@@ -1055,11 +1095,11 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       {chat && <ClaudeCodeInspectorSection chatId={chat.id} />}
 
       <Section title="Tool grants">
-        <ElsewhereNote chat={chat} what="These are this machine's grants, which apply only when it runs here; that machine's aren't shown." />
+        <ElsewhereNote chat={chat} what="These are its grants there." />
         {chat ? (
           <>
             <ProfileSiteList profile={profile} />
-            <GrantsSection chatId={chat.id} profileId={chat.profileId} />
+            <GrantsSection chat={chat} />
           </>
         ) : (
           <EmptyState>No chat selected.</EmptyState>
@@ -1067,13 +1107,13 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       </Section>
 
       <Section title="MCP servers">
-        <ElsewhereNote chat={chat} what="These are this machine's MCP servers; it uses that machine's, which aren't shown." />
-        <McpServersSection profile={chat ? profile : null} />
+        <ElsewhereNote chat={chat} what="These are its MCP servers there; tick one to let the chat use it." />
+        <McpServersSection chat={chat} profile={chat ? profile : null} />
       </Section>
 
       <Section title="Audit trail">
-        <ElsewhereNote chat={chat} what="Its tool calls there are audited there and aren't shown; this is this machine's trail." />
-        {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
+        <ElsewhereNote chat={chat} what="These are its tool calls there." />
+        {chat ? <AuditSection chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       {chat && memoryProject && (

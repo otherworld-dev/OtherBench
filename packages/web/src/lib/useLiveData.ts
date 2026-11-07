@@ -22,14 +22,18 @@ export const LIVE_MAX_WAIT_MS = 1000;
  *
  * Backs the Inspector's MCP servers, Tool grants and Audit trail sections and
  * Settings > MCP servers, which polled every 4 s before these events existed.
+ * For a chat that runs on a paired machine the Inspector's are that machine's,
+ * re-read on its `peer-tool-state` events.
  */
 export function useLiveData<T>(
   fetcher: () => Promise<T>,
   deps: unknown[],
   refetchOn: (event: AppEvent) => boolean
-): { data: T | null; failed: boolean; refetch: () => void } {
+): { data: T | null; failed: boolean; error: unknown; refetch: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [failed, setFailed] = useState(false);
+  // What the last failed read threw, for a caller that words it (an unreachable paired machine).
+  const [error, setError] = useState<unknown>(null);
   // The caller's latest fetcher and filter, without either restarting the effect.
   const fetchNow = useEffectEvent(() => fetcher());
   const wanted = useEffectEvent((event: AppEvent) => refetchOn(event));
@@ -39,6 +43,7 @@ export function useLiveData<T>(
   if (useChanged(deps)) {
     setData(null);
     setFailed(false);
+    setError(null);
   }
 
   useEffect(() => {
@@ -58,7 +63,10 @@ export function useLiveData<T>(
         })
         .catch((err: unknown) => {
           console.error('[otherbench-web] useLiveData fetch failed:', err);
-          if (!disposed && request === latest) setFailed(true);
+          if (!disposed && request === latest) {
+            setFailed(true);
+            setError(err);
+          }
         });
     }
 
@@ -91,5 +99,5 @@ export function useLiveData<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the caller's own explicit restart list, not derivable from `fetcher`'s identity.
   }, deps);
 
-  return { data, failed, refetch: () => refetchRef.current() };
+  return { data, failed, error, refetch: () => refetchRef.current() };
 }

@@ -2,6 +2,9 @@ import type { ScheduleRunStatus } from '../domain/schedule.js';
 import type { Chat } from '../ports/store.js';
 import type { MessageStatus } from './messages.js';
 
+/** The Inspector's sections that are each machine's own and never sync. */
+export type ToolStateSection = 'mcp' | 'grants' | 'audit';
+
 /**
  * App-wide events (v2 plan, Task 34): what changed anywhere in the app, as
  * opposed to one chat's turn stream. `GET /api/events` sends them so every
@@ -16,8 +19,10 @@ import type { MessageStatus } from './messages.js';
  * `peer-activity`, and `GET /api/peers` carries it. Its schedules go the same way as the `schedules`
  * announcement, whole each time they change, and arrive as `peer-schedules` (`GET /api/peers/schedules`,
  * read-only). Synced rows arrive by
- * sync (`sync-applied`). Grants, the audit trail and MCP health have no route
- * on the peer listener, so their events stay on the machine they happen on.
+ * sync (`sync-applied`). Grants, the audit trail and MCP health never sync: a
+ * paired machine reads them over the peer listener for a chat that runs here
+ * (`chatToolStateRoutes`), and is told when they change by the `tool-state`
+ * announcement (which section, and the chat), arriving as `peer-tool-state`.
  */
 export type AppEvent =
   | { type: 'chat-created' | 'chat-updated'; chat: Chat }
@@ -45,6 +50,8 @@ export type AppEvent =
   | { type: 'peer-activity'; nodeId: string }
   /** A paired machine said what its schedules are now (read-only here): re-read `GET /api/peers/schedules`. */
   | { type: 'peer-schedules'; nodeId: string }
+  /** A paired machine's grants, audit trail or MCP health changed there: re-read that section for a chat running there. `chatId` null: any chat. */
+  | { type: 'peer-tool-state'; nodeId: string; section: ToolStateSection; chatId: string | null }
   /** A schedule was made, changed or deleted: re-read the list (spec 2026-10-12-scheduled-tasks-design). */
   | { type: 'schedules-changed' }
   /** A scheduled run's reply has started. */
