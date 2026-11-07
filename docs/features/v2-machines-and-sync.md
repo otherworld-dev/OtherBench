@@ -24,7 +24,13 @@ desktop app and lets two machines share chats. Built so far:
   machines with a one-time code; each pins the other's certificate and
   holds a bearer token from it (stored only as a hash on the issuing side).
   The peer listener (HTTPS, default port 4748, `--peer-port`/`--peer-host`)
-  runs only while a peer exists or a code is shown.
+  runs only while a peer exists or a code is shown. A machine's name starts
+  as its hostname at first run and is changed with *Rename* in Settings →
+  Machines, not by renaming the computer. Each pull reads the peer's
+  `/peer/info`; when the name there differs from the one it gave last
+  (kept in settings as `peer-reported-name:<id>`), it replaces the name
+  this machine holds for it, so a rename reaches the other side within a
+  minute while a name edited here stays until the next one.
 - **Locations and portable folders** (`core/src/domain/workspace.ts`): a
   chat's (or project's) folder is either relative to a named location that
   each machine maps to its own path, or bound to one machine's absolute

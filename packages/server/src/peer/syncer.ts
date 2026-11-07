@@ -5,6 +5,7 @@ import type { Store, SyncRepo } from '@otherbench/core/ports/store.js';
 import type { PeerInfo } from '@otherbench/core/types/peer.js';
 import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js';
 
+import { LOCATION_NAME_MAX } from '../routes/locations.js';
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
 
@@ -46,6 +47,14 @@ export interface SyncStatus {
 /** Where a version mismatch is kept, so it's still shown after a restart while the peer is away. */
 function mismatchKey(nodeId: string): string {
   return `sync-version-mismatch:${nodeId}`;
+}
+
+/**
+ * The name a peer last gave for itself. A different one means it was renamed
+ * there, so it replaces the name here; until then a name edited here stays.
+ */
+function reportedNameKey(nodeId: string): string {
+  return `peer-reported-name:${nodeId}`;
 }
 
 type StoredMismatch = VersionMismatch & { message: string };
@@ -171,11 +180,25 @@ export class Syncer {
     return run;
   }
 
+  /** Takes the name a peer gives for itself when it differs from the one it gave last. */
+  private followRename(nodeId: string, name: unknown): void {
+    if (typeof name !== 'string') return;
+    const trimmed = name.trim().slice(0, LOCATION_NAME_MAX);
+    const settings = this.options.store.settings;
+    if (trimmed.length === 0 || settings.getValue(reportedNameKey(nodeId)) === trimmed) return;
+    settings.setValue(reportedNameKey(nodeId), trimmed);
+    const peer = this.options.store.peers.get(nodeId);
+    if (!peer || peer.name === trimmed) return;
+    this.options.store.peers.update(nodeId, { name: trimmed });
+    this.options.events?.emit({ type: 'peers-changed' });
+  }
+
   private async pullOnce(nodeId: string): Promise<number> {
     const peers = this.options.peers;
     let mismatch: VersionMismatch | null = null;
     try {
       const info = (await peers.call(nodeId, { method: 'GET', path: '/peer/info' })).body as PeerInfo;
+      this.followRename(nodeId, info.name);
       const self = peers.info();
       if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
         const peerOlder = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION;
