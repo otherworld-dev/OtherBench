@@ -1,0 +1,40 @@
+# Deviations from the specs
+
+Where what was built differs from a spec or plan, and why. Moved out of `HANDOVER.md` on 2026-11-09.
+
+## Deviations from the v2 spec and plan
+
+| Plan or spec said | Built | Why |
+| --- | --- | --- |
+| Migrations numbered from 005 | 011-013 | v1 work after the plan was written had already used up to 010 |
+| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`), which since remote access also makes `--tls auto`'s local CA and server certificate (SANs, key usages, key ids) | Avoids a new dependency for a few fixed certificate shapes; Node signs and parses certificates, it just can't build one |
+| `undici` Agent for the pinned client | `node:tls` + `node:http` with `createConnection` (`peer/client.ts`) | No new dependency, and the fingerprint is checked before any byte (the token included) is written |
+| Pairing MAC: `HMAC(code, fpA ‖ fpB)` | HMAC with a key derived by scrypt (N=2^14, r=8) from the code, salted with both fingerprints; the answer must come within 15 s | A security review showed a captured MAC of an 8-character code (2^40 guesses) falls to a GPU well inside the code's 10 minutes; the spec's "impractical" was wrong |
+| Messages are insert-only | Last writer wins by stamp | A retried reply and *keep* marks change a message in place; insert-only would never deliver them |
+| — | Projects and project memory sync too | They were added to v1 after the spec was written |
+| — | `sync_secret` (keep the key here) is each machine's own setting, not synced | Otherwise a peer could switch it back on and be sent the key |
+| The InMemoryStore mirrors change tracking | Change tracking is SQLite-only (triggers); sync tests use real SQLite stores | The fake would need its own change log on every repository for no gain over testing the real thing |
+| `apply` refuses every `location_path` row for this machine | Refuses them only when this machine already has a path for that location | Adopting a location (Task 44) writes the other machine's path, which that machine needs to resolve the chats it was given |
+| `GET /fs/dirs` forwarded with `?node=` | Never mounted on the peer listener | It lists directories anywhere on the machine; see What is NOT built |
+| `WorkspaceStatus.hint.nodeName` | `hint.nodeId` | The UI names machines from the paired list; the server needn't |
+| Task 40: try a Node SEA first, else ship a pinned `node` | Ships the build machine's own `node.exe` beside an esbuild bundle (`packages/server/scripts/bundle.mjs`), with the Claude Agent SDK, its native Claude Code runtime and `unpdf` copied beside the bundle rather than bundled | The Agent SDK starts a 237 MB per-platform native runtime and unpdf loads PDF.js from its own folder; neither survives bundling or a SEA. Shipping the node that ran the tests avoids a download and checksum step for now; a pinned, CI-downloaded node comes with the release workflow |
+| Office files (Deck #928): the server bundle gains the writers | `docx` 9.8.1, `write-excel-file` 4.1.1, `pptxgenjs` 4.0.1 and the mdast/GFM parser are bundled, not copied beside it. `cli.js` is 5.59 MB and the new `render-worker.js` 1.93 MB: 7.51 MB together, up from 4.59 MB | The writers are plain JS and bundle cleanly. `npm audit` reports `image-size` (high) through `pptxgenjs`: the ES build OtherBench bundles never imports it and OtherBench never passes images. Don't run `npm audit fix --force` (it would also move `ai` to v7). `bundle:smoke` makes one file of each kind through the bundle |
+| Spec: a spreadsheet formula check refuses a list of named functions | An allowlist of Excel's built-in worksheet functions behind a fail-closed tokenizer, with a short list refused by name; `formulaForFile` is the one source of the text written | A security review showed the denylist incomplete (STOCKHISTORY, TRANSLATE, INFO, CELL, INDIRECT...) and bypassable by spacing, prefixes and LET/LAMBDA aliases; what was checked has to be exactly what's written. It refuses some valid workbooks (INDIRECT, CELL, INFO, LET, LAMBDA, named ranges, 3-D references, `@`, `#`); the ~500-entry list could also miss a function |
+| Spec: a document has no checks beyond the 1 MB cap | Limits on characters, lines, table rows and cells, indent, quote depth and formatting marks | The Markdown parser is super-linear on some shapes (200 KB of `**a**` took about 2 minutes). The limits are early, clear errors; the Worker is what actually bounds it |
+| Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
+| The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
+| Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
+| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. At most 120 password checks in any hour: a budget of 100 without a device cookie (a bucket of 20, one more every 45 s) plus 20 with one (a bucket of 5, one more every 4 minutes), and a slow-down from 20 failures in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie (only with Keep me signed in) lets a browser skip the budget and the slow-down and is locked by its id; 5 tokens and 5 waiting places are kept for addresses with no failure in a day; an attempt that walks away after taking a token counts as a failure. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
+
+## Deviations from the original spec
+
+All deliberate, all recorded at the time in the plan's Global Constraints:
+
+| Spec said | Built | Why |
+| --- | --- | --- |
+| pnpm | npm workspaces | pnpm wasn't installed on the build machine; installing global tooling overnight was declined |
+| Node 26 | Node 24.16.0 | What was on the machine — not a rejection of 26 for any `node:sqlite`/FTS5 reason, just "neither pnpm nor Node 26 was installed" |
+| FTS5 with a `LIKE` fallback | FTS5 only, no fallback | FTS5 was verified present on this build, so the fallback would have been dead code |
+| `.sql` migration files | Inlined as TypeScript string constants | `tsc` only emits `.js`/`.d.ts` — a plain `.sql` file is never copied into `dist/`, so a built package would silently ship without its migrations. Inlining removes that packaging failure mode at the cost of losing standalone `.sql` syntax highlighting |
+| — | `node:sqlite` imported via `createRequire`, not a static `import` | `node:sqlite` has no unprefixed alias, and the vite-node version vitest 2.x pins hardcodes its builtin-module allowlist without it — a plain `import` resolves to the bare specifier `"sqlite"` under vitest and fails. `createRequire` is a function call, not an import declaration, so it bypasses vite-node's static rewriting and hits Node's own loader, which resolves it correctly both under vitest and under plain `node`. Verified the built `dist/db.js` uses the identical call, so tests and the shipped server agree — this isn't a test-only shim. Revisit once vitest moves past whatever vite-node version fixes the allowlist |
+

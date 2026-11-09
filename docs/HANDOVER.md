@@ -1,21 +1,16 @@
 # OtherBench — handover
 
-This replaces the previous handover, which was written before two feature
-branches merged: the Settings UI (`5d8cd0b`) and the attachment lifecycle
-work (`1ab07c0`, the current `main` HEAD). Everything in this repo lives on
-`main` now — the `feat/grunt-v1` branch it used to describe is deleted, and
-so is the execution ledger it pointed readers at
-(`.superpowers/sdd/2026-08-12-grunt-v1/progress.md`, git-ignored, removed
-during cleanup). Where this doc used to cite that ledger for specifics, it
-now cites the source file it lives in instead.
+What OtherBench is, how it is defended, and what is known to be missing. Work
+happens on `dev`; `main` is far behind it. Each feature has its own page
+under `docs/features/` (indexed below), the build's departures from its
+specs are in `docs/deviations.md`, and the test setup is in
+`docs/testing.md`.
 
-**Status (5 October 2026):** 2,222 unit and integration tests pass (4
-skipped) and 25 Playwright tests pass, including a two-server test of
-pairing, sync and running a chat on the other machine; `npm run typecheck`
-and `npm run build` are clean. `README.md` has a verified install → build →
-run → mock-provider walkthrough, and how to pair two machines. The v2
-page (`docs/features/v2-machines-and-sync.md`) says what v2 added; the v1
-pages there still hold.
+**Status (9 November 2026):** `npm test` passes 10,002 tests (20 skipped)
+in 528 files; `npm run typecheck`, `npm run typecheck:tests` and `npm run
+lint` are clean. CI runs them all on Windows and publishes a signed beta
+from every green push of `dev` (see `CLAUDE.md` and
+[Updates](features/updates.md)).
 
 ## Feature docs
 
@@ -24,7 +19,8 @@ unchanged from this file on 2026-11-06. A reference elsewhere to a
 section by name ("see *Scheduled tasks*") means the page of that name;
 searching `docs/` finds a heading inside one. What stays here is what
 cuts across features: what is not built, the security posture, encryption,
-the known gaps, the integration notes and the deviations.
+and the known gaps. The integration notes, the deviations and the test
+setup have their own pages (see Where to look).
 
 - [v2: desktop app, machines and sync](features/v2-machines-and-sync.md)
 - [Updates](features/updates.md)
@@ -64,7 +60,7 @@ the known gaps, the integration notes and the deviations.
   the installer (only the updater's signature exists, so Windows SmartScreen
   still warns on a first install), the Explorer verbs (*Open folder in
   OtherBench*, *Send to OtherBench*) and Linux packages (the bundle targets
-  only `nsis`). Task 40's Node SEA wasn't tried: see Deviations.
+  only `nsis`). Task 40's Node SEA wasn't tried: see `docs/deviations.md`.
 - **A folder browser for another machine's folders** (part of Task 53).
   The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
   is deliberately never mounted there (it lists directories anywhere on the
@@ -846,7 +842,7 @@ this on startup.
   are loaded while running; the sign-in limits still reset on a restart.
 - **MCP sign-in, phase 2** (Deck #931). Not built: registering the public and loopback redirect addresses side by side (each change of address registers again), revoking tokens at the provider on sign-out (RFC 7009), a fixed callback port for providers that pin it, a sign-in button in the Inspector, and URL-based client IDs (SEP-991). In open or token mode with `--host ::1` or one specific non-loopback address, `127.0.0.1` isn't served, so the callback can't arrive; paste-back still works. Tool-call error text from an MCP server isn't redacted (only lifecycle errors are). After a URL change and a new sign-in, a stale refresh on the old URL can force one more sign-in; it never discloses a token.
 - **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Another LAN device's global IPv6 address outside this machine's own /64s is treated as the internet. Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. In a scheduled run a site needs an Always grant made beforehand, or to be on the profile's site list. That list is checked without a Public Suffix List, so a wildcard over a suffix outside its rules (`*.k12.ca.us`) is accepted, and a real site that happens to look like a registry (a two-label name such as `co.xx`) is refused as a wildcard base. Sub-agents share the chat's one browser.
-- **Computer use** (Deck #927). Ships switched off and none of its desktop side has run; a Claude Code helper's screenshots aren't stored or shown (the turn's own are). Scheduled runs, Plan mode and sub-agents never get it (see *Integration*). The full list is under *Computer use* above.
+- **Computer use** (Deck #927). Ships switched off and none of its desktop side has run; a Claude Code helper's screenshots aren't stored or shown (the turn's own are). Scheduled runs, Plan mode and sub-agents never get it (see `docs/integration.md`). The full list is under *Computer use* above.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 - **Office files (Deck #928): the writers' output has been opened in real
   Office, but not end to end through a model.** On 2026-11-09 a memo, a
@@ -959,266 +955,15 @@ this on startup.
   the thread. A chat's own commands appear in the `/` menu only after its first
   reply since the server started; listing them any other way would run the
   folder's SessionStart hooks.
-
-## Integration (feat/cowork-parity-all)
-
-The sandbox, Office files, remote access with MCP sign-in, thread cards,
-scheduled tasks, live artifacts, API sub-agents, the model's browser and
-computer use were built on separate branches from 8dcbd36 and merged here (the
-browser from `feat/remote-access-build` at 42a56d0, computer use from the same
-branch at 4068624; neither has a migration). Each took the
-next free migration number on its own branch, so they were renumbered once
-merged. The final order is:
-
-- 022 `chat-plan-mode`
-- 023 `schedules`
-- 024 `artifact-version-live`
-- 025 `mcp-oauth`
-- 026 `usage-subagent`
-
-**021 is chat-unread.** It was kept free for that migration and landed on dev
-first (2a3767f), so dev now runs 021 then 022 to 026 in order, and a test
-pins that there are no gaps. A database at 20 or 21 migrates normally. The
-one trap left is a database that one of the feature branches took to 22-26
-before 021 existed: the runner only applies versions above `user_version`,
-so it would skip 021 silently. Recreate such a database, or add
-`chat.unread` (`ALTER TABLE chat ADD COLUMN unread INTEGER NOT NULL DEFAULT 0`)
-by hand.
-
-The runner trusts `user_version`, so a dev database that a feature branch
-migrated under another numbering can't come here as it is. Migrations 025
-and 026 check for that: if `mcp_server.oauth` (025) or
-`usage.subagent_call_id` (026) is already there, the migration stops with an
-error that points here, rather than skipping or failing on a bare
-duplicate-column error. Each migration commits on its own, so the ones before
-the one that stopped still run. Check `PRAGMA user_version` first, with OtherBench
-stopped:
-
-- **From `feat/remote-access-build`** (022 was `mcp-oauth`: it has
-  `mcp_server.oauth` but no `chat.plan_mode`):
-  - At 22 (not yet opened here): `ALTER TABLE mcp_server DROP COLUMN oauth;`
-    then `PRAGMA user_version = 20;`. The runner then adds 022 to 026. The
-    sign-in summaries (account, time, a hand-registered client ID) go with
-    the column, so a signed-in MCP server may need signing in again.
-  - At 24 (opened here once: 023 and 024 ran, then 025 stopped):
-    `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
-    `PRAGMA user_version = 25;`. This keeps the sign-in data, and the runner
-    then adds 026. Don't use the first fix here: the runner would then try to
-    create `schedule` again.
-- **From this branch before live artifacts were merged** (commits b4bc881 to
-  5013bb6, where 024 was `mcp-oauth`): at 24, with `mcp_server.oauth` but no
-  `artifact_version.live`, whether or not it has been opened since (025 stops
-  before changing anything). Run `ALTER TABLE artifact_version ADD COLUMN live
-  TEXT;` then `PRAGMA user_version = 25;`. The runner then adds 026.
-- **From `feat/office-files-build` once sub-agents landed** (0a76225 on,
-  where 022 was `usage-subagent`: it has `usage.subagent_call_id` but no
-  `chat.plan_mode`). It starts at 22. The preferred route loses nothing:
-  - **Open it here once, then fix it at 25.** Opening it runs 023 to 025,
-    then 026 stops with the error that points here and leaves it at 25.
-    With OtherBench stopped again, run
-    `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
-    `PRAGMA user_version = 26;`. This keeps `usage.subagent_call_id`, so
-    sub-agent usage rows stay marked.
-  - Or, at 22 without opening it here: `ALTER TABLE usage DROP COLUMN
-    subagent_call_id;` then `PRAGMA user_version = 20;`. The runner then adds
-    022 to 026. This one is lossy: the marks on sub-agent usage rows go with
-    the column, so those rows can no longer be told apart from the reply's
-    own. Don't use it on a database already at 25: the runner would then try
-    to create `schedule` again.
-- **Fine as it is:**
-  - From `feat/remote-access-build` with the model's browser: the browser
-    added no migration, so such a database is the remote-access case above.
-  - From `dev`, `feat/cowork-parity` (the sandbox) or
-    `feat/office-files-build` before sub-agents (up to 91a0af4): 20, or 21
-    with chat-unread.
-  - From this branch before sub-agents were merged: 25. It runs 026.
-  - From `feat/thread-cards-build`: 23 if migrated before b55da3e, or 24 from
-    b55da3e on (that commit added `024-artifact-version-live`). Those numbers
-    mean the same here, and it runs the rest.
-
-### Computer use beside the rest
-
-How computer use (Deck #927) meets the other features here. Its own rulings
-(once-only terminals, shells, shell surfaces, admin tools, script hosts,
-installers and non-ASCII paths; off after any channel fault until restart;
-the toolset model list; the 20-attachment cap) are as it built them, but for
-one change Adam asked for on 2026-10-14: browsers and IDEs, terminals inside
-IDEs included, may have "this chat" and "always" grants, still pinned to the
-exact program path, with a card that says what such a grant lets the model
-do (see *Computer use*).
-
-- **Scheduled runs never use the computer.** There is one
-  `ToolContext.unattended`, set from `TurnInput.unattended` and carried by
-  `toolContextFor` on both engines (the computer branch's own context in the
-  AI SDK engine and the mock `#computer` had neither the plan gate nor the
-  flag; both use `toolContextFor` now). Every action is refused, a screenshot
-  included and whatever grants exist, before `describeCall`, so no start
-  dialog comes up; it is audited `deny:unattended` with the computer's own
-  reason. The schedule editor says so for a profile with computer use on.
-- **Sub-agents never get it.** `SUBAGENT_POLICY_RULES.computer` is always
-  off and `SubagentRunner` never offers a `computer` tool whatever the
-  provider lists; the property test covers computer calls and grants.
-- **Plan mode refuses every computer action**, the looks included, until the
-  plan is approved: a look starts the session (the native dialog) and sends
-  the whole screen to the model, unlike the browser's snapshot of a page the
-  model opened. Fail closed; say if you want the looks allowed once a session
-  is already live.
-- **Grants.** `{ app }` sits beside `{ host }` and `live` on
-  `Grant.constraint`. A grant of one source never covers another; a host or
-  app grant must be exactly its one key; a computer "always" must be exactly
-  the card's own `{ app }` (anything more is refused). The web card, the
-  server's `parseConstraint` and the broker agree on that. When the broker
-  refuses an answer, a computer call is denied (ruling 8) and any other call
-  still runs once, audited and announced as `once`.
-- **Remote access.** Stop, `GET /api/computer/status` and the session events
-  (on `GET /api/events`) are behind sign-in mode, the Host check and the
-  cross-site check, and not on the peer listener; `/peer/events` never
-  carries a computer session. A signed-in remote client can turn computer use
-  on, and answer cards while no session is live; while one may be in control,
-  only the desktop app's own window can answer or change anything (see
-  *Computer use*). The native dialog on this machine stays the only local
-  consent.
-- **Images.** A sub-agent's tool images are now kept like the parent's
-  (stored against the parent reply, under its one budget), so no base64 goes
-  into its broadcast or stored copy. A file sent as its text (an Office file,
-  or any file for Claude Code) counts toward the request's attachment cap
-  like an image or a PDF; one past the newest 20 is the engines' over-budget
-  note. Live artifacts read only an MCP result's text and structuredContent,
-  so computer use's change to MCP images, audio and blobs doesn't reach them,
-  and computer use can never be a live call.
-- **The sandbox and the browser** share nothing with it at run time. Computer
-  use acts on this machine's desktop whatever the shell runs on, so a
-  sandboxed profile with computer use on can still reach a host terminal
-  through the GUI; terminals are once-only, so each action there asks, but
-  an IDE's built-in terminal is part of the IDE's window, so a lasting IDE
-  grant reaches it with no card. The browser and computer use have separate
-  grants (`host` and `app`) and separate stops (the viewer's close and the
-  banner's Stop).
-
-### Confirmed by Adam (2026-10-14)
-
-No code change; recorded so they aren't asked again.
-
-- Protected files are put back after every sandboxed command.
-- A sub-agent's grants are matched and stored under the parent reply's profile.
-- This branch will be merged into dev in one go, after his checks.
-- He will commit the chat-unread migration (021) on dev first, which is what the 021 note above waits on.
-- The test type errors are Deck #954; the CI step stays `continue-on-error` until they are fixed.
-
-### Follow-ups from the integration
-
-Left as they are on purpose; each is written down so it isn't found again by
-surprise.
-
-- **Done: the sandbox agent's address list was looser than core's.** The
-  agent in the VM (`packages/sandbox/resources/agent-core.mjs`) can't import
-  core, so `isPrivateAddress` and `DENIED_RESOLVED_ADDRESSES` are its own
-  copy of the ranges, and the copy used to let through 192.88.99.0/24, 6to4
-  with a private IPv4 address inside, `2001::/23`, `3fff::/20`, `100::/64`,
-  `::a.b.c.d` and any IPv6 address outside `2000::/3` that wasn't on its
-  list, while the ranges handed to the runtime were narrower still. Both now
-  allow exactly what `isPublicAddress` allows, and
-  `packages/sandbox/test/agent-addresses.test.ts` fails when they stop doing
-  so (see "Network" under the sandbox, above). `SHARED_ADDRESS_VECTORS` no
-  longer has a way to record a difference. What is left on purpose: a host
-  given as a number is judged by the agent's lookup only (the runtime
-  doesn't judge those), and the runtime refuses one public address by
-  itself, Azure's 168.63.129.16.
-- **Done: a scheduled run could read a page it couldn't open.** Under "Ask
-  on changes" the browser's reads (`snapshot`, `scroll`) needed no card on
-  any site, so a page on a granted site could link or redirect a scheduled
-  run to another site it would then read. Now, in an unattended run, a read
-  needs its site's own Always grant or site-list entry like any other call
-  (`permissions/browser.ts`; only `close` keeps the read pass), and an
-  action that lands on another site returns `withheld` in place of the page
-  (`browser/tool.ts`), so reading it is a `snapshot` the broker judges.
-  Attended replies still read without a card. Tests:
-  `tools/test/browser/unattended.test.ts`, `core/test/permissions-browser.test.ts`.
 - **`open` is refused while planning.** In Plan mode a reply may read the
   page that is already open and nothing else, so it can't start browsing
   until its plan is approved. This is the fail-closed choice: `open` is a
   request to an address the model chose. Claude Code's own WebFetch is
   allowed while planning, so allowing `open` on a site that already has a
   grant would be consistent; it wasn't done.
-- **Test files are typechecked.** `tsc -b` builds `src` only, so tests were
-  never typechecked. `npm run typecheck:tests` (each package's
-  `tsconfig.test.json`, after `tsc -b`) checks them. It found 146 errors at
-  first; the cheap ones were fixed then, and the rest (175 by 2026-11-04,
-  with the tests written since) were fixed for Deck d954. CI now runs it as a
-  required step, so a test that doesn't compile fails the build.
-- **Tests run the other packages' source, not their `dist/`.** Each
-  package's `exports` point at `dist/`, so a test in store-sqlite, server or
-  web used to run whatever core was last built (a test added to core's store
-  contract once silently didn't run in the SQLite suite). `vitest.workspace.ts`
-  now resolves `@otherbench/<pkg>/<path>.js` to `packages/<pkg>/src/<path>.ts`
-  for tests only; `tsc -b`, Node and the bundles still use `dist/`. What still
-  needs `npx tsc -b` first: the server tests that start a real worker thread
-  (`office/render.test.ts`, the Claude import reader), because Node runs the
-  worker from `packages/server/dist`, and `npm run typecheck:tests`, which
-  reads the other packages' types from `dist/`.
-- **Start vitest from the folder's real spelling on Windows.** Started from
-  `e:\...` when the folder is `E:\...`, vitest 2 loads modules under both
-  spellings and every `vi.mock` of a relative path quietly misses: each web
-  test file with one fails ("mockReset is not a function"), 72 files at
-  d71c5a08, 88 now. This was the "first full run after a merge fails 72 web
-  files" flake. Git Bash and PowerShell hand Node `E:`, while a process
-  started with a lowercase cwd (`cmd /c "cd /d e:\..."` reproduces it) keeps
-  `e:`, which most likely is why a re-run from another shell passed. `npm
-  test` (`scripts/vitest.mjs`) now starts vitest from the real path, and
-  `vitest.workspace.ts` refuses a direct `npx vitest` started from the wrong
-  case with a message saying so.
-- **Test time limits allow for a busy machine.** With other full runs going
-  at once (parallel agents), tests that start real processes (git, MCP
-  servers over stdio, the SQLite secret store's concurrent writes) or render
-  big panels missed vitest's 5 s, and `findBy*` missed testing-library's 1 s,
-  with nothing wrong. `vitest.workspace.ts` gives every package 20 s per test
-  and hook, and `packages/web/test/setup.ts` gives `findBy*`/`waitFor` 5 s; a
-  passing test is no slower. Tests that need wall-clock order use a fake
-  clock instead: the Office render queue (`office/render.test.ts`, which
-  missed a 1.5 s limit under load) and ChatList's date headings (which failed
-  in the first minute after midnight). Still on the real clock:
-  `blob-gc.test.ts`'s "real timing" sweep (3,000 blobs, its own 30 s), which
-  timed out in loaded runs on 2026-11-04, and `provider-live.test.ts`'s
-  300 ms live-call limit.
 - **Sub-agents share the chat's one browser page** (see the browser section).
   A browser per sub-agent would need `BrowserManager` keyed on more than the
   chat.
-
-## Deviations from the v2 spec and plan
-
-| Plan or spec said | Built | Why |
-| --- | --- | --- |
-| Migrations numbered from 005 | 011-013 | v1 work after the plan was written had already used up to 010 |
-| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`), which since remote access also makes `--tls auto`'s local CA and server certificate (SANs, key usages, key ids) | Avoids a new dependency for a few fixed certificate shapes; Node signs and parses certificates, it just can't build one |
-| `undici` Agent for the pinned client | `node:tls` + `node:http` with `createConnection` (`peer/client.ts`) | No new dependency, and the fingerprint is checked before any byte (the token included) is written |
-| Pairing MAC: `HMAC(code, fpA ‖ fpB)` | HMAC with a key derived by scrypt (N=2^14, r=8) from the code, salted with both fingerprints; the answer must come within 15 s | A security review showed a captured MAC of an 8-character code (2^40 guesses) falls to a GPU well inside the code's 10 minutes; the spec's "impractical" was wrong |
-| Messages are insert-only | Last writer wins by stamp | A retried reply and *keep* marks change a message in place; insert-only would never deliver them |
-| — | Projects and project memory sync too | They were added to v1 after the spec was written |
-| — | `sync_secret` (keep the key here) is each machine's own setting, not synced | Otherwise a peer could switch it back on and be sent the key |
-| The InMemoryStore mirrors change tracking | Change tracking is SQLite-only (triggers); sync tests use real SQLite stores | The fake would need its own change log on every repository for no gain over testing the real thing |
-| `apply` refuses every `location_path` row for this machine | Refuses them only when this machine already has a path for that location | Adopting a location (Task 44) writes the other machine's path, which that machine needs to resolve the chats it was given |
-| `GET /fs/dirs` forwarded with `?node=` | Never mounted on the peer listener | It lists directories anywhere on the machine; see What is NOT built |
-| `WorkspaceStatus.hint.nodeName` | `hint.nodeId` | The UI names machines from the paired list; the server needn't |
-| Task 40: try a Node SEA first, else ship a pinned `node` | Ships the build machine's own `node.exe` beside an esbuild bundle (`packages/server/scripts/bundle.mjs`), with the Claude Agent SDK, its native Claude Code runtime and `unpdf` copied beside the bundle rather than bundled | The Agent SDK starts a 237 MB per-platform native runtime and unpdf loads PDF.js from its own folder; neither survives bundling or a SEA. Shipping the node that ran the tests avoids a download and checksum step for now; a pinned, CI-downloaded node comes with the release workflow |
-| Office files (Deck #928): the server bundle gains the writers | `docx` 9.8.1, `write-excel-file` 4.1.1, `pptxgenjs` 4.0.1 and the mdast/GFM parser are bundled, not copied beside it. `cli.js` is 5.59 MB and the new `render-worker.js` 1.93 MB: 7.51 MB together, up from 4.59 MB | The writers are plain JS and bundle cleanly. `npm audit` reports `image-size` (high) through `pptxgenjs`: the ES build OtherBench bundles never imports it and OtherBench never passes images. Don't run `npm audit fix --force` (it would also move `ai` to v7). `bundle:smoke` makes one file of each kind through the bundle |
-| Spec: a spreadsheet formula check refuses a list of named functions | An allowlist of Excel's built-in worksheet functions behind a fail-closed tokenizer, with a short list refused by name; `formulaForFile` is the one source of the text written | A security review showed the denylist incomplete (STOCKHISTORY, TRANSLATE, INFO, CELL, INDIRECT...) and bypassable by spacing, prefixes and LET/LAMBDA aliases; what was checked has to be exactly what's written. It refuses some valid workbooks (INDIRECT, CELL, INFO, LET, LAMBDA, named ranges, 3-D references, `@`, `#`); the ~500-entry list could also miss a function |
-| Spec: a document has no checks beyond the 1 MB cap | Limits on characters, lines, table rows and cells, indent, quote depth and formatting marks | The Markdown parser is super-linear on some shapes (200 KB of `**a**` took about 2 minutes). The limits are early, clear errors; the Worker is what actually bounds it |
-| Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
-| The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
-| Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
-| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. At most 120 password checks in any hour: a budget of 100 without a device cookie (a bucket of 20, one more every 45 s) plus 20 with one (a bucket of 5, one more every 4 minutes), and a slow-down from 20 failures in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie (only with Keep me signed in) lets a browser skip the budget and the slow-down and is locked by its id; 5 tokens and 5 waiting places are kept for addresses with no failure in a day; an attempt that walks away after taking a token counts as a failure. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
-
-## Deviations from the original spec
-
-All deliberate, all recorded at the time in the plan's Global Constraints:
-
-| Spec said | Built | Why |
-| --- | --- | --- |
-| pnpm | npm workspaces | pnpm wasn't installed on the build machine; installing global tooling overnight was declined |
-| Node 26 | Node 24.16.0 | What was on the machine — not a rejection of 26 for any `node:sqlite`/FTS5 reason, just "neither pnpm nor Node 26 was installed" |
-| FTS5 with a `LIKE` fallback | FTS5 only, no fallback | FTS5 was verified present on this build, so the fallback would have been dead code |
-| `.sql` migration files | Inlined as TypeScript string constants | `tsc` only emits `.js`/`.d.ts` — a plain `.sql` file is never copied into `dist/`, so a built package would silently ship without its migrations. Inlining removes that packaging failure mode at the cost of losing standalone `.sql` syntax highlighting |
-| — | `node:sqlite` imported via `createRequire`, not a static `import` | `node:sqlite` has no unprefixed alias, and the vite-node version vitest 2.x pins hardcodes its builtin-module allowlist without it — a plain `import` resolves to the bare specifier `"sqlite"` under vitest and fails. `createRequire` is a function call, not an import declaration, so it bypasses vite-node's static rewriting and hits Node's own loader, which resolves it correctly both under vitest and under plain `node`. Verified the built `dist/db.js` uses the identical call, so tests and the shipped server agree — this isn't a test-only shim. Revisit once vitest moves past whatever vite-node version fixes the allowlist |
 
 ## Where to look
 
@@ -1229,13 +974,13 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 | Collectives `Products/OtherBench/Design/Plans/2026-08-12-grunt-v1` | The 31-task implementation plan this was originally built from, with the full milestone breakdown and code-level detail for M0–M3 |
 | `packages/core/src/domain/paths.ts`, `packages/tools/src/fs-tools.ts` | The containment/TOCTOU/hard-link mechanics and their residuals, documented in-module — read these directly rather than trusting a paraphrase, this one included |
 | `packages/store-sqlite/src/blob-store.ts`, `packages/store-sqlite/src/blob-gc.ts` | The per-database attachment roots, the legacy-root fallback, and the GC sweep — same rule: read the module comments directly |
+| `docs/integration.md` | How the Cowork-parity branches were merged (October 2026), the migration renumbering, how computer use meets the rest |
+| `docs/deviations.md` | Where the build differs from the specs and plans, and why |
+| `docs/testing.md` | How the test setup behaves (test typechecking, source resolution, the drive-letter case, time limits) |
 
 ## If you're picking this back up
 
-The natural next steps, roughly in order of value:
-1. Try two physical machines: pair the PC and the laptop over the LAN (allow the firewall prompt on Private networks only), then over the VPN. `docs/desktop-checklist.md` has the steps.
-2. Tasks 40-41: installers and a bundled Node runtime, so the app doesn't need this checkout.
-3. The small v2 UI gaps under What is NOT built.
-4. The legacy shared blob directory is the one remaining place disk usage can grow without bound; abandoned unsent attachments are now collected after 30 days (see Known gaps above).
-5. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
-6. Computer use: go through its section of `docs/desktop-checklist.md` on the PC before switching it on for real use.
+What is left is on the Deck board `OtherBench` (Backlog and To Do), with
+`d1107` listing what still needs a hand check in the running app. The open
+gaps are under Known gaps above. Re-run `npm audit --omit=dev` now and
+then; `ai` stays on v6 until the v7 migration is looked at on its own.
