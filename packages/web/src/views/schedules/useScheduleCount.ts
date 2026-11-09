@@ -11,37 +11,63 @@ export function countSchedulesFor(schedules: Pick<Schedule, 'target'>[], target:
   ).length;
 }
 
-/** The delete dialog's line for a chat or project with schedules, which go with it (023-schedules cascades); null for none. */
+/**
+ * How many of `schedules` go when a profile is deleted: those run on it, and
+ * those whose target chat is built on it (`chatIds`), since that chat is
+ * deleted with the profile and takes its schedules with it (023-schedules
+ * cascades from both).
+ */
+export function countProfileSchedules(schedules: Pick<Schedule, 'profileId' | 'target'>[], profileId: string, chatIds: ReadonlySet<string>): number {
+  return schedules.filter((s) => s.profileId === profileId || (s.target.kind === 'chat' && chatIds.has(s.target.chatId))).length;
+}
+
+/** The delete dialog's line for a chat, project or profile with schedules, which go with it (023-schedules cascades); null for none. */
 export function schedulesDeletedLine(count: number | null): string | null {
   if (count === null || count === 0) return null;
   return count === 1 ? 'Its schedule is deleted too.' : `Its ${count} schedules are deleted too.`;
 }
 
 /**
- * How many schedules run on `target`, read from the server when it is set,
- * for a delete dialog. Null while it is read, when there is no target, or
- * when the list can't be read: the dialog then just leaves the line out.
+ * The schedule list, read from the server whenever `key` changes to a
+ * non-null value, for a delete dialog. Null while it is read, when `key` is
+ * null, or when the list can't be read: the dialog then just leaves its line
+ * out. Another key goes back to null in the same render, so the last one's
+ * list is never counted for it.
  */
-export function useScheduleCount(target: ScheduleTarget | null): number | null {
-  const [count, setCount] = useState<number | null>(null);
-  const key = target === null ? null : target.kind === 'chat' ? `chat:${target.chatId}` : `project:${target.projectId}`;
-  // Another target goes back to null in the same render, so the last one's count is never said of it.
-  if (useChanged([key])) setCount(null);
+function useScheduleList(key: string | null): Schedule[] | null {
+  const [list, setList] = useState<Schedule[] | null>(null);
+  if (useChanged([key])) setList(null);
   useEffect(() => {
-    if (target === null) return;
+    if (key === null) return;
     let live = true;
     Promise.resolve()
       .then(() => api.schedules.list())
       .then(
-        (list) => {
-          if (live && Array.isArray(list)) setCount(countSchedulesFor(list, target));
+        (rows) => {
+          if (live && Array.isArray(rows)) setList(rows);
         },
         () => {}
       );
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for `target`, a new object on every render.
   }, [key]);
-  return count;
+  return list;
+}
+
+/** How many schedules run on `target`, for its delete dialog; null while unknown (see `useScheduleList`). */
+export function useScheduleCount(target: ScheduleTarget | null): number | null {
+  const key = target === null ? null : target.kind === 'chat' ? `chat:${target.chatId}` : `project:${target.projectId}`;
+  const list = useScheduleList(key);
+  return list === null || target === null ? null : countSchedulesFor(list, target);
+}
+
+/**
+ * How many schedules go with a profile (`countProfileSchedules`), read when
+ * its form opens, so the delete confirmation (a synchronous `window.confirm`)
+ * has the number ready. Null while unknown.
+ */
+export function useProfileScheduleCount(profileId: string | null, chatIds: ReadonlySet<string>): number | null {
+  const list = useScheduleList(profileId === null ? null : `profile:${profileId}`);
+  return list === null || profileId === null ? null : countProfileSchedules(list, profileId, chatIds);
 }
