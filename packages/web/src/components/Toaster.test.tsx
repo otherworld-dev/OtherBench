@@ -52,14 +52,22 @@ describe('Toaster', () => {
     vi.useFakeTimers();
     render(<Toaster />);
     act(() => void toast({ tone: 'ok', text: 'Closed Alpha.', action: { label: 'Undo', run: vi.fn() } }));
-    act(() => vi.advanceTimersByTime(TOAST_MS - 1000));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_MS - 1000);
+    });
     fireEvent.mouseEnter(screen.getByTestId('toast'));
-    act(() => vi.advanceTimersByTime(TOAST_MS * 3));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_MS * 3);
+    });
     expect(screen.getByTestId('toast')).toBeInTheDocument();
     fireEvent.mouseLeave(screen.getByTestId('toast'));
-    act(() => vi.advanceTimersByTime(TOAST_RESUME_MS - 1));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_RESUME_MS - 1);
+    });
     expect(screen.getByTestId('toast')).toBeInTheDocument();
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
   });
 
@@ -70,10 +78,14 @@ describe('Toaster', () => {
     act(() => screen.getByRole('button', { name: 'Undo' }).focus());
     fireEvent.mouseEnter(screen.getByTestId('toast'));
     fireEvent.mouseLeave(screen.getByTestId('toast'));
-    act(() => vi.advanceTimersByTime(TOAST_MS * 3));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_MS * 3);
+    });
     expect(screen.getByTestId('toast')).toBeInTheDocument();
     act(() => screen.getByRole('button', { name: 'Undo' }).blur());
-    act(() => vi.advanceTimersByTime(TOAST_MS));
+    act(() => {
+      vi.advanceTimersByTime(TOAST_MS);
+    });
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
   });
 
