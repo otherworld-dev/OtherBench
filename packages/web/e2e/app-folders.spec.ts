@@ -82,7 +82,7 @@ test('a folder holds dragged and menu-filed apps, stays folded across a reload, 
   await expect(folderSection.getByTestId(`all-apps-card-${ids.one}`)).toBeVisible();
 
   // The other path: the second app's menu, Move to folder….
-  await card(ids.two).getByRole('button', { name: 'App actions' }).click();
+  await card(ids.two).getByRole('button', { name: `Actions for ${names.two}` }).click();
   await page.getByRole('menuitem', { name: 'Move to folder…' }).click();
   await page.getByRole('menuitemradio', { name: renamed }).click();
   await expect(folderSection.getByTestId(`all-apps-card-${ids.two}`)).toBeVisible();

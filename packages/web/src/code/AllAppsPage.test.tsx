@@ -115,17 +115,17 @@ describe('AllAppsPage', () => {
     expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('alpha'));
   });
 
-  it('Enter and Space on a focused card open the app and show its home', async () => {
+  it("Enter and Space on a card's name button open the app and show its home", async () => {
     setup([app('alpha'), app('beta')]);
     vi.mocked(api.apps.patch).mockImplementation(async (id) => app(id, { open: true }));
     render(<AllAppsPage />);
     const u = user();
-    screen.getByTestId('all-apps-card-alpha').focus();
+    within(screen.getByTestId('all-apps-card-alpha')).getByRole('button', { name: 'alpha' }).focus();
     await u.keyboard('{Enter}');
     expect(api.apps.patch).toHaveBeenCalledWith('alpha', { open: true });
     expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('alpha'));
 
-    screen.getByTestId('all-apps-card-beta').focus();
+    within(screen.getByTestId('all-apps-card-beta')).getByRole('button', { name: 'beta' }).focus();
     await u.keyboard(' ');
     expect(api.apps.patch).toHaveBeenCalledWith('beta', { open: true });
     expect(useOtherBenchStore.getState().activeChatId).toBe(appTabId('beta'));
@@ -256,7 +256,7 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
   };
   const dragCard = (id: string) => fireEvent.dragStart(card(id), { dataTransfer: transfer(id) });
   const dragFolder = (key: string) => fireEvent.dragStart(fold(key), { dataTransfer: transfer(key) });
-  const openCardMenu = async (u: ReturnType<typeof user>, id: string) => u.click(within(card(id)).getByRole('button', { name: 'App actions' }));
+  const openCardMenu = async (u: ReturnType<typeof user>, id: string) => u.click(within(card(id)).getByRole('button', { name: /^Actions for / }));
   const openFolderMenu = async (u: ReturnType<typeof user>, key: string) => u.click(within(heading(key)).getByRole('button', { name: 'Folder actions' }));
 
   it('shows a section per folder in folder order, then Unfiled, each counting its apps', () => {
@@ -436,7 +436,7 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
     await u.click(screen.getByRole('menuitem', { name: 'Move to folder…' }));
     await u.click(within(screen.getByRole('menu', { name: 'Move to folder…' })).getByRole('menuitemradio', { name: 'Games' }));
     expect(mockedAppPatch).not.toHaveBeenCalled();
-    await waitFor(() => expect(document.activeElement).toBe(card('A')));
+    await waitFor(() => expect(document.activeElement).toBe(within(card('A')).getByRole('button', { name: 'Alpha' })));
   });
 
   it("Move to folder… that fails says so and shows the server's apps", async () => {
@@ -522,6 +522,42 @@ describe('AllAppsPage folders, card menu and drag (plan 2026-11-04-open-apps Tas
     await waitFor(() => expect(layoutOrder()).toEqual(['folder:F1', 'A', 'B', 'folder:F2', 'W', 'G']));
     expect(mockedAppPatch.mock.calls).toEqual([['G', { folderId: 'F2', sortOrder: 1 }]]);
     expect(section('folder:F2').getAttribute('data-drop-active')).toBeNull();
+  });
+
+  it('with every app filed, an empty Unfiled shows while a filed app is dragged and takes it out of its folder', async () => {
+    setupFolders({ apps: filed.filter((a) => a.id !== 'G') });
+    expect(screen.queryByTestId('all-apps-section-folder:unfiled')).toBeNull();
+    dragCard('A');
+    expect(within(section('folder:unfiled')).getByText('Drop an app here to take it out of its folder')).toBeTruthy();
+    at('dragOver', section('folder:unfiled'), 'A', 'before');
+    expect(section('folder:unfiled').getAttribute('data-drop-active')).toBe('true');
+    at('drop', section('folder:unfiled'), 'A', 'before');
+    await waitFor(() => expect(layoutOrder()).toEqual(['folder:F1', 'B', 'folder:F2', 'W', 'folder:unfiled', 'A']));
+    expect(mockedAppPatch.mock.calls).toEqual([['A', { folderId: null, sortOrder: 0 }]]);
+  });
+
+  it('a drag that ends without a drop takes the empty Unfiled away again', () => {
+    setupFolders({ apps: filed.filter((a) => a.id !== 'G') });
+    dragCard('A');
+    expect(section('folder:unfiled')).toBeTruthy();
+    fireEvent.dragEnd(card('A'));
+    expect(screen.queryByTestId('all-apps-section-folder:unfiled')).toBeNull();
+  });
+
+  it('the card is no button itself: its name is, with the ⋯ beside it named for the app', () => {
+    setupFolders();
+    expect(card('A').getAttribute('role')).toBeNull();
+    expect(card('A').getAttribute('tabindex')).toBeNull();
+    const main = within(card('A')).getByRole('button', { name: 'Alpha' });
+    const more = within(card('A')).getByRole('button', { name: 'Actions for Alpha' });
+    expect(main.contains(more)).toBe(false);
+  });
+
+  it("Shift+F10 on a card's name button opens its menu", async () => {
+    const u = setupFolders();
+    within(card('A')).getByRole('button', { name: 'Alpha' }).focus();
+    await u.keyboard('{Shift>}{F10}{/Shift}');
+    expect(screen.getByRole('menu', { name: 'App actions' })).toBeTruthy();
   });
 
   it("a card's own section takes no drop", () => {
