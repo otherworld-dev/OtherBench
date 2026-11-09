@@ -52,10 +52,6 @@ export function AllAppsPage(): JSX.Element {
   const [layout, setLayoutState] = useState<AllAppsLayout>(loadLayout);
   const o = useAppOrganiser(() => setQuery(''));
   const { apps } = o;
-  const sections = useMemo(() => allAppsSections(apps, folders, chats, query), [apps, folders, chats, query]);
-  const openCount = apps.filter((a) => a.open).length;
-  // Order only makes sense among every app; a search shows some of them.
-  const searching = query.trim() !== '';
 
   const setLayout = (next: AllAppsLayout): void => {
     setLayoutState(next);
@@ -77,6 +73,15 @@ export function AllAppsPage(): JSX.Element {
   const deletingFolder = o.deletingFolderId ? (o.sortedFolders.find((f) => f.id === o.deletingFolderId) ?? null) : null;
   const draggingApp = o.dragging?.kind === 'app' ? (apps.find((a) => a.id === o.dragging!.id) ?? null) : null;
   const draggingFolderId = o.dragging?.kind === 'folder' ? o.dragging.id : null;
+  // A filed app on the move can always go back to Unfiled, even when nothing else is there.
+  const draggingFiled = draggingApp !== null && o.loadedFolderOf(draggingApp) !== null;
+  const sections = useMemo(
+    () => allAppsSections(apps, folders, chats, query, draggingFiled),
+    [apps, folders, chats, query, draggingFiled]
+  );
+  const openCount = apps.filter((a) => a.open).length;
+  // Order only makes sense among every app; a search shows some of them.
+  const searching = query.trim() !== '';
 
   function renderSection(section: AllAppsSection): JSX.Element {
     const folder = section.folder;

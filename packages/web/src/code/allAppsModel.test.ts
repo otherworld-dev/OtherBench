@@ -35,6 +35,11 @@ describe('allAppsSections', () => {
     expect(s.map((x) => [x.key, x.cards.length, x.total])).toEqual([['folder:f1', 0, 0]]);
   });
 
+  it('keeps an empty Unfiled when asked, for a filed app being dragged out', () => {
+    const s = allAppsSections([app('a', { folderId: 'f1' })], [folder('f1', 'Work')], [], '', true);
+    expect(s.map((x) => [x.key, x.cards.length, x.total])).toEqual([['folder:f1', 1, 1], ['folder:unfiled', 0, 0]]);
+  });
+
   it('matches the query against app name, workspace path or folder name and drops sections with no match', () => {
     const apps = [app('alpha', { folderId: 'f1' }), app('beta', { folderId: 'f2', workspaceRoot: 'E:/Work/needle' }), app('gamma', { folderId: 'f3' })];
     const folders = [folder('f1', 'Business', 0), folder('f2', 'Games', 1), folder('f3', 'PhD', 2)];

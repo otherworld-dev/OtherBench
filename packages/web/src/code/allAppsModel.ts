@@ -29,10 +29,11 @@ export const UNFILED_KEY = 'folder:unfiled';
 /**
  * The page's sections (spec 2026-11-04-open-apps-design, Goals 10 and 14): a section per folder in
  * `compareAppFolders` order (kept when empty), then Unfiled for apps with no folder or one that isn't loaded
- * (left out when empty). A query (case-insensitive) matches an app's name or workspace path, or its folder's name,
- * which brings in all of that folder's apps; sections left with no match are dropped.
+ * (left out when empty, unless `keepUnfiled`: a filed app is being dragged and needs somewhere to go back out of its
+ * folder). A query (case-insensitive) matches an app's name or workspace path, or its folder's name, which brings in
+ * all of that folder's apps; sections left with no match are dropped.
  */
-export function allAppsSections(apps: App[], folders: AppFolder[], chats: Chat[], query: string): AllAppsSection[] {
+export function allAppsSections(apps: App[], folders: AppFolder[], chats: Chat[], query: string, keepUnfiled = false): AllAppsSection[] {
   const q = query.trim().toLowerCase();
   const known = new Set(folders.map((f) => f.id));
   const sorted = [...apps].sort(compareApps);
@@ -47,7 +48,7 @@ export function allAppsSections(apps: App[], folders: AppFolder[], chats: Chat[]
   };
   const sections = [...folders].sort(compareAppFolders).map((f) => section(f, sorted.filter((a) => a.folderId === f.id)));
   const unfiled = section(null, sorted.filter((a) => a.folderId === null || !known.has(a.folderId)));
-  if (unfiled.total > 0) sections.push(unfiled);
+  if (unfiled.total > 0 || keepUnfiled) sections.push(unfiled);
   // Searching keeps a section with a match; an empty folder only when its own name matched.
   return q === '' ? sections : sections.filter((s) => s.cards.length > 0 || (s.folder !== null && s.total === 0 && s.folder.name.toLowerCase().includes(q)));
 }

@@ -144,7 +144,7 @@ export function AllAppsSectionView({ section, layout, menu, rename, reorder, fil
       {!collapsed && (
         <div id={listId}>
           {section.cards.length === 0 ? (
-            <p className="text-sm text-[var(--text-faint)]">No apps yet</p>
+            <p className="text-sm text-[var(--text-faint)]">{section.folder === null ? 'Drop an app here to take it out of its folder' : 'No apps yet'}</p>
           ) : layout === 'grid' ? (
             <div data-testid="all-apps-grid" className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2.5">
               {children}
