@@ -276,7 +276,7 @@ describe('renderOfficeFile: spreadsheet', () => {
     const bytes = await renderOfficeFile('spreadsheet', JSON.stringify(BUDGET), 'Budget');
     expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK\x03\x04');
     expect(part(bytes, 'xl/workbook.xml')).toContain('fullCalcOnLoad="1"');
-    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toContain('<f>SUM(B2:B3)</f>');
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toMatch(/<c r="B4"[^>]* cm="1"><f t="array" ref="B4">SUM\(B2:B3\)<\/f>/);
     const text = extractOfficeText(bytes)!;
     expect(text).toContain('Sheet "Costs" (A1:B8) as CSV:');
     for (const line of ['B4: =SUM(B2:B3)', 'When,2026-10-12', 'Literal,=not a formula', 'Flag,TRUE', 'Café 😀,bad  char', `B1: ='Costs'!B4*2`]) expect(text, line).toContain(line);
@@ -358,7 +358,7 @@ describe('renderOfficeFile: spreadsheet', () => {
     const rows = ROUND_TRIP_FORMULAS.map((f, i) => (i % 2 === 0 ? [f] : [{ formula: f }]));
     const source = JSON.stringify({ sheets: [{ name: 'Costs', rows }, { name: 'Second sheet', rows: [['x']] }] });
     const xml = part(await renderOfficeFile('spreadsheet', source, 'F'), 'xl/worksheets/sheet1.xml');
-    const written = [...xml.matchAll(/<f>([\s\S]*?)<\/f>/g)].map((m) => unescapeXml(m[1]!));
+    const written = [...xml.matchAll(/<f t="array" ref="[A-Z]+\d+">([\s\S]*?)<\/f>/g)].map((m) => unescapeXml(m[1]!));
     expect(written).toHaveLength(ROUND_TRIP_FORMULAS.length);
     ROUND_TRIP_FORMULAS.forEach((formula, i) => {
       const expected = formulaForFile(formula, names);
@@ -367,21 +367,24 @@ describe('renderOfficeFile: spreadsheet', () => {
     });
     expect(written[3]).toBe('_xlfn.XLOOKUP(A1,B1:B5,C1:C5)');
     expect(written[5]).toBe('_xlfn._xlws.FILTER(A1:A9,B1:B9>0)');
-    expect(xml).not.toMatch(/<f>=/);
+    expect(xml).not.toMatch(/<f[^>]*>=/);
     // An XML reader turns a literal CR into LF, so a CR in a formula has to be written as a character reference.
     expect(xml).not.toContain('\r');
     expect(xml).toContain('&#13;');
     expect(written[13]).toContain('\r\n');
   }, 30_000);
 
-  /** Each formula cell of a sheet's XML: its reference, its t (or null), its formula text and its cached value (or null). */
+  /**
+   * Each formula cell of a sheet's XML: its reference, its t (or null), its formula text and its cached value (or null).
+   * Every one is a dynamic-array formula over its own cell.
+   */
   function formulaCells(xml: string): { r: string; t: string | null; f: string; v: string | null }[] {
-    return [...xml.matchAll(/<c ([^>]*)><f>([\s\S]*?)<\/f>(?:<v>([\s\S]*?)<\/v>)?<\/c>/g)].map((m) => ({
-      r: /\br="([^"]+)"/.exec(m[1]!)![1]!,
-      t: /\bt="([^"]+)"/.exec(m[1]!)?.[1] ?? null,
-      f: unescapeXml(m[2]!),
-      v: m[3] === undefined ? null : unescapeXml(m[3]),
-    }));
+    return [...xml.matchAll(/<c ([^>]*)><f t="array" ref="([^"]+)">([\s\S]*?)<\/f>(?:<v>([\s\S]*?)<\/v>)?<\/c>/g)].map((m) => {
+      const r = /\br="([^"]+)"/.exec(m[1]!)![1]!;
+      expect(m[2], r).toBe(r);
+      expect(m[1], r).toMatch(/ cm="1"$/);
+      return { r, t: /\bt="([^"]+)"/.exec(m[1]!)?.[1] ?? null, f: unescapeXml(m[3]!), v: m[4] === undefined ? null : unescapeXml(m[4]) };
+    });
   }
 
   it('writes a cached value for the formulas it can calculate, typed as Excel types them, and still asks Excel to calculate on open', async () => {
@@ -422,13 +425,37 @@ describe('renderOfficeFile: spreadsheet', () => {
       { r: 'B2', t: null, f: 'Costs!B8+1', v: null },
     ]);
     // The B6 style the library gave the cell is kept beside the type.
-    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toMatch(/<c r="B6" s="\d+" t="str"><f>/);
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toMatch(/<c r="B6" s="\d+" t="str" cm="1"><f t="array" ref="B6">/);
     // OtherBench's own reader sees the values, as a viewer would.
     const text = extractOfficeText(bytes)!;
     for (const line of ['Total,42.5', 'Big?,TRUE', 'Label,Total: 42.5', 'B4: =SUM(B2:B3) (value 42.5)', "B1: ='Costs'!B4*2 (value 85)", 'B8: =VLOOKUP("Widgets",A2:B3,2,FALSE)\n']) {
       expect(text, line).toContain(line);
     }
   }, 30_000);
+
+  // Written the old way, Excel 365 put "@" before SORT, FILTER, UNIQUE and SEQUENCE and showed one value (2026-11-09).
+  it('writes formulas as dynamic arrays, with the XLDAPR cell metadata they point at, so a SORT or FILTER spills', async () => {
+    const bytes = await renderOfficeFile('spreadsheet', JSON.stringify({ sheets: [{ name: 'S', rows: [[3, '=SORT(A1:A3)'], [1], [2]] }] }), 'Spill');
+    expect(formulaCells(part(bytes, 'xl/worksheets/sheet1.xml'))).toEqual([{ r: 'B1', t: null, f: '_xlfn._xlws.SORT(A1:A3)', v: null }]);
+    const metadata = part(bytes, 'xl/metadata.xml');
+    expect(metadata).toContain('<metadataType name="XLDAPR"');
+    expect(metadata).toContain('<xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/>');
+    expect(metadata).toContain('<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata>');
+    expect(part(bytes, '[Content_Types].xml')).toContain(
+      '<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>'
+    );
+    expect(part(bytes, 'xl/_rels/workbook.xml.rels')).toMatch(
+      /<Relationship Id="[^"]+" Type="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/relationships\/sheetMetadata" Target="metadata\.xml"\/>/
+    );
+    expect(extractOfficeText(bytes)).toContain('B1: =_xlfn._xlws.SORT(A1:A3)');
+  });
+
+  it('adds no metadata part to a workbook without formulas', async () => {
+    const bytes = await renderOfficeFile('spreadsheet', JSON.stringify({ sheets: [{ name: 'S', rows: [['a', 1]] }] }), 'Plain');
+    expect(listZipEntries(bytes).map((e) => e.name)).not.toContain('xl/metadata.xml');
+    expect(part(bytes, '[Content_Types].xml')).not.toContain('metadata');
+    expect(part(bytes, 'xl/_rels/workbook.xml.rels')).not.toContain('sheetMetadata');
+  });
 
   it('writes a cached text value with markup and non-ASCII characters escaped so it reads back exactly', async () => {
     const source = { sheets: [{ name: 'S', rows: [['a < b & "c"', 'Café 😀', '=A1&" "&B1']] }] };

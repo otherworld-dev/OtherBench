@@ -14,6 +14,16 @@ import { cachedFormulaValues, type CachedValue } from './formula-values.js';
  * TRUE/FALSE and text), which is what viewers that don't calculate show
  * (Protected View, preview panes, phones, Drive); the rest get none.
  *
+ * Every formula is written as a dynamic-array formula (`cm="1"` pointing at
+ * the XLDAPR cell metadata in `xl/metadata.xml`, and `<f t="array">` over its
+ * own cell), the form Excel 365 saves a typed formula in. Written the old way,
+ * Excel reads it as from before dynamic arrays and puts "@" in front of
+ * anything that could return several values: `=SORT(...)`, `=FILTER(...)`,
+ * `=UNIQUE(...)` and `=SEQUENCE(...)` showed only their first value instead
+ * of spilling (found in Excel 16, build 20527, 2026-11-09). A formula with a
+ * single result is the same either way; Excel before 2021 shows these as
+ * one-cell array formulas, `{=...}`.
+ *
  * Every formula's text is core's `formulaForFile(...).text` and nothing else.
  * The library would alter it on the way to the file (it drops "discouraged"
  * XML characters such as U+007F-U+009F and U+FFFD, and writes a CR as a
@@ -41,19 +51,48 @@ interface WrittenFormula {
   value: CachedValue | null;
 }
 
-/** A formula cell as written: its `<f>` is the checked text, then its cached value if it has one. The library writes a formula cell with no `t`. */
+/** The one cell metadata record every formula points at (`cm="1"`): Excel's "dynamic array" flag, as Excel itself writes it. */
+const METADATA_XML =
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray">' +
+  '<metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes>' +
+  '<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>' +
+  '<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata>' +
+  '</metadata>';
+
+/**
+ * A formula cell as written: a dynamic-array formula over its own cell (see the module comment) whose `<f>` is the
+ * checked text, then its cached value if it has one. The library writes a formula cell with no `t`.
+ */
 function formulaXml(attrs: string, formula: WrittenFormula): string {
+  const ref = /(?:^|\s)r="([A-Z]+[0-9]+)"/.exec(attrs)?.[1];
+  if (ref === undefined) throw new Error('The .xlsx writer made a formula cell with no reference.');
   const value = /(?:^|\s)t="/.test(attrs) ? null : formula.value;
   const type = value === null || value.t === 'n' ? '' : ` t="${value.t}"`;
-  return `<c ${attrs}${type}><f>${xmlText(formula.text)}</f>${value === null ? '' : `<v>${xmlText(value.v)}</v>`}</c>`;
+  return `<c ${attrs}${type} cm="1"><f t="array" ref="${ref}">${xmlText(formula.text)}</f>${value === null ? '' : `<v>${xmlText(value.v)}</v>`}</c>`;
 }
 
-/** The workbook asks Excel to calculate on open, and each sheet's formula cells are written again from the checked texts and cached values, in cell order. */
+/**
+ * The workbook asks Excel to calculate on open, and each sheet's formula cells are written again from the checked
+ * texts and cached values, in cell order. With any formula, the workbook also gets `xl/metadata.xml` for their `cm`.
+ */
 function features(formulasBySheet: WrittenFormula[][]) {
+  const anyFormula = formulasBySheet.some((f) => f.length > 0);
   return [
     {
       files: {
+        ...(anyFormula ? { write: { files: () => ({ 'xl/metadata.xml': METADATA_XML }) } } : {}),
         transform: {
+          ...(anyFormula
+            ? {
+                '[Content_Types].xml': {
+                  insert: () => '<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>',
+                },
+                'xl/_rels/workbook.xml.rels': {
+                  insert: () => '<Relationship Id="rIdOtherBenchMetadata" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/>',
+                },
+              }
+            : {}),
           'xl/workbook.xml': {
             transformElementAttributes: (tag: string, attrs: Record<string, string | number>) => (tag === 'calcPr' ? { ...attrs, fullCalcOnLoad: 1 } : attrs),
           },
