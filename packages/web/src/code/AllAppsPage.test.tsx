@@ -15,6 +15,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
   };
 });
 
+import { formatStamp } from '../lib/relativeTime.js';
 import { useToasts } from '../lib/toasts.js';
 import { PROJECT_DRAG_MIME } from '../panes/sidebar/ProjectGroup.js';
 import { ApiError, api } from '../state/api.js';
@@ -80,6 +81,13 @@ describe('AllAppsPage', () => {
     expect(within(card).getByText('Replying')).toBeTruthy();
     expect(within(card).getByText('5 min ago')).toBeTruthy();
     expect(within(card).getByText('In sidebar')).toBeTruthy();
+  });
+
+  it('shows a last use older than a day as a short date and time, not the full locale one', () => {
+    const at = NOW - 3 * 24 * 3_600_000;
+    setup([app('alpha')], [chat('c1', 'alpha', { updatedAt: at })]);
+    render(<AllAppsPage />);
+    expect(within(screen.getByTestId('all-apps-card-alpha')).getByText(formatStamp(at, NOW))).toBeTruthy();
   });
 
   it('says No chats yet for an app without chats and shows no In sidebar for a closed one', () => {
