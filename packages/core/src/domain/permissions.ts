@@ -29,7 +29,7 @@ import type { Decision } from './permissions/decision.js';
 import { findMatchingGrant } from './permissions/grant-matching.js';
 import { persistAnswer } from './permissions/grant-minting.js';
 import { decideLive, grantLive, liveGrant, liveIneligibility, revokeLive } from './permissions/live.js';
-import { allowedWhilePlanning, UNATTENDED_REASON } from './permissions/modes.js';
+import { allowedWhilePlanning, openNeedsStandingGrant, PLAN_BROWSER_OPEN_REFUSAL, UNATTENDED_REASON } from './permissions/modes.js';
 import { DEFAULT_MAX_PENDING, PendingApprovals } from './permissions/pending.js';
 import { checkPolicy } from './permissions/policy.js';
 import { askOnMutateReadPass, isProtectedAgentWrite, sourceDecision, workspaceDenial } from './permissions/sources.js';
@@ -38,7 +38,7 @@ import { cardSummary } from './permissions/summaries.js';
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 export { auditGrantedBy, type Decision } from './permissions/decision.js';
 export { SUBAGENT_COMPUTER_REFUSAL } from './permissions/computer.js';
-export { allowedWhilePlanning, isDeferrableInAutoMode, UNATTENDED_REASON } from './permissions/modes.js';
+export { allowedWhilePlanning, isDeferrableInAutoMode, openNeedsStandingGrant, PLAN_BROWSER_OPEN_REFUSAL, UNATTENDED_REASON } from './permissions/modes.js';
 export { MEDIA_OFF_REASON } from './permissions/policy.js';
 export { SUBAGENT_MEDIA_REFUSAL, SUBAGENT_THREAD_REFUSAL } from './permissions/sources.js';
 
@@ -135,7 +135,9 @@ export interface PermissionBrokerOptions {
  *
  * The browser (`source: 'browser'`) is refused for blocked, local and private
  * sites before any card; its reads (`snapshot`, `scroll`, `close`) skip the
- * card under ask_on_mutate; its grants are always pinned to one `host`, by
+ * card under ask_on_mutate; while a reply's plan waits it may read the open
+ * page, and `open` a site only on a standing grant (a stored grant or the
+ * site list, never a card); its grants are always pinned to one `host`, by
  * the same rules as the sandbox's network grants (`alwaysConstraintFor`,
  * every-key matching, the canonical host) and never interchangeable with them.
  * After those refusals, and before the stored grants, it consults one more
@@ -202,8 +204,12 @@ export class PermissionBroker {
     // Plan mode (spec 2026-10-12-thread-cards-design §4): until the user
     // approves this reply's plan, anything that could change something is
     // refused, with no card. This only adds refusals: an allowed call still
-    // goes on to its grants or card below.
-    if (ctx.plan && !ctx.plan.approved && !allowedWhilePlanning(tool, args)) {
+    // goes on to its grants or card below. The browser's `open` is the one
+    // call let through part way (`openNeedsStandingGrant`): it goes on to the
+    // browser's refusals, the site list and the stored grants, and is refused
+    // below, before any card, when none of them lets it run.
+    const planning = ctx.plan !== undefined && !ctx.plan.approved && !allowedWhilePlanning(tool, args);
+    if (planning && !openNeedsStandingGrant(tool, args)) {
       return { kind: 'deny', reason: PLAN_REFUSAL, plan: true };
     }
 
@@ -238,6 +244,11 @@ export class PermissionBroker {
       if (grant.scope === 'once') this.store.grants.delete(grant.id);
       return { kind: 'allow', grantedBy: 'grant', grantId: grant.id };
     }
+
+    // A planning reply's `open` with no standing grant: a card would let it
+    // reach a site nobody approved, so it is refused here, before one is
+    // raised (and so before auto mode could approve it in a card's place).
+    if (planning) return { kind: 'deny', reason: PLAN_BROWSER_OPEN_REFUSAL, plan: true };
 
     // A card nobody can answer: refused here, with the scheduled run's reason,
     // rather than left for the provider to drop.

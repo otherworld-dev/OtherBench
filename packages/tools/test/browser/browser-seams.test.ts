@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { PermissionBroker, PLAN_BROWSER_OPEN_REFUSAL, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
@@ -46,22 +46,31 @@ function setup(o: { answer?: ApprovalChoice['choice']; grants?: Grant[] } = {}) 
 }
 
 describe('the browser in a Plan-mode chat', () => {
-  it('refuses opening a page and every change to one until the plan is approved, with no card and no browser started', async () => {
+  it('refuses opening a site with no standing grant until the plan is approved, with no card and no browser started', async () => {
+    const s = setup({ answer: 'once', grants: [siteGrant('g1', 'example.com')] });
+    const plan = createPlanGate();
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      const tool = await s.browser(policy({ approvalMode }));
+      const opened = await tool.execute({ command: 'open', url: 'https://other.test/' }, ctx({ plan }));
+      expect(isError(opened, 'plan_mode'), approvalMode).toBe(true);
+      expect(messageOf(opened)).toBe(PLAN_BROWSER_OPEN_REFUSAL);
+    }
+    expect(s.factory.sessions).toHaveLength(0);
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:deny:plan', 'browser:deny:plan']);
+    expect(s.broker.pendingCount).toBe(0);
+  });
+
+  it("opens a site with a standing grant while planning, reads it, and changes nothing on it until the plan is approved", async () => {
     const s = setup({ answer: 'once', grants: [siteGrant('g1', 'example.com')] });
     const tool = await s.browser();
     const plan = createPlanGate();
-    const opened = await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx({ plan }));
-    expect(isError(opened, 'plan_mode')).toBe(true);
-    expect(messageOf(opened)).toBe(PLAN_REFUSAL);
-    expect(s.factory.sessions).toHaveLength(0);
-    expect(s.cards).toEqual([]);
-    expect(s.audit()).toEqual(['browser:deny:plan']);
-    expect(s.broker.pendingCount).toBe(0);
-
-    // A page opened before the plan was asked for (another reply of the chat, with no gate).
-    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx()))).toBe(false);
+    // The site has an Always grant: a planning reply may open it, with no card.
+    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx({ plan })))).toBe(false);
     const session = s.factory.sessions[0]!;
     expect(session.actions).toEqual(['open https://example.com/']);
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:grant:g1']);
 
     // The planning reply may read it...
     const read = await tool.execute({ command: 'snapshot' }, ctx({ plan }));
@@ -75,19 +84,21 @@ describe('the browser in a Plan-mode chat', () => {
       { command: 'select', ref: 'e2', values: ['x'] },
       { command: 'press', key: 'Enter' },
       { command: 'back' },
-      { command: 'open', url: 'https://example.com/next' },
     ]) {
       const refused = await tool.execute(args, ctx({ plan }));
       expect(isError(refused, 'plan_mode'), JSON.stringify(args)).toBe(true);
       expect(messageOf(refused)).toBe(PLAN_REFUSAL);
     }
-    expect(session.actions).toEqual(['open https://example.com/', 'scroll down']);
+    // Another page on the granted site opens; one on a site with no grant does not, and raises no card.
+    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/next' }, ctx({ plan })))).toBe(false);
+    expect(isError(await tool.execute({ command: 'open', url: 'https://other.test/' }, ctx({ plan })), 'plan_mode')).toBe(true);
+    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'open https://example.com/next']);
     expect(s.cards).toEqual([]);
 
     // The same gate, approved: the click goes on to the site's grant and runs.
     plan.approve();
     expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, ctx({ plan })))).toBe(false);
-    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'click e3']);
+    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'open https://example.com/next', 'click e3']);
   });
 
   it("refuses the relayed browser the same way: Claude Code's gate gets the plan refusal, and no ticket's worth of arguments", async () => {
@@ -95,7 +106,16 @@ describe('the browser in a Plan-mode chat', () => {
     const [spec] = (await s.provider.relayTools(policy()));
     expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ plan: createPlanGate() }));
-    expect(outcome).toEqual({ allowed: false, reason: PLAN_REFUSAL });
+    expect(outcome).toEqual({ allowed: false, reason: PLAN_BROWSER_OPEN_REFUSAL });
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:deny:plan']);
+  });
+
+  it('never lets auto mode approve a planning open in place of a card', async () => {
+    const s = setup({ answer: 'once' });
+    const [spec] = await s.provider.relayTools(policy());
+    const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ plan: createPlanGate() }), { deferAsk: true });
+    expect(outcome).toEqual({ allowed: false, reason: PLAN_BROWSER_OPEN_REFUSAL });
     expect(s.cards).toEqual([]);
     expect(s.audit()).toEqual(['browser:deny:plan']);
   });
@@ -350,22 +370,27 @@ describe("a sub-agent and the model's browser", () => {
     ]);
   });
 
-  it("is held to its parent's plan gate: it may read the page the chat has open, and open or change nothing", async () => {
+  it("is held to its parent's plan gate: it may open a site its parent's profile has a grant for and read it, and open nothing else or change anything", async () => {
     const r = await turn({
       planMode: true,
-      subCalls: [openOf('https://example.com/'), { command: 'snapshot' }],
-      grants: [siteGrant('g-main', 'example.com')],
+      subCalls: [openOf('https://other.test/'), openOf('https://example.com/'), { command: 'snapshot' }, { command: 'click', ref: 'e3' }],
+      grants: [siteGrant('g-main', 'example.com'), siteGrant('g-other', 'other.test', 'p-other')],
+      other: {},
       answer: 'once',
     });
     expect(r.seen.parent).toBe('Finished.');
     expect(r.seen.child!.plan!.approved).toBe(false);
+    // A grant held by the profile it runs as counts for nothing.
     expect(isError(r.seen.results[0], 'plan_mode')).toBe(true);
-    expect(messageOf(r.seen.results[0])).toBe(PLAN_REFUSAL);
-    // No page is open, so there is nothing to read either: refused before the broker, as for any reply.
-    expect(isError(r.seen.results[1], 'permission_denied')).toBe(true);
-    expect(r.factory.sessions).toHaveLength(0);
+    expect(messageOf(r.seen.results[0])).toBe(PLAN_BROWSER_OPEN_REFUSAL);
+    expect(isError(r.seen.results[1])).toBe(false);
+    expect(isError(r.seen.results[2])).toBe(false);
+    expect(isError(r.seen.results[3], 'plan_mode')).toBe(true);
+    expect(messageOf(r.seen.results[3])).toBe(PLAN_REFUSAL);
+    expect(r.factory.sessions).toHaveLength(1);
+    expect(r.factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
     expect(r.cards).toEqual([]);
-    expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['deny:plan', 'deny:policy']);
+    expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['deny:plan', 'grant:g-main', 'auto_read', 'deny:plan']);
   });
 
   it("is unattended in a scheduled run: a new site is refused without a card, and a site the parent's profile has an Always grant for works", async () => {

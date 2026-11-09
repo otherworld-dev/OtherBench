@@ -9,6 +9,7 @@
 import { classifyAgentTool } from '../agent-tools.js';
 import { BROWSER_READ_COMMANDS } from '../browser-hosts.js';
 import type { ToolSpec } from '../../ports/tool-provider.js';
+import { PLAN_REFUSAL } from '../thread-tools.js';
 import { stringField } from './fields.js';
 
 /**
@@ -55,6 +56,8 @@ export function allowedWhilePlanning(tool: ToolSpec, args?: unknown): boolean {
     // refused: `click`, `type`, `select`, `press`, `back`, and `open` too (a
     // request to an address the model chose, which can carry anything in its
     // query). A call with no command, or one OtherBench doesn't know, is refused.
+    // `open` has a narrower way through, `openNeedsStandingGrant` below: only
+    // to a site a person already let the browser use.
     case 'browser':
       return BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '');
     // Computer use (spec 2026-10-12-computer-use-design): every action is
@@ -87,4 +90,29 @@ export function allowedWhilePlanning(tool: ToolSpec, args?: unknown): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * What a planning reply's browser `open` is told when its site has no
+ * standing grant: the plan gate's own words, and what would let it through.
+ */
+export const PLAN_BROWSER_OPEN_REFUSAL =
+  `${PLAN_REFUSAL} Until then the browser opens only websites that already have a grant or are on the profile's site list; ` +
+  'say in your plan which other sites you need.';
+
+/**
+ * Whether a call that `allowedWhilePlanning` refuses may still run before the
+ * plan is approved, on a standing grant alone: the browser's `open`. Claude
+ * Code's WebFetch is allowed while planning, so the browser may go to a site
+ * too, but only one a person already let it use, a stored grant (this chat's
+ * or an Always one, under the profile grants are matched under) or the
+ * profile's site list. `decide()` lets such a call reach the browser's
+ * refusals, the site list and the grants, and refuses it with
+ * `PLAN_BROWSER_OPEN_REFUSAL` where it would otherwise raise a card: a card
+ * would let a planning reply reach a site nobody had approved. In a
+ * scheduled run that is exactly what the run allows anyway (a grant or the
+ * site list, never a card). Everything that changes a page stays refused.
+ */
+export function openNeedsStandingGrant(tool: ToolSpec, args?: unknown): boolean {
+  return tool.source === 'browser' && stringField(args, 'command') === 'open';
 }

@@ -955,12 +955,6 @@ this on startup.
   the thread. A chat's own commands appear in the `/` menu only after its first
   reply since the server started; listing them any other way would run the
   folder's SessionStart hooks.
-- **`open` is refused while planning.** In Plan mode a reply may read the
-  page that is already open and nothing else, so it can't start browsing
-  until its plan is approved. This is the fail-closed choice: `open` is a
-  request to an address the model chose. Claude Code's own WebFetch is
-  allowed while planning, so allowing `open` on a site that already has a
-  grant would be consistent; it wasn't done.
 - **Sub-agents share the chat's one browser page** (see the browser section).
   A browser per sub-agent would need `BrowserManager` keyed on more than the
   chat.
