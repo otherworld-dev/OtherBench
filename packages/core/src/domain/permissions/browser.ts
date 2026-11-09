@@ -7,6 +7,7 @@
  */
 import { BROWSER_READ_COMMANDS, browserHostDenial } from '../browser-hosts.js';
 import { siteListEntryFor } from '../browser-sites.js';
+import { isUnattendedRun } from '../computer-apps.js';
 import type { ToolContext } from '../../ports/tool-provider.js';
 import type { Store } from '../../ports/store.js';
 import type { ToolPolicy } from '../../types/config.js';
@@ -25,8 +26,13 @@ export function browserDecision(store: Store, args: unknown, policy: ToolPolicy,
   const denial = browserHostDenial(stringField(args, 'host'), policy, { allowLoopbackPorts });
   if (denial) return { kind: 'deny', reason: denial };
   // Reading the open page needs no card under "ask on mutate". By command
-  // name, never by declared risk (as for Claude Code's file reads).
-  if (policy.approvalMode === 'ask_on_mutate' && BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '')) {
+  // name, never by declared risk (as for Claude Code's file reads). In a
+  // scheduled run nobody sees which page that is (a granted site can redirect
+  // anywhere), so a read there needs its site's own grant or site-list entry
+  // like any other call; only `close`, which reads nothing, skips them.
+  const command = stringField(args, 'command') ?? '';
+  const readPass = isUnattendedRun(ctx) ? command === 'close' : BROWSER_READ_COMMANDS.has(command);
+  if (policy.approvalMode === 'ask_on_mutate' && readPass) {
     return { kind: 'allow', grantedBy: 'auto_read' };
   }
   // The profile's site list: a standing grant for the websites it names,

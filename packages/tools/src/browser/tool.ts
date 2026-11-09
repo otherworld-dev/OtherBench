@@ -1,5 +1,6 @@
 import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@otherbench/core/domain/browser-hosts.js';
 import { asciiLower } from '@otherbench/core/domain/card-text.js';
+import { isUnattendedRun } from '@otherbench/core/domain/computer-apps.js';
 import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { AskInput, AskOutcome } from '@otherbench/core/types/thread.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
@@ -219,6 +220,19 @@ export function pageFailure(code: string, message: string, site: string | null):
   return { about: aboutPage(site ?? 'an unknown page'), error: true, code, message };
 }
 
+/**
+ * A scheduled run's action that landed on another site than the one it was
+ * approved for: the page is left out (nothing from it, not even its title or
+ * address), and the model is told how to ask for it.
+ */
+function withheld(site: string | null): { about: string; withheld: string } {
+  const where = site ?? 'a blank page';
+  return {
+    about: aboutPage(site ?? 'an unknown page'),
+    withheld: `The page went on to ${where}. A scheduled run reads only sites it is approved for, so this result leaves the page out: use snapshot to read it, which works if ${where} has an Always grant or is on the profile's site list.`,
+  };
+}
+
 /** The site of the page a chat's browser is on now, else the site the call was approved for. */
 function siteNow(chat: ChatBrowser, approved: string): string {
   return siteOf(chat.session.url()) ?? approved;
@@ -412,13 +426,24 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     if (call.command === 'handover') return await handOver(chat, call.reason!, host, ctx, askUser);
     await act(chat, call, guard);
     await chat.session.settle();
-    const result = await pageResult(chat, reads ? guard : undefined, call.part);
-    if (reads) {
+    // In a scheduled run nobody sees where an action landed, so the page it shows is held to the approved site too: one on another
+    // site (a redirect, a link) is left out, and reading it is a snapshot the broker judges against that site's own approval.
+    const unattended = isUnattendedRun(ctx);
+    const pinned = reads || unattended;
+    if (unattended && !reads) {
+      const site = siteOf(chat.session.url());
+      if (site !== host) {
+        setRefs(chat, new Map());
+        return withheld(site);
+      }
+    }
+    const result = await pageResult(chat, pinned ? { site: host } : undefined, call.part);
+    if (pinned) {
       // The page moved while it was being read: what was read is from a site nobody approved, so none of it is passed on.
       const site = siteOf(chat.session.url());
-      if (site !== guard.site) {
+      if (site !== host) {
         setRefs(chat, new Map());
-        return pageFailure('page_moved', new PageMovedError(site).message, site);
+        return reads ? pageFailure('page_moved', new PageMovedError(site).message, site) : withheld(site);
       }
     }
     return result;

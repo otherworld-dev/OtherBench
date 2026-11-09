@@ -53,6 +53,28 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
     expect(broker.decide(BROWSER('read'), { command: 'snapshot', host: 'example.com' }, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'ask' });
   });
 
+  it('in a scheduled run, reading a page needs that site approved: a grant or the site list, never the ask-on-mutate read pass', () => {
+    const lenient = policy();
+    for (const unattended of [true, 'yes', 1]) {
+      const run = ctx({ unattended: unattended as boolean });
+      for (const command of ['snapshot', 'scroll', 'handover']) {
+        expect(broker.decide(BROWSER('read'), { command, host: 'other.test' }, lenient, run), `${command} ${String(unattended)}`).toMatchObject({ kind: 'ask' });
+      }
+      // Closing the browser reads nothing.
+      expect(broker.decide(BROWSER('read'), { command: 'close', host: 'other.test' }, lenient, run)).toEqual({ kind: 'allow', grantedBy: 'auto_read' });
+    }
+    const run = ctx({ unattended: true });
+    // An Always grant made beforehand covers the read.
+    store.grants.create({ id: 'g', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'granted.test' }, expiresAt: null });
+    expect(broker.decide(BROWSER('read'), { command: 'snapshot', host: 'granted.test' }, lenient, run)).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    // So does the profile's site list.
+    store.profiles.create({
+      id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'c1', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: lenient, isDefault: false, archivedAt: null,
+      browserAllowedSites: ['listed.test'],
+    });
+    expect(broker.decide(BROWSER('read'), { command: 'snapshot', host: 'listed.test' }, lenient, run)).toMatchObject({ kind: 'allow', grantedBy: 'site_list' });
+  });
+
   it('names the site and what the call does on its card', () => {
     const always = policy({ approvalMode: 'always_ask' });
     const summary = (args: Record<string, unknown>) => expectAsk(broker.decide(BROWSER(), { host: 'example.com', ...args }, always, ctx())).request.summary;
