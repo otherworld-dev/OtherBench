@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,7 +7,7 @@ vi.mock('../desktop/bridge.js', () => ({ revealPath }));
 
 import { useOtherBenchStore } from '../state/store.js';
 import { Toaster } from './Toaster.js';
-import { TOAST_MS, toast, useToasts } from '../lib/toasts.js';
+import { TOAST_MS, TOAST_RESUME_MS, toast, useToasts } from '../lib/toasts.js';
 
 beforeEach(() => {
   useToasts.setState({ toasts: [] });
@@ -46,6 +46,52 @@ describe('Toaster', () => {
       vi.advanceTimersByTime(TOAST_MS);
     });
     expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+  });
+
+  it('waits while hovered, then goes after what was left (at least a few seconds)', () => {
+    vi.useFakeTimers();
+    render(<Toaster />);
+    act(() => void toast({ tone: 'ok', text: 'Closed Alpha.', action: { label: 'Undo', run: vi.fn() } }));
+    act(() => vi.advanceTimersByTime(TOAST_MS - 1000));
+    fireEvent.mouseEnter(screen.getByTestId('toast'));
+    act(() => vi.advanceTimersByTime(TOAST_MS * 3));
+    expect(screen.getByTestId('toast')).toBeInTheDocument();
+    fireEvent.mouseLeave(screen.getByTestId('toast'));
+    act(() => vi.advanceTimersByTime(TOAST_RESUME_MS - 1));
+    expect(screen.getByTestId('toast')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+  });
+
+  it('waits while focus is inside it, even when the pointer leaves', () => {
+    vi.useFakeTimers();
+    render(<Toaster />);
+    act(() => void toast({ tone: 'ok', text: 'Closed Alpha.', action: { label: 'Undo', run: vi.fn() } }));
+    act(() => screen.getByRole('button', { name: 'Undo' }).focus());
+    fireEvent.mouseEnter(screen.getByTestId('toast'));
+    fireEvent.mouseLeave(screen.getByTestId('toast'));
+    act(() => vi.advanceTimersByTime(TOAST_MS * 3));
+    expect(screen.getByTestId('toast')).toBeInTheDocument();
+    act(() => screen.getByRole('button', { name: 'Undo' }).blur());
+    act(() => vi.advanceTimersByTime(TOAST_MS));
+    expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+  });
+
+  it('Dismiss from the keyboard puts focus back where it came from', async () => {
+    render(
+      <>
+        <button type="button">Before</button>
+        <Toaster />
+      </>
+    );
+    act(() => void toast({ tone: 'ok', text: 'Saved.' }));
+    const u = userEvent.setup();
+    screen.getByRole('button', { name: 'Before' }).focus();
+    await u.tab();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toHaveFocus();
+    await u.keyboard('{Enter}');
+    expect(screen.queryByTestId('toast')).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Before' })).toHaveFocus());
   });
 
   it('an action button runs and dismisses', async () => {
