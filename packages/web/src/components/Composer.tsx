@@ -1,80 +1,28 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
-import type { Chat, PublicAttachment } from '@otherbench/core/ports/store.js';
-import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
-import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@otherbench/core/types/config.js';
-import { AccountSelect } from './AccountSelect.js';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import type { Chat } from '@otherbench/core/ports/store.js';
+import type { Profile } from '@otherbench/core/types/config.js';
 import { ESCAPE_STOPS_REPLY_ATTR } from '../lib/escapeStopsReply.js';
-import { promptHistory } from '../lib/promptHistory.js';
 import { useStopReply } from '../state/useStopReply.js';
-import { CLIENT_ID } from '../lib/clientId.js';
-import { api, ApiError } from '../state/api.js';
-import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
+import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { CommandMenu, commandOptionId, filterCommands } from './CommandMenu.js';
 import { useChatCommands } from '../state/useChatCommands.js';
-import { isCommandText, type CommandRow } from '@otherbench/core/domain/context-lines.js';
-import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
+import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
 import { useUnsentText } from '../state/unsent.js';
 import { factFromMessage } from '@otherbench/core/domain/app-notes.js';
-import { useAppNotesStore } from '../state/appNotes.js';
-import { useChanged } from '../lib/useChanged.js';
+import { ChatSettingsControls } from './ChatSettingsControls.js';
+import { ComposerNotices } from './ComposerNotices.js';
+import { ComparePicker, isClaudeCodeProfile, ProfilePicker } from './ProfilePickers.js';
+import { useChatSettings } from './useChatSettings.js';
+import { useComposerAttachments } from './useComposerAttachments.js';
+import { useComposerFocus } from './useComposerFocus.js';
+import { useComposerHistory } from './useComposerHistory.js';
+import { useComposerSend } from './useComposerSend.js';
 
-/** An attachment chip in the box: an upload, or one a returned note brought back (whose size isn't known). */
-type ChipAttachment = Pick<PublicAttachment, 'id' | 'filename' | 'mime'> & { size?: number };
-
-/** Said above the box when a message sent while a reply ran comes back into it. */
-const NOTE_RETURNED = "Not sent: the reply ended before it was read. It's back in the box.";
-
-/** Whether the focused element is a place to type, or sits in a dialog or menu, so coming back to the window leaves it there. */
-function keepsFocus(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement) || el === document.body) return false;
-  if (el.isContentEditable || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
-  if (el instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file'].includes(el.type)) return true;
-  return el.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null;
-}
-
-/**
- * The `Part` an uploaded attachment becomes on the outgoing message (task
- * 21): `image` for anything with an `image/*` MIME type -- the only shape
- * `toModelMessages`/`TurnRunner`'s capability fallback knows how to embed as
- * real visual content or degrade -- `file` for everything else (PDFs, text,
- * CSVs, ...), which `toModelMessages` sends as file content unconditionally.
- */
-function attachmentToPart(attachment: ChipAttachment): Part {
-  return attachment.mime.startsWith('image/')
-    ? { type: 'image', attachmentId: attachment.id, mime: attachment.mime }
-    : { type: 'file', attachmentId: attachment.id, mime: attachment.mime, filename: attachment.filename };
-}
-
-/**
- * Per-file upload cap. Mirrors the server's `MAX_ATTACHMENT_BYTES`
- * (packages/server/src/routes/attachments.ts); keep the two in step. Checked
- * here so a far-oversized file is refused before any bytes are sent: the server
- * rejects an over-limit body without draining it, and for a very large one the
- * socket resets before the client can read the 413 message.
- */
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const UPLOAD_TOO_LARGE_MESSAGE = 'That upload is too large. Attachments are limited to 25MB per file.';
-
-const EFFORT_LABELS: Record<ClaudeEffort, string> = { low: 'low', medium: 'medium', high: 'high', xhigh: 'extra high', max: 'max' };
-
-/**
- * Reads dropped/pasted files off a `DataTransfer`. Prefers `.files` (what a
- * `drop` event, and a browser pasting an image, both populate) and falls
- * back to walking `.items` (`DataTransferItemList`) for anything that only
- * populated that -- some browsers only fill `.items` on `paste`, not `.files`.
- */
-function filesFromDataTransfer(data: DataTransfer | null | undefined): File[] {
-  if (!data) return [];
-  if (data.files && data.files.length > 0) return Array.from(data.files);
-  return Array.from(data.items ?? [])
-    .filter((item) => item.kind === 'file')
-    .map((item) => item.getAsFile())
-    .filter((f): f is File => f !== null);
-}
+export { isClaudeCodeProfile };
 
 export interface ComposerProps {
   chat: Chat;
@@ -111,54 +59,26 @@ export interface ComposerProps {
   onPrimaryProfileChange?: (profileId: string | null) => void;
 }
 
-/** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than OtherBench's tool layer. */
-export function isClaudeCodeProfile(profile: Profile, connections: Connection[]): boolean {
-  return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
-}
-
 export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfileChange }: ComposerProps): JSX.Element {
   const profiles = useOtherBenchStore((s) => s.profiles);
   const connections = useOtherBenchStore((s) => s.connections);
-  const messages = useOtherBenchStore((s) => s.messages);
-  const registerMessage = useOtherBenchStore((s) => s.registerMessage);
-  const setHeadMessageId = useOtherBenchStore((s) => s.setHeadMessageId);
-  const upsertChat = useOtherBenchStore((s) => s.upsertChat);
   // The store's copy, so an optimistic toggle shows at once even if the parent
   // hasn't re-rendered with the new chat yet.
   const storedChat = useOtherBenchStore((s) => s.chats.find((c) => c.id === chat.id));
 
   const [text, setText] = useState('');
   useUnsentText(text);
-  // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
-  const history = useMemo(() => promptHistory(messages, parentId ?? (storedChat ?? chat).headMessageId), [messages, parentId, storedChat, chat]);
-  const [browsing, setBrowsing] = useState<{ index: number; draft: string } | null>(null);
-  // Another chat (or branch) has its own history.
-  if (useChanged([chat.id, parentId])) setBrowsing(null);
   const caretTo = useRef<'start' | 'end' | null>(null);
-  const [sending, setSending] = useState(false);
+  const { browsing, setBrowsing, stepHistory } = useComposerHistory({ chat, storedChat, parentId, text, setText, caretToRef: caretTo });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>(() => (chat.profileId ? [chat.profileId] : []));
-  const [attachments, setAttachments] = useState<ChipAttachment[]>([]);
+  const { attachments, setAttachments, dragOver, removeError, setRemoveError, uploadError, uploadFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste, removeAttachment } =
+    useComposerAttachments(chat.id);
   // A one-line `# fact` in an app chat: saved to the app's notes on send rather than sent (see saveNoteFact).
   const noteFact = chat.appId && attachments.length === 0 ? factFromMessage(text) : null;
-  const [dragOver, setDragOver] = useState(false);
-  const [removeError, setRemoveError] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [autoError, setAutoError] = useState<string | null>(null);
-  const [effortSaving, setEffortSaving] = useState(false);
-  const [effortError, setEffortError] = useState<string | null>(null);
-  const [accountSaving, setAccountSaving] = useState(false);
-  const [accountError, setAccountError] = useState<string | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const setAppNotesView = useAppNotesStore((s) => s.setView);
-  const addFactCard = useAppNotesStore((s) => s.addCard);
   const appName = useOtherBenchStore((s) => (chat.appId ? (s.apps.find((a) => a.id === chat.appId)?.name ?? null) : null));
   const [noteReturned, setNoteReturned] = useState(false);
-  const [autoSaving, setAutoSaving] = useState(false);
-  const [planSaving, setPlanSaving] = useState(false);
-  const [planError, setPlanError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // The `/` menu: open while the box holds just `/name` (no space yet) and a selected profile runs Claude Code.
   const [menuDismissed, setMenuDismissed] = useState(false);
@@ -173,22 +93,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   }, [text]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Attachments already on the server but not yet sent -- left by a reload,
-  // or added from outside the composer (desktop `--send`) -- show as chips,
-  // so they're sent with the next message rather than forgotten.
-  useEffect(() => {
-    let cancelled = false;
-    Promise.resolve(api.attachments.list(chat.id))
-      .then((list) => {
-        if (cancelled || !Array.isArray(list)) return;
-        const unsent = list.filter((a) => a.messageId === null);
-        if (unsent.length > 0) setAttachments((prev) => [...prev, ...unsent.filter((a) => !prev.some((p) => p.id === a.id))]);
-      })
-      .catch((err: unknown) => console.error(`[otherbench-web] failed to load unsent attachments for chat ${chat.id}:`, err));
-    return () => {
-      cancelled = true;
-    };
-  }, [chat.id]);
   const primaryId = selectedProfileIds[0] ?? null;
   useEffect(() => {
     onPrimaryProfileChange?.(primaryId);
@@ -219,12 +123,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const claudeAccount = (storedChat ?? chat).claudeAccount ?? null;
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+  const settings = useChatSettings({ chat, storedChat, autoMode, planMode, effort, claudeAccount, setSelectedProfileIds, setPickerOpen });
 
   const { streaming: isStreaming, canStop, stop: stopReplies } = useStopReply(chat.id);
   // While a reply runs, or messages sent during one still wait, Send makes a note (spec 2026-10-18-send-while-replying-design).
   const waitingCount = useOtherBenchStore((s) => s.chatNotes[chat.id]?.length ?? 0);
   const busy = isStreaming || waitingCount > 0;
-  const noteSent = useOtherBenchStore((s) => s.noteSent);
 
   // A note that comes back (a stopped or lost reply, or one taken back) goes after the draft, its attachments as chips again.
   const returnedCount = useOtherBenchStore((s) => s.returnedNotes.filter((n) => n.chatId === chat.id).length);
@@ -281,329 +185,32 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when text is handed over, not when browsing history; the draft it keeps is this render's.
   }, [hasPrefill, chat.id]);
 
-  // A chat just made (the "+", a start box) puts the cursor here, so typing can start at once.
-  const focusWanted = useOtherBenchStore((s) => s.composerFocus === chat.id);
-  useEffect(() => {
-    if (focusWanted && useOtherBenchStore.getState().takeComposerFocus(chat.id)) textareaRef.current?.focus();
-  }, [focusWanted, chat.id]);
+  useComposerFocus(chat.id, textareaRef);
 
-  // Coming back to the window (Alt+Tab, the tray) puts the cursor in the active
-  // chat's box, unless it was left somewhere else to type or in a dialog.
-  useEffect(() => {
-    const onWindowFocus = (): void => {
-      const el = textareaRef.current;
-      if (!el || useOtherBenchStore.getState().activeChatId !== chat.id) return;
-      // A pane hidden behind a maximised one keeps its composer mounted.
-      if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) return;
-      if (keepsFocus(document.activeElement)) return;
-      el.focus();
-    };
-    window.addEventListener('focus', onWindowFocus);
-    return () => window.removeEventListener('focus', onWindowFocus);
-  }, [chat.id]);
+  const { sending, sendError, handleSend } = useComposerSend({
+    chat,
+    parentId,
+    text,
+    setText,
+    setBrowsing,
+    attachments,
+    setAttachments,
+    setRemoveError,
+    setNoteReturned,
+    returnedAttachmentIds,
+    textareaRef,
+    noteFact,
+    selectedProfileIds,
+    profiles,
+    folderUnresolved,
+    elsewhereUnreachable,
+    busy,
+    claudeCodeProfiles,
+    commands: chatCommands.commands,
+  });
 
   async function handleStop(): Promise<void> {
     await stopReplies();
-  }
-
-  /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies at once, to a reply already running too (its Claude Code is switched). */
-  async function toggleAutoMode(): Promise<void> {
-    if (autoSaving) return;
-    const previous = autoMode;
-    const next = !previous;
-    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
-    setAutoError(null);
-    setAutoSaving(true);
-    upsertChat({ ...latest(), autoMode: next });
-    try {
-      upsertChat(await api.chats.patch(chat.id, { autoMode: next }));
-    } catch (err) {
-      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
-      // A chat removed mid-save must not be re-inserted by the revert.
-      if (current) upsertChat({ ...current, autoMode: previous });
-      setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
-    } finally {
-      setAutoSaving(false);
-    }
-  }
-
-  /** Flips the chat's Plan mode optimistically; a failed save reverts only `planMode` and shows why. Applies from the next message. */
-  async function togglePlanMode(): Promise<void> {
-    if (planSaving) return;
-    const previous = planMode;
-    const next = !previous;
-    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
-    setPlanError(null);
-    setPlanSaving(true);
-    upsertChat({ ...latest(), planMode: next });
-    try {
-      upsertChat(await api.chats.patch(chat.id, { planMode: next }));
-    } catch (err) {
-      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
-      if (current) upsertChat({ ...current, planMode: previous });
-      setPlanError(err instanceof ApiError ? err.message : "Couldn't change plan mode. Please try again.");
-    } finally {
-      setPlanSaving(false);
-    }
-  }
-
-  /**
-   * Makes `profileId` the chat's profile: the selector shows it at once, and
-   * the chat keeps it, so it's still chosen after switching away and back. A
-   * failed save puts the chat's profile back and shows why; the selector keeps
-   * the choice for this message.
-   */
-  async function choosePrimaryProfile(profileId: string): Promise<void> {
-    setSelectedProfileIds((ids) => [profileId, ...ids.slice(1).filter((id) => id !== profileId)]);
-    setPickerOpen(false);
-    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
-    const previous = latest().profileId;
-    if (previous === profileId) return;
-    setProfileError(null);
-    upsertChat({ ...latest(), profileId });
-    try {
-      upsertChat(await api.chats.patch(chat.id, { profileId }));
-    } catch (err) {
-      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
-      if (current) upsertChat({ ...current, profileId: previous });
-      setProfileError(err instanceof ApiError ? err.message : "Couldn't keep the profile for this chat. Please try again.");
-    }
-  }
-
-  /** Sets the chat's Claude Code effort optimistically; a failed save reverts only `effort` and shows why. Applies from the next message. */
-  async function changeEffort(next: ClaudeEffort | null): Promise<void> {
-    if (effortSaving) return;
-    const previous = effort;
-    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
-    setEffortError(null);
-    setEffortSaving(true);
-    upsertChat({ ...latest(), effort: next });
-    try {
-      upsertChat(await api.chats.patch(chat.id, { effort: next }));
-    } catch (err) {
-      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
-      if (current) upsertChat({ ...current, effort: previous });
-      setEffortError(err instanceof ApiError ? err.message : "Couldn't change the effort. Please try again.");
-    } finally {
-      setEffortSaving(false);
-    }
-  }
-
-  /** Sets the chat's Claude account optimistically; a failed save reverts only `claudeAccount` and shows why. Applies from the next message. */
-  async function changeAccount(next: string | null): Promise<void> {
-    if (accountSaving) return;
-    const previous = claudeAccount;
-    const latest = (): Chat => useOtherBenchStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
-    setAccountError(null);
-    setAccountSaving(true);
-    upsertChat({ ...latest(), claudeAccount: next });
-    try {
-      upsertChat(await api.chats.patch(chat.id, { claudeAccount: next }));
-    } catch (err) {
-      const current = useOtherBenchStore.getState().chats.find((c) => c.id === chat.id);
-      if (current) upsertChat({ ...current, claudeAccount: previous });
-      setAccountError(err instanceof ApiError ? err.message : "Couldn't change the account. Please try again.");
-    } finally {
-      setAccountSaving(false);
-    }
-  }
-
-  /** Uploads each file in turn, appending it to `attachments` as soon as its own upload resolves -- so a chip for a fast file appears immediately rather than waiting on a slower sibling in the same drop/paste. A file that fails to upload is dropped silently from the composer (logged, not surfaced as a blocking error) rather than left in limbo with no attachment id to send. */
-  async function uploadFiles(files: File[]): Promise<void> {
-    // A new upload starts a clean slate for any earlier remove-failure
-    // message -- it describes an attachment that may not even be in this
-    // batch, and leaving it up reads as if the NEW upload just failed.
-    setRemoveError(null);
-    setUploadError(null);
-    for (const file of files) {
-      if (file.size > MAX_ATTACHMENT_BYTES) {
-        setUploadError(UPLOAD_TOO_LARGE_MESSAGE);
-        continue;
-      }
-      try {
-        const created = await api.attachments.upload(chat.id, file);
-        setAttachments((prev) => [...prev, created]);
-      } catch (err) {
-        console.error(`[otherbench-web] failed to upload attachment "${file.name}":`, err);
-      }
-    }
-  }
-
-  function handleDragOver(e: DragEvent<HTMLDivElement>): void {
-    e.preventDefault();
-    setDragOver(true);
-  }
-
-  function handleDragLeave(): void {
-    setDragOver(false);
-  }
-
-  function handleDrop(e: DragEvent<HTMLDivElement>): void {
-    e.preventDefault();
-    setDragOver(false);
-    const files = filesFromDataTransfer(e.dataTransfer);
-    if (files.length > 0) void uploadFiles(files);
-  }
-
-  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>): void {
-    const files = filesFromDataTransfer(e.clipboardData);
-    if (files.length > 0) void uploadFiles(files);
-  }
-
-  /**
-   * Removing a chip before sending must actually delete the server-side
-   * attachment row (and, if orphaned, its blob) -- not just drop it from
-   * local state, which would leave the upload behind forever (task 32
-   * decision #4). The chip stays put until the DELETE actually succeeds:
-   * dropping it optimistically and then failing would desync the composer
-   * from the server (the row -- and the part it would become on send --
-   * would still exist, with no chip showing it), which is a more confusing
-   * failure than just leaving the chip there with an error message.
-   *
-   * A 404 is treated as success, not a failure to surface (task 32 fix
-   * round 1, Minor #9): it means the row is ALREADY gone -- e.g. this same
-   * remove already went through and only the local state update raced a
-   * second click, or another tab/request deleted it first -- and the
-   * chip's only job left is to disappear, not to report an "error" for a
-   * row that is, from the user's point of view, already exactly as removed
-   * as they wanted.
-   */
-  async function removeAttachment(id: string): Promise<void> {
-    setRemoveError(null);
-    try {
-      await api.attachments.delete(id);
-      setAttachments((prev) => prev.filter((a) => a.id !== id));
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        setAttachments((prev) => prev.filter((a) => a.id !== id));
-        return;
-      }
-      console.error(`[otherbench-web] failed to delete attachment ${id}:`, err);
-      setRemoveError(err instanceof ApiError ? err.message : 'Failed to remove the attachment. Please try again.');
-    }
-  }
-
-  async function handleSend(): Promise<void> {
-    const trimmed = text.trim();
-    // In an app chat, a one-line `# fact` goes to the app's notes, never to the model (spec 2026-11-05-app-notes-design).
-    if (noteFact !== null && !sending) {
-      await saveNoteFact(noteFact);
-      return;
-    }
-    if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
-    // The same rules as the Send button, which Enter reaches without. A
-    // Claude Code chat with no folder is a clean chat and may send.
-    if (folderUnresolved || elsewhereUnreachable) return;
-    // A message sent while a reply runs waits for it or goes into it; a command can't.
-    if (busy && claudeCodeProfiles.length > 0 && isCommandText(trimmed, chatCommands.commands)) {
-      setSendError(COMMAND_MID_REPLY);
-      return;
-    }
-
-    setSending(true);
-    // A stale remove-failure message from before this send must not linger
-    // over the (possibly different) attachments actually being sent now.
-    setRemoveError(null);
-    setSendError(null);
-    // Before the send, so a note that comes back while it's in flight keeps its notice.
-    setNoteReturned(false);
-    returnedAttachmentIds.current.clear();
-    try {
-      // The chat went quiet between the click and the server: a normal message after all.
-      if (!busy || !(await sendNote(trimmed))) await sendTurnOrNote(trimmed);
-      // Only what was sent: a note that came back meanwhile went after it, and stays, chips included.
-      const sentIds = new Set(attachments.map((a) => a.id).filter((id) => !returnedAttachmentIds.current.has(id)));
-      setText((now) => (now.startsWith(text) ? now.slice(text.length).trimStart() : now));
-      setBrowsing(null);
-      setAttachments((now) => now.filter((a) => !sentIds.has(a.id)));
-      textareaRef.current?.focus();
-    } catch (err) {
-      console.error('[otherbench-web] failed to send:', err);
-      // The message stays in the box to send again; say why it didn't go.
-      setSendError(
-        err instanceof ApiError ? (err.kind === 'command' ? err.message : `Couldn't send: ${err.message}`) : "Couldn't send the message. Please try again."
-      );
-    } finally {
-      setSending(false);
-    }
-  }
-
-  /** Files `fact` in the app's notes and shows its card in this chat; the box empties once it's saved. */
-  async function saveNoteFact(fact: string): Promise<void> {
-    if (!chat.appId) return;
-    const appId = chat.appId;
-    setSending(true);
-    setSendError(null);
-    try {
-      const saved = await api.appNotes.addFact(appId, { text: fact, chatId: chat.id });
-      setAppNotesView(appId, saved);
-      // eslint-disable-next-line react-hooks/purity -- runs after the save resolves, never in render; the compiler can't tell, through the textarea's onKeyDown, that handleSend only runs from an event.
-      addFactCard(chat.id, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, appId, fact: saved.fact, state: 'saved' });
-      setText('');
-      textareaRef.current?.focus();
-    } catch (err) {
-      setSendError(`Couldn't save it to the notes: ${err instanceof ApiError ? err.message : 'please try again.'}`);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  /** Sends the box as a note to the running reply; false when the server says nothing is running (send it as a turn). */
-  async function sendNote(trimmed: string): Promise<boolean> {
-    try {
-      const note = await api.notes.send(chat.id, {
-        text: trimmed,
-        attachments: attachments.map((a) => ({ attachmentId: a.id })),
-        parentId: parentId ?? chat.headMessageId,
-        profileIds: selectedProfileIds,
-        clientId: CLIENT_ID,
-      });
-      noteSent(note);
-      return true;
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.kind === 'idle') return false;
-      throw err;
-    }
-  }
-
-  /** Sends the box as a turn, or as a note when notes this box hadn't heard of are waiting (another tab's, or a reply just started). */
-  async function sendTurnOrNote(trimmed: string): Promise<void> {
-    try {
-      await sendTurn(trimmed);
-    } catch (err) {
-      if (!(err instanceof ApiError && err.status === 409 && err.kind === 'notes-waiting') || !(await sendNote(trimmed))) throw err;
-    }
-  }
-
-  async function sendTurn(trimmed: string): Promise<void> {
-    const parts: Part[] = [
-      ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
-      ...attachments.map(attachmentToPart),
-    ];
-    // The effective tail to parent this turn on -- see ComposerProps.parentId's
-    // doc for why this must NOT just be chat.headMessageId.
-    const effectiveParentId = parentId ?? chat.headMessageId;
-    const result = await api.turns.create(chat.id, { parentId: effectiveParentId, parts, profileIds: selectedProfileIds });
-
-    // What the server stored and ran, not what was typed: a /clear is a context line, and a /compact runs one profile.
-    registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, result.userParts ?? parts));
-    const ranProfileIds = result.profileIds ?? selectedProfileIds;
-    result.assistantMessageIds.forEach((id, i) => {
-      const profile = profiles.find((p) => p.id === ranProfileIds[i]);
-      if (!profile) return;
-      registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
-    });
-
-    // Head always advances to the new USER message, never straight to one
-    // of its assistant replies -- picking a reply is an explicit choice
-    // (task 27: `POST .../head`), never automatic, even for a single
-    // profile. `Thread` walks forward through any run of single-child
-    // messages on its own (`extendForward`, packages/core/src/domain/tree.ts),
-    // so a single-profile reply still renders immediately; a multi-profile
-    // (compare) turn instead surfaces as an open tab strip right after
-    // this message, since its several replies are NOT a single-child run.
-    setHeadMessageId(chat.id, result.userMessageId);
-    void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
   }
 
   /** What picking a row puts in the box: `/clear` whole, anything else ready for its arguments. */
@@ -648,39 +255,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     }
   }
 
-  /**
-   * Up on the first line shows the previous message, Down on the last line
-   * the next, and Down past the newest puts the draft back. Anywhere else
-   * the keys move the caret as usual. The caret goes to the start after Up
-   * and the end after Down, so pressing again keeps stepping.
-   */
-  function stepHistory(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    const el = e.currentTarget;
-    if (el.selectionStart !== el.selectionEnd) return;
-    if (e.key === 'ArrowUp') {
-      if (el.value.slice(0, el.selectionStart).includes('\n')) return;
-      const index = (browsing?.index ?? -1) + 1;
-      const recalled = history[index];
-      if (recalled === undefined) return;
-      e.preventDefault();
-      setBrowsing({ index, draft: browsing?.draft ?? text });
-      caretTo.current = 'start';
-      setText(recalled);
-    } else {
-      if (!browsing || el.value.slice(el.selectionEnd).includes('\n')) return;
-      e.preventDefault();
-      const index = browsing.index - 1;
-      caretTo.current = 'end';
-      if (index < 0) {
-        setBrowsing(null);
-        setText(browsing.draft);
-      } else {
-        setBrowsing({ ...browsing, index });
-        setText(history[index] ?? '');
-      }
-    }
-  }
-
   // After a step through the history, put the caret where the next step expects it.
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -703,71 +277,20 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       onDrop={handleDrop}
       className={`border-t px-3 py-2 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
     >
-      {uploadError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {uploadError}
-        </div>
-      )}
-
-      {removeError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {removeError}
-        </div>
-      )}
-
-      {autoError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {autoError}
-        </div>
-      )}
-
-      {planError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {planError}
-        </div>
-      )}
-
-      {profileError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {profileError}
-        </div>
-      )}
-
-      {effortError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {effortError}
-        </div>
-      )}
-
-      {accountError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {accountError}
-        </div>
-      )}
-
-      {noteFact !== null && (
-        <p role="status" data-testid="composer-note-hint" className="mb-1.5 text-xs text-[var(--text-muted)]">
-          Enter saves this to {appName ? `${appName}'s` : "the app's"} notes. It isn't sent to the model.
-        </p>
-      )}
-
-      {sendError && (
-        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
-          {sendError}
-        </div>
-      )}
-
-      {noteReturned && (
-        <p role="status" className="mb-1.5 text-xs text-[var(--text-muted)]">
-          {NOTE_RETURNED}
-        </p>
-      )}
-
-      {continuesFrom && (
-        <p role="status" className="mb-1.5 text-xs text-[var(--text-muted)]">
-          Sending continues from {continuesFrom}'s reply, the tab you're on. The other replies stay in the tabs.
-        </p>
-      )}
+      <ComposerNotices
+        uploadError={uploadError}
+        removeError={removeError}
+        autoError={settings.autoError}
+        planError={settings.planError}
+        profileError={settings.profileError}
+        effortError={settings.effortError}
+        accountError={settings.accountError}
+        noteFact={noteFact}
+        appName={appName}
+        sendError={sendError}
+        noteReturned={noteReturned}
+        continuesFrom={continuesFrom}
+      />
 
       <input
         ref={fileInputRef}
@@ -846,127 +369,34 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             <span aria-hidden="true">📎</span>
           </button>
 
-          {/* Laid out at its least and grown back to the full name, so the name is cut before anything wraps. */}
-          <div className="relative min-w-14 max-w-max shrink grow basis-14">
-            <button
-              type="button"
-              onClick={() => setPickerOpen((o) => !o)}
-              aria-haspopup="listbox"
-              aria-expanded={pickerOpen}
-              title={primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : undefined}
-              // line-clamp with break-all, not truncate: it looks the same, but the name can shrink to a letter, so the
-              // toolbar wraps by its other controls' widths rather than the full name's.
-              className="chip max-w-full line-clamp-1 break-all px-2 py-0.5 font-mono text-[0.6875rem] text-[var(--text)]"
-            >
-              {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
-            </button>
-            {pickerOpen && (
-              <ul role="listbox" aria-label="Profile" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
-                {profiles.map((p) => (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={p.id === selectedProfileIds[0]}
-                      onClick={() => void choosePrimaryProfile(p.id)}
-                      className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
-                    >
-                      {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
-                      <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'OtherBench tools'}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <ProfilePicker
+            profiles={profiles}
+            connections={connections}
+            primaryProfile={primaryProfile}
+            selectedProfileIds={selectedProfileIds}
+            pickerOpen={pickerOpen}
+            setPickerOpen={setPickerOpen}
+            choosePrimaryProfile={settings.choosePrimaryProfile}
+          />
 
-          <button
-            type="button"
-            aria-label="Plan mode"
-            aria-pressed={planMode}
-            disabled={planSaving}
-            title="Plan first: the model sets out a plan and waits for your approval before it changes anything (from the next message)"
-            onClick={() => void togglePlanMode()}
-            className="chip shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]"
-          >
-            Plan
-          </button>
+          <ChatSettingsControls
+            settings={settings}
+            planMode={planMode}
+            showAutoToggle={showAutoToggle}
+            autoActive={autoActive}
+            autoUnavailable={autoUnavailable}
+            effort={effort}
+            claudeAccount={claudeAccount}
+          />
 
-          {showAutoToggle && (
-            <button
-              type="button"
-              aria-label="Auto mode"
-              aria-pressed={autoActive}
-              disabled={autoUnavailable || autoSaving}
-              title={
-                autoUnavailable
-                  ? 'Auto mode needs the Claude login'
-                  : autoActive
-                    ? 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.'
-                    : 'Let Claude Code decide routine tool calls (applies at once, even to a reply that is running)'
-              }
-              onClick={() => void toggleAutoMode()}
-              className="chip shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]"
-            >
-              Auto
-            </button>
-          )}
-
-          {showAutoToggle && (
-            <select
-              aria-label="Effort"
-              value={effort ?? ''}
-              disabled={effortSaving}
-              title="Effort: how much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
-              onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
-              className={`chip shrink-0 field-sizing-content bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] ${effort ? 'chip-on' : ''}`}
-            >
-              {/* Just the level, to keep the toolbar to one line; the tooltip says what it is. */}
-              <option value="">default</option>
-              {CLAUDE_EFFORTS.map((level) => (
-                <option key={level} value={level}>
-                  {EFFORT_LABELS[level]}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* The Claude login's accounts, so like the plan meter not for a Claude Code profile on an endpoint. */}
-          {showAutoToggle && !autoUnavailable && <AccountSelect value={claudeAccount} disabled={accountSaving} onChange={(next) => void changeAccount(next)} />}
-
-          {comparedProfiles.map((p) => (
-            <span key={p.id} className="chip chip-on shrink-0 px-2 py-0.5 font-mono text-[0.6875rem]">
-              + {p.name}
-            </span>
-          ))}
-
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => setComparePickerOpen((o) => !o)}
-              aria-haspopup="listbox"
-              aria-expanded={comparePickerOpen}
-              aria-label="Compare"
-              title="Compare against other profiles"
-              className="chip chip-add px-2 py-0.5 font-mono text-[0.6875rem]"
-            >
-              +
-            </button>
-            {comparePickerOpen && (
-              <ul role="listbox" aria-label="Compare profiles" aria-multiselectable="true" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
-                {profiles
-                  .filter((p) => p.id !== selectedProfileIds[0])
-                  .map((p) => (
-                    <li key={p.id}>
-                      <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg-sunken)]">
-                        <input type="checkbox" checked={selectedProfileIds.includes(p.id)} onChange={() => togglePickerProfile(p.id)} />
-                        {p.name}
-                      </label>
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </div>
+          <ComparePicker
+            profiles={profiles}
+            comparedProfiles={comparedProfiles}
+            selectedProfileIds={selectedProfileIds}
+            comparePickerOpen={comparePickerOpen}
+            setComparePickerOpen={setComparePickerOpen}
+            togglePickerProfile={togglePickerProfile}
+          />
 
           </div>
 
