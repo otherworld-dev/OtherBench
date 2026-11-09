@@ -203,9 +203,13 @@ export class ClaudeLoginRunner {
     return this.logins.has(slug);
   }
 
-  /** Ends the sign-in running for an account, if any. */
+  /** Ends the sign-in running for an account, if any. It is let go at once, so a new one can start before the old process has closed. */
   cancel(slug: string): void {
-    this.logins.get(slug)?.child.kill();
+    const login = this.logins.get(slug);
+    if (!login) return;
+    this.logins.delete(slug);
+    clearTimeout(login.timer);
+    login.child.kill();
   }
 
   /** Ends everything still running: logins, status reads and logouts. For server shutdown. */

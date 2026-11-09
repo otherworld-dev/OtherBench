@@ -270,6 +270,24 @@ describe('ClaudeLoginRunner.signIn', () => {
     expect(r.signingIn('vh')).toBe(false);
   });
 
+  it('cancel ends a login at once, so another can start straight away', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    const child = calls[0]!.child;
+    // A real process closes some time after it is killed.
+    child.kill = function () {
+      this.killed = true;
+      return true;
+    };
+    r.cancel('vh');
+    expect(child.killed).toBe(true);
+    expect(r.signingIn('vh')).toBe(false);
+    expect((await r.signIn(vh())).started).toBe(true);
+    expect(calls).toHaveLength(2);
+    child.finish(1);
+    expect(r.signingIn('vh')).toBe(true);
+  });
+
   it('survives an EPIPE on the login stdin', async () => {
     const r = runner();
     await r.signIn(vh());

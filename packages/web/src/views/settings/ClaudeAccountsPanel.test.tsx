@@ -9,7 +9,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       claude: {
-        accounts: { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn(), signIn: vi.fn(), submitCode: vi.fn(), signOut: vi.fn() },
+        accounts: { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn(), signIn: vi.fn(), submitCode: vi.fn(), cancelSignIn: vi.fn(), signOut: vi.fn() },
       },
     },
   };
@@ -126,6 +126,16 @@ describe('ClaudeAccountsPanel', () => {
     await user.click(within(card('vh')).getByRole('button', { name: 'Submit' }));
     await waitFor(() => expect(useToasts.getState().toasts).toMatchObject([{ tone: 'error', text: 'No sign-in is running for this account.' }]));
     expect(within(card('vh')).getByLabelText('Paste code')).toHaveValue('abc#123');
+  });
+
+  it('cancels a sign-in, so a fresh one can be started', async () => {
+    accounts.list.mockResolvedValueOnce({ accounts: [account(), VH({ signingIn: true })] });
+    accounts.list.mockResolvedValue({ accounts: [account(), VH()] });
+    accounts.cancelSignIn.mockResolvedValue(undefined);
+    render(<ClaudeAccountsPanel />);
+    await userEvent.setup().click(await within(await screen.findByTestId('claude-account-vh')).findByRole('button', { name: 'Cancel' }));
+    expect(accounts.cancelSignIn).toHaveBeenCalledWith('vh');
+    expect(await within(card('vh')).findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
   it('holds Submit while Claude Code checks the code, so it is sent once', async () => {

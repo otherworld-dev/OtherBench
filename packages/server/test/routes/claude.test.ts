@@ -183,6 +183,16 @@ describe('Claude account routes', () => {
       expect(await res.text()).toContain('Invalid code. Please make sure the full code was copied.');
     });
 
+    it('cancels a sign-in with 204, 404 for an unknown account', async () => {
+      const cancel = vi.fn();
+      fakeLogin({ cancel });
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/cancel')).status).toBe(204);
+      expect(cancel).toHaveBeenCalledWith('vh');
+      expect((await send(app, 'POST', '/api/claude/accounts/nope/sign-in/cancel')).status).toBe(404);
+    });
+
     it('signs out with 204', async () => {
       const login = fakeLogin();
       const app = withAccounts();
