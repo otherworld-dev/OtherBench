@@ -1023,6 +1023,8 @@ export const api = {
       signIn: (slug: string) => post<{ url: string | null }>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in`),
       /** The code the sign-in page shows, for a CLI that can't be reached by its callback. */
       submitCode: (slug: string, code: string) => post<void>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in/code`, { code }),
+      /** Ends the sign-in running for an account, so another can be started. */
+      cancelSignIn: (slug: string) => post<void>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in/cancel`),
       signOut: (slug: string) => post<void>(`/claude/accounts/${encodeURIComponent(slug)}/sign-out`),
     },
   },

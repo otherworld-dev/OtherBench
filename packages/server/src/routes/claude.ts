@@ -128,6 +128,13 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
     return c.body(null, 204);
   });
 
+  app.post('/accounts/:slug/sign-in/cancel', (c) => {
+    const slug = c.req.param('slug');
+    refOf(accounts(), slug);
+    login().cancel(slug);
+    return c.body(null, 204);
+  });
+
   app.post('/accounts/:slug/sign-out', async (c) => {
     const ref = refOf(accounts(), c.req.param('slug'));
     try {

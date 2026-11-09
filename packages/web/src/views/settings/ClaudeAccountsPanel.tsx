@@ -103,6 +103,7 @@ export function ClaudeAccountsPanel(): JSX.Element {
             }}
             onColour={(colour) => void act(() => api.claude.accounts.update(a.slug, { colour }))}
             onCode={(code) => act(() => api.claude.accounts.submitCode(a.slug, code))}
+            onCancel={() => void act(() => api.claude.accounts.cancelSignIn(a.slug))}
           />
         ))}
       </ul>
@@ -123,9 +124,11 @@ interface CardProps {
   onColour(colour: string): void;
   /** Resolves true when the code was taken, so the field is cleared only then. */
   onCode(code: string): Promise<boolean>;
+  /** Gives up on the running sign-in, for a link already used or a code mistyped. */
+  onCancel(): void;
 }
 
-function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode }: CardProps): JSX.Element {
+function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode, onCancel }: CardProps): JSX.Element {
   const [code, setCode] = useState('');
   // A code is with Claude Code, which can take a few seconds to say what it made of it.
   const [checking, setChecking] = useState(false);
@@ -180,6 +183,9 @@ function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove,
             />
             <button type="submit" className="btn px-2 py-1" disabled={checking || !code.trim()}>
               {checking ? 'Checking…' : 'Submit'}
+            </button>
+            <button type="button" className="btn px-2 py-1" onClick={onCancel}>
+              Cancel
             </button>
           </form>
         </div>
