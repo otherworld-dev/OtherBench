@@ -127,6 +127,8 @@ interface CardProps {
 
 function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode }: CardProps): JSX.Element {
   const [code, setCode] = useState('');
+  // A code is with Claude Code, which can take a few seconds to say what it made of it.
+  const [checking, setChecking] = useState(false);
   const limited = a.limitedUntil !== null && a.limitedUntil > loadedAt;
   return (
     <li data-testid={`claude-account-${a.slug}`} className="space-y-2 rounded border border-[var(--border)] bg-[var(--bg-raised)] p-3">
@@ -160,8 +162,13 @@ function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove,
             onSubmit={(e) => {
               e.preventDefault();
               const pasted = code.trim();
+              if (!pasted || checking) return;
+              setChecking(true);
               // A failed submit keeps the code, to be sent again.
-              if (pasted) void onCode(pasted).then((ok) => ok && setCode(''));
+              void onCode(pasted).then((ok) => {
+                setChecking(false);
+                if (ok) setCode('');
+              });
             }}
           >
             <input
@@ -171,8 +178,8 @@ function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove,
               placeholder="Paste code"
               className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-sm"
             />
-            <button type="submit" className="btn px-2 py-1" disabled={!code.trim()}>
-              Submit
+            <button type="submit" className="btn px-2 py-1" disabled={checking || !code.trim()}>
+              {checking ? 'Checking…' : 'Submit'}
             </button>
           </form>
         </div>

@@ -122,7 +122,9 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
     const body = await bodyOf(c);
     const code = text(body['code'], 'code').trim();
     if (!code) throw new HTTPException(400, { message: 'Paste the code the sign-in page showed.' });
-    if (!login().submitCode(slug, code)) throw new HTTPException(409, { message: 'No sign-in is running for this account.' });
+    const answer = await login().submitCode(slug, code);
+    if (!answer) throw new HTTPException(409, { message: 'No sign-in is running for this account.' });
+    if (!answer.taken) throw new HTTPException(400, { message: answer.message });
     return c.body(null, 204);
   });
 

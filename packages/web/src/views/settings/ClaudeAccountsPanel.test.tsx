@@ -128,6 +128,20 @@ describe('ClaudeAccountsPanel', () => {
     expect(within(card('vh')).getByLabelText('Paste code')).toHaveValue('abc#123');
   });
 
+  it('holds Submit while Claude Code checks the code, so it is sent once', async () => {
+    accounts.list.mockResolvedValue({ accounts: [account(), VH({ signingIn: true })] });
+    let finish: () => void = () => {};
+    accounts.submitCode.mockReturnValue(new Promise<void>((resolve) => (finish = resolve)));
+    render(<ClaudeAccountsPanel />);
+    const user = userEvent.setup();
+    await user.type(await within(await screen.findByTestId('claude-account-vh')).findByLabelText('Paste code'), 'abc#123');
+    await user.click(within(card('vh')).getByRole('button', { name: 'Submit' }));
+    expect(within(card('vh')).getByRole('button', { name: 'Checking…' })).toBeDisabled();
+    finish();
+    await waitFor(() => expect(within(card('vh')).getByRole('button', { name: 'Submit' })).toBeDisabled());
+    expect(accounts.submitCode).toHaveBeenCalledTimes(1);
+  });
+
   it("toasts an error when the sign-in gave no page and isn't running", async () => {
     accounts.list.mockResolvedValue({ accounts: [account(), VH()] });
     accounts.signIn.mockResolvedValue({ url: null });
