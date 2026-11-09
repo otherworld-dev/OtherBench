@@ -848,11 +848,27 @@ this on startup.
 - **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Another LAN device's global IPv6 address outside this machine's own /64s is treated as the internet. Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. In a scheduled run a site needs an Always grant made beforehand, or to be on the profile's site list. That list is checked without a Public Suffix List, so a wildcard over a suffix outside its rules (`*.k12.ca.us`) is accepted, and a real site that happens to look like a registry (a two-label name such as `co.xx`) is refused as a wildcard base. Sub-agents share the chat's one browser.
 - **Computer use** (Deck #927). Ships switched off and none of its desktop side has run; a Claude Code helper's screenshots aren't stored or shown (the turn's own are). Scheduled runs, Plan mode and sub-agents never get it (see *Integration*). The full list is under *Computer use* above.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
-- **Office files (Deck #928): the final writers' output hasn't been opened
-  in Office.** The tests read the files back as XML. An early probe on
-  2026-10-12, with throwaway files and not the final writers, had Excel 16
-  compute SUM, IF with `<`, `&` and quotes, and a reference into a sheet name
-  with a space; Word showed Heading 1 and a table; PowerPoint opened a deck.
+- **Office files (Deck #928): the writers' output has been opened in real
+  Office, but not end to end through a model.** On 2026-11-09 a memo, a
+  two-sheet budget and a five-slide deck made by the shipped writers
+  (`renderOfficeFileInProcess`, not through a chat) were opened over COM in
+  Excel, Word and PowerPoint 16 (Excel build 20527). No repair prompt in any.
+  Excel calculated all 22 formulas on the budget's second sheet, a reference
+  into `'Monthly Costs'` included, with no `#NAME?`: XLOOKUP, XMATCH, FILTER,
+  SORT, TEXTJOIN and all ten prefixes set from memory (VALUETOTEXT,
+  ARRAYTOTEXT, PERCENTOF, TRIMRANGE, REGEXTEST, REGEXEXTRACT, REGEXREPLACE,
+  ENCODEURL, DBCS) are right. Every cached value written (SUM, IF with `<`,
+  `&` and doubled quotes, AVERAGE, ROUND, COUNT on a whole column, text `&` a
+  number, `=0.1+0.2`) equalled Excel's own, and in Protected View (before
+  Enable Editing) those showed and the uncached ones were blank. That check
+  found that SORT, FILTER, UNIQUE and SEQUENCE opened as `@SORT(...)` and so
+  on, one value and no spill; every formula is now written as a dynamic-array
+  formula (`xl/metadata.xml`, see `server/src/office/xlsx.ts`), and the four
+  spill in Excel. Word: Heading 1/2 are Word's own styles, the numbered and
+  bulleted lists are List Paragraph, the 3x3 table is a real table. Raw HTML
+  in the markdown (`<text>`) is left out, as the preview leaves it out.
+  PowerPoint: 5 slides at 960x540 (16:9), slide numbers on all but the
+  title, notes kept, the table slide a real 3x2 table.
   The spreadsheet asks Excel to calculate on open (`fullCalcOnLoad`), and a
   downloaded file opens in Protected View, where Excel doesn't recalculate, as
   do viewers that don't calculate (Outlook, Explorer or Finder preview panes,
@@ -884,11 +900,11 @@ this on startup.
     at all, as its references can't be known from the text, and so does one
     whose dependencies come to more than two million; past ten million cells
     read while calculating, the formulas still to do are left uncached.
-  - The rules follow Microsoft's documentation and Excel's known behaviour
-    but haven't been checked against Excel itself: after Enable Editing, the
-    values Excel calculates should be the cached ones.
+  - The rules follow Microsoft's documentation and Excel's known behaviour.
+    Only the cases listed above have been checked against Excel itself; they
+    matched.
 
-  By hand, once: ask a Claude Code profile and an API profile for a
+  Still to do by hand, once: ask a Claude Code profile and an API profile for a
   one-page memo, a budget with a formula on a second sheet that refers to the
   first, and a five-slide deck; download each and open it.
   - Excel: before Enable Editing, and in a preview pane, the cached formulas
@@ -898,9 +914,8 @@ this on startup.
     `_xlfn.` prefix was set from memory, not Microsoft's list: XMATCH,
     VALUETOTEXT, ARRAYTOTEXT, PERCENTOF, TRIMRANGE, REGEXTEST, REGEXEXTRACT,
     REGEXREPLACE, ENCODEURL, DBCS); a cross-sheet reference; an unquoted
-    non-ASCII sheet name (`Données!A1`). Dynamic arrays are written without
-    spill metadata, so FILTER/SORT/SEQUENCE may show as `@FILTER` and return
-    one value.
+    non-ASCII sheet name (`Données!A1`). Still unchecked: Excel 2016/2019,
+    which show the formulas as one-cell array formulas (`{=...}`).
   - Word: Heading 1/2 are Word's own styles; numbered lists restart; tables
     and links look right.
   - PowerPoint: 16:9; slide numbers (none on title slides); notes; a table of
