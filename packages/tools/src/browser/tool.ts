@@ -223,9 +223,13 @@ export function pageFailure(code: string, message: string, site: string | null):
 /**
  * A scheduled run's action that landed on another site than the one it was
  * approved for: the page is left out (nothing from it, not even its title or
- * address), and the model is told how to ask for it.
+ * address), and the model is told how to ask for it. What the page said
+ * meanwhile (a dialog, a popup's address) is dropped, so no later result
+ * carries it.
  */
-function withheld(site: string | null): { about: string; withheld: string } {
+function withheld(chat: ChatBrowser, site: string | null): { about: string; withheld: string } {
+  setRefs(chat, new Map());
+  chat.takeNotes();
   const where = site ?? 'a blank page';
   return {
     about: aboutPage(site ?? 'an unknown page'),
@@ -432,18 +436,16 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     const pinned = reads || unattended;
     if (unattended && !reads) {
       const site = siteOf(chat.session.url());
-      if (site !== host) {
-        setRefs(chat, new Map());
-        return withheld(site);
-      }
+      if (site !== host) return withheld(chat, site);
     }
     const result = await pageResult(chat, pinned ? { site: host } : undefined, call.part);
     if (pinned) {
       // The page moved while it was being read: what was read is from a site nobody approved, so none of it is passed on.
       const site = siteOf(chat.session.url());
       if (site !== host) {
+        if (!reads) return withheld(chat, site);
         setRefs(chat, new Map());
-        return reads ? pageFailure('page_moved', new PageMovedError(site).message, site) : withheld(site);
+        return pageFailure('page_moved', new PageMovedError(site).message, site);
       }
     }
     return result;
