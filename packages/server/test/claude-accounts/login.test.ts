@@ -196,10 +196,53 @@ describe('ClaudeLoginRunner.signIn', () => {
 
   it('writes a pasted code to stdin, and refuses when no login runs', async () => {
     const r = runner();
-    expect(r.submitCode('vh', 'abc')).toBe(false);
+    expect(r.submitCode('vh', 'abc')).toBeNull();
     await r.signIn(vh());
-    expect(r.submitCode('vh', '  abc#def \n')).toBe(true);
+    const answer = r.submitCode('vh', '  abc#def \n');
     expect(calls[0]!.child.written).toEqual(['abc#def\n']);
+    calls[0]!.child.finish(0);
+    expect(await answer).toEqual({ taken: true });
+  });
+
+  it("answers with the CLI's complaint about a code, and keeps the login running for another", async () => {
+    const r = runner();
+    await r.signIn(vh());
+    const answer = r.submitCode('vh', 'abc');
+    calls[0]!.child.stderr.emit('data', Buffer.from('Invalid code. Please make sure the full'));
+    calls[0]!.child.stderr.emit('data', Buffer.from(' code was copied.\n'));
+    expect(await answer).toEqual({ taken: false, message: 'Invalid code. Please make sure the full code was copied.' });
+    expect(r.signingIn('vh')).toBe(true);
+  });
+
+  it('answers with why the login failed when the CLI gives up on a code', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    const answer = r.submitCode('vh', 'abc#def');
+    calls[0]!.child.stderr.emit('data', Buffer.from('Login failed: Request failed with status code 400\n'));
+    calls[0]!.child.finish(1);
+    expect(await answer).toEqual({ taken: false, message: 'Login failed: Request failed with status code 400' });
+    expect(r.signingIn('vh')).toBe(false);
+  });
+
+  it('ignores what the CLI said before the code was given', async () => {
+    const r = runner();
+    await r.signIn(vh());
+    calls[0]!.child.stderr.emit('data', Buffer.from('some warning\n'));
+    const answer = r.submitCode('vh', 'abc#def');
+    calls[0]!.child.finish(0);
+    expect(await answer).toEqual({ taken: true });
+  });
+
+  it('answers that the code was taken when the CLI is still busy with it after 15 s', async () => {
+    vi.useFakeTimers();
+    const r = runner();
+    const started = r.signIn(vh());
+    await vi.advanceTimersByTimeAsync(1);
+    await started;
+    const answer = r.submitCode('vh', 'abc#def');
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(await answer).toEqual({ taken: true });
+    expect(r.signingIn('vh')).toBe(true);
   });
 
   it('stops signing in when the process exits, and forgets the cached status', async () => {

@@ -20,7 +20,15 @@ const FAILED_STATUS_CACHE_MS = 15_000;
 const LOGIN_LIFETIME_MS = 10 * 60_000;
 /** How long `signIn` waits for the CLI to print its sign-in link before answering without one. */
 const URL_WAIT_MS = 20_000;
+/** How long `submitCode` waits for the CLI's verdict on a code before taking it as accepted. */
+const CODE_WAIT_MS = 15_000;
 const SIGN_IN_URL = /visit:\s*(https:\/\/\S+)/;
+
+/** What became of a code given to a running login: taken, or turned down with the CLI's own words. */
+export type CodeAnswer = { taken: true } | { taken: false; message: string };
+
+/** What a running login says: a line on stderr, or that it ended. */
+type LoginEvent = { complaint: string } | { exit: number | null };
 
 /** The Claude Code CLI bundled with the Agent SDK for this platform. */
 export function bundledCliPath(): string {
@@ -32,6 +40,8 @@ interface Login {
   child: ChildProcess;
   url: string | null;
   timer: ReturnType<typeof setTimeout>;
+  /** Who is waiting on what the login says next: a code given to it. */
+  listeners: Set<(event: LoginEvent) => void>;
 }
 
 /**
@@ -143,7 +153,10 @@ export class ClaudeLoginRunner {
     const child = this.spawnFn(this.cliPath(), ['auth', 'login', '--claudeai'], this.options(account));
     this.track(child);
     child.stdin?.on('error', () => {});
-    const login: Login = { child, url: null, timer: setTimeout(() => child.kill(), LOGIN_LIFETIME_MS) };
+    const login: Login = { child, url: null, timer: setTimeout(() => child.kill(), LOGIN_LIFETIME_MS), listeners: new Set() };
+    const tell = (event: LoginEvent): void => {
+      for (const listener of [...login.listeners]) listener(event);
+    };
     login.timer.unref?.();
     this.logins.set(account.slug, login);
 
@@ -165,16 +178,24 @@ export class ClaudeLoginRunner {
           answer();
         }
       });
-      child.stderr?.on('data', () => {});
-      const ended = (): void => {
+      // The CLI's complaints (a malformed code, a failed exchange) come on stderr, a line each.
+      let err = '';
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        err += chunk.toString();
+        const lines = err.split('\n');
+        err = lines.pop()!;
+        for (const line of lines) if (line.trim()) tell({ complaint: line.trim() });
+      });
+      const ended = (code: number | null): void => {
         clearTimeout(login.timer);
         if (this.logins.get(account.slug) === login) this.logins.delete(account.slug);
         this.forget(account.slug);
+        tell({ exit: code });
         // Ended before printing a link: the login did not start.
         answer(login.url === null);
       };
-      child.on('close', ended);
-      child.on('error', ended);
+      child.on('close', (code: number | null) => ended(code));
+      child.on('error', () => ended(null));
     });
   }
 
@@ -202,12 +223,32 @@ export class ClaudeLoginRunner {
     child.on('error', gone);
   }
 
-  /** Gives the running login the code the sign-in page showed. False when no login is running. */
-  submitCode(slug: string, code: string): boolean {
+  /**
+   * Gives the running login the code the sign-in page showed, and answers with
+   * what the CLI made of it: turned down when it complains on stderr (a code
+   * without its `#state` half is refused there while the login keeps waiting)
+   * or exits non-zero; taken when it exits 0 or is still busy after 15 s.
+   * Null when no login is running.
+   */
+  submitCode(slug: string, code: string): Promise<CodeAnswer> | null {
     const login = this.logins.get(slug);
-    if (!login?.child.stdin) return false;
-    login.child.stdin.write(`${code.trim()}\n`);
-    return true;
+    if (!login?.child.stdin) return null;
+    const stdin = login.child.stdin;
+    return new Promise((resolve) => {
+      const done = (answer: CodeAnswer): void => {
+        clearTimeout(wait);
+        login.listeners.delete(hear);
+        resolve(answer);
+      };
+      const hear = (event: LoginEvent): void => {
+        if ('complaint' in event) done({ taken: false, message: event.complaint });
+        else done(event.exit === 0 ? { taken: true } : { taken: false, message: 'Claude Code could not sign in with that code.' });
+      };
+      const wait = setTimeout(() => done({ taken: true }), CODE_WAIT_MS);
+      wait.unref?.();
+      login.listeners.add(hear);
+      stdin.write(`${code.trim()}\n`);
+    });
   }
 
   /** `auth logout`, after ending a sign-in still waiting on this account. Forgets the cached status. */

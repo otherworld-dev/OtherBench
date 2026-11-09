@@ -134,7 +134,7 @@ describe('Claude account routes', () => {
         status: vi.fn(async (ref: { slug: string }) => (ref.slug === 'vh' ? { signedIn: true, email: 'a@b.c', subscriptionType: 'max' } : { signedIn: false, email: null, subscriptionType: null })),
         signIn: vi.fn(async (_ref: { slug: string }) => ({ started: true, url: 'https://claude.com/cai/oauth/authorize?x=1' })),
         signingIn: vi.fn((slug: string) => slug === 'vh'),
-        submitCode: vi.fn(() => true),
+        submitCode: vi.fn(async (): Promise<{ taken: true } | { taken: false; message: string } | null> => ({ taken: true })),
         signOut: vi.fn(async () => {}),
         ...over,
       };
@@ -169,8 +169,18 @@ describe('Claude account routes', () => {
       expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', { code: 'abc' })).status).toBe(204);
       expect(login.submitCode).toHaveBeenCalledWith('vh', 'abc');
       expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', {})).status).toBe(400);
-      login.submitCode.mockReturnValue(false);
+      login.submitCode.mockResolvedValue(null);
       expect((await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', { code: 'abc' })).status).toBe(409);
+    });
+
+    it("answers 400 with Claude Code's own words when it turns a code down", async () => {
+      const login = fakeLogin();
+      const app = withAccounts();
+      await send(app, 'POST', '/api/claude/accounts', vh);
+      login.submitCode.mockResolvedValue({ taken: false, message: 'Invalid code. Please make sure the full code was copied.' });
+      const res = await send(app, 'POST', '/api/claude/accounts/vh/sign-in/code', { code: 'abc' });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('Invalid code. Please make sure the full code was copied.');
     });
 
     it('signs out with 204', async () => {
