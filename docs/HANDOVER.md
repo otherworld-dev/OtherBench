@@ -1124,15 +1124,16 @@ surprise.
   given as a number is judged by the agent's lookup only (the runtime
   doesn't judge those), and the runtime refuses one public address by
   itself, Azure's 168.63.129.16.
-- **A scheduled run can read a page it couldn't open.** Under "Ask on
-  changes" the browser's reads (`snapshot`, `scroll`) need no card, on any
-  site. A page on a site with an Always grant can link or redirect to
-  another site, and the run can then read that page, though every action on
-  it and every `open` on its site is refused. The same holds for an attended
-  reply (it reads without a card and asks before acting); the difference in
-  a scheduled run is only that nobody sees it happen. Page text is untrusted
-  wherever it comes from. To close it, a read would have to need the site's
-  grant in an unattended run.
+- **Done: a scheduled run could read a page it couldn't open.** Under "Ask
+  on changes" the browser's reads (`snapshot`, `scroll`) needed no card on
+  any site, so a page on a granted site could link or redirect a scheduled
+  run to another site it would then read. Now, in an unattended run, a read
+  needs its site's own Always grant or site-list entry like any other call
+  (`permissions/browser.ts`; only `close` keeps the read pass), and an
+  action that lands on another site returns `withheld` in place of the page
+  (`browser/tool.ts`), so reading it is a `snapshot` the broker judges.
+  Attended replies still read without a card. Tests:
+  `tools/test/browser/unattended.test.ts`, `core/test/permissions-browser.test.ts`.
 - **`open` is refused while planning.** In Plan mode a reply may read the
   page that is already open and nothing else, so it can't start browsing
   until its plan is approved. This is the fail-closed choice: `open` is a

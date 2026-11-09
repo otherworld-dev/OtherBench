@@ -24,6 +24,8 @@ export class FakeSession implements BrowserSession {
   private navId = 0;
   /** Runs once as an action starts, after the tool's own look at the page and before the session's check: where a test makes the page move "just now". */
   beforeAct: (() => void) | null = null;
+  /** Runs once as an action ends, after any navigation of its own: where a test makes the action land somewhere else (a redirect, a link). */
+  afterAct: (() => void) | null = null;
 
   constructor(readonly proxy: ProxyCredentials) {}
 
@@ -36,8 +38,9 @@ export class FakeSession implements BrowserSession {
     return this.snap;
   }
   async open(url: string): Promise<void> {
-    this.act(`open ${url}`);
+    this.act(`open ${url}`, undefined, false);
     this.navigate(url, 'Opened');
+    this.landed();
   }
   async click(ref: string, double: boolean, guard?: ActionGuard): Promise<void> { this.act(`${double ? 'dblclick' : 'click'} ${ref}`, guard); }
   async type(ref: string, text: string, submit: boolean, guard?: ActionGuard): Promise<void> { this.act(`type ${ref} ${text}${submit ? ' +Enter' : ''}`, guard); }
@@ -95,13 +98,20 @@ export class FakeSession implements BrowserSession {
     if (site !== guard.site || (guard.navId !== undefined && guard.navId !== this.navId)) throw new PageMovedError(site);
   }
 
-  private act(what: string, guard?: ActionGuard): void {
+  private act(what: string, guard?: ActionGuard, ends = true): void {
     if (this.fail) throw this.fail;
     const hook = this.beforeAct;
     this.beforeAct = null;
     hook?.();
     this.check(guard);
     this.actions.push(what);
+    if (ends) this.landed();
+  }
+
+  private landed(): void {
+    const hook = this.afterAct;
+    this.afterAct = null;
+    hook?.();
   }
 }
 

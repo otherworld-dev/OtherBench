@@ -20,7 +20,7 @@ export const UNATTENDED_REASON =
   'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
   'To let it run unattended, allow it ahead of time with an Always grant. Shell commands run unattended in the sandbox ' +
   '(a profile whose shell runs there, with "Ask on changes"); a host the sandbox needs must be on that profile\'s list or have an Always grant. ' +
-  'The browser needs an Always grant for each website it opens or acts on, or the website on the profile\'s site list; with "Ask on changes" it can read a page that is already open without one.';
+  'The browser needs an Always grant for each website it opens, reads or acts on, or the website on the profile\'s site list.';
 
 /**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go

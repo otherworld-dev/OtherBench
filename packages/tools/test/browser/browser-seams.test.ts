@@ -126,13 +126,15 @@ describe('the browser in a scheduled run', () => {
     const session = s.factory.sessions[0]!;
     // The page takes itself to a site nobody approved (a link, a redirect).
     session.navigate('https://elsewhere.test/landing', 'Elsewhere');
-    await tool.execute({ command: 'snapshot' }, unattended); // reading needs no card under "ask on changes"; it gives the new page's refs
+    // Reading it needs its own approval too: nobody watching saw where the page went.
+    const read = await tool.execute({ command: 'snapshot' }, unattended);
+    expect(isError(read, 'approval_unavailable')).toBe(true);
     const clicked = await tool.execute({ command: 'click', ref: 'e3' }, unattended);
     expect(isError(clicked, 'approval_unavailable')).toBe(true);
     expect(messageOf(clicked)).toBe(UNATTENDED_REASON);
     expect(session.actions).toEqual(['open https://example.com/', 'click e3']);
     expect(s.cards).toEqual([]);
-    expect(s.audit().filter((a) => a.endsWith('deny:unattended'))).toHaveLength(1);
+    expect(s.audit().filter((a) => a.endsWith('deny:unattended'))).toHaveLength(2);
   });
 
   it('refuses even reading the page under "always ask", and a blocked site as itself, not as unattended', async () => {
@@ -150,9 +152,9 @@ describe('the browser in a scheduled run', () => {
   });
 
   it('says what the refusal tells the model about the browser, and each half of it is true', async () => {
-    expect(UNATTENDED_REASON).toContain(`The browser needs an Always grant for each website it opens or acts on, or the website on the profile's site list; with "Ask on changes" it can read a page that is already open without one.`);
+    expect(UNATTENDED_REASON).toContain(`The browser needs an Always grant for each website it opens, reads or acts on, or the website on the profile's site list.`);
     const unattended = ctx({ unattended: true });
-    // "an Always grant for each website it opens or acts on": without one both are refused, with one both run.
+    // "an Always grant for each website it opens, reads or acts on": without one each is refused, with one each runs.
     const none = setup();
     const bare = await none.browser();
     expect(isError(await bare.execute({ command: 'open', url: 'https://example.com/' }, unattended), 'approval_unavailable')).toBe(true);
@@ -160,14 +162,14 @@ describe('the browser in a scheduled run', () => {
     const tool = await s.browser();
     expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, unattended))).toBe(false);
     expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, unattended))).toBe(false);
-    // "read a page that is already open without one": the page is now on a site with no grant.
+    expect(isError(await tool.execute({ command: 'snapshot' }, unattended))).toBe(false);
+    // The page is now on a site with no grant: reading it, acting on it, or opening another on its site, is refused.
     s.factory.sessions[0]!.navigate('https://elsewhere.test/', 'Elsewhere');
-    expect(await tool.execute({ command: 'snapshot' }, unattended)).toMatchObject({ url: 'https://elsewhere.test/' });
-    expect(isError(await tool.execute({ command: 'scroll', direction: 'down' }, unattended))).toBe(false);
-    // Reading is all: acting on that page, or opening another on its site, is refused.
+    expect(isError(await tool.execute({ command: 'snapshot' }, unattended), 'approval_unavailable')).toBe(true);
+    expect(isError(await tool.execute({ command: 'scroll', direction: 'down' }, unattended), 'approval_unavailable')).toBe(true);
     expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, unattended), 'approval_unavailable')).toBe(true);
     expect(isError(await tool.execute({ command: 'open', url: 'https://elsewhere.test/next' }, unattended), 'approval_unavailable')).toBe(true);
-    // 'with "Ask on changes"': under "always ask" the read is refused too.
+    // Under "always ask" the same.
     const strict = await s.browser(policy({ approvalMode: 'always_ask' }));
     expect(isError(await strict.execute({ command: 'snapshot' }, unattended), 'approval_unavailable')).toBe(true);
     expect(s.cards).toEqual([]);
