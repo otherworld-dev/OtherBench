@@ -114,32 +114,25 @@ interface CardProps {
 }
 
 /**
- * One app on the All apps page: a card in the grid, a row in the list. The whole thing opens the app (a div with a
- * button role, so the ⋯ button and the rename field can sit inside it).
+ * One app on the All apps page: a card in the grid, a row in the list. A click anywhere on it opens the app; for the
+ * keyboard and screen readers the app's name is the button that does, with the ⋯ button beside it rather than inside
+ * it (axe nested-interactive).
  */
 export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, rename, reorder }: CardProps): JSX.Element {
   const { app } = card;
-  const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
-    if (e.target !== e.currentTarget) return;
-    if (menu && isContextMenuKey(e)) {
-      e.preventDefault();
-      const r = e.currentTarget.getBoundingClientRect();
-      menu.onOpen({ x: r.left + 16, y: r.top + 16 }, 'context');
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onOpen();
-    }
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>): void => {
+    if (!menu || !isContextMenuKey(e)) return;
+    e.preventDefault();
+    const r = e.currentTarget.getBoundingClientRect();
+    menu.onOpen({ x: r.left + 16, y: r.bottom }, 'context');
   };
   const used = card.lastUsed === null ? 'No chats yet' : formatRelativeTime(card.lastUsed, now);
   const draggable = !rename && reorder?.draggable === true;
   const common = {
-    role: 'button' as const,
-    tabIndex: 0,
     'data-testid': `all-apps-card-${app.id}`,
     'data-open': app.open ? 'true' : undefined,
     'data-drop-position': reorder?.indicator ?? undefined,
     onClick: rename ? undefined : onOpen,
-    onKeyDown: onKey,
     onContextMenu: menu
       ? (e: MouseEvent<HTMLDivElement>) => {
           e.preventDefault();
@@ -176,12 +169,18 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
     },
   };
   // The field sits inside the card: its clicks must not open the app.
-  const name = rename ? (
-    <span className="min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
-      <InlineNameInput initial={app.name} label="App name" maxLength={APP_NAME_MAX} onCommit={rename.onCommit} onCancel={rename.onCancel} />
-    </span>
-  ) : null;
-  const menuButton = menu ? <MenuButton label="App actions" menu={menu} /> : null;
+  // The name button's click goes on up to the card, which opens the app.
+  const name = (className: string): JSX.Element =>
+    rename ? (
+      <span className="min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
+        <InlineNameInput initial={app.name} label="App name" maxLength={APP_NAME_MAX} onCommit={rename.onCommit} onCancel={rename.onCancel} />
+      </span>
+    ) : (
+      <button type="button" data-card-main="" onKeyDown={onKey} className={`min-w-0 truncate text-left ${className}`}>
+        {app.name}
+      </button>
+    );
+  const menuButton = menu ? <MenuButton label={`Actions for ${app.name}`} menu={menu} /> : null;
   const line = indicatorClass(reorder?.indicator ?? null, layout);
   if (layout === 'list') {
     return (
@@ -191,7 +190,7 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
       >
         <Tile name={app.name} />
         <span className="flex min-w-0 items-baseline gap-2">
-          {name ?? <span className="truncate font-medium">{app.name}</span>}
+          {name('font-medium')}
           {app.open && <span className="shrink-0 text-[11px] text-[var(--accent)]">In sidebar</span>}
         </span>
         <span className={PATH}>{app.workspaceRoot ?? NOT_HERE}</span>
@@ -213,7 +212,7 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
     >
       <div className="flex items-center gap-2 pr-16">
         <Tile name={app.name} />
-        {name ?? <span className="truncate text-sm font-semibold">{app.name}</span>}
+        {name('text-sm font-semibold')}
       </div>
       <div className="absolute right-2 top-2.5 flex items-center gap-1.5">
         {app.open && <span className="text-[10px] text-[var(--accent)]">In sidebar</span>}

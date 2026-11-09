@@ -36,6 +36,7 @@ vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 
 import { saveFile } from '../lib/saveFile.js';
 import { useToasts } from '../lib/toasts.js';
+import { headingSelector } from './sidebar/focus.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
@@ -2293,6 +2294,14 @@ describe('ChatList Code mode (spec 2026-10-20-code-tab-design, Goals 1 and 8)', 
       expect(mockedAppPatch).toHaveBeenLastCalledWith('A', { open: true });
       await waitFor(() => expect(within(screen.getByTestId('group-heading-A')).getByText('Alpha 2')).toBeInTheDocument());
       expect(useOtherBenchStore.getState().apps.find((a) => a.id === 'A')).toMatchObject({ name: 'Alpha 2', open: true });
+    });
+
+    it('Undo puts focus on the app it brought back', async () => {
+      const user = setup({ mode: 'code' });
+      await user.click(within(screen.getByTestId('group-heading-A')).getByRole('button', { name: 'Close Alpha' }));
+      await waitFor(() => expect(screen.queryByTestId('group-A')).toBeNull());
+      act(() => lastToast().action!.run());
+      await waitFor(() => expect(document.activeElement).toBe(document.querySelector(headingSelector('A'))));
     });
 
     it('a close that fails says so and leaves the app open', async () => {

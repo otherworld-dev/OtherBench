@@ -56,11 +56,15 @@ the known gaps, the integration notes and the deviations.
 
 ## What is NOT built
 
-- **A release pipeline** (v2 Task 41). `npm run app:installer -w
-  @otherbench/desktop` makes a per-user Windows installer locally (bundled
-  server, bundled Node runtime); there's no `release.yml`, no code signing,
-  no Explorer verbs (*Open folder in OtherBench*, *Send to OtherBench*), and no Linux
-  packages. Task 40's Node SEA wasn't tried: see Deviations.
+- **The rest of v2 Task 41 (installers).** The release pipeline is built:
+  CI's `release` job (`.github/workflows/ci.yml`, not a separate
+  `release.yml`) publishes a signed beta on every green push of `dev` and a
+  full release on a `vX.Y.Z` tag, and installed apps update from them (see
+  [Updates](features/updates.md)). Still not built: Authenticode signing of
+  the installer (only the updater's signature exists, so Windows SmartScreen
+  still warns on a first install), the Explorer verbs (*Open folder in
+  OtherBench*, *Send to OtherBench*) and Linux packages (the bundle targets
+  only `nsis`). Task 40's Node SEA wasn't tried: see Deviations.
 - **A folder browser for another machine's folders** (part of Task 53).
   The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
   is deliberately never mounted there (it lists directories anywhere on the

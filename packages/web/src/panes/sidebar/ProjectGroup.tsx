@@ -65,7 +65,7 @@ export interface ProjectGroupProps {
   openTitle?: string;
   /**
    * An open app (Code mode): a × that closes it, shown in place of the count while the heading is hovered or has
-   * focus (plan 2026-11-04-open-apps). `closeLabel` is its name and hover text.
+   * focus, and always on a touch screen (plan 2026-11-04-open-apps). `closeLabel` is its name and hover text.
    */
   onClose?: () => void;
   closeLabel?: string;
@@ -206,7 +206,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
                 </span>
               )}
               <span
-                className={`font-normal tabular-nums ${onClose ? 'group-hover/heading:hidden group-focus-within/heading:hidden' : ''}`}
+                className={`font-normal tabular-nums ${onClose ? 'group-hover/heading:hidden group-focus-within/heading:hidden pointer-coarse:hidden' : ''}`}
                 title={`${count} ${counted}`}
                 data-testid={`group-count-${groupKey}`}
               >
@@ -218,13 +218,14 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           </h3>
           {onClose && (
             // Beside the heading's button, not in it (a button can't hold one); hidden until the heading is hovered or
-            // focused, so tabbing onto the name reveals it as the next stop.
+            // focused, so tabbing onto the name reveals it as the next stop. A touch screen can't hover, so there it
+            // always shows, in place of the count (Deck d1115).
             <button
               type="button"
               aria-label={closeLabel}
               title={closeLabel}
               onClick={onClose}
-              className="hidden shrink-0 rounded px-1.5 py-0.5 text-sm leading-none text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] group-hover/heading:flex group-focus-within/heading:flex"
+              className="hidden shrink-0 rounded px-1.5 py-0.5 text-sm leading-none text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] group-hover/heading:flex group-focus-within/heading:flex pointer-coarse:flex"
             >
               ×
             </button>

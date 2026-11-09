@@ -26,8 +26,8 @@ export function focusLater(selector: string, fallback?: string): void {
   }, 0);
 }
 
-/** An app's card on the page: what focus goes back to after acting on the app. */
-export const cardSelector = (appId: string): string => `[data-testid="all-apps-card-${appId}"]`;
+/** An app's card on the page (its name button): what focus goes back to after acting on the app. */
+export const cardSelector = (appId: string): string => `[data-testid="all-apps-card-${appId}"] [data-card-main]`;
 
 /** A section's fold button: what focus goes back to after acting on the folder. */
 export const headingSelector = (key: string): string => `[data-testid="all-apps-heading-${key}"] [data-heading-main]`;

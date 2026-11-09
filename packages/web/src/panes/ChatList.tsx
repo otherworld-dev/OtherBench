@@ -797,6 +797,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   async function reopenApp(appId: string, name: string): Promise<void> {
     try {
       await setAppOpen(appId, true);
+      // Undo from the toast: focus goes to the app it put back.
+      focusLater(headingSelector(appId), LIST_SELECTOR);
     } catch (err) {
       console.error(`[otherbench-web] failed to reopen app ${appId}:`, err);
       toast({ text: `Couldn't put ${name} back in the sidebar -- please try again.`, tone: 'error' });

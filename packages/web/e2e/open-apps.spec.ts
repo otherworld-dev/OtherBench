@@ -60,3 +60,25 @@ test('an app is opened from All apps, listed in the sidebar, closed with × and 
 
   await request.delete(`${BASE_URL}/api/apps/${appId}`);
 });
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true });
+
+  // No hover there, so an open app's × can't wait for one (Deck d1115): it shows in place of the count.
+  test("an open app's × shows without hover", async ({ page, request }) => {
+    const name = `Touch App ${randomUUID().slice(0, 8)}`;
+    const created = await request.post(`${BASE_URL}/api/apps`, { data: { name, workspacePath: process.cwd(), githubRepo: null } });
+    expect(created.ok()).toBeTruthy();
+    const appId = (await created.json()).id as string;
+    expect((await request.patch(`${BASE_URL}/api/apps/${appId}`, { data: { open: true } })).ok()).toBeTruthy();
+
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.goto('/');
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+    const nav = page.getByRole('navigation', { name: 'Chats' });
+    await nav.getByTestId('mode-switch').getByRole('button', { name: 'Code' }).click();
+    const heading = nav.getByTestId(`group-heading-${appId}`);
+    await expect(heading.getByRole('button', { name: `Close ${name}` })).toBeVisible();
+    await expect(heading.getByTestId(`group-count-${appId}`)).toBeHidden();
+  });
+});
