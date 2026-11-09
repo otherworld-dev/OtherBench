@@ -2,7 +2,7 @@ import type { DragEvent, JSX, KeyboardEvent, MouseEvent } from 'react';
 import { APP_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { InlineNameInput } from '../components/InlineNameInput.js';
 import { StatusWord } from '../components/StatusWord.js';
-import { formatRelativeTime } from '../lib/relativeTime.js';
+import { formatRelativeTime, formatStamp } from '../lib/relativeTime.js';
 import { isContextMenuKey, positionIn, type DropPosition, type MenuSource } from '../panes/sidebar/ChatRow.js';
 import { PROJECT_DRAG_MIME, type ProjectReorder } from '../panes/sidebar/ProjectGroup.js';
 import { chatStatus, type ChatActivity, type ChatStatus } from '../state/chatStatus.js';
@@ -86,6 +86,13 @@ function chatCountText(n: number): string {
   return n === 0 ? '' : `${n} chat${n === 1 ? '' : 's'}`;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "5 min ago" within a day, then "2 Nov 01:11" (`formatStamp`): the full locale date and time ran onto two lines. */
+function lastUsedText(at: number, now: number): string {
+  return now - at < DAY_MS ? formatRelativeTime(at, now) : formatStamp(at, now);
+}
+
 /** Which half of a card a dragged app is over: left/right across the grid's rows of cards, top/bottom down the list. */
 function positionAcross(e: DragEvent<HTMLElement>, layout: AllAppsLayout): DropPosition {
   if (layout === 'list') return positionIn(e);
@@ -126,7 +133,7 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
     const r = e.currentTarget.getBoundingClientRect();
     menu.onOpen({ x: r.left + 16, y: r.bottom }, 'context');
   };
-  const used = card.lastUsed === null ? 'No chats yet' : formatRelativeTime(card.lastUsed, now);
+  const used = card.lastUsed === null ? 'No chats yet' : lastUsedText(card.lastUsed, now);
   const draggable = !rename && reorder?.draggable === true;
   const common = {
     'data-testid': `all-apps-card-${app.id}`,
@@ -198,7 +205,7 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
         <span className="flex items-baseline gap-2">
           <StatusWords card={card} activity={activity} now={now} />
         </span>
-        <span className="flex items-center justify-end gap-2 text-xs text-[var(--text-faint)]">
+        <span className="flex items-center justify-end gap-2 whitespace-nowrap text-xs text-[var(--text-faint)]">
           {used}
           {menuButton}
         </span>
@@ -208,21 +215,20 @@ export function AllAppsCardView({ card, layout, activity, now, onOpen, menu, ren
   return (
     <div
       {...common}
-      className={`relative flex min-h-[6.5rem] cursor-pointer flex-col gap-1.5 rounded-lg border bg-[var(--bg-raised)] p-3 text-left hover:border-[var(--border-strong)] ${app.open ? 'border-[var(--accent)]' : 'border-[var(--border)]'} ${line}`}
+      className={`flex min-h-[6.5rem] cursor-pointer flex-col gap-1.5 rounded-lg border bg-[var(--bg-raised)] p-3 text-left hover:border-[var(--border-strong)] ${app.open ? 'border-[var(--accent)]' : 'border-[var(--border)]'} ${line}`}
     >
-      <div className="flex items-center gap-2 pr-16">
+      {/* The name takes what's left of the row and truncates before the mark and the ⋯. */}
+      <div className="flex items-center gap-2">
         <Tile name={app.name} />
-        {name('text-sm font-semibold')}
-      </div>
-      <div className="absolute right-2 top-2.5 flex items-center gap-1.5">
-        {app.open && <span className="text-[10px] text-[var(--accent)]">In sidebar</span>}
+        {name('flex-1 text-sm font-semibold')}
+        {app.open && <span className="shrink-0 text-[10px] text-[var(--accent)]">In sidebar</span>}
         {menuButton}
       </div>
       <span className={PATH}>{app.workspaceRoot ?? NOT_HERE}</span>
       <div className="mt-auto flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-[var(--text-muted)]">
         {card.chatCount > 0 && <span>{chatCountText(card.chatCount)}</span>}
         <StatusWords card={card} activity={activity} now={now} />
-        <span className="ml-auto text-[var(--text-faint)]">{used}</span>
+        <span className="ml-auto whitespace-nowrap text-[var(--text-faint)]">{used}</span>
       </div>
     </div>
   );
