@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/release/sign.mjs sign-native"
+  },
+  "bundle": {
+    "windows": {
+      "signCommand": {
+        "cmd": "node",
+        "args": ["../scripts/release/sign.mjs", "sign", "%1"]
+      }
+    }
+  }
+}

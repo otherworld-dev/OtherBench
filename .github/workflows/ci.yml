@@ -39,6 +39,19 @@ jobs:
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: actions/setup-node@v7
         with: { node-version: '24', cache: 'npm' }
+      # Authenticode (docs/features/code-signing.md) is on only when the
+      # repository has every ARTIFACT_SIGNING_* secret and variable. With none
+      # the build is unsigned as before; with some but not all the job stops
+      # here. Only whether each is set reaches this step, never a value.
+      - id: authenticode
+        run: node desktop/scripts/release/sign.mjs enabled
+        env:
+          HAS_ARTIFACT_SIGNING_TENANT_ID: ${{ secrets.ARTIFACT_SIGNING_TENANT_ID != '' }}
+          HAS_ARTIFACT_SIGNING_CLIENT_ID: ${{ secrets.ARTIFACT_SIGNING_CLIENT_ID != '' }}
+          HAS_ARTIFACT_SIGNING_CLIENT_SECRET: ${{ secrets.ARTIFACT_SIGNING_CLIENT_SECRET != '' }}
+          HAS_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT != '' }}
+          HAS_ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
+          HAS_ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE != '' }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: { workspaces: desktop/src-tauri }
       - run: npm ci
@@ -46,10 +59,36 @@ jobs:
       - run: node desktop/scripts/release/publish.mjs version
         env:
           GH_TOKEN: ${{ github.token }}
-      - run: npm run app:release -w @otherbench/desktop
+      # Microsoft's signing client (a signtool plug-in) runs on .NET 10.
+      - if: steps.authenticode.outputs.enabled == 'true'
+        uses: actions/setup-dotnet@v6
+        with: { dotnet-version: '10.0.x' }
+      - if: steps.authenticode.outputs.enabled == 'true'
+        run: node desktop/scripts/release/sign.mjs prepare
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+      - if: steps.authenticode.outputs.enabled != 'true'
+        run: npm run app:release -w @otherbench/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # The same build with tauri.authenticode.conf.json added: Tauri signs the
+      # app, the bundled native modules, the uninstaller and the installer
+      # through sign.mjs, then writes the updater's .sig over the signed installer.
+      - if: steps.authenticode.outputs.enabled == 'true'
+        run: npm run app:release -w @otherbench/desktop -- --config src-tauri/tauri.authenticode.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.ARTIFACT_SIGNING_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.ARTIFACT_SIGNING_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.ARTIFACT_SIGNING_CLIENT_SECRET }}
+      # Nothing unsigned or untimestamped is published once signing is on: the
+      # installer, and the app and native modules packed inside it.
+      - if: steps.authenticode.outputs.enabled == 'true'
+        run: node desktop/scripts/release/sign.mjs verify
       - run: node desktop/scripts/release/publish.mjs publish
         env:
           GH_TOKEN: ${{ github.token }}
