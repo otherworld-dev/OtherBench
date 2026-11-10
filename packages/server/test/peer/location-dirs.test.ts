@@ -120,6 +120,39 @@ describe("browsing the folders of another machine's locations", () => {
     }
   });
 
+  it("never browses a folder of the PC's that a paired machine filled in by sync, however it is stamped or marked, until it is set on the PC", async () => {
+    const { pc, laptop, root, outside } = await setup();
+    // The laptop makes a location with no path of its own and fills in the PC's (as adopting one does): `outside`.
+    const made = (await (await laptop.api('POST', '/api/locations', { name: 'Everything' })).json()) as { id: string };
+    laptop.container.store.locations.setPath({ locationId: made.id, nodeId: pc.id, path: outside });
+    await pc.container.peers!.syncerOrNull()!.pullFrom(laptop.id);
+    expect(pc.container.store.locations.pathsForNode(pc.id).map((p) => p.path)).toContain(outside);
+
+    const refused = async (): Promise<void> => {
+      const list = (await (await dirsOn(laptop, pc)).json()) as PeerFolderListing;
+      expect(list.locations.map((l) => l.root)).toEqual([root]);
+      const res = await dirsOn(laptop, pc, outside);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ kind: 'outside_locations' });
+    };
+    await refused();
+
+    // A forged row carrying this machine's own stamp and `set_here: 1` is still a synced row.
+    const forgedLocation = 'forged-loc';
+    const stamp = `${String(Date.now() + 60_000).padStart(13, '0')}-0000-${pc.id}`;
+    pc.container.store.sync!.apply([
+      { op: 'upsert', tbl: 'location', id: forgedLocation, hlc: stamp, row: { id: forgedLocation, name: 'Forged' } },
+      { op: 'upsert', tbl: 'location_path', id: `${forgedLocation}:${pc.id}`, hlc: stamp, row: { location_id: forgedLocation, node_id: pc.id, path: outside, set_here: 1 } },
+    ] as never);
+    expect(pc.container.store.locations.paths(forgedLocation).map((p) => p.path)).toEqual([outside]);
+    await refused();
+
+    // Set on the PC itself, it is the PC's own and can be browsed.
+    expect((await pc.api('PUT', `/api/locations/${made.id}/path`, { path: outside })).status).toBe(200);
+    const listing = (await (await dirsOn(laptop, pc, outside)).json()) as PeerFolderListing;
+    expect(listing.dirs.map((d) => d.name)).toEqual(['private']);
+  });
+
   it('refuses a relative path, says a missing folder is missing, and a file is not a folder', async () => {
     const { pc, laptop, root } = await setup();
     expect((await dirsOn(laptop, pc, 'alpha')).status).toBe(400);

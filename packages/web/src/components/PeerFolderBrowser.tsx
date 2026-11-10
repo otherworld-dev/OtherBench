@@ -79,7 +79,7 @@ export function PeerFolderBrowser({
       {listing && at === null && (
         listing.locations.length === 0 ? (
           <p className="text-[var(--text-muted)]">
-            <bdi>{name}</bdi> has no locations yet, so none of its folders can be browsed from here. Add one in Settings → Locations on <bdi>{name}</bdi>, or type the path.
+            <bdi>{name}</bdi> has no locations to browse yet. Only a location whose folder was set on <bdi>{name}</bdi> itself can be browsed: add one, or set an existing one's folder again, in Settings → Locations there. Or type the path.
           </p>
         ) : (
           <ul className="space-y-1">

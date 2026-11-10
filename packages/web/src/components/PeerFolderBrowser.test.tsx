@@ -50,7 +50,7 @@ describe('PeerFolderBrowser', () => {
   it('says when that machine has no locations, since only they can be browsed', async () => {
     vi.mocked(api.peers.dirs).mockResolvedValue({ ...list, locations: [] });
     render(<PeerFolderBrowser nodeId="node-pc" machine="PC" onPick={() => {}} onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByTestId('peer-folder-browser')).toHaveTextContent('PC has no locations yet'));
+    await waitFor(() => expect(screen.getByTestId('peer-folder-browser')).toHaveTextContent('PC has no locations to browse yet. Only a location whose folder was set on PC itself can be browsed'));
   });
 
   it("shows that machine's refusal, and closes", async () => {

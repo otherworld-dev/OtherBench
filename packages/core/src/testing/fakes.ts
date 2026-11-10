@@ -697,6 +697,10 @@ class InMemoryLocationRepo implements LocationRepo {
   pathsForNode(nodeId: string): LocationPath[] {
     return this.pathRows.filter((p) => p.nodeId === nodeId).map((p) => ({ ...p }));
   }
+  /** Nothing syncs into the in-memory store, so every path in it was set here. */
+  pathsSetHere(nodeId: string): LocationPath[] {
+    return this.pathsForNode(nodeId);
+  }
   setPath(p: LocationPath): LocationPath {
     if (!this.repo.get(p.locationId)) throw new Error(`location: not found: ${p.locationId}`);
     this.pathRows = [...this.pathRows.filter((r) => !(r.locationId === p.locationId && r.nodeId === p.nodeId)), { ...p }];

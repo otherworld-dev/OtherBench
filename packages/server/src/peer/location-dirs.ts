@@ -8,9 +8,10 @@ import { HardLinkError, readdirVerified, ToctouGuardError } from '@otherbench/to
  * The folder browser a paired machine may use here (HANDOVER "What is NOT built", the part of v2 Task 53 that was
  * left out): for choosing a folder for a chat that runs here from the machine whose UI it is open in. Deliberately not
  * `GET /api/fs/dirs`, which lists directories anywhere on this machine and is never on the peer listener. This lists
- * only inside this machine's OWN locations (`pathsForNode(self)`: the roots a typed path for a chat that runs here is
- * classified against; a paired machine's synced paths are its folders, not ours, and are never listed), and only
- * sub-folder names with their paths: no file names, no sizes, nothing read inside a folder.
+ * only inside this machine's OWN locations, and only those whose path was set on this machine (`pathsSetHere(self)`:
+ * a paired machine's paths are its folders, not ours, and a path for this machine that a paired machine filled in by
+ * sync is never listed until it is set again here), and only sub-folder names with their paths: no file names, no
+ * sizes, nothing read inside a folder.
  *
  * Every path goes through `containPath` against a location root, and the listing itself through fs-tools'
  * `readdirVerified`, which brackets the `readdir` with identity checks and a second containPath verdict (read its
@@ -37,11 +38,16 @@ export interface LocationDirsRefusal {
 
 const byName = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'base' });
 
-/** This machine's locations with a path here, by name. */
+/**
+ * This machine's locations whose path here was set HERE, by name. Not every row `pathsForNode(self)` has: a paired
+ * machine may fill in this machine's path for a location that has none yet (adopting a location), and such a synced
+ * row could name `C:\` and so open everything to browsing. A synced path becomes browsable only once it is set
+ * again in Settings → Locations on this machine (`pathsSetHere`, the `set_here` column no peer can write).
+ */
 function ownLocations(store: Store): PeerFolderLocation[] {
   const self = store.nodes.self().id;
   return store.locations
-    .pathsForNode(self)
+    .pathsSetHere(self)
     .map((p) => ({ id: p.locationId, name: store.locations.get(p.locationId)?.name ?? 'Location', root: p.path }))
     .sort((a, b) => byName(a.name, b.name))
     .slice(0, MAX_LOCATIONS);

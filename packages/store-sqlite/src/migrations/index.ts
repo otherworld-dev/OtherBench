@@ -43,6 +43,7 @@ import { MIGRATION_041_APP_NOTES } from './041-app-notes.js';
 import { MIGRATION_042_PROFILE_BROWSER_SITES } from './042-profile-browser-sites.js';
 import { MIGRATION_043_FRESH_CHAT_HANDOVER } from './043-fresh-chat-handover.js';
 import { MIGRATION_044_CHAT_SENDS } from './044-chat-sends.js';
+import { MIGRATION_045_LOCATION_PATH_SET_HERE } from './045-location-path-set-here.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -92,6 +93,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_042_PROFILE_BROWSER_SITES,
   MIGRATION_043_FRESH_CHAT_HANDOVER,
   MIGRATION_044_CHAT_SENDS,
+  MIGRATION_045_LOCATION_PATH_SET_HERE,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

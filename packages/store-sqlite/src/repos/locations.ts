@@ -65,6 +65,12 @@ export class SqliteLocationRepo implements LocationRepo {
     );
   }
 
+  pathsSetHere(nodeId: string): LocationPath[] {
+    return (
+      this.db.prepare('SELECT * FROM location_path WHERE node_id = ? AND set_here = 1 ORDER BY location_id').all(nodeId) as Record<string, unknown>[]
+    ).map(pathFromRow);
+  }
+
   pathsForNode(nodeId: string): LocationPath[] {
     return (this.db.prepare('SELECT * FROM location_path WHERE node_id = ? ORDER BY location_id').all(nodeId) as Record<string, unknown>[]).map(
       pathFromRow
@@ -75,8 +81,8 @@ export class SqliteLocationRepo implements LocationRepo {
   setPath(p: LocationPath): LocationPath {
     this.db
       .prepare(
-        `INSERT INTO location_path (location_id, node_id, path, hlc) VALUES (?, ?, ?, ?)
-         ON CONFLICT (location_id, node_id) DO UPDATE SET path = excluded.path, hlc = excluded.hlc`
+        `INSERT INTO location_path (location_id, node_id, path, hlc, set_here) VALUES (?, ?, ?, ?, 1)
+         ON CONFLICT (location_id, node_id) DO UPDATE SET path = excluded.path, hlc = excluded.hlc, set_here = 1`
       )
       .run(p.locationId, p.nodeId, p.path, this.clock.stamp());
     // Set again after being removed: the removal no longer stands.

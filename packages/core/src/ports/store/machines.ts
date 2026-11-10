@@ -20,6 +20,12 @@ export interface LocationRepo {
   allPaths(): LocationPath[];
   paths(locationId: string): LocationPath[];
   pathsForNode(nodeId: string): LocationPath[];
+  /**
+   * `nodeId`'s paths that were set through this store's own `setPath`, never one that arrived by sync. Called with
+   * this machine's id: the folders a paired machine may browse here (a peer can fill in this machine's path for a
+   * location that has none, so a synced one could name any folder).
+   */
+  pathsSetHere(nodeId: string): LocationPath[];
   /** Creates or replaces `nodeId`'s path for the location. */
   setPath(p: LocationPath): LocationPath;
   deletePath(locationId: string, nodeId: string): void;
