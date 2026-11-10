@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import {
   DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
+  MAX_SCHEDULE_ATTACHMENTS,
   MAX_SCHEDULES,
   SCHEDULE_NAME_MAX,
   SCHEDULE_PROMPT_MAX,
@@ -20,7 +21,9 @@ import {
 import { projectDisplayName } from '@otherbench/core/domain/projects.js';
 import type { Schedule, SchedulePatch, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
+import { releaseBlobs, scheduleBlobShas, toPublicScheduleAttachment } from '../schedule/attachments.js';
 import { ScheduleBusyError } from '../schedule/service.js';
+import { limitUploadBody, readUploadedFile, storeUpload } from './attachments.js';
 
 interface ScheduleBody {
   name?: unknown;
@@ -123,6 +126,7 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
     activeRun: container.schedules?.activeRun(s.id) ?? null,
     lastRun: store.schedules.lastRun(s.id),
     warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder, s.autoMode) : [],
+    attachments: store.schedules.attachments(s.id).map(toPublicScheduleAttachment),
   };
 }
 
@@ -211,11 +215,55 @@ export function schedulesRoutes(container: Container): Hono {
     return c.json(scheduleView(container, updated));
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const s = getOr404(c.req.param('id'));
-    // A run still going finishes its reply, unrecorded.
+    const shas = scheduleBlobShas(container.store, [s]);
+    // A run still going finishes its reply, unrecorded. Its files go with it (ON DELETE CASCADE), and then their blobs.
     container.store.schedules.delete(s.id);
     container.events?.emit({ type: 'schedules-changed' });
+    await releaseBlobs(container.store, container.blobStore, shas);
+    return c.body(null, 204);
+  });
+
+  /**
+   * Adds a file the schedule sends with its prompt on every run: the same
+   * upload, 25MB cap and text extraction as a chat attachment
+   * (routes/attachments.ts), stored as a `ScheduleAttachment`. At most
+   * `MAX_SCHEDULE_ATTACHMENTS`, checked before the body is read and again
+   * as the row is written, so two uploads at once can't pass it.
+   */
+  app.post('/:id/attachments', limitUploadBody, async (c) => {
+    const s = getOr404(c.req.param('id'));
+    const full = (): HTTPException => new HTTPException(409, { message: `A schedule can carry at most ${MAX_SCHEDULE_ATTACHMENTS} files.` });
+    if (container.store.schedules.attachments(s.id).length >= MAX_SCHEDULE_ATTACHMENTS) throw full();
+    const { data, filename, mime } = await readUploadedFile(c);
+    const created = await storeUpload(container, data, filename, mime, (blob, extractedText) => {
+      if (!container.store.schedules.get(s.id)) throw new HTTPException(404, { message: `Schedule "${s.id}" not found.` });
+      if (container.store.schedules.attachments(s.id).length >= MAX_SCHEDULE_ATTACHMENTS) throw full();
+      return container.store.schedules.addAttachment({
+        id: randomUUID(),
+        scheduleId: s.id,
+        filename,
+        mime,
+        size: blob.size,
+        sha256: blob.sha256,
+        storagePath: blob.path,
+        extractedText,
+        createdAt: Date.now(),
+      });
+    });
+    container.events?.emit({ type: 'schedules-changed' });
+    return c.json(toPublicScheduleAttachment(created), 201);
+  });
+
+  /** Removes one of the schedule's files, and its blob once nothing else holds it. Runs already sent keep their own copies. */
+  app.delete('/:id/attachments/:attachmentId', async (c) => {
+    const s = getOr404(c.req.param('id'));
+    const attachment = container.store.schedules.getAttachment(c.req.param('attachmentId'));
+    if (!attachment || attachment.scheduleId !== s.id) throw new HTTPException(404, { message: `Attachment "${c.req.param('attachmentId')}" not found.` });
+    container.store.schedules.deleteAttachment(attachment.id);
+    container.events?.emit({ type: 'schedules-changed' });
+    await releaseBlobs(container.store, container.blobStore, [attachment.sha256]);
     return c.body(null, 204);
   });
 

@@ -4,6 +4,7 @@ import type {
   NewSchedule,
   NewScheduleRun,
   Schedule,
+  ScheduleAttachment,
   SchedulePatch,
   ScheduleRepo,
   ScheduleRun,
@@ -57,6 +58,20 @@ function toRun(row: Record<string, unknown>): ScheduleRun {
     userMessageId: row.user_message_id as string | null,
     messageId: row.message_id as string | null,
     refusedCalls: row.refused_calls as number,
+  };
+}
+
+function toAttachment(row: Record<string, unknown>): ScheduleAttachment {
+  return {
+    id: row.id as string,
+    scheduleId: row.schedule_id as string,
+    filename: row.filename as string,
+    mime: row.mime as string,
+    size: row.size as number,
+    sha256: row.sha256 as string,
+    storagePath: row.storage_path as string,
+    extractedText: row.extracted_text as string | null,
+    createdAt: row.created_at as number,
   };
 }
 
@@ -246,6 +261,32 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     if (!row) throw new Error(`schedule: not found: ${id}`);
     if (row.chat_id === null) throw new Error(`schedule: ${id} runs in a project, not a chat`);
     this.db.prepare('UPDATE schedule SET chat_id = ?, updated_at = ? WHERE id = ?').run(chatId, Date.now(), id);
+  }
+
+  addAttachment(a: ScheduleAttachment): ScheduleAttachment {
+    // schedule_id's foreign key refuses an unknown schedule; the primary key a duplicate.
+    this.db
+      .prepare(
+        `INSERT INTO schedule_attachment (id, schedule_id, filename, mime, size, sha256, storage_path, extracted_text, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(a.id, a.scheduleId, a.filename, a.mime, a.size, a.sha256, a.storagePath, a.extractedText, a.createdAt);
+    return this.getAttachment(a.id)!;
+  }
+
+  getAttachment(id: string): ScheduleAttachment | null {
+    const row = this.db.prepare('SELECT * FROM schedule_attachment WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? toAttachment(row) : null;
+  }
+
+  attachments(scheduleId: string): ScheduleAttachment[] {
+    return (this.db.prepare('SELECT * FROM schedule_attachment WHERE schedule_id = ? ORDER BY created_at ASC, rowid ASC').all(scheduleId) as Record<string, unknown>[]).map(
+      toAttachment
+    );
+  }
+
+  deleteAttachment(id: string): void {
+    this.db.prepare('DELETE FROM schedule_attachment WHERE id = ?').run(id);
   }
 
   private row(id: string): Record<string, unknown> | undefined {

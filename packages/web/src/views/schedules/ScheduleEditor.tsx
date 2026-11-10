@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, unattendedWarnings, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { MAX_SCHEDULE_ATTACHMENTS, SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, unattendedWarnings, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
-import type { ScheduleView } from '@otherbench/core/ports/store.js';
+import type { PublicScheduleAttachment, ScheduleView } from '@otherbench/core/ports/store.js';
+import { MAX_ATTACHMENT_BYTES } from '../../components/composerAttachments.js';
 import { api } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
 import {
@@ -31,17 +32,39 @@ interface ScheduleEditorProps {
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])';
+
+/** A file picked in the editor, sent once Save has the schedule to send it to. */
+interface PendingFile {
+  key: number;
+  file: File;
+}
+
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const FIELD ='w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1';
 
-/** New or Edit schedule (spec 2026-10-12-scheduled-tasks-design §5). Esc or Cancel closes it unsaved. */
+/**
+ * New or Edit schedule (spec 2026-10-12-scheduled-tasks-design §5). Esc or
+ * Cancel closes it unsaved. Files picked under Files are only sent on Save,
+ * after the schedule itself is made or changed, since they need its id: a
+ * file taken off is deleted, then each new one uploaded. If one of those
+ * fails the schedule is already saved, so the editor stays open on it (as
+ * Edit schedule) with what is left still listed, and Save tries that again.
+ */
 export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: ScheduleEditorProps): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
   const profiles = useOtherBenchStore((s) => s.profiles);
   const connections = useOtherBenchStore((s) => s.connections);
-  const [initial] = useState<ScheduleDraft>(() =>
+  const [initial, setInitial] = useState<ScheduleDraft>(() =>
     schedule ? draftFromSchedule(schedule) : emptyDraft(prefill ?? null, defaultProfileFor(prefill ?? null, chats, projects, profiles))
   );
+  // The schedule as saved so far: the one being edited, or the new one once Save has made it.
+  const [saved, setSaved] = useState<ScheduleView | null>(schedule ?? null);
+  // Its files still on it, those taken off (deleted on Save), and those picked but not sent yet.
+  const [kept, setKept] = useState<PublicScheduleAttachment[]>(schedule?.attachments ?? []);
+  const [removed, setRemoved] = useState<PublicScheduleAttachment[]>([]);
+  const [pending, setPending] = useState<PendingFile[]>([]);
+  const nextKey = useRef(0);
   const [draft, setDraft] = useState<ScheduleDraft>(initial);
   // The preview's "now": taken with each edit, as the runs it lists are worked out again then.
   const [editedAt, setEditedAt] = useState(() => Date.now());
@@ -67,7 +90,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   // Every time the editor shows, the preview's included, is in the zone chosen under Time zone.
   const timezone = draft.timezone;
   // The target is immutable once made (patchBody ignores it), so it is read-only when editing or opened with a prefill.
-  const targetFixed = schedule !== undefined || prefill !== undefined;
+  const targetFixed = saved !== null || prefill !== undefined;
   const profile = profiles.find((p) => p.id === draft.profileId);
   const connection = profile ? connections.find((c) => c.id === profile.connectionId) : undefined;
   // Auto mode is Claude Code's: offered only for its profiles. A tick left over from another profile is kept, and ignored by the run.
@@ -78,8 +101,20 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   const chatChoices = chats.filter((c) => c.archivedAt === null).sort((a, b) => b.createdAt - a.createdAt);
   const targetText =
     draft.targetKind === 'chat'
-      ? `Chat: ${chats.find((c) => c.id === draft.chatId)?.title ?? schedule?.targetName ?? ''}`
-      : `New chat each run in ${projectDisplayNameById(projects, draft.projectId) ?? schedule?.targetName ?? ''}`;
+      ? `Chat: ${chats.find((c) => c.id === draft.chatId)?.title ?? saved?.targetName ?? ''}`
+      : `New chat each run in ${projectDisplayNameById(projects, draft.projectId) ?? saved?.targetName ?? ''}`;
+
+  /** Adds picked files, up to the schedule's limit, refusing any over the per-file cap as the composer does. */
+  function addFiles(list: FileList | null): void {
+    const files = [...(list ?? [])];
+    const room = MAX_SCHEDULE_ATTACHMENTS - kept.length - pending.length;
+    const tooBig = files.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    const fitting = files.filter((f) => f.size <= MAX_ATTACHMENT_BYTES).slice(0, Math.max(room, 0));
+    if (tooBig) setError(`"${tooBig.name}" is over 25MB, the most a file can be.`);
+    else if (files.length > room) setError(`A schedule can carry at most ${MAX_SCHEDULE_ATTACHMENTS} files.`);
+    else setError(null);
+    if (fitting.length > 0) setPending((p) => [...p, ...fitting.map((file) => ({ key: nextKey.current++, file }))]);
+  }
 
   async function save(): Promise<void> {
     const problem = draftProblem(draft);
@@ -89,20 +124,54 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     }
     setSaving(true);
     setError(null);
+    let view: ScheduleView;
     try {
-      onSaved(schedule ? await api.schedules.patch(schedule.id, patchBody(initial, draft)) : await api.schedules.create(createBody(draft)));
+      view = saved ? await api.schedules.patch(saved.id, patchBody(initial, draft)) : await api.schedules.create(createBody(draft));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
+      setError(errorText(err));
       setSaving(false);
+      return;
     }
+    // Saved: from here a Save edits it, and what was just sent is its starting point.
+    setSaved(view);
+    setInitial(draft);
+    let files = kept;
+    for (const a of removed) {
+      try {
+        await api.schedules.deleteAttachment(view.id, a.id);
+        setRemoved((r) => r.filter((x) => x.id !== a.id));
+      } catch (err) {
+        setError(`The schedule was saved, but "${a.filename}" couldn't be taken off: ${errorText(err)}`);
+        setSaving(false);
+        return;
+      }
+    }
+    for (const p of pending) {
+      try {
+        files = [...files, await api.schedules.uploadAttachment(view.id, p.file)];
+        setKept(files);
+        setPending((list) => list.filter((x) => x.key !== p.key));
+      } catch (err) {
+        setError(`The schedule was saved, but "${p.file.name}" couldn't be attached: ${errorText(err)}`);
+        setSaving(false);
+        return;
+      }
+    }
+    setSaving(false);
+    onSaved({ ...view, attachments: files });
+  }
+
+  /** Esc and Cancel: unsaved, unless a Save already made or changed the schedule, which the list then shows. */
+  function close(): void {
+    if (saved !== null && saved !== schedule) onSaved({ ...saved, attachments: kept });
+    else onCancel();
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      if (!saving) onCancel();
+      if (!saving) close();
     } else if (e.key === 'Tab') {
       // Tab wraps between the first and last control so focus never leaves the dialog.
       const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
@@ -138,7 +207,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
         className="max-h-[90vh] w-[32rem] max-w-[95vw] space-y-3 overflow-y-auto rounded border border-[var(--border)] bg-[var(--bg-raised)] p-4 text-sm shadow-lg"
       >
         <h2 id={`${id}-title`} className="text-base font-semibold">
-          {schedule ? 'Edit schedule' : 'New schedule'}
+          {saved ? 'Edit schedule' : 'New schedule'}
         </h2>
 
         <div>
@@ -191,6 +260,56 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
           <textarea id={`${id}-prompt`} rows={6} value={draft.prompt} onChange={(e) => set('prompt', e.target.value)} className={FIELD} />
           <p className="text-right text-xs text-[var(--text-muted)]">
             {draft.prompt.length.toLocaleString('en-US')} / {SCHEDULE_PROMPT_MAX.toLocaleString('en-US')}
+          </p>
+        </div>
+
+        <div>
+          <p className="font-medium">Files</p>
+          {(kept.length > 0 || pending.length > 0) && (
+            <ul data-testid="schedule-files" className="my-1 flex flex-wrap gap-1">
+              {kept.map((a) => (
+                <li key={a.id} className="flex items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5">
+                  <span className="max-w-[14rem] truncate">{a.filename}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${a.filename}`}
+                    onClick={() => {
+                      setKept((k) => k.filter((x) => x.id !== a.id));
+                      setRemoved((r) => [...r, a]);
+                    }}
+                    className="text-[var(--text-muted)]"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              {pending.map((p) => (
+                <li key={`new-${p.key}`} className="flex items-center gap-1 rounded border border-dashed border-[var(--border)] px-1.5 py-0.5">
+                  <span className="max-w-[14rem] truncate">{p.file.name}</span>
+                  <button type="button" aria-label={`Remove ${p.file.name}`} onClick={() => setPending((list) => list.filter((x) => x.key !== p.key))} className="text-[var(--text-muted)]">
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <label className="btn inline-block cursor-pointer px-2.5 py-1">
+            <input
+              type="file"
+              multiple
+              aria-label="Attach files"
+              aria-describedby={`${id}-files-help`}
+              className="sr-only"
+              onChange={(e) => {
+                addFiles(e.target.files);
+                // So the same file can be picked again after it is taken off.
+                e.target.value = '';
+              }}
+            />
+            Attach files…
+          </label>
+          <p id={`${id}-files-help`} className="text-xs text-[var(--text-muted)]">
+            Sent with the prompt on every run: up to {MAX_SCHEDULE_ATTACHMENTS} files, 25MB each.
           </p>
         </div>
 
@@ -372,7 +491,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
           </p>
         )}
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onCancel} disabled={saving} className="btn px-2.5 py-1">
+          <button type="button" onClick={close} disabled={saving} className="btn px-2.5 py-1">
             Cancel
           </button>
           <button type="button" onClick={() => void save()} disabled={saving} className="btn px-2.5 py-1">

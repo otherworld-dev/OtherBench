@@ -15,6 +15,8 @@ export const SCHEDULE_RUNS_KEPT = 50;
 export const MAX_CONCURRENT_SCHEDULED_RUNS = 2;
 export const SCHEDULE_LATE_AFTER_MS = 5 * 60_000;
 export const SCHEDULE_CHECK_MAX_MS = 30_000;
+/** The most files a schedule sends with its prompt (`ScheduleAttachment`); each is up to 25MB, as a chat attachment is. */
+export const MAX_SCHEDULE_ATTACHMENTS = 10;
 
 /**
  * A run's time limit (`Schedule.timeLimitMinutes`) when none is chosen, and

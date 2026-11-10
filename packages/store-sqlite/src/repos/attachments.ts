@@ -84,13 +84,16 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
     this.crud.delete(id);
   }
 
+  /** A schedule's file (`schedule_attachment`, migration 045) counts too, so blob GC keeps it while its schedule exists. */
   isReferenced(sha256: string): boolean {
-    const row = this.db.prepare('SELECT 1 FROM attachment WHERE sha256 = ? LIMIT 1').get(sha256);
+    const row = this.db
+      .prepare('SELECT 1 FROM attachment WHERE sha256 = ? UNION ALL SELECT 1 FROM schedule_attachment WHERE sha256 = ? LIMIT 1')
+      .get(sha256, sha256);
     return row !== undefined;
   }
 
   referencedShas(): Set<string> {
-    const rows = this.db.prepare('SELECT DISTINCT sha256 FROM attachment').all() as { sha256: string }[];
+    const rows = this.db.prepare('SELECT sha256 FROM attachment UNION SELECT sha256 FROM schedule_attachment').all() as { sha256: string }[];
     return new Set(rows.map((r) => r.sha256));
   }
 

@@ -1,9 +1,9 @@
 /** Scheduled task calls and shapes for `api.schedules`. */
-import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { PublicScheduleAttachment, ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { ScheduleRule } from '@otherbench/core/domain/schedule.js';
-import { request, post, patch, del } from './http.js';
+import { request, post, patch, del, uploadFile } from './http.js';
 
-/** `POST /api/schedules` (spec 2026-10-12-scheduled-tasks-design). The server sets the time zone. */
+/** `POST /api/schedules` (spec 2026-10-12-scheduled-tasks-design). The zone is the server's unless `timezone` is given. */
 export interface CreateScheduleBody {
   name: string;
   prompt: string;
@@ -41,4 +41,7 @@ export const schedulesApi = {
   /** Newest first. */
   runs: (id: string) => request<ScheduleRun[]>(`/schedules/${id}/runs`),
   run: (id: string) => post<ScheduleRun>(`/schedules/${id}/run`),
+  /** Adds a file every run sends with the prompt (25MB at most, 10 files a schedule). */
+  uploadAttachment: (id: string, file: File) => uploadFile<PublicScheduleAttachment>(`/schedules/${id}/attachments`, file),
+  deleteAttachment: (id: string, attachmentId: string) => del(`/schedules/${id}/attachments/${attachmentId}`),
 };
