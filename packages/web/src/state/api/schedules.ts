@@ -14,6 +14,8 @@ export interface CreateScheduleBody {
   autoMode?: boolean;
   /** Minutes, or null for no limit; left out on create it is 30. */
   timeLimitMinutes?: number | null;
+  /** An IANA zone; left out, the server's own. */
+  timezone?: string;
 }
 
 /** `PATCH /api/schedules/:id`: any of these; the target can't change. */
@@ -26,6 +28,8 @@ export interface PatchScheduleBody {
   autoMode?: boolean;
   /** Minutes, or null for no limit; left out on create it is 30. */
   timeLimitMinutes?: number | null;
+  /** An IANA zone; a new one recomputes the next run in it. */
+  timezone?: string;
 }
 
 /** Scheduled tasks: local to the server machine. Run now answers 409 with a reason when it can't start. */

@@ -165,7 +165,7 @@ describe('SchedulesView', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30 })
+      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -257,6 +257,24 @@ describe('SchedulesView', () => {
     await user.selectOptions(limit, '4 hours');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('s1', { timeLimitMinutes: 240 }));
+  });
+
+  it("changes a schedule's time zone from its own, moving the preview, and sends only that", async () => {
+    list.mockResolvedValue([view({ timezone: 'Europe/London' })]);
+    patch.mockResolvedValue(view({ timezone: 'Asia/Tokyo' }));
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    await user.click(within(await screen.findByTestId('schedule-row-s1')).getByRole('button', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit schedule' });
+    const zone = within(dialog).getByLabelText('Time zone');
+    expect(zone).toHaveDisplayValue('Europe/London');
+    expect(dialog).toHaveTextContent('(Europe/London)');
+    await user.selectOptions(zone, 'Asia/Tokyo');
+    expect(dialog).toHaveTextContent('(Asia/Tokyo)');
+    expect(within(dialog).getByTestId('schedule-preview')).toHaveTextContent('09:00');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('s1', { timezone: 'Asia/Tokyo' }));
   });
 
   it("offers Auto for a Claude Code profile: ticking it changes the warnings and is saved with the schedule", async () => {

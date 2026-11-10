@@ -169,6 +169,21 @@ export function isValidTimeZone(timezone: string): boolean {
   }
 }
 
+/** What the API answers for a zone `canonicalTimeZone` refuses. */
+export const TIME_ZONE_PROBLEM = '"timezone" must be an IANA time zone, such as "Europe/London".';
+const TIME_ZONE_NAME_MAX = 64;
+
+/**
+ * A schedule's zone as given to the API: an IANA name this runtime knows, in
+ * its canonical spelling (`america/new_york` is `America/New_York`, `GMT` is
+ * `UTC`), or null. An offset such as `+05:00`, which Intl also takes, is
+ * refused: a schedule's zone is a place, whose clock changes it follows.
+ */
+export function canonicalTimeZone(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > TIME_ZONE_NAME_MAX || !/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(value) || !isValidTimeZone(value)) return null;
+  return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+}
+
 function wallClockWithSeconds(instant: number, timezone: string): WallClock & { second: number } {
   const out: Record<string, number> = {};
   for (const part of formatterFor(timezone).formatToParts(new Date(instant))) {

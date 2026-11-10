@@ -5,7 +5,8 @@ import type { ScheduleRule, ScheduleRunStatus, ScheduleTarget, ScheduleTrigger }
 /**
  * A prompt run on a profile on a timetable, with nobody there. Lives and runs
  * only on the machine that made it (never synced in phase 1). `timezone` is
- * that machine's IANA zone when it was made. `nextRunAt` is null while paused.
+ * the zone chosen in the editor (the browser's by default), or the server's
+ * when none is given; it can be changed. `nextRunAt` is null while paused.
  */
 export interface Schedule {
   id: string;
@@ -49,7 +50,7 @@ export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' |
 };
 
 /** What `ScheduleRepo.update` may change. The target is fixed once made. */
-export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'timezone' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
 
 /** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
 export interface ScheduleRun {

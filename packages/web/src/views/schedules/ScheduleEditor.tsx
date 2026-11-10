@@ -8,7 +8,6 @@ import {
   CADENCE_OPTIONS,
   NO_TIME_LIMIT,
   WEEKDAYS_MONDAY_FIRST,
-  browserTimeZone,
   createBody,
   defaultProfileFor,
   draftFromSchedule,
@@ -18,6 +17,7 @@ import {
   previewRuns,
   targetHasFolder,
   timeLimitOptions,
+  timeZoneOptions,
   type ScheduleDraft,
 } from './draft.js';
 
@@ -64,7 +64,8 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     setDraft((d) => ({ ...d, [key]: value }));
     setEditedAt(Date.now());
   };
-  const timezone = schedule?.timezone ?? browserTimeZone();
+  // Every time the editor shows, the preview's included, is in the zone chosen under Time zone.
+  const timezone = draft.timezone;
   // The target is immutable once made (patchBody ignores it), so it is read-only when editing or opened with a prefill.
   const targetFixed = schedule !== undefined || prefill !== undefined;
   const profile = profiles.find((p) => p.id === draft.profileId);
@@ -273,6 +274,22 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
             <p className="text-xs text-[var(--text-muted)]">In shorter months, runs on the last day.</p>
           </div>
         )}
+
+        <div>
+          <label htmlFor={`${id}-zone`} className="block font-medium">
+            Time zone
+          </label>
+          <select id={`${id}-zone`} value={draft.timezone} onChange={(e) => set('timezone', e.target.value)} aria-describedby={`${id}-zone-help`} className={`${FIELD} w-auto`}>
+            {timeZoneOptions(initial.timezone).map((z) => (
+              <option key={z} value={z}>
+                {z}
+              </option>
+            ))}
+          </select>
+          <p id={`${id}-zone-help`} className="text-xs text-[var(--text-muted)]">
+            The schedule keeps to this zone's clock, summer time included.
+          </p>
+        </div>
 
         <div data-testid="schedule-preview" aria-live="polite">
           {typeof preview === 'string' ? (

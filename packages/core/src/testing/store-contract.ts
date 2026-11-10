@@ -1785,6 +1785,14 @@ export function runStoreContract(
         expect(store.schedules.list().map((s) => s.autoMode)).toEqual([true, false]);
       });
 
+      it('timezone changes through update and is kept by other edits', () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1', timezone: 'Europe/London' }, ids));
+        expect(store.schedules.update('s1', { timezone: 'Asia/Tokyo', nextRunAt: 5 })).toMatchObject({ timezone: 'Asia/Tokyo', nextRunAt: 5 });
+        expect(store.schedules.update('s1', { name: 'Renamed' }).timezone).toBe('Asia/Tokyo');
+        expect(store.schedules.get('s1')!.timezone).toBe('Asia/Tokyo');
+      });
+
       it('timeLimitMinutes defaults to 30, keeps null for no limit, and round-trips through create and update', () => {
         const ids = seedTargets();
         expect(store.schedules.create(schedule({ id: 's1' }, ids)).timeLimitMinutes).toBe(30);

@@ -8,6 +8,7 @@ import type { Container } from '../../src/container.js';
 import { forwardedApi } from '../../src/peer/forward.js';
 import { resolveProfile } from '../../src/profile-resolution.js';
 import { serverTimeZone } from '../../src/routes/schedules.js';
+import { formatInZone } from '@otherbench/core/domain/schedule.js';
 import { ScheduleService, type ScheduleLimits } from '../../src/schedule/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -137,6 +138,8 @@ describe('POST /api/schedules', () => {
       [{ timeLimitMinutes: 1441 }, /"timeLimitMinutes"/],
       [{ timeLimitMinutes: 2.5 }, /"timeLimitMinutes"/],
       [{ timeLimitMinutes: '30' }, /"timeLimitMinutes"/],
+      [{ timezone: 'Mars/Olympus' }, /^"timezone" must be an IANA time zone/],
+      [{ timezone: '+05:00' }, /"timezone"/],
     ];
     for (const [over, message] of cases) {
       const res = await send('POST', '', body(over));
@@ -244,6 +247,35 @@ describe('PATCH and DELETE /api/schedules/:id', () => {
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as { error: string }).error).toBe('"timeLimitMinutes" must be a whole number of minutes from 1 to 1440, or null for no limit.');
     expect(container.store.schedules.get(made.id)!.timeLimitMinutes).toBeNull();
+  });
+
+  it('takes a zone on create and edit; a new zone recomputes the next run in it, and a bad one is refused', async () => {
+    setup();
+    const nine = { cadence: 'daily', time: '09:00' };
+    const before = Date.now();
+    const made = await create({ rule: nine, timezone: 'Asia/Tokyo' });
+    expect(made.timezone).toBe('Asia/Tokyo');
+    expect(formatInZone(made.nextRunAt!, 'Asia/Tokyo', 'time')).toBe('09:00');
+    expect(made.nextRunAt! - before).toBeLessThanOrEqual(25 * 60 * 60_000);
+
+    const moved = (await (await send('PATCH', `/${made.id}`, { timezone: 'america/new_york' })).json()) as ScheduleView;
+    expect(moved.timezone).toBe('America/New_York');
+    expect(formatInZone(moved.nextRunAt!, 'America/New_York', 'time')).toBe('09:00');
+    expect(moved.nextRunAt!).toBeGreaterThan(before);
+    expect(moved.nextRunAt!).not.toBe(made.nextRunAt);
+    // The same zone again changes nothing; other edits keep the zone.
+    const same = (await (await send('PATCH', `/${made.id}`, { timezone: 'America/New_York', name: 'Renamed' })).json()) as ScheduleView;
+    expect(same).toMatchObject({ timezone: 'America/New_York', nextRunAt: moved.nextRunAt });
+
+    const bad = await send('PATCH', `/${made.id}`, { timezone: 'Mars/Olympus' });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe('"timezone" must be an IANA time zone, such as "Europe/London".');
+    expect(container.store.schedules.get(made.id)!.timezone).toBe('America/New_York');
+
+    // A paused schedule takes a new zone and stays paused.
+    const paused = (await (await send('PATCH', `/${made.id}`, { enabled: false })).json()) as ScheduleView;
+    const pausedMoved = (await (await send('PATCH', `/${paused.id}`, { timezone: 'UTC' })).json()) as ScheduleView;
+    expect(pausedMoved).toMatchObject({ timezone: 'UTC', enabled: false, nextRunAt: null });
   });
 
   it('DELETE removes it', async () => {

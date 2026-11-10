@@ -104,13 +104,14 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     if (!row) throw new Error(`schedule: not found: ${id}`);
     const next = { ...toSchedule(row), ...patch };
     this.db
-      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, enabled = ?, next_run_at = ?, auto_mode = ?, time_limit_minutes = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE schedule SET name = ?, prompt = ?, profile_id = ?, rule = ?, timezone = ?, enabled = ?, next_run_at = ?, auto_mode = ?, time_limit_minutes = ?, updated_at = ? WHERE id = ?')
       .run(
         next.name,
         next.prompt,
         next.profileId,
         // An unreadable rule stays as stored until a new one is given.
         patch.rule !== undefined ? JSON.stringify(patch.rule) : (row.rule as string),
+        next.timezone,
         next.enabled ? 1 : 0,
         next.nextRunAt,
         next.autoMode ? 1 : 0,

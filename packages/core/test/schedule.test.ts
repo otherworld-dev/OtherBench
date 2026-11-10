@@ -8,6 +8,8 @@ import {
   nextRuns,
   parseRule,
   parseTimeLimit,
+  TIME_ZONE_PROBLEM,
+  canonicalTimeZone,
   runChatTitle,
   scheduledPromptText,
   timedOutText,
@@ -171,6 +173,19 @@ describe('nextRunAt for a cron rule', () => {
     expect(runs('* * * * *', LONDON, '2026-03-29T00:58:00Z', 3)).toEqual(['2026-03-29T00:59:00.000Z', '2026-03-29T01:00:00.000Z', '2026-03-29T01:01:00.000Z']);
     expect(runs('@hourly', 'UTC', '2026-10-12T08:00:00Z', 2)).toEqual(['2026-10-12T09:00:00.000Z', '2026-10-12T10:00:00.000Z']);
     expect(runs('@weekly', 'UTC', '2026-10-12T08:00:00Z', 1)).toEqual(['2026-10-18T00:00:00.000Z']);
+  });
+});
+
+describe('canonicalTimeZone', () => {
+  it('takes an IANA zone, in its canonical spelling', () => {
+    expect(canonicalTimeZone('Europe/London')).toBe('Europe/London');
+    expect(canonicalTimeZone('america/new_york')).toBe('America/New_York');
+    expect(canonicalTimeZone('UTC')).toBe('UTC');
+  });
+
+  it('refuses anything else, an offset included, with a message for the API', () => {
+    for (const bad of ['Mars/Olympus', '+05:00', '-0800', '', ' ', 5, null, undefined, `Europe/${'x'.repeat(80)}`]) expect(canonicalTimeZone(bad), String(bad)).toBeNull();
+    expect(TIME_ZONE_PROBLEM).toBe('"timezone" must be an IANA time zone, such as "Europe/London".');
   });
 });
 

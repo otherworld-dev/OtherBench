@@ -6,6 +6,8 @@ import {
   MAX_SCHEDULES,
   SCHEDULE_NAME_MAX,
   SCHEDULE_PROMPT_MAX,
+  TIME_ZONE_PROBLEM,
+  canonicalTimeZone,
   describeRule,
   isValidTimeZone,
   nextRunAt,
@@ -29,6 +31,7 @@ interface ScheduleBody {
   enabled?: unknown;
   autoMode?: unknown;
   timeLimitMinutes?: unknown;
+  timezone?: unknown;
 }
 
 /** The server machine's IANA zone, which schedules made now are stored in; UTC when the runtime can't say. */
@@ -55,6 +58,13 @@ function parseTimeLimitBody(value: unknown): number | null {
   const limit = parseTimeLimit(value);
   if (typeof limit === 'string') throw new HTTPException(400, { message: limit });
   return limit;
+}
+
+/** An IANA zone, canonically spelt (`canonicalTimeZone`); anything else is a 400. */
+function parseTimeZoneBody(value: unknown): string {
+  const zone = canonicalTimeZone(value);
+  if (zone === null) throw new HTTPException(400, { message: TIME_ZONE_PROBLEM });
+  return zone;
 }
 
 function parseProfile(container: Container, value: unknown): string {
@@ -120,7 +130,8 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
  * Scheduled tasks (spec 2026-10-12-scheduled-tasks-design §4), at /api/schedules.
  * Behind the app's token, Host and cross-site checks; never on the peer
  * listener (peer/forward.ts mounts only the turns routes). The time zone is
- * this server's, never the body's.
+ * the body's `timezone` when given (the editor sends the one it showed),
+ * else this server's; either way an IANA zone this runtime knows.
  */
 export function schedulesRoutes(container: Container): Hono {
   const app = new Hono();
@@ -146,11 +157,11 @@ export function schedulesRoutes(container: Container): Hono {
     const enabled = parseFlag('enabled', body.enabled, true);
     const autoMode = parseFlag('autoMode', body.autoMode, false);
     const timeLimitMinutes = body.timeLimitMinutes === undefined ? DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES : parseTimeLimitBody(body.timeLimitMinutes);
+    const timezone = body.timezone === undefined ? serverTimeZone() : parseTimeZoneBody(body.timezone);
     if (container.store.schedules.list().length >= MAX_SCHEDULES) {
       throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most OtherBench keeps. Delete one first.` });
     }
     const now = Date.now();
-    const timezone = serverTimeZone();
     const created = container.store.schedules.create({
       id: randomUUID(),
       name,
@@ -183,13 +194,17 @@ export function schedulesRoutes(container: Container): Hono {
     if (body.autoMode !== undefined) patch.autoMode = parseFlag('autoMode', body.autoMode, current.autoMode);
     // A run going now keeps the limit it started with.
     if (body.timeLimitMinutes !== undefined) patch.timeLimitMinutes = parseTimeLimitBody(body.timeLimitMinutes);
+    if (body.timezone !== undefined) {
+      const timezone = parseTimeZoneBody(body.timezone);
+      if (timezone !== current.timezone) patch.timezone = timezone;
+    }
     const enabled = parseFlag('enabled', body.enabled, current.enabled);
     patch.enabled = enabled;
     if (!enabled) {
       patch.nextRunAt = null;
-    } else if (patch.rule !== undefined || !current.enabled || current.nextRunAt === null) {
-      // A new rule or a resume counts from now: slots missed while paused never fire.
-      patch.nextRunAt = nextRunAt(patch.rule ?? current.rule, current.timezone, now);
+    } else if (patch.rule !== undefined || patch.timezone !== undefined || !current.enabled || current.nextRunAt === null) {
+      // A new rule, a new zone or a resume counts from now: slots missed while paused never fire.
+      patch.nextRunAt = nextRunAt(patch.rule ?? current.rule, patch.timezone ?? current.timezone, now);
     }
     const updated = container.store.schedules.update(current.id, patch);
     changed();
