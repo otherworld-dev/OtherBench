@@ -38,6 +38,12 @@ export interface ModelInfo {
   priceOutPer1m: number | null;
   priceCachedPer1m: number | null;
   currency: string;
+  /**
+   * When "Discover models" first found it (ms), shared by every model one run
+   * added. Null for a model added by hand or found before this was recorded;
+   * absent reads as null.
+   */
+  firstSeenAt?: number | null;
 }
 
 export type FsMode = 'off' | 'read' | 'readwrite';

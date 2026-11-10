@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-24).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments']);
+    expect(MIGRATIONS.slice(-25).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments', '048-model-first-seen']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(47);
+      expect(SCHEMA_VERSION).toBe(48);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch', 'context_tokens', 'handover_ask_at', 'handover_suggest']));
     } finally {
@@ -1070,6 +1070,20 @@ describe('migration 047: schedule attachments', () => {
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'schedule_attachment'").all()).toEqual([]);
       db.exec(`DELETE FROM schedule WHERE id = 's1'`);
       expect(db.prepare('SELECT COUNT(*) AS n FROM schedule_attachment').get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('migration 048: model first seen', () => {
+  it('adds a nullable first_seen_at to model, empty for models already there', () => {
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= 47));
+      seedMinimalChain(db);
+      runMigrations(db);
+      expect(db.prepare("SELECT first_seen_at FROM model WHERE id = 'model-1'").get()).toEqual({ first_seen_at: null });
     } finally {
       db.close();
     }
