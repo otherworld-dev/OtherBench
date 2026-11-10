@@ -85,6 +85,7 @@ import type {
   NewSchedule,
   NewScheduleRun,
   Schedule,
+  ScheduleAttachment,
   SchedulePatch,
   SchedulePeerChange,
   ScheduleRepo,
@@ -1243,6 +1244,8 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
   private readonly repo = new InMemoryCrudRepo<Attachment>();
   /** When each row was last written, for `abandoned` (every row here is this machine's). */
   private readonly writtenAt = new Map<string, number>();
+  /** `scheduleShas` gives the blobs schedules' files hold, which count as referenced (as `schedule_attachment` does in store-sqlite). */
+  constructor(private readonly scheduleShas: () => Set<string> = () => new Set()) {}
   create(a: Attachment): Attachment {
     const created = this.repo.create(a);
     this.writtenAt.set(a.id, Date.now());
@@ -1269,10 +1272,10 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
     this.writtenAt.delete(id);
   }
   isReferenced(sha256: string): boolean {
-    return this.repo.list().some((a) => a.sha256 === sha256);
+    return this.repo.list().some((a) => a.sha256 === sha256) || this.scheduleShas().has(sha256);
   }
   referencedShas(): Set<string> {
-    return new Set(this.repo.list().map((a) => a.sha256));
+    return new Set([...this.repo.list().map((a) => a.sha256), ...this.scheduleShas()]);
   }
   abandoned(writtenBefore: number): Attachment[] {
     return this.repo.list().filter((a) => a.messageId === null && (this.writtenAt.get(a.id) ?? Infinity) < writtenBefore);
@@ -1614,6 +1617,8 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   private readonly rows = new Map<string, Schedule>();
   /** Every run with the order it was added, for ties on `startedAt` (SQLite: rowid). */
   private runRows: { run: ScheduleRun; seq: number }[] = [];
+  /** Schedules' files, with the order added for ties on `createdAt` (SQLite: rowid). */
+  private attachmentRows: { attachment: ScheduleAttachment; seq: number }[] = [];
   private seq = 0;
   /** Not tied to a schedule (no foreign key in SQLite): a deleted schedule's record stays. */
   private peerChangeRows: { change: SchedulePeerChange; seq: number }[] = [];
@@ -1654,6 +1659,36 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   delete(id: string): void {
     this.rows.delete(id);
     this.runRows = this.runRows.filter((r) => r.run.scheduleId !== id);
+    this.attachmentRows = this.attachmentRows.filter((x) => x.attachment.scheduleId !== id);
+  }
+
+  addAttachment(a: ScheduleAttachment): ScheduleAttachment {
+    // Mirrors schedule_attachment.schedule_id's foreign key and its primary key.
+    if (!this.rows.has(a.scheduleId)) throw new Error(`schedule_attachment: no schedule ${a.scheduleId}`);
+    if (this.attachmentRows.some((x) => x.attachment.id === a.id)) throw new Error(`Duplicate id: ${a.id}`);
+    this.attachmentRows.push({ attachment: structuredClone(a), seq: this.seq++ });
+    return structuredClone(a);
+  }
+
+  getAttachment(id: string): ScheduleAttachment | null {
+    const row = this.attachmentRows.find((x) => x.attachment.id === id);
+    return row ? structuredClone(row.attachment) : null;
+  }
+
+  attachments(scheduleId: string): ScheduleAttachment[] {
+    return this.attachmentRows
+      .filter((x) => x.attachment.scheduleId === scheduleId)
+      .sort((a, b) => a.attachment.createdAt - b.attachment.createdAt || a.seq - b.seq)
+      .map((x) => structuredClone(x.attachment));
+  }
+
+  deleteAttachment(id: string): void {
+    this.attachmentRows = this.attachmentRows.filter((x) => x.attachment.id !== id);
+  }
+
+  /** The blobs schedules' files hold, for the attachment repo's GC checks. */
+  attachmentShas(): Set<string> {
+    return new Set(this.attachmentRows.map((x) => x.attachment.sha256));
   }
 
   due(now: number): Schedule[] {
@@ -1784,7 +1819,8 @@ export class InMemoryStore implements Store {
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
   readonly messages: MessageRepo;
-  readonly attachments: AttachmentRepo = new InMemoryAttachmentRepo();
+  // Lazy: `schedules` is set in the constructor, after the field initialisers run.
+  readonly attachments: AttachmentRepo = new InMemoryAttachmentRepo(() => (this.schedules as InMemoryScheduleRepo).attachmentShas());
   readonly usage: UsageRepo = new InMemoryUsageRepo();
   readonly mcpServers: McpServerRepo = new InMemoryMcpServerRepo();
   readonly grants: GrantRepo = new InMemoryGrantRepo();

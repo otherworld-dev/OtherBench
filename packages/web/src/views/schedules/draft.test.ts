@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project, Schedule } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
-import { NO_TIME_LIMIT, createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, previewRuns, targetHasFolder, timeLimitOptions, type ScheduleDraft } from './draft.js';
+import { NO_TIME_LIMIT, browserTimeZone, createBody, defaultProfileFor, draftFromSchedule, draftProblem, emptyDraft, patchBody, previewRuns, targetHasFolder, timeLimitOptions, timeZoneOptions, type ScheduleDraft } from './draft.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return { id: 'c1', title: 'Trip plans', profileId: 'p-chat', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -19,11 +19,12 @@ const valid = (over: Partial<ScheduleDraft> = {}): ScheduleDraft => ({ ...emptyD
 
 describe('drafts', () => {
   it('starts a new schedule daily at 09:00 on its prefilled target', () => {
-    expect(emptyDraft({ kind: 'project', projectId: 'pr1' }, 'p1')).toEqual({
+    expect(emptyDraft({ kind: 'project', projectId: 'pr1' }, 'p1', 'Asia/Tokyo')).toEqual({
       name: '', prompt: '', profileId: 'p1', cadence: 'daily', time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: '1', everyHours: '3', hourlyWeekdays: [0, 1, 2, 3, 4, 5, 6], cron: '0 9 * * 1-5',
-      targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false, timeLimitMinutes: 30,
+      targetKind: 'project', chatId: '', projectId: 'pr1', autoMode: false, timeLimitMinutes: 30, timezone: 'Asia/Tokyo',
     });
-    expect(emptyDraft(null, '')).toMatchObject({ targetKind: 'chat', chatId: '', projectId: '' });
+    // Left out, the zone is the browser's.
+    expect(emptyDraft(null, '')).toMatchObject({ targetKind: 'chat', chatId: '', projectId: '', timezone: browserTimeZone() });
   });
 
   it('fills a draft from a schedule', () => {
@@ -50,8 +51,8 @@ describe('drafts', () => {
   });
 
   it('builds the create body, trimming the name and sorting the days', () => {
-    expect(createBody(valid({ name: ' Report ', cadence: 'weekly', weekdays: [5, 1] }))).toEqual({
-      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] }, autoMode: false, timeLimitMinutes: 30,
+    expect(createBody(valid({ name: ' Report ', cadence: 'weekly', weekdays: [5, 1], timezone: 'Europe/London' }))).toEqual({
+      name: 'Report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'weekly', time: '09:00', weekdays: [1, 5] }, autoMode: false, timeLimitMinutes: 30, timezone: 'Europe/London',
     });
     expect(createBody(valid({ autoMode: true }))).toMatchObject({ autoMode: true });
     expect(createBody(valid({ timeLimitMinutes: null }))).toMatchObject({ timeLimitMinutes: null });
@@ -113,6 +114,30 @@ describe('every-N-hours and cron drafts', () => {
   });
 });
 
+describe('the time zone', () => {
+  it("is the schedule's own when editing, sent only when changed, and always sent for a new schedule", () => {
+    const initial = draftFromSchedule(schedule({ timezone: 'Asia/Tokyo' }));
+    expect(initial.timezone).toBe('Asia/Tokyo');
+    expect(patchBody(initial, { ...initial })).toEqual({});
+    expect(patchBody(initial, { ...initial, timezone: 'Europe/London' })).toEqual({ timezone: 'Europe/London' });
+    expect(createBody(valid({ timezone: 'Europe/Paris' })).timezone).toBe('Europe/Paris');
+  });
+
+  it('offers every zone the browser knows, UTC, and the current one even when the browser lacks it, sorted', () => {
+    const zones = timeZoneOptions('Mars/Olympus');
+    expect(zones).toContain('Europe/London');
+    expect(zones).toContain('UTC');
+    expect(zones).toContain('Mars/Olympus');
+    expect(new Set(zones).size).toBe(zones.length);
+    expect([...zones].sort()).toEqual(zones);
+  });
+
+  it('moves the preview with it', () => {
+    const MONDAY_NOON = Date.parse('2026-10-12T11:00:00Z');
+    expect(previewRuns(valid({ cadence: 'daily', time: '09:00' }), 'Asia/Tokyo', MONDAY_NOON)[0]).toBe('Tuesday 13 October 2026, 09:00');
+  });
+});
+
 describe('previewRuns', () => {
   const MONDAY_NOON = Date.parse('2026-10-12T11:00:00Z'); // 12:00 in London
 
@@ -133,6 +158,20 @@ describe('previewRuns', () => {
       'Tuesday 13 October 2026, 08:00',
     ]);
     expect(previewRuns(valid(), 'Europe/London', MONDAY_NOON)).toEqual(['Tuesday 13 October 2026, 09:00', 'Wednesday 14 October 2026, 09:00', 'Thursday 15 October 2026, 09:00']);
+  });
+
+  it("previews L, W and # rules, and says what is wrong with them", () => {
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 LW * *' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Friday 30 October 2026, 09:00',
+      'Monday 30 November 2026, 09:00',
+      'Thursday 31 December 2026, 09:00',
+    ]);
+    expect(previewRuns(valid({ cadence: 'cron', cron: '30 8 * * 1#1,5L' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Friday 30 October 2026, 08:30',
+      'Monday 2 November 2026, 08:30',
+      'Friday 27 November 2026, 08:30',
+    ]);
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 * * 5#6' }), 'Europe/London', MONDAY_NOON)).toBe('The day of week field\'s "5#6" asks for week 6: "#" takes 1 to 5.');
   });
 
   it('says what is wrong instead, so a typo shows as it is typed', () => {

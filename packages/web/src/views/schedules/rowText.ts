@@ -32,3 +32,9 @@ export function timeLimitSuffix(minutes: number | null): string {
   if (minutes === null) return ' · No time limit';
   return minutes === DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES ? '' : ` · Time limit ${timeLimitText(minutes)}`;
 }
+
+/** " · 1 file" or " · 3 files" for what each run sends with the prompt, and nothing for none. */
+export function filesSuffix(count: number): string {
+  if (count === 0) return '';
+  return count === 1 ? ' · 1 file' : ` · ${count} files`;
+}

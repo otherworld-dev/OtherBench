@@ -46,6 +46,8 @@ export interface ScheduleDraft {
   autoMode: boolean;
   /** How long a run may go, in minutes (`Schedule.timeLimitMinutes`); null for no limit. */
   timeLimitMinutes: number | null;
+  /** The IANA zone its times are in: the schedule's own, or the browser's for a new one. */
+  timezone: string;
 }
 
 /** The day checkboxes, Monday first. */
@@ -85,7 +87,7 @@ const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
 const DEFAULT_CRON = '0 9 * * 1-5';
 
-export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): ScheduleDraft {
+export function emptyDraft(prefill: ScheduleTarget | null, profileId: string, timezone: string = browserTimeZone()): ScheduleDraft {
   return {
     name: '',
     prompt: '',
@@ -102,6 +104,7 @@ export function emptyDraft(prefill: ScheduleTarget | null, profileId: string): S
     projectId: prefill?.kind === 'project' ? prefill.projectId : '',
     autoMode: false,
     timeLimitMinutes: DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
+    timezone,
   };
 }
 
@@ -123,6 +126,7 @@ export function draftFromSchedule(s: Schedule): ScheduleDraft {
     projectId: s.target.kind === 'project' ? s.target.projectId : '',
     autoMode: s.autoMode,
     timeLimitMinutes: s.timeLimitMinutes,
+    timezone: s.timezone,
   };
 }
 
@@ -210,6 +214,8 @@ export function createBody(d: ScheduleDraft): CreateScheduleBody {
     rule: ruleOrThrow(d),
     autoMode: d.autoMode,
     timeLimitMinutes: d.timeLimitMinutes,
+    // The zone the preview was shown in, so the schedule runs at the times it listed.
+    timezone: d.timezone,
   };
 }
 
@@ -223,6 +229,7 @@ export function patchBody(initial: ScheduleDraft, d: ScheduleDraft): PatchSchedu
   if (JSON.stringify(rule) !== JSON.stringify(draftRule(initial))) body.rule = rule;
   if (d.autoMode !== initial.autoMode) body.autoMode = d.autoMode;
   if (d.timeLimitMinutes !== initial.timeLimitMinutes) body.timeLimitMinutes = d.timeLimitMinutes;
+  if (d.timezone !== initial.timezone) body.timezone = d.timezone;
   return body;
 }
 
@@ -246,11 +253,26 @@ export function targetHasFolder(d: Pick<ScheduleDraft, 'targetKind' | 'chatId' |
   return (workspace ?? null) !== null;
 }
 
-/** The zone a new schedule will be made in. The server sets the real one; in phase 1 it runs on this machine, so they match. */
+/** A new schedule's zone until another is chosen: the browser's, as the person making it reads the times there. */
 export function browserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   } catch {
     return 'UTC';
   }
+}
+
+/**
+ * The editor's Time zone choices: every IANA zone the browser knows, UTC
+ * (which `Intl.supportedValuesOf` leaves out) and `current`, so a zone
+ * this browser doesn't list is still shown as it is. Sorted.
+ */
+export function timeZoneOptions(current: string): string[] {
+  let known: string[] = [];
+  try {
+    known = Intl.supportedValuesOf('timeZone');
+  } catch {
+    // An older browser without it offers just UTC and the current zone.
+  }
+  return [...new Set([...known, 'UTC', current])].sort();
 }

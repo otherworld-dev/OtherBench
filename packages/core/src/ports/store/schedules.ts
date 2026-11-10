@@ -6,7 +6,8 @@ import type { SchedulePeerChangeAction } from '../../domain/schedule-peers.js';
 /**
  * A prompt run on a profile on a timetable, with nobody there. Lives and runs
  * only on the machine that made it (never synced in phase 1). `timezone` is
- * that machine's IANA zone when it was made. `nextRunAt` is null while paused.
+ * the zone chosen in the editor (the browser's by default), or the server's
+ * when none is given; it can be changed. `nextRunAt` is null while paused.
  */
 export interface Schedule {
   id: string;
@@ -50,7 +51,31 @@ export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid' |
 };
 
 /** What `ScheduleRepo.update` may change. The target is fixed once made. */
-export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'timezone' | 'enabled' | 'nextRunAt' | 'autoMode' | 'timeLimitMinutes' | 'updatedAt'>>;
+
+/**
+ * A file a schedule sends with its prompt on every run (migration 047), local
+ * like its schedule. Its bytes are a blob in the attachment store, shared by
+ * content hash with any chat attachment of the same file: a run copies this
+ * row into an ordinary `Attachment` of its chat, pointing at the same blob.
+ * The blob is kept while this row exists (`AttachmentRepo.isReferenced`
+ * counts it) and goes with the schedule's delete, through blob GC.
+ */
+export interface ScheduleAttachment {
+  id: string;
+  scheduleId: string;
+  filename: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  storagePath: string;
+  /** Read at upload, as for a chat attachment (`extractAttachmentText`); copied to each run's attachment. */
+  extractedText: string | null;
+  createdAt: number;
+}
+
+/** A schedule attachment as the API returns it: no server path, and not its extracted text. */
+export type PublicScheduleAttachment = Omit<ScheduleAttachment, 'storagePath' | 'extractedText'>;
 
 /** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
 export interface ScheduleRun {
@@ -94,6 +119,8 @@ export interface ScheduleView extends Schedule {
   warnings: string[];
   /** The newest change a paired machine made to it (`ScheduleRepo.peerChanges`), named; absent when none has. */
   changedFrom?: { nodeId: string; machine: string; action: SchedulePeerChangeAction; at: number };
+  /** The files each run sends with the prompt, oldest first. */
+  attachments: PublicScheduleAttachment[];
 }
 
 /**
@@ -156,4 +183,11 @@ export interface ScheduleRepo {
   recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange;
   /** Changes paired machines made, newest first (then the newest recorded); every schedule's when `scheduleId` is left out. */
   peerChanges(scheduleId?: string): SchedulePeerChange[];
+  /** Adds a file to a schedule. Throws for an unknown schedule or a duplicate id. Deleting the schedule deletes it. */
+  addAttachment(a: ScheduleAttachment): ScheduleAttachment;
+  getAttachment(id: string): ScheduleAttachment | null;
+  /** The schedule's files, oldest first (by `createdAt`, then the order added). */
+  attachments(scheduleId: string): ScheduleAttachment[];
+  /** A no-op for an unknown id. The caller GCs the blob (`gcBlobIfOrphaned`). */
+  deleteAttachment(id: string): void;
 }

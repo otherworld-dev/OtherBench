@@ -17,6 +17,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
       computer: { status: vi.fn() },
       connections: { mediaModels: vi.fn() },
       mediaWorkflows: { list: vi.fn() },
+      schedules: { list: vi.fn() },
     },
   };
 });
@@ -31,6 +32,9 @@ const mockedSandboxStatus = vi.mocked(api.sandbox.status);
 const mockedComputerStatus = vi.mocked(api.computer.status);
 const mockedMediaModels = vi.mocked(api.connections.mediaModels);
 const mockedWorkflows = vi.mocked(api.mediaWorkflows.list);
+const mockedScheduleList = vi.mocked(api.schedules.list);
+type ScheduleRow = Awaited<ReturnType<typeof api.schedules.list>>[number];
+const scheduleOn = (profileId: string, target: ScheduleRow['target']): ScheduleRow => ({ profileId, target }) as ScheduleRow;
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -108,6 +112,7 @@ function reset(): void {
   mockedComputerStatus.mockReset().mockResolvedValue({ computerUse: false });
   mockedMediaModels.mockReset().mockResolvedValue({ models: [], checkpoints: [] });
   mockedWorkflows.mockReset().mockResolvedValue([]);
+  mockedScheduleList.mockReset().mockResolvedValue([]);
 }
 
 describe('ProfilesPanel', () => {
@@ -633,6 +638,39 @@ describe('ProfilesPanel', () => {
     expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/Paired machines delete them too.*Archive the profile instead/);
     confirmSpy.mockRestore();
     useOtherBenchStore.setState({ machines: null });
+  });
+
+  it("the delete confirmation says how many schedules go with the profile: its own and its chats', and nothing when there are none", async () => {
+    useOtherBenchStore.getState().setConnections([makeConnection()]);
+    useOtherBenchStore.getState().setModels([makeModel()]);
+    useOtherBenchStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' }), makeProfile({ id: 'profile-2', name: 'Other' })]);
+    useOtherBenchStore.getState().setChats([
+      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    // One runs on the profile, one runs another profile in a chat built on it (the chat goes, and its schedule with it), one is unrelated.
+    mockedScheduleList.mockResolvedValue([
+      scheduleOn('profile-1', { kind: 'project', projectId: 'p1' }),
+      scheduleOn('profile-2', { kind: 'chat', chatId: 'chat-1' }),
+      scheduleOn('profile-2', { kind: 'chat', chatId: 'chat-9' }),
+    ]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await waitFor(() => expect(mockedScheduleList).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/Its 2 schedules are deleted too\. This cannot be undone\./);
+
+    mockedScheduleList.mockResolvedValue([scheduleOn('profile-1', { kind: 'chat', chatId: 'chat-9' })]);
+    await user.click(screen.getByTestId('profile-row-profile-2'));
+    await waitFor(() => expect(mockedScheduleList).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    expect(confirmSpy.mock.calls[1]?.[0]).not.toMatch(/schedule/i);
+    expect(mockedDelete).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
   });
 
   it('the delete confirmation omits the chat clause when no chat depends on this profile', async () => {

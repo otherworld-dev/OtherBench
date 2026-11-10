@@ -16,7 +16,7 @@ vi.mock('../state/api.js', () => ({
     }
   },
   api: {
-    schedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), runs: vi.fn(), run: vi.fn() },
+    schedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), runs: vi.fn(), run: vi.fn(), uploadAttachment: vi.fn(), deleteAttachment: vi.fn() },
     turns: { cancel: vi.fn() },
     peers: { schedules: vi.fn(), machineSchedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), run: vi.fn(), runs: vi.fn() } },
   },
@@ -41,12 +41,15 @@ const there = {
   run: vi.mocked(api.peers.machineSchedules.run),
   runs: vi.mocked(api.peers.machineSchedules.runs),
 };
+const uploadAttachment = vi.mocked(api.schedules.uploadAttachment);
+const deleteAttachment = vi.mocked(api.schedules.deleteAttachment);
+const uploadedAs = (scheduleId: string) => async (_id: string, file: File) => ({ id: `a-${file.name}`, scheduleId, filename: file.name, mime: file.type, size: file.size, sha256: 'x', createdAt: 1 });
 
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
     id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' },
     rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'), autoMode: false, timeLimitMinutes: 30,
-    createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, activeRun: null, lastRun: null, warnings: [], ...over,
+    createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, activeRun: null, lastRun: null, warnings: [], attachments: [], ...over,
   };
 }
 
@@ -173,7 +176,7 @@ describe('SchedulesView', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30 })
+      expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
@@ -265,6 +268,98 @@ describe('SchedulesView', () => {
     await user.selectOptions(limit, '4 hours');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('s1', { timeLimitMinutes: 240 }));
+  });
+
+  it("changes a schedule's time zone from its own, moving the preview, and sends only that", async () => {
+    list.mockResolvedValue([view({ timezone: 'Europe/London' })]);
+    patch.mockResolvedValue(view({ timezone: 'Asia/Tokyo' }));
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    await user.click(within(await screen.findByTestId('schedule-row-s1')).getByRole('button', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit schedule' });
+    const zone = within(dialog).getByLabelText('Time zone');
+    expect(zone).toHaveDisplayValue('Europe/London');
+    expect(dialog).toHaveTextContent('(Europe/London)');
+    await user.selectOptions(zone, 'Asia/Tokyo');
+    expect(dialog).toHaveTextContent('(Asia/Tokyo)');
+    expect(within(dialog).getByTestId('schedule-preview')).toHaveTextContent('09:00');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('s1', { timezone: 'Asia/Tokyo' }));
+  });
+
+  it('attaches files to a new schedule: listed until Save, uploaded once it is made, and one can be taken off first', async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    create.mockResolvedValue(view({ id: 's9' }));
+    uploadAttachment.mockImplementation(uploadedAs('s9'));
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    await user.upload(within(dialog).getByLabelText('Attach files'), [new File(['png'], 'chart.png', { type: 'image/png' }), new File(['hi'], 'notes.txt', { type: 'text/plain' })]);
+    const files = within(dialog).getByTestId('schedule-files');
+    expect(files).toHaveTextContent('chart.png');
+    expect(files).toHaveTextContent('notes.txt');
+    await user.click(within(files).getByRole('button', { name: 'Remove notes.txt' }));
+    expect(files).not.toHaveTextContent('notes.txt');
+    await user.type(within(dialog).getByLabelText('Name'), 'Weekly report');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(uploadAttachment).toHaveBeenCalledTimes(1);
+    expect(uploadAttachment).toHaveBeenCalledWith('s9', expect.objectContaining({ name: 'chart.png' }));
+    expect(create.mock.invocationCallOrder[0]!).toBeLessThan(uploadAttachment.mock.invocationCallOrder[0]!);
+  });
+
+  it("edits a schedule's files: one taken off is deleted on Save, a new one uploaded, and nothing else is sent", async () => {
+    list.mockResolvedValue([view({ attachments: [{ id: 'a1', scheduleId: 's1', filename: 'old.pdf', mime: 'application/pdf', size: 10, sha256: 'x', createdAt: 1 }] })]);
+    patch.mockResolvedValue(view());
+    deleteAttachment.mockResolvedValue(undefined);
+    uploadAttachment.mockImplementation(uploadedAs('s1'));
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    const row = await screen.findByTestId('schedule-row-s1');
+    expect(row).toHaveTextContent('1 file');
+    await user.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit schedule' });
+    const files = within(dialog).getByTestId('schedule-files');
+    expect(files).toHaveTextContent('old.pdf');
+    await user.click(within(files).getByRole('button', { name: 'Remove old.pdf' }));
+    await user.upload(within(dialog).getByLabelText('Attach files'), new File(['new'], 'new.txt', { type: 'text/plain' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(patch).toHaveBeenCalledWith('s1', {});
+    expect(deleteAttachment).toHaveBeenCalledWith('s1', 'a1');
+    expect(uploadAttachment).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'new.txt' }));
+  });
+
+  it('keeps the editor open when a file fails to upload after the schedule is made, and Save tries just that file again', async () => {
+    list.mockResolvedValue([]);
+    useOtherBenchStore.setState({ chats: [{ id: 'c1', title: 'Trip plans', profileId: 'p1', headMessageId: null, workspace: null, runsOn: 'n', pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, appId: null, memoryCursor: null, memoryExcluded: false, unread: false, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    create.mockResolvedValue(view({ id: 's9' }));
+    patch.mockResolvedValue(view({ id: 's9' }));
+    uploadAttachment.mockRejectedValueOnce(new ApiError(413, 'That upload is too large.')).mockImplementation(uploadedAs('s9'));
+    const user = userEvent.setup();
+    render(<SchedulesView prefill={{ kind: 'chat', chatId: 'c1' }} onClose={vi.fn()} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+    await user.upload(within(dialog).getByLabelText('Attach files'), new File(['big'], 'big.txt', { type: 'text/plain' }));
+    await user.type(within(dialog).getByLabelText('Name'), 'Weekly report');
+    await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('The schedule was saved, but "big.txt" couldn\'t be attached: That upload is too large.');
+    expect(screen.getByRole('dialog', { name: 'Edit schedule' })).toBeInTheDocument();
+    expect(within(dialog).getByTestId('schedule-files')).toHaveTextContent('big.txt');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledWith('s9', {});
+    expect(uploadAttachment).toHaveBeenCalledTimes(2);
   });
 
   it("offers Auto for a Claude Code profile: ticking it changes the warnings and is saved with the schedule", async () => {

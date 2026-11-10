@@ -40,12 +40,13 @@ export interface ScheduleEditedFields {
   rule: unknown;
   autoMode: boolean;
   timeLimitMinutes: number | null;
+  timezone: string;
   enabled: boolean;
 }
 
 /**
  * What a PATCH did, read from the schedule before and after it rather than from what was sent: a change to its
- * name, prompt, profile, rule, auto mode or time limit is an edit (kept until it ages out, however many pauses
+ * name, prompt, profile, rule, auto mode, time limit or time zone is an edit (kept until it ages out, however many pauses
  * follow); a change only to whether it is on is a pause or a resume; nothing changed is null, and nothing is recorded.
  */
 export function schedulePatchAction(before: ScheduleEditedFields, after: ScheduleEditedFields): SchedulePeerChangeAction | null {
@@ -55,7 +56,8 @@ export function schedulePatchAction(before: ScheduleEditedFields, after: Schedul
     before.profileId !== after.profileId ||
     JSON.stringify(before.rule) !== JSON.stringify(after.rule) ||
     before.autoMode !== after.autoMode ||
-    before.timeLimitMinutes !== after.timeLimitMinutes;
+    before.timeLimitMinutes !== after.timeLimitMinutes ||
+    before.timezone !== after.timezone;
   if (edited) return 'edited';
   if (before.enabled !== after.enabled) return after.enabled ? 'resumed' : 'paused';
   return null;

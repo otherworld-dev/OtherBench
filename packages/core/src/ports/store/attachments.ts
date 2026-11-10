@@ -21,14 +21,16 @@ export interface AttachmentRepo {
   /**
    * True if at least one attachment row (in any chat -- upload dedupes by
    * content hash, so the same blob can be referenced from several chats,
-   * see `BlobStore`) still has this sha256. Used by the blob GC sweep
+   * see `BlobStore`) or schedule attachment (`ScheduleAttachment`, migration
+   * 047) still has this sha256. Used by the blob GC sweep
    * (`@otherbench/store-sqlite/blob-gc.js`) to decide whether a blob on disk is
-   * garbage: a blob is only ever removed once nothing references it.
+   * garbage: a blob is only ever removed once nothing references it, so a
+   * schedule's file is never collected while the schedule exists.
    */
   isReferenced(sha256: string): boolean;
   /**
    * Every distinct sha256 referenced by at least one attachment row, across
-   * every chat. Used by the startup blob sweep, which walks what is
+   * every chat, or by a schedule attachment. Used by the startup blob sweep, which walks what is
    * physically on disk and needs the full referenced set to diff against --
    * see `@otherbench/store-sqlite/blob-gc.js`'s `sweepOrphanedBlobs`.
    */

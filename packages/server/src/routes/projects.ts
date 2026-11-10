@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } from '@otherbench/core/domain/projects.js';
 import type { Project, Store } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
+import { releaseBlobs, scheduleBlobShas } from '../schedule/attachments.js';
 import { optionalNullableString } from '../validation.js';
 import { parseFoldersBody, parseWorkspaceBody, projectView, projectViews } from '../workspace-view.js';
 
@@ -143,9 +144,14 @@ export function projectsRoutes(container: Container): Hono {
     return c.json(projectView(container, container.store.projects.update(id, patch)));
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getProjectOrThrow(container, id);
+    // Its schedules go too (ON DELETE CASCADE): their files' blobs are freed after.
+    const scheduleShas = scheduleBlobShas(
+      container.store,
+      container.store.schedules.list().filter((s) => s.target.kind === 'project' && s.target.projectId === id)
+    );
     // Its chats move to No project (chat.project_id ON DELETE SET NULL);
     // streaming turns in them are unaffected. Its sub-projects become top
     // level (the project repo clears their parentId). That happens inside the
@@ -156,6 +162,7 @@ export function projectsRoutes(container: Container): Hono {
       const chat = container.store.chats.get(chatId);
       if (chat) container.events?.emit({ type: 'chat-updated', chat });
     }
+    await releaseBlobs(container.store, container.blobStore, scheduleShas);
     return c.body(null, 204);
   });
 

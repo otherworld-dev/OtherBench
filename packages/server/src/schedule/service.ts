@@ -19,6 +19,7 @@ import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import { chatTip, collectMessageTree } from '../routes/chats.js';
+import { runAttachmentParts } from './attachments.js';
 
 export interface ScheduleLimits {
   maxConcurrent: number;
@@ -323,10 +324,12 @@ export class ScheduleService {
         autoMode,
         timeLimitMinutes: schedule.timeLimitMinutes,
       });
+      // The schedule's files, copied into the run's chat on the same blobs; sent after the text, as the composer sends them.
+      const files = runAttachmentParts(this.store, schedule.id, target.chatId, this.generateId);
       const result = await this.startTurn({
         chatId: target.chatId,
         parentId: target.parentId,
-        userParts: [{ type: 'text', text }],
+        userParts: [{ type: 'text', text }, ...files],
         profiles: [profile],
         unattended: true,
         ...(autoMode ? { unattendedAuto: true } : {}),

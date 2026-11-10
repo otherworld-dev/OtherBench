@@ -9,7 +9,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { PeerSchedulesSection } from './schedules/PeerSchedules.js';
 import { ScheduleEditor } from './schedules/ScheduleEditor.js';
 import { ScheduleHistory } from './schedules/ScheduleHistory.js';
-import { nextRunText, STATUS_LABEL, timeLimitSuffix } from './schedules/rowText.js';
+import { filesSuffix, nextRunText, STATUS_LABEL, timeLimitSuffix } from './schedules/rowText.js';
 
 /** How often the open overlay re-reads the list, on top of every schedule event. */
 export const SCHEDULES_POLL_MS = 30_000;
@@ -152,6 +152,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                     {s.target.kind === 'chat' ? `Chat: ${s.targetName}` : `New chat each run in ${s.targetName}`} · {profileName(s.profileId)}
                     {runsInAuto(s) && ' · Auto mode'}
                     {timeLimitSuffix(s.timeLimitMinutes)}
+                    {filesSuffix(s.attachments.length)}
                   </p>
                   <p data-testid="schedule-next">Next run: {nextRunText(s, now)}</p>
                   {s.lastRun && (

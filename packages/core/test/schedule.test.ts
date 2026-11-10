@@ -8,6 +8,8 @@ import {
   nextRuns,
   parseRule,
   parseTimeLimit,
+  TIME_ZONE_PROBLEM,
+  canonicalTimeZone,
   runChatTitle,
   scheduledPromptText,
   timedOutText,
@@ -154,11 +156,36 @@ describe('nextRunAt for a cron rule', () => {
     expect(runs('30 1 * * *', 'America/New_York', '2026-10-31T12:00:00Z', 2)).toEqual(['2026-11-01T05:30:00.000Z', '2026-11-02T06:30:00.000Z']);
   });
 
+  it('runs on the last day, the last weekday, the nearest weekday and the third Friday', () => {
+    expect(runs('0 9 L * *', LONDON, '2026-02-01T00:00:00Z', 3)).toEqual(['2026-02-28T09:00:00.000Z', '2026-03-31T08:00:00.000Z', '2026-04-30T08:00:00.000Z']);
+    expect(runs('0 9 LW * *', 'UTC', '2026-10-01T00:00:00Z', 3)).toEqual(['2026-10-30T09:00:00.000Z', '2026-11-30T09:00:00.000Z', '2026-12-31T09:00:00.000Z']);
+    expect(runs('0 9 1W * *', 'UTC', '2026-07-15T00:00:00Z', 3)).toEqual(['2026-08-03T09:00:00.000Z', '2026-09-01T09:00:00.000Z', '2026-10-01T09:00:00.000Z']);
+    expect(runs('0 9 * * 5#3', 'UTC', '2026-10-01T00:00:00Z', 3)).toEqual(['2026-10-16T09:00:00.000Z', '2026-11-20T09:00:00.000Z', '2026-12-18T09:00:00.000Z']);
+  });
+
+  it('meets a clock change on a last-Sunday rule as a daily schedule does', () => {
+    // London changes its clocks on the last Sunday of March and of October: the 01:30 slot is in the gap, then the fold.
+    expect(runs('30 1 * 3,10 0L', LONDON, '2026-03-01T00:00:00Z', 3)).toEqual(['2026-03-29T01:30:00.000Z', '2026-10-25T00:30:00.000Z', '2027-03-28T01:30:00.000Z']);
+  });
+
   it('runs every minute, and the shortcuts', () => {
     expect(runs('* * * * *', LONDON, '2026-10-12T08:00:30Z', 3)).toEqual(['2026-10-12T08:01:00.000Z', '2026-10-12T08:02:00.000Z', '2026-10-12T08:03:00.000Z']);
     expect(runs('* * * * *', LONDON, '2026-03-29T00:58:00Z', 3)).toEqual(['2026-03-29T00:59:00.000Z', '2026-03-29T01:00:00.000Z', '2026-03-29T01:01:00.000Z']);
     expect(runs('@hourly', 'UTC', '2026-10-12T08:00:00Z', 2)).toEqual(['2026-10-12T09:00:00.000Z', '2026-10-12T10:00:00.000Z']);
     expect(runs('@weekly', 'UTC', '2026-10-12T08:00:00Z', 1)).toEqual(['2026-10-18T00:00:00.000Z']);
+  });
+});
+
+describe('canonicalTimeZone', () => {
+  it('takes an IANA zone, in its canonical spelling', () => {
+    expect(canonicalTimeZone('Europe/London')).toBe('Europe/London');
+    expect(canonicalTimeZone('america/new_york')).toBe('America/New_York');
+    expect(canonicalTimeZone('UTC')).toBe('UTC');
+  });
+
+  it('refuses anything else, an offset included, with a message for the API', () => {
+    for (const bad of ['Mars/Olympus', '+05:00', '-0800', '', ' ', 5, null, undefined, `Europe/${'x'.repeat(80)}`]) expect(canonicalTimeZone(bad), String(bad)).toBeNull();
+    expect(TIME_ZONE_PROBLEM).toBe('"timezone" must be an IANA time zone, such as "Europe/London".');
   });
 });
 

@@ -15,6 +15,8 @@ export const SCHEDULE_RUNS_KEPT = 50;
 export const MAX_CONCURRENT_SCHEDULED_RUNS = 2;
 export const SCHEDULE_LATE_AFTER_MS = 5 * 60_000;
 export const SCHEDULE_CHECK_MAX_MS = 30_000;
+/** The most files a schedule sends with its prompt (`ScheduleAttachment`); each is up to 25MB, as a chat attachment is. */
+export const MAX_SCHEDULE_ATTACHMENTS = 10;
 
 /**
  * A run's time limit (`Schedule.timeLimitMinutes`) when none is chosen, and
@@ -169,6 +171,21 @@ export function isValidTimeZone(timezone: string): boolean {
   }
 }
 
+/** What the API answers for a zone `canonicalTimeZone` refuses. */
+export const TIME_ZONE_PROBLEM = '"timezone" must be an IANA time zone, such as "Europe/London".';
+const TIME_ZONE_NAME_MAX = 64;
+
+/**
+ * A schedule's zone as given to the API: an IANA name this runtime knows, in
+ * its canonical spelling (`america/new_york` is `America/New_York`, `GMT` is
+ * `UTC`), or null. An offset such as `+05:00`, which Intl also takes, is
+ * refused: a schedule's zone is a place, whose clock changes it follows.
+ */
+export function canonicalTimeZone(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > TIME_ZONE_NAME_MAX || !/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(value) || !isValidTimeZone(value)) return null;
+  return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+}
+
 function wallClockWithSeconds(instant: number, timezone: string): WallClock & { second: number } {
   const out: Record<string, number> = {};
   for (const part of formatterFor(timezone).formatToParts(new Date(instant))) {
@@ -267,7 +284,10 @@ function planFor(rule: ScheduleRule): RulePlan {
     case 'cron': {
       const spec = parseCron(rule.cron);
       if (typeof spec === 'string') throw new Error(`Bad cron rule "${rule.cron}": ${spec}`);
-      return { matches: (date) => cronMatchesDate(spec, date.month, date.day, weekdayOf(date)), minutes: cronMinutesOfDay(spec) };
+      return {
+        matches: (date) => cronMatchesDate(spec, date.month, date.day, weekdayOf(date), daysInMonth(date.year, date.month)),
+        minutes: cronMinutesOfDay(spec),
+      };
     }
   }
 }
@@ -303,7 +323,8 @@ function firstSlotAfter(date: WallDate, minutes: number[], timezone: string, aft
  * How far `nextRunAt` looks. The fixed kinds need 400 days at most. A cron
  * rule for 29 February can be 8 years off across 2100, and one that needs a
  * date to fall on a given weekday too (Vixie's both-fields case) can be 11;
- * for 29 February on a weekday, about 40 across 2100. 50 years covers every rule `parseCron` accepts, and
+ * for 29 February on a weekday, about 40 across 2100 (`5#5` in February is the same: 29 February on a Friday).
+ * 50 years covers every rule `parseCron` accepts, and
  * the walk only gets that far for such a rule.
  */
 const WALK_DAYS = 50 * 366;

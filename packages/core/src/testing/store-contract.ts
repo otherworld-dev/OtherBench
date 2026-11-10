@@ -12,6 +12,7 @@ import type {
   NewSchedule,
   NewScheduleRun,
   Schedule,
+  ScheduleAttachment,
   SchedulePeerChange,
   ScheduleRun,
 } from '../ports/store.js';
@@ -1755,6 +1756,13 @@ export function runStoreContract(
         };
       }
 
+      const SHA_A = 'a'.repeat(64);
+      const SHA_B = 'b'.repeat(64);
+
+      function scheduleAttachment(over: { id: string; scheduleId: string } & Partial<ScheduleAttachment>): ScheduleAttachment {
+        return { filename: 'notes.txt', mime: 'text/plain', size: 5, sha256: SHA_A, storagePath: `/blobs/aa/${SHA_A}`, extractedText: 'hello', createdAt: 1, ...over };
+      }
+
       function run(over: { id: string; scheduleId: string } & Partial<ScheduleRun>): NewScheduleRun {
         return { trigger: 'scheduled', dueAt: 1000, startedAt: 1000, status: 'running', ...over };
       }
@@ -1793,6 +1801,14 @@ export function runStoreContract(
         expect(store.schedules.update('s2', { name: 'Renamed' }).autoMode).toBe(true);
         expect(store.schedules.update('s2', { autoMode: false }).autoMode).toBe(false);
         expect(store.schedules.list().map((s) => s.autoMode)).toEqual([true, false]);
+      });
+
+      it('timezone changes through update and is kept by other edits', () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1', timezone: 'Europe/London' }, ids));
+        expect(store.schedules.update('s1', { timezone: 'Asia/Tokyo', nextRunAt: 5 })).toMatchObject({ timezone: 'Asia/Tokyo', nextRunAt: 5 });
+        expect(store.schedules.update('s1', { name: 'Renamed' }).timezone).toBe('Asia/Tokyo');
+        expect(store.schedules.get('s1')!.timezone).toBe('Asia/Tokyo');
       });
 
       it('timeLimitMinutes defaults to 30, keeps null for no limit, and round-trips through create and update', () => {
@@ -1844,6 +1860,44 @@ export function runStoreContract(
         expect(updated).toMatchObject({ status: 'complete', finishedAt: 2000, chatId: ids.chatId, refusedCalls: 2, trigger: 'scheduled' });
         expect(store.schedules.runs('s1')[0]).toEqual(updated);
         expect(store.schedules.updateRun('missing', { status: 'error' })).toBeNull();
+      });
+
+      it("keeps a schedule's attachments oldest first; they go with the schedule, its chat included", () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1', target: { kind: 'project', projectId: 'proj-a' } }, ids));
+        store.schedules.create(schedule({ id: 's2' }, ids));
+        const a1 = store.schedules.addAttachment(scheduleAttachment({ id: 'a1', scheduleId: 's1', createdAt: 2 }));
+        store.schedules.addAttachment(scheduleAttachment({ id: 'a2', scheduleId: 's1', sha256: SHA_B, filename: 'photo.png', mime: 'image/png', extractedText: null, createdAt: 1 }));
+        store.schedules.addAttachment(scheduleAttachment({ id: 'b1', scheduleId: 's2' }));
+        expect(a1).toEqual(scheduleAttachment({ id: 'a1', scheduleId: 's1', createdAt: 2 }));
+        expect(store.schedules.getAttachment('a1')).toEqual(a1);
+        expect(store.schedules.getAttachment('nope')).toBeNull();
+        expect(store.schedules.attachments('s1').map((a) => a.id)).toEqual(['a2', 'a1']);
+        expect(store.schedules.attachments('nope')).toEqual([]);
+        expect(() => store.schedules.addAttachment(scheduleAttachment({ id: 'a3', scheduleId: 'nope' }))).toThrow(Error);
+        expect(() => store.schedules.addAttachment(scheduleAttachment({ id: 'a1', scheduleId: 's2' }))).toThrow(Error);
+
+        store.schedules.deleteAttachment('a2');
+        store.schedules.deleteAttachment('nope');
+        expect(store.schedules.attachments('s1').map((a) => a.id)).toEqual(['a1']);
+        store.schedules.delete('s1');
+        expect(store.schedules.getAttachment('a1')).toBeNull();
+        expect(store.schedules.attachments('s1')).toEqual([]);
+        // s2 targets the chat: deleting the chat deletes it, and its attachments with it.
+        store.chats.delete(ids.chatId);
+        expect(store.schedules.getAttachment('b1')).toBeNull();
+      });
+
+      it("counts a schedule's attachment as referencing its blob, so blob GC keeps it until the schedule goes", () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1', target: { kind: 'project', projectId: 'proj-a' } }, ids));
+        expect(store.attachments.isReferenced(SHA_A)).toBe(false);
+        store.schedules.addAttachment(scheduleAttachment({ id: 'a1', scheduleId: 's1' }));
+        expect(store.attachments.isReferenced(SHA_A)).toBe(true);
+        expect(store.attachments.referencedShas()).toEqual(new Set([SHA_A]));
+        store.schedules.delete('s1');
+        expect(store.attachments.isReferenced(SHA_A)).toBe(false);
+        expect(store.attachments.referencedShas()).toEqual(new Set());
       });
 
       it('lastRun, lastCompleted and runningRuns', () => {

@@ -8,6 +8,7 @@ import { useChanged } from '../../lib/useChanged.js';
 import { useComputerUseAvailable } from '../../lib/computerUse.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { GenerationSection, generationProblem, type GenerationState } from './GenerationSection.js';
+import { schedulesDeletedLine, useProfileScheduleCount } from '../schedules/useScheduleCount.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -69,6 +70,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const models = useOtherBenchStore((s) => s.models);
   const chats = useOtherBenchStore((s) => s.chats);
   const machines = useOtherBenchStore((s) => s.machines);
+  // Read when the form opens, for the delete confirmation: its schedules and its chats' go with it.
+  const profileChatIds = new Set(profile ? chats.filter((c) => c.profileId === profile.id).map((c) => c.id) : []);
+  const scheduleCount = useProfileScheduleCount(profile?.id ?? null, profileChatIds);
 
   const [name, setName] = useState(profile?.name ?? '');
   const [description, setDescription] = useState(profile?.description ?? '');
@@ -304,7 +308,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       dependentChatCount > 0 && (useOtherBenchStore.getState().machines?.peers.length ?? 0) > 0
         ? ' Paired machines delete them too when they next sync. Archive the profile instead to keep them.'
         : '';
-    const ok = window.confirm(`Delete profile "${profile.name}"?${consequence}${everywhere} This cannot be undone.`);
+    // Schedules are local, so this line says nothing about paired machines. Left out while the count is unknown.
+    const schedulesLine = schedulesDeletedLine(scheduleCount);
+    const schedules = schedulesLine === null ? '' : ` ${schedulesLine}`;
+    const ok = window.confirm(`Delete profile "${profile.name}"?${consequence}${everywhere}${schedules} This cannot be undone.`);
     if (!ok) return;
     setDeleting(true);
     setError(null);

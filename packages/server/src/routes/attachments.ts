@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
 import { sniffToolImageMime, sniffToolVideoMime, toolImageBound, toolVideoBound } from '@otherbench/core/domain/tool-images.js';
@@ -50,7 +50,7 @@ export const UPLOAD_TOO_LARGE = 'That upload is too large. Attachments are limit
  * answer is sent, `@hono/node-server` drains what's left for a short while
  * and then closes the connection (its `autoCleanupIncoming`).
  */
-const limitUploadBody: MiddlewareHandler = async (c, next) => {
+export const limitUploadBody: MiddlewareHandler = async (c, next) => {
   const source = c.req.raw.body;
   if (!source) return next();
   if (Number(c.req.header('content-length')) > MAX_UPLOAD_BODY_BYTES) {
@@ -313,12 +313,8 @@ export function contentDisposition(kind: 'inline' | 'attachment', filename: stri
  * even called.
  */
 async function storeAttachment(container: Container, chatId: string, data: Buffer, filename: string, mime: string): Promise<Attachment> {
-  const sha256 = sha256Of(data);
-  return withPinnedSha(sha256, async () => {
-    const blob = await container.blobStore.put(data);
-    const extractedText = await extractAttachmentText(data, mime, filename);
-
-    return container.store.attachments.create({
+  return storeUpload(container, data, filename, mime, (blob, extractedText) =>
+    container.store.attachments.create({
       id: randomUUID(),
       chatId,
       messageId: null,
@@ -328,8 +324,64 @@ async function storeAttachment(container: Container, chatId: string, data: Buffe
       sha256: blob.sha256,
       storagePath: blob.path,
       extractedText,
+    })
+  );
+}
+
+/**
+ * Writes `data` as a blob, reads its text, and hands both to `record`, which
+ * makes the row that references the blob: a chat attachment
+ * (`storeAttachment`) or a schedule's file (routes/schedules.ts). The blob is
+ * pinned from before it is written until `record` returns (see
+ * `storeAttachment`), so no GC pass can take it in between. Should `record`
+ * throw, the blob is collected again unless something else references it.
+ */
+export async function storeUpload<T>(
+  container: Container,
+  data: Buffer,
+  filename: string,
+  mime: string,
+  record: (blob: { sha256: string; size: number; path: string }, extractedText: string | null) => T
+): Promise<T> {
+  const sha256 = sha256Of(data);
+  let recorded = false;
+  try {
+    const row = await withPinnedSha(sha256, async () => {
+      const blob = await container.blobStore.put(data);
+      const extractedText = await extractAttachmentText(data, mime, filename);
+      return record(blob, extractedText);
     });
-  });
+    recorded = true;
+    return row;
+  } finally {
+    if (!recorded) await gcBlobIfOrphaned(container.store, container.blobStore, sha256);
+  }
+}
+
+/**
+ * The `file` of a multipart upload as bytes, its name and its type, held to
+ * `MAX_ATTACHMENT_BYTES` both by the `File`'s own size and by the bytes read.
+ * Behind `limitUploadBody`, which caps the whole body as it is read.
+ */
+export async function readUploadedFile(c: Context): Promise<{ data: Buffer; filename: string; mime: string }> {
+  let body: Record<string, string | File>;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    throw new HTTPException(400, { message: 'Expected multipart/form-data with a "file" field.' });
+  }
+
+  const file = body['file'];
+  if (!(file instanceof File)) {
+    throw new HTTPException(400, { message: 'Missing "file" field (expected multipart/form-data).' });
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, file.size);
+
+  const data = Buffer.from(await file.arrayBuffer());
+  // Re-checked against the bytes actually read, not just the File API's
+  // self-reported `.size` -- see MAX_ATTACHMENT_BYTES's doc.
+  if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, data.length);
+  return { data, filename: file.name, mime: file.type || 'application/octet-stream' };
 }
 
 export function attachmentsRoutes(container: Container): Hono {
@@ -338,27 +390,8 @@ export function attachmentsRoutes(container: Container): Hono {
   app.post('/chats/:id/attachments', limitUploadBody, async (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
-
-    let body: Record<string, string | File>;
-    try {
-      body = await c.req.parseBody();
-    } catch {
-      throw new HTTPException(400, { message: 'Expected multipart/form-data with a "file" field.' });
-    }
-
-    const file = body['file'];
-    if (!(file instanceof File)) {
-      throw new HTTPException(400, { message: 'Missing "file" field (expected multipart/form-data).' });
-    }
-    if (file.size > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, file.size);
-
-    const data = Buffer.from(await file.arrayBuffer());
-    // Re-checked against the bytes actually read, not just the File API's
-    // self-reported `.size` -- see MAX_ATTACHMENT_BYTES's doc.
-    if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, data.length);
-
-    const mime = file.type || 'application/octet-stream';
-    const created = await storeAttachment(container, chatId, data, file.name, mime);
+    const { data, filename, mime } = await readUploadedFile(c);
+    const created = await storeAttachment(container, chatId, data, filename, mime);
     return c.json(toPublicAttachment(created), 201);
   });
 

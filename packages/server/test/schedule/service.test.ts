@@ -446,6 +446,40 @@ describe('ScheduleService: targets, endings and Run now', () => {
     expect(lastUserText(engine.requests[0]!)).toMatch(/^\[Run by hand from schedule "Weekly report": Monday 12 October 2026, 08:00 \(Europe\/London\)\./);
   });
 
+  it("sends the schedule's files with each run, as new attachments of the run's chat bound to its message, sharing the schedule's blobs", async () => {
+    store.projects.create({ id: 'proj', name: 'Alpha', workspace: null, defaultProfileId: null });
+    addSchedule('s1');
+    addSchedule('s2', { target: { kind: 'project', projectId: 'proj' }, nextRunAt: NINE + 24 * HOUR });
+    const png = { filename: 'chart.png', mime: 'image/png', size: 3, sha256: 'c'.repeat(64), storagePath: '/blobs/cc', extractedText: null };
+    const txt = { filename: 'notes.txt', mime: 'text/plain', size: 5, sha256: 'd'.repeat(64), storagePath: '/blobs/dd', extractedText: 'hello' };
+    for (const id of ['s1', 's2']) {
+      store.schedules.addAttachment({ id: `${id}-png`, scheduleId: id, ...png, createdAt: 1 });
+      store.schedules.addAttachment({ id: `${id}-txt`, scheduleId: id, ...txt, createdAt: 2 });
+    }
+    service.start();
+    service.runNow('s1');
+    service.runNow('s2');
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+
+    for (const id of ['s1', 's2']) {
+      const run = store.schedules.runs(id)[0]!;
+      const sent = store.messages.get(run.userMessageId!)!;
+      const files = store.attachments.list(run.chatId!);
+      expect(files).toHaveLength(2);
+      const [image, text] = [files.find((f) => f.mime === 'image/png')!, files.find((f) => f.mime === 'text/plain')!];
+      expect(image).toMatchObject({ ...png, chatId: run.chatId, messageId: sent.id });
+      expect(text).toMatchObject({ ...txt, chatId: run.chatId, messageId: sent.id });
+      expect(sent.parts.slice(1)).toEqual([
+        { type: 'image', attachmentId: image.id, mime: 'image/png' },
+        { type: 'file', attachmentId: text.id, mime: 'text/plain', filename: 'notes.txt' },
+      ]);
+      expect(sent.parts[0]).toMatchObject({ type: 'text' });
+    }
+    // The schedule keeps its own files for the next run.
+    expect(store.schedules.attachments('s1').map((a) => a.id)).toEqual(['s1-png', 's1-txt']);
+  });
+
   it('stops a run at the default 30-minute limit and records it as timed out', async () => {
     addSchedule('s1');
     service.start();

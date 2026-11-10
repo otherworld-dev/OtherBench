@@ -3,9 +3,12 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import {
   DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES,
+  MAX_SCHEDULE_ATTACHMENTS,
   MAX_SCHEDULES,
   SCHEDULE_NAME_MAX,
   SCHEDULE_PROMPT_MAX,
+  TIME_ZONE_PROBLEM,
+  canonicalTimeZone,
   describeRule,
   isValidTimeZone,
   nextRunAt,
@@ -18,7 +21,9 @@ import {
 import { projectDisplayName } from '@otherbench/core/domain/projects.js';
 import type { Schedule, SchedulePatch, ScheduleView } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
+import { releaseBlobs, scheduleBlobShas, toPublicScheduleAttachment } from '../schedule/attachments.js';
 import { ScheduleBusyError } from '../schedule/service.js';
+import { limitUploadBody, readUploadedFile, storeUpload } from './attachments.js';
 
 interface ScheduleBody {
   name?: unknown;
@@ -29,6 +34,7 @@ interface ScheduleBody {
   enabled?: unknown;
   autoMode?: unknown;
   timeLimitMinutes?: unknown;
+  timezone?: unknown;
 }
 
 /** The server machine's IANA zone, which schedules made now are stored in; UTC when the runtime can't say. */
@@ -55,6 +61,13 @@ function parseTimeLimitBody(value: unknown): number | null {
   const limit = parseTimeLimit(value);
   if (typeof limit === 'string') throw new HTTPException(400, { message: limit });
   return limit;
+}
+
+/** An IANA zone, canonically spelt (`canonicalTimeZone`); anything else is a 400. */
+function parseTimeZoneBody(value: unknown): string {
+  const zone = canonicalTimeZone(value);
+  if (zone === null) throw new HTTPException(400, { message: TIME_ZONE_PROBLEM });
+  return zone;
 }
 
 function parseProfile(container: Container, value: unknown): string {
@@ -115,6 +128,7 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
     activeRun: container.schedules?.activeRun(s.id) ?? null,
     lastRun: store.schedules.lastRun(s.id),
     warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder, s.autoMode) : [],
+    attachments: store.schedules.attachments(s.id).map(toPublicScheduleAttachment),
     ...(peerChange
       ? { changedFrom: { nodeId: peerChange.fromNode, machine: store.peers.get(peerChange.fromNode)?.name ?? 'a machine no longer paired', action: peerChange.action, at: peerChange.at } }
       : {}),
@@ -126,7 +140,9 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
  * Behind the app's token, Host and cross-site checks. On the peer listener
  * only through `peerScheduleRoutes` (peer/schedule-control.ts): the run
  * history always, the rest only while this machine lets paired machines
- * manage its schedules. The time zone is this server's, never the body's.
+ * manage its schedules (never the attachment routes). The time zone is
+ * the body's `timezone` when given (the editor sends the one it showed),
+ * else this server's; either way an IANA zone this runtime knows.
  */
 export function schedulesRoutes(container: Container): Hono {
   const app = new Hono();
@@ -152,11 +168,11 @@ export function schedulesRoutes(container: Container): Hono {
     const enabled = parseFlag('enabled', body.enabled, true);
     const autoMode = parseFlag('autoMode', body.autoMode, false);
     const timeLimitMinutes = body.timeLimitMinutes === undefined ? DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES : parseTimeLimitBody(body.timeLimitMinutes);
+    const timezone = body.timezone === undefined ? serverTimeZone() : parseTimeZoneBody(body.timezone);
     if (container.store.schedules.list().length >= MAX_SCHEDULES) {
       throw new HTTPException(409, { message: `You have ${MAX_SCHEDULES} schedules, the most OtherBench keeps. Delete one first.` });
     }
     const now = Date.now();
-    const timezone = serverTimeZone();
     const created = container.store.schedules.create({
       id: randomUUID(),
       name,
@@ -189,24 +205,72 @@ export function schedulesRoutes(container: Container): Hono {
     if (body.autoMode !== undefined) patch.autoMode = parseFlag('autoMode', body.autoMode, current.autoMode);
     // A run going now keeps the limit it started with.
     if (body.timeLimitMinutes !== undefined) patch.timeLimitMinutes = parseTimeLimitBody(body.timeLimitMinutes);
+    if (body.timezone !== undefined) {
+      const timezone = parseTimeZoneBody(body.timezone);
+      if (timezone !== current.timezone) patch.timezone = timezone;
+    }
     const enabled = parseFlag('enabled', body.enabled, current.enabled);
     patch.enabled = enabled;
     if (!enabled) {
       patch.nextRunAt = null;
-    } else if (patch.rule !== undefined || !current.enabled || current.nextRunAt === null) {
-      // A new rule or a resume counts from now: slots missed while paused never fire.
-      patch.nextRunAt = nextRunAt(patch.rule ?? current.rule, current.timezone, now);
+    } else if (patch.rule !== undefined || patch.timezone !== undefined || !current.enabled || current.nextRunAt === null) {
+      // A new rule, a new zone or a resume counts from now: slots missed while paused never fire.
+      patch.nextRunAt = nextRunAt(patch.rule ?? current.rule, patch.timezone ?? current.timezone, now);
     }
     const updated = container.store.schedules.update(current.id, patch);
     changed();
     return c.json(scheduleView(container, updated));
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const s = getOr404(c.req.param('id'));
-    // A run still going finishes its reply, unrecorded.
+    const shas = scheduleBlobShas(container.store, [s]);
+    // A run still going finishes its reply, unrecorded. Its files go with it (ON DELETE CASCADE), and then their blobs.
     container.store.schedules.delete(s.id);
     container.events?.emit({ type: 'schedules-changed' });
+    await releaseBlobs(container.store, container.blobStore, shas);
+    return c.body(null, 204);
+  });
+
+  /**
+   * Adds a file the schedule sends with its prompt on every run: the same
+   * upload, 25MB cap and text extraction as a chat attachment
+   * (routes/attachments.ts), stored as a `ScheduleAttachment`. At most
+   * `MAX_SCHEDULE_ATTACHMENTS`, checked before the body is read and again
+   * as the row is written, so two uploads at once can't pass it.
+   */
+  app.post('/:id/attachments', limitUploadBody, async (c) => {
+    const s = getOr404(c.req.param('id'));
+    const full = (): HTTPException => new HTTPException(409, { message: `A schedule can carry at most ${MAX_SCHEDULE_ATTACHMENTS} files.` });
+    if (container.store.schedules.attachments(s.id).length >= MAX_SCHEDULE_ATTACHMENTS) throw full();
+    const { data, filename, mime } = await readUploadedFile(c);
+    const created = await storeUpload(container, data, filename, mime, (blob, extractedText) => {
+      if (!container.store.schedules.get(s.id)) throw new HTTPException(404, { message: `Schedule "${s.id}" not found.` });
+      if (container.store.schedules.attachments(s.id).length >= MAX_SCHEDULE_ATTACHMENTS) throw full();
+      return container.store.schedules.addAttachment({
+        id: randomUUID(),
+        scheduleId: s.id,
+        filename,
+        mime,
+        size: blob.size,
+        sha256: blob.sha256,
+        storagePath: blob.path,
+        extractedText,
+        createdAt: Date.now(),
+      });
+    });
+    container.events?.emit({ type: 'schedules-changed' });
+    return c.json(toPublicScheduleAttachment(created), 201);
+  });
+
+  /** Removes one of the schedule's files, and its blob once nothing else holds it. Runs already sent keep their own copies. */
+  app.delete('/:id/attachments/:attachmentId', async (c) => {
+    const s = getOr404(c.req.param('id'));
+    const attachment = container.store.schedules.getAttachment(c.req.param('attachmentId'));
+    if (!attachment || attachment.scheduleId !== s.id) throw new HTTPException(404, { message: `Attachment "${c.req.param('attachmentId')}" not found.` });
+    container.store.schedules.deleteAttachment(attachment.id);
+    container.events?.emit({ type: 'schedules-changed' });
+    await releaseBlobs(container.store, container.blobStore, [attachment.sha256]);
     return c.body(null, 204);
   });
 
