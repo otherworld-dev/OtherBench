@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type { ComputerStartOutcome } from '@otherbench/core/types/events.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { Hono, type Context, type Next } from 'hono';
 import { encodeHlc } from '@otherbench/core/domain/hlc.js';
@@ -9,12 +10,14 @@ import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbenc
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { COMPUTER_NO_SESSION_REASON } from '../computer/sessions.js';
+import { startOutcomeOf } from '../computer/start-outcome.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
 import { chatToolStateRoutes, parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { peerScheduleRoutes } from './schedule-control.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
+import { listLocationDirs } from './location-dirs.js';
 import { PeerError } from './service.js';
 
 /**
@@ -770,10 +773,12 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
  * server already set up here), stopping a reply still running here
  * in a chat moved elsewhere, stopping a computer-use session held here,
  * and, while this machine lets it (`peerComputerControl`, off until turned on in this machine's desktop app),
- * asking to start one here (its own start dialog asks the person here, naming the paired machine). Reading a
- * schedule's run history, and, while this machine lets it (`peerScheduleControl`, off until turned on in Settings
- * here), managing its schedules (`peerScheduleRoutes`). Nothing else --
- * no settings (so the setting can't be turned on from there), no folder browsing, no attaching files by path. The approving machine is the caller's authenticated
+ * asking to start one here (its own start dialog asks the person here, naming the paired machine), and listing the
+ * sub-folders of a folder inside one of this machine's own locations (`/locations/dirs`). Reading a schedule's run
+ * history, and, while this machine lets it (`peerScheduleControl`, off until turned on in Settings here), managing
+ * its schedules (`peerScheduleRoutes`). Nothing else -- no settings (so the setting can't be turned on from there),
+ * no folder browsing anywhere else (`/fs/dirs` is never mounted here), no attaching files by path. The approving
+ * machine is the caller's authenticated
  * identity, never a header.
  */
 export interface ForwardedEnv {
@@ -856,7 +861,8 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
    * computer. The start is this machine's own (`ComputerSessions.ensureSession`), so its native start dialog asks the
    * person here, as for any start, and says which paired machine asked; it waits on that, so this answers 202 at once
    * and the session shows on the paired machine once it has started (its activity). Declined or left unanswered, no
-   * session starts. The session is named as started from the paired machine.
+   * session starts, and the paired machine is told which (`computer-start`, to it alone: declined, unanswered or not
+ * started). The session is named as started from the paired machine.
    */
   app.post('/chats/:id/computer/start', async (c) => {
     const chat = container.store.chats.get(c.req.param('id'));
@@ -872,11 +878,21 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     }
     const holder = computer.holder();
     if (holder !== null && holder !== chat.id) return c.json({ error: `Another chat is controlling ${here}. Stop it first.`, kind: 'computer_busy' }, 409);
+    // The machine that asked is told how a start that didn't happen ended (declined, unanswered, or neither), and
+    // only that: the reason in this machine's words stays in its log. A start that happened shows in its activity.
+    const asker = c.env.peerNodeId;
+    const tell = (outcome: ComputerStartOutcome): void => container.peers?.announceTo(asker, 'computer-start', { chatId: chat.id, outcome });
     void computer.ensureSession(chat.id, chat.title, { from }).then(
       (answer) => {
-        if (answer.ok !== true) console.info(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} did not start: ${answer.reason}`);
+        const outcome = startOutcomeOf(answer);
+        if (outcome === null) return;
+        console.info(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} did not start: ${answer.ok ? '' : answer.reason}`);
+        tell(outcome);
       },
-      (err: unknown) => console.error(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} failed to start:`, err)
+      (err: unknown) => {
+        console.error(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} failed to start:`, err);
+        tell('not_started');
+      }
     );
     return c.json({ starting: true }, 202);
   });
@@ -905,6 +921,15 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     const replies = container.store.messages.listByStatus('streaming').filter((m) => m.chatId === chat.id);
     const asked = replies.flatMap((m) => (m.parentId ? [container.store.messages.get(m.parentId)] : [])).filter((m): m is CanonMessage => m !== null && m.chatId === chat.id);
     return c.json({ messages: [...asked, ...replies], headMessageId: chat.headMessageId });
+  });
+
+  // Choosing a folder for a chat that runs here, from the paired machine's UI: sub-folder names inside this
+  // machine's own locations only, every path through containPath (location-dirs.ts). Not `/fs/dirs`, which lists
+  // anywhere and is never mounted here. A read, so it marks nothing and passes the desktop-only gate.
+  app.get('/locations/dirs', async (c) => {
+    const listing = await listLocationDirs(container.store, c.req.query('path'));
+    if ('status' in listing) return c.json({ error: listing.error, kind: listing.kind }, listing.status);
+    return c.json(listing);
   });
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.

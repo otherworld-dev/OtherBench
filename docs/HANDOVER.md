@@ -65,11 +65,6 @@ setup have their own pages (see Where to look).
   Explorer verbs (*Open folder in OtherBench*, *Send to OtherBench*) and
   Linux packages (the bundle targets only `nsis`). Task 40's Node SEA
   wasn't tried: see `docs/deviations.md`.
-- **A folder browser for another machine's folders** (part of Task 53).
-  The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
-  is deliberately never mounted there (it lists directories anywhere on the
-  machine), so choosing a folder for a chat that runs elsewhere is a typed
-  path, classified against that machine's locations.
 - **"Also active on PC"** in the workspace header (Task 53) is not shown.
 
 ## Security posture, stated without euphemism
@@ -81,8 +76,9 @@ with both certificates pinned at pairing plus a per-peer token; the
 listener off until pairing and bound only to the chosen hosts (default:
 every interface; `--peer-host` to narrow it); only the chat-running routes,
 the schedule routes (history always, management only with this machine's
-opt-in) and `/peer/*` mounted on it, never settings, folder browsing or attaching
-by path; immediate revocation; approvals never delegated (each tool call
+opt-in) and `/peer/*` mounted on it, never settings, general folder browsing
+or attaching by path (the one folder route lists sub-folders only inside
+that machine's own locations: see below); immediate revocation; approvals never delegated (each tool call
 still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
@@ -185,8 +181,17 @@ it whether computer use is on here (the refusal says so), and the
 `activity` announcement now carries the chats controlling this computer
 with their last action (`actionSummary`, the same line as the banner,
 which never holds typed text and is derived from the stored tool call
-that syncs anyway). The computer-use status route and `/api/events` are
-still not on the listener. Grants, the audit trail and MCP health are
+that syncs anyway), and nothing else about a session: not which machine
+started it, no app, no screenshot (`PeerService.activity`, pinned by
+`server/test/peer/waiting.test.ts`). That is sent whatever *Let paired
+machines start and approve computer use* says: the setting governs who
+may drive a session, while seeing that one is live is what lets any paired
+machine use the Stop that is always allowed (d1109), and the chat id and
+action line already reach it by sync. A start the paired machine asked for
+that didn't start is told to that machine alone, as one word
+(`computer-start`: `declined`, `unanswered` or `not_started`), never this
+machine's reason in its own words. The computer-use status route and
+`/api/events` are still not on the listener. Grants, the audit trail and MCP health are
 readable for a chat that runs here since 2026-11-07 (next paragraph but one).
 
 **A paired machine can read this machine's schedules and their history,
@@ -239,6 +244,34 @@ computer use (`PeerInfluence`), because computer use refuses unattended
 runs. The schedule routes sit behind the listener's desktop-only gate, so
 while computer use may be in control here they are refused unless paired
 machines may drive computer use.
+
+**A paired machine can list sub-folders inside this machine's own
+locations, and nothing else of its disk.** So that a chat that runs here
+can be given a folder from the other machine's UI (Browse PC… in the
+Inspector), `forwardedApi` mounts `GET /locations/dirs` (`peer/location-dirs.ts`):
+with no path, this machine's locations; with an absolute path, the names and
+paths of its sub-folders, only when the path is inside one of those
+locations. Every path goes through `containPath` against the location's root
+and the listing through fs-tools' `readdirVerified` (its residual applies: a
+swap made and undone entirely inside the `readdir` call isn't seen, which
+here could leak one directory's sub-folder names to a paired machine).
+Junctions and links are never listed, and a path through one that leads out
+is refused (403 `outside_locations`), as is anything above a location, a
+relative path, or a location's path on another machine. Never a file name,
+a size or anything read inside a folder. **Only a path set on this machine
+counts:** a paired machine may fill in this machine's path for a location
+that has none yet (adopting a location, `docs/deviations.md`), so a synced
+row could name `C:\`; a `location_path` row says whether it was set here
+(`set_here`, migration 046, a `LOCAL_COLUMNS` column that is never sent and
+never taken from a peer), and only those are browsable. A synced one becomes
+browsable once its path is set again in Settings → Locations here. The
+migration takes no existing row as set here, since nothing before it records
+where a row came from (a stamp names a machine, but a peer can send any
+stamp): after updating, each location's path has to be set again on the
+machine to be browsed, and until then the browser says the machine has no
+locations. `GET /api/fs/dirs`, which lists
+anywhere, is still not on the listener (`server/test/peer/location-dirs.test.ts`
+checks both over real TLS, and that a forged synced row is refused).
 
 **A paired machine can read the Inspector's tool state of a chat that runs
 here, and only take things away.** So that the Inspector shows the tools a
@@ -814,13 +847,6 @@ this on startup.
   machine's list of schedules (its `schedules` announcement, see
   *Scheduled tasks*; managing them needs that machine's opt-in). Apart from that, what doesn't sync never shows:
   grants, MCP servers, the audit log, settings.
-- **The laptop isn't told when the PC declines its start.** A remote
-  start is accepted at the PC by design (its dialog asks, naming the
-  laptop; see *Computer use across machines*). The start route answers 202
-  at once and the laptop learns of the session from the PC's activity; a
-  Cancel there, or the dialog closing unanswered after 110 s, is only in
-  the PC's log, so the laptop just never sees a session. Not tried on two
-  real machines.
 - **Project memory is summarised only by the machine a chat runs on**, so
   two machines don't redo and overwrite each other's notes. Its version
   history stays on the machine that wrote it.

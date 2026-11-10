@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { shortFingerprint } from '@otherbench/core/domain/pairing.js';
 import type { Container } from '../container.js';
 import type { PeerSchedules } from '@otherbench/core/types/peer.js';
+import { peerFolderListingOf } from '../peer/location-dirs.js';
 import { namedPeerSchedules } from '../peer/schedules.js';
 import { PeerError, type PeerService } from '../peer/service.js';
 import { requireNonEmptyString } from '../validation.js';
@@ -109,6 +110,37 @@ export function peersRoutes(container: Container): Hono {
   app.delete('/:id/schedules/:sid', (c) => onPeer(c, 'DELETE', `/${sid(c)}`));
   app.post('/:id/schedules/:sid/run', (c) => onPeer(c, 'POST', `/${sid(c)}/run`));
   app.get('/:id/schedules/:sid/runs', (c) => onPeer(c, 'GET', `/${sid(c)}/runs`));
+  /**
+   * A folder of a paired machine, for choosing a folder for a chat that runs there: asked there over the peer channel
+   * (`GET /api/locations/dirs` on its listener), which lists sub-folders only inside its own locations and refuses
+   * anything else (location-dirs.ts). No `path` lists its locations. What comes back is checked and bounded
+   * (`peerFolderListingOf`) before it is passed on. A machine on a build without the route answers a bare 404, said
+   * here as needing an update.
+   */
+  app.get('/:id/dirs', async (c) => {
+    const peers = service(container);
+    const nodeId = c.req.param('id');
+    const peer = peers.peer(nodeId);
+    if (!peer) throw new HTTPException(404, { message: `No paired machine "${nodeId}".` });
+    const path = c.req.query('path');
+    let res;
+    try {
+      res = await peers.call(nodeId, { method: 'GET', path: `/api/locations/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}` });
+    } catch (err) {
+      if (err instanceof PeerError && err.status === 503) return c.json({ error: err.message, kind: 'peer_unreachable', nodeId }, 503);
+      throw err;
+    }
+    if (res.status === 200) {
+      const listing = peerFolderListingOf(res.body);
+      if (!listing) return c.json({ error: `${peer.name} sent a folder list that couldn't be read.`, kind: 'peer_bad_answer', nodeId }, 502);
+      return c.json(listing);
+    }
+    const said = typeof res.body === 'object' && res.body !== null ? (res.body as { error?: unknown; kind?: unknown }) : null;
+    if (res.status === 404 && said === null) return c.json({ error: `${peer.name} needs a newer OtherBench to browse its folders.`, kind: 'peer_outdated', nodeId }, 501);
+    const status = res.status === 400 || res.status === 403 || res.status === 404 ? res.status : 502;
+    const error = typeof said?.error === 'string' ? said.error.slice(0, 300) : `${peer.name} couldn't list that folder.`;
+    return c.json({ error, ...(typeof said?.kind === 'string' ? { kind: said.kind.slice(0, 40) } : {}) }, status);
+  });
 
   /** Shows a code (starting the peer listener) for the other machine to enter. */
   app.post('/pairing', async (c) => c.json(await guarded(() => service(container).startPairing()), 201));

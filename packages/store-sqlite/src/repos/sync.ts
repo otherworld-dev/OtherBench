@@ -17,13 +17,16 @@ import { deriveSearchText } from './messages.js';
  * Columns that never leave this machine: connection health, whether this
  * machine shares a connection's key (each machine decides that for its own
  * copy, so another can't switch it on to be sent the key), where a blob is
- * on disk, and derived search text.
+ * on disk, derived search text, and whether this machine's folder for a
+ * location was set here (only such a folder may be browsed from a paired
+ * machine, so another can't mark one it filled in).
  */
 const LOCAL_COLUMNS: Partial<Record<SyncTable, string[]>> = {
   connection: ['status', 'status_message', 'checked_at', 'sync_secret'],
   attachment: ['storage_path'],
   message: ['search_text'],
   app_notes: ['mirrored_at'],
+  location_path: ['set_here'],
 };
 const STAMP_COLUMNS = ['hlc', 'field_hlc'];
 

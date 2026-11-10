@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat, Project } from '@otherbench/core/ports/store.js';
-import type { FolderView } from '@otherbench/core/types/workspace.js';
+import type { FolderView, PeerFolderListing } from '@otherbench/core/types/workspace.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
 import type { Profile } from '@otherbench/core/types/config.js';
@@ -48,6 +48,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
       profiles: {
         patch: vi.fn(),
       },
+      peers: {
+        dirs: vi.fn(),
+      },
     },
   };
 });
@@ -71,6 +74,7 @@ const mockedProjectsPatch = vi.mocked(api.projects.patch);
 const mockedProfilesPatch = vi.mocked(api.profiles.patch);
 const mockedIsDesktop = vi.mocked(isDesktop);
 const mockedPickFolder = vi.mocked(pickFolder);
+const mockedPeerDirs = vi.mocked(api.peers.dirs);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -372,6 +376,54 @@ describe('Inspector for a chat that runs on another machine', () => {
     render(<Inspector chat={makeChat({ runsOn: 'node-pc' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(mcpHealthSection()).findByText("PC isn't reachable. Connection refused.")).toBeInTheDocument();
     expect(await within(auditSection()).findByText('PC needs a newer OtherBench to show this.')).toBeInTheDocument();
+  });
+
+  /** The PC's one location, "Projects", with one folder in it. */
+  const pcFolders = (_nodeId: string, path?: string): Promise<PeerFolderListing> => {
+    const location = { id: 'loc-1', name: 'Projects', root: 'D:\\Projects' };
+    return Promise.resolve(
+      path === undefined
+        ? { path: null, parent: null, location: null, dirs: [], truncated: false, locations: [location] }
+        : { path, parent: null, location, dirs: [{ name: 'site', path: 'D:\\Projects\\site' }], truncated: false, locations: [location] }
+    );
+  };
+
+  it("browses the PC's locations for the workspace instead of this machine's folder picker", async () => {
+    mockedIsDesktop.mockReturnValue(true);
+    mockedPeerDirs.mockReset().mockImplementation(pcFolders);
+    useOtherBenchStore.setState({ machines: paired });
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat({ runsOn: 'node-pc', workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    // This machine's native picker would choose a folder here, not on the PC.
+    expect(within(workspaceSection()).queryByRole('button', { name: 'Choose folder…' })).toBeNull();
+    await user.click(within(workspaceSection()).getByRole('button', { name: 'Browse PC…' }));
+    expect(mockedPeerDirs).toHaveBeenCalledWith('node-pc', undefined);
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /Projects/ }));
+    await user.click(await within(workspaceSection()).findByRole('button', { name: 'site' }));
+    await user.click(await within(workspaceSection()).findByRole('button', { name: 'Use this folder' }));
+    expect(within(workspaceSection()).getByRole('textbox', { name: 'Workspace folder' })).toHaveValue('D:\\Projects\\site');
+    expect(within(workspaceSection()).queryByTestId('peer-folder-browser')).toBeNull();
+    mockedIsDesktop.mockReturnValue(false);
+  });
+
+  it("adds another folder browsed on the PC, and offers no browsing while the PC can't be reached", async () => {
+    mockedPeerDirs.mockReset().mockImplementation(pcFolders);
+    mockedChatsPatch.mockResolvedValue(makeChat({ runsOn: 'node-pc' }));
+    useOtherBenchStore.setState({ machines: paired });
+    const user = userEvent.setup();
+    const chat = makeChat({ runsOn: 'node-pc', workspaceRoot: 'D:\\Projects', folders: [], folderViews: [] });
+    const { unmount } = render(<Inspector chat={chat} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await user.click(within(foldersSection()).getByRole('button', { name: 'Browse PC…' }));
+    await user.click(await within(foldersSection()).findByRole('button', { name: /Projects/ }));
+    await user.click(await within(foldersSection()).findByRole('button', { name: 'site' }));
+    await user.click(await within(foldersSection()).findByRole('button', { name: 'Use this folder' }));
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { folders: [{ path: 'D:\\Projects\\site', access: 'read' }] }));
+    unmount();
+
+    useOtherBenchStore.setState({ machines: { ...paired, peers: [{ ...paired.peers[0]!, status: 'unreachable' as const }] } });
+    render(<Inspector chat={chat} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(within(foldersSection()).queryByRole('button', { name: 'Browse PC…' })).toBeNull();
   });
 
   it('says nothing of the kind for a chat that runs here, or before machines are known', () => {

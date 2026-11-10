@@ -9,6 +9,7 @@ import { alsoActive } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useSectionSummary } from './InspectorSection.js';
 import { FolderList } from '../components/FolderList.js';
+import { PeerFolderBrowser } from '../components/PeerFolderBrowser.js';
 import { isClaudeCodeProfile } from '../components/Composer.js';
 import { folderName, workspaceConsequence } from './inspectorHelpers.js';
 
@@ -21,6 +22,18 @@ import { folderName, workspaceConsequence } from './inspectorHelpers.js';
 // unreachable from the app because there was no UI path to the one field
 // that turns them on.
 // ---------------------------------------------------------------------------
+
+/**
+ * The paired machine a chat runs on, while it is reachable: its folders are the ones to choose, so the folder pickers
+ * browse its locations (`PeerFolderBrowser`) instead of this machine's. Null for a chat that runs here, or on a machine
+ * that isn't reachable now (a typed path still works).
+ */
+function useBrowsableMachine(chat: Chat): { nodeId: string; name: string } | null {
+  const machines = useOtherBenchStore((s) => s.machines);
+  if (!machines || chat.runsOn === machines.self.id) return null;
+  const peer = machines.peers.find((p) => p.nodeId === chat.runsOn && p.status === 'reachable');
+  return peer ? { nodeId: peer.nodeId, name: peer.name } : null;
+}
 
 /** Where this chat's turns run (v2 spec §5): this machine or a paired one, atop the Workspace section. Hidden until a machine is paired. */
 export function RunsOn({ chat }: { chat: Chat }): JSX.Element | null {
@@ -80,6 +93,7 @@ export function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
   const machines = useOtherBenchStore((s) => s.machines);
   // The native picker chooses a folder on this machine: only offered when that's where the chat runs.
   const runsHere = !machines || chat.runsOn === machines.self.id;
+  const browse = useBrowsableMachine(chat);
   const views = [...(project?.folderViews ?? []), ...(chat.folderViews ?? [])];
   const away = views.filter((v) => v.status.status === 'unresolved').length;
   useSectionSummary(
@@ -106,6 +120,7 @@ export function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
           label="this chat"
           views={chat.folderViews ?? []}
           canPick={isDesktop() && runsHere}
+          browse={browse}
           onSave={async (folders) => upsertChat(await api.chats.patch(chat.id, { folders }))}
         />
       </div>
@@ -120,6 +135,10 @@ export function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profi
   const chats = useOtherBenchStore((s) => s.chats);
   const activeElsewhere = alsoActive(machines, chats, chat);
   const serverPlatform = useServerPlatform();
+  const browse = useBrowsableMachine(chat);
+  // The native picker chooses a folder on this machine: only offered when that's where the chat runs.
+  const runsHere = !machines || chat.runsOn === machines.self.id;
+  const [browsing, setBrowsing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.workspaceRoot ?? '');
   const [saving, setSaving] = useState(false);
@@ -138,6 +157,7 @@ export function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profi
   // Done in the render that sees the new chat, so the last chat's form is never drawn under it.
   if (useChanged([chat.id])) {
     setEditing(false);
+    setBrowsing(false);
     setError(null);
     setLocalWorkspaceRoot(undefined);
     // The draft is intentionally NOT synced on every keystroke of chat.workspaceRoot's own updater below.
@@ -201,6 +221,7 @@ export function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profi
   function openEdit(): void {
     setDraft(displayedWorkspaceRoot ?? '');
     setError(null);
+    setBrowsing(false);
     setEditing(true);
   }
 
@@ -247,7 +268,24 @@ export function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profi
           placeholder={serverPlatform === 'win32' ? 'E:\\Git\\OtherBench' : '/home/user/project'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 font-mono text-sm"
         />
-        {isDesktop() && (
+        {browse &&
+          (browsing ? (
+            <PeerFolderBrowser
+              nodeId={browse.nodeId}
+              machine={browse.name}
+              onPick={(picked) => {
+                setDraft(picked);
+                setError(null);
+                setBrowsing(false);
+              }}
+              onClose={() => setBrowsing(false)}
+            />
+          ) : (
+            <button type="button" onClick={() => setBrowsing(true)} className="btn px-2.5 py-1">
+              Browse {browse.name}…
+            </button>
+          ))}
+        {isDesktop() && runsHere && (
           <button
             type="button"
             onClick={() => {

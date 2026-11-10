@@ -1,5 +1,5 @@
 /** Locations, paired machines and this machine: `api.locations`, `api.peers` and `api.node`. */
-import type { Location, LocationPath, NodeInfo } from '@otherbench/core/types/workspace.js';
+import type { Location, LocationPath, NodeInfo, PeerFolderListing } from '@otherbench/core/types/workspace.js';
 import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
 import type { PeerSchedules, PublicPeer } from '@otherbench/core/types/peer.js';
 import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
@@ -116,6 +116,12 @@ export const peersApi = {
     /** Newest first. */
     runs: (nodeId: string, id: string) => request<ScheduleRun[]>(`/peers/${encodeURIComponent(nodeId)}/schedules/${encodeURIComponent(id)}/runs`),
   },
+  /**
+   * A folder of that machine, for choosing a folder for a chat that runs there: sub-folders inside its own locations
+   * only (it refuses anything else). No `path` lists its locations.
+   */
+  dirs: (nodeId: string, path?: string) =>
+    request<PeerFolderListing>(`/peers/${encodeURIComponent(nodeId)}/dirs${path === undefined ? '' : `?path=${encodeURIComponent(path)}`}`),
 };
 
 /** This machine. */

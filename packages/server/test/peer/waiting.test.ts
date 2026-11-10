@@ -143,7 +143,9 @@ describe('activity: waiting chats and gh login', () => {
 
   it('says only ids, times, a login and the action line: the whole of what a paired machine hears live', () => {
     const pc = node('PC');
-    pc.service.attachActivity(() => ['r'], () => ['b'], () => ['w'], () => ({ w: 1 }), () => [{ chatId: 'c', lastAction: 'take a screenshot' }]);
+    // A computer-use session is told as its chat and last action only (d1109): not which machine started it, and
+    // nothing of the screen or the app, which the session here doesn't carry either.
+    pc.service.attachActivity(() => ['r'], () => ['b'], () => ['w'], () => ({ w: 1 }), () => [{ chatId: 'c', lastAction: 'take a screenshot', startedFrom: 'Laptop' }]);
     expect(pc.service.activity()).toEqual({
       chatIds: ['r'], backgroundChatIds: ['b'], waitingChatIds: ['w'], waitingSince: { w: 1 }, githubLogin: null,
       computerSessions: [{ chatId: 'c', lastAction: 'take a screenshot' }],
@@ -157,5 +159,38 @@ describe('activity: waiting chats and gh login', () => {
     await laptop.service.remove('node-PC');
     expect(laptop.service.computerSessions('node-PC')).toEqual([]);
     expect(laptop.service.waitingChats('node-PC')).toEqual([]);
+  });
+});
+
+describe('computer-start: how a start a paired machine asked for came out', () => {
+  it('goes only to the machine that asked, as the chat and one of three outcomes', async () => {
+    const { pc, laptop } = await connected();
+    const tablet = node('Tablet');
+    await pair(pc, tablet);
+    tablet.service.startMonitoring();
+    await expect.poll(() => tablet.service.status('node-PC').status).toBe('reachable');
+
+    pc.service.announceTo('node-Laptop', 'computer-start', { chatId: 'c1', outcome: 'declined' });
+    await expect.poll(() => laptop.events.filter((e) => e.type === 'peer-computer-start')).toEqual([
+      { type: 'peer-computer-start', nodeId: 'node-PC', chatId: 'c1', outcome: 'declined' },
+    ]);
+    pc.service.announceTo('node-Laptop', 'computer-start', { chatId: 'c1', outcome: 'unanswered' });
+    pc.service.announceTo('node-Laptop', 'computer-start', { chatId: 'c1', outcome: 'not_started' });
+    await expect
+      .poll(() => laptop.events.filter((e) => e.type === 'peer-computer-start').map((e) => (e as { outcome: string }).outcome))
+      .toEqual(['declined', 'unanswered', 'not_started']);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(tablet.events.filter((e) => e.type === 'peer-computer-start')).toEqual([]);
+  });
+
+  it('drops anything else: an unknown outcome, a missing or overlong chat id, and every other field', async () => {
+    const { pc, laptop } = await connected();
+    for (const said of [{ chatId: 'c1', outcome: 'exploded' }, { outcome: 'declined' }, { chatId: 'x'.repeat(201), outcome: 'declined' }, null, 'declined']) {
+      pc.service.announceTo('node-Laptop', 'computer-start', said);
+    }
+    pc.service.announceTo('node-Laptop', 'computer-start', { chatId: 'c2', outcome: 'declined', reason: 'the screen said so', app: 'C:\\x.exe' });
+    await expect.poll(() => laptop.events.filter((e) => e.type === 'peer-computer-start')).toEqual([
+      { type: 'peer-computer-start', nodeId: 'node-PC', chatId: 'c2', outcome: 'declined' },
+    ]);
   });
 });

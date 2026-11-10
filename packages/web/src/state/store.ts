@@ -321,6 +321,14 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   appPendingApprovals: {},
   appRunningTurns: {},
   computerSessions: {},
+  peerComputerStarts: {},
+  clearPeerComputerStart: (chatId) =>
+    set((state) => {
+      if (!(chatId in state.peerComputerStarts)) return {};
+      const next = { ...state.peerComputerStarts };
+      delete next[chatId];
+      return { peerComputerStarts: next };
+    }),
   appBackgroundChats: {},
   syncRevision: 0,
   lastTurnFinished: null,
@@ -427,6 +435,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
           }
           return { computerSessions: next };
         }
+        case 'peer-computer-start':
+          return { peerComputerStarts: { ...state.peerComputerStarts, [event.chatId]: { nodeId: event.nodeId, outcome: event.outcome } } };
         case 'background-tasks': {
           const next = { ...state.appBackgroundChats };
           if (event.count > 0) next[event.chatId] = event.count;

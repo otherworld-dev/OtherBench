@@ -167,6 +167,35 @@ describe('ComputerBanner', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent("PC doesn't let paired machines start or approve computer use");
       });
 
+      it('says when the person at that machine declined, or nobody answered there, in place of "Asked PC"', async () => {
+        profile(true);
+        machines('reachable', []);
+        render(<ComputerBanner chat={remoteChat} />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Start on PC' }));
+        expect(await screen.findByRole('status')).toHaveTextContent('Asked PC.');
+        const ended = (outcome: 'declined' | 'unanswered' | 'not_started', chatId = 'chat-1', nodeId = 'node-pc'): void =>
+          act(() => useOtherBenchStore.getState().applyAppEvent({ type: 'peer-computer-start', nodeId, chatId, outcome }));
+
+        // Another chat's, or another machine's: not this one's.
+        ended('declined', 'other');
+        ended('declined', 'chat-1', 'node-tablet');
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        ended('declined');
+        expect(screen.getByRole('alert')).toHaveTextContent("PC declined: nobody there said OK, so computer use didn't start.");
+        expect(screen.queryByText(/Asked PC/)).toBeNull();
+        ended('unanswered');
+        expect(screen.getByRole('alert')).toHaveTextContent("Nobody answered on PC in time, so computer use didn't start.");
+        ended('not_started');
+        expect(screen.getByRole('alert')).toHaveTextContent("Computer use didn't start on PC.");
+
+        // Asking again clears it until that machine says how the new one went.
+        await user.click(screen.getByRole('button', { name: 'Start on PC' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+        expect(await screen.findByRole('status')).toHaveTextContent('Asked PC.');
+      });
+
       it("isn't offered for a profile without computer use, an unreachable machine, or a chat that runs here", () => {
         profile(false);
         machines('reachable', []);

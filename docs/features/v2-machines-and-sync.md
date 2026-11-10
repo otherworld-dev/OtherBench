@@ -39,6 +39,19 @@ desktop app and lets two machines share chats. Built so far:
   location, or to run the chat on the machine that has it). Tool calls and
   results from another machine have that machine's location paths
   translated in the copy sent to the model; stored history is untouched.
+- **Choosing a folder on the machine a chat runs on** (`peer/location-dirs.ts`,
+  `web/src/components/PeerFolderBrowser.tsx`): for a chat that runs on a
+  reachable paired machine, the Inspector's Workspace and Other folders
+  offer *Browse PC…* in place of this machine's native picker. It starts at
+  PC's locations and lists sub-folders inside them only
+  (`GET /api/peers/:id/dirs`, answered by PC's `GET /api/locations/dirs`
+  on its peer listener): names and paths, never files, every path through
+  `containPath`, Up stopping at the location's root. Only a location whose
+  path was set on PC itself is browsable, never one a paired machine filled
+  in by sync (`location_path.set_here`, migration 046; after updating,
+  each path has to be set again once on PC). The folder picked is saved as
+  a typed path would be, so it lands in that location. A path outside them
+  can still be typed. PC on an older build answers 501 `peer_outdated`.
 - **Sync** (`store-sqlite/src/repos/sync.ts`, `peer/syncer.ts`): triggers
   keep a change log and tombstones; every synced row carries a hybrid
   logical clock stamp, chats one per field. A machine pulls from a peer when
@@ -118,7 +131,12 @@ desktop app and lets two machines share chats. Built so far:
   is accepted at the PC, by design: the PC's own start dialog asks every
   time and says which machine asked ("The paired machine 'Laptop' wants to
   start computer use here..."), and declined or left unanswered (it closes
-  as Cancel after 110 s) nothing starts. Its banner says "Started from
+  as Cancel after 110 s) nothing starts. The laptop is then told which, on
+  the chat's Start line ("PC declined: nobody there said OK...", "Nobody
+  answered on PC in time...", or "Computer use didn't start on PC."): the PC
+  sends only that word to the machine that asked (`computer-start` on
+  `/peer/events`, arriving as `peer-computer-start`), never its reason,
+  and only while that machine's stream is open. Its banner says "Started from
   Laptop", and its audit trail names the machine each call was approved
   from. Off, the laptop can only see the session and stop it. The setting
   is never synced and isn't on the peer listener, so the laptop can't turn

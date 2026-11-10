@@ -76,7 +76,7 @@ export const DESKTOP_END_UNCONFIRMED_AFTER = "OtherBench asked the desktop app t
 export const DESKTOP_BAD_CHAT_REASON = "That chat can't control this computer: its id can't be sent to the desktop app.";
 const START_STOPPED_REASON = 'Control was stopped before it started, so nothing was started.';
 const TOO_MANY_REASON ='OtherBench is keeping track of too many control sessions; stop one first.';
-const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
+export const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
 const START_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so nothing was started.";
 const START_REFUSED_REASON = 'The desktop app refused to start controlling this computer.';
 /** The longest question sent with `settings.confirm`, in characters. */
