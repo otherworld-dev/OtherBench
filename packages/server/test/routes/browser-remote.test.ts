@@ -21,7 +21,7 @@ import { from, PASSWORD, remoteFixture, type RemoteFixture } from '../remote/hel
 // and the cross-site check all apply to them, and none of them is on the peer
 // listener.
 
-const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true };
+const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true, page: 'main', pages: [{ id: 'main', subagent: null, host: 'example.com' }] };
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const PUBLIC_HOST = 'otherbench.test:4747';
 const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
@@ -120,11 +120,11 @@ describe("the model's browser routes in sign-in mode", () => {
     const live = await call(app, 'GET', '/api/chats/c1/browser/live', { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' });
     expect(live.status).toBe(200);
     expect(live.headers.get('content-type')).toContain('text/event-stream');
-    expect(browser.watch).toHaveBeenCalledWith('c1', expect.any(Function), expect.any(Function));
+    expect(browser.watch).toHaveBeenCalledWith('c1', expect.any(Function), expect.any(Function), 'main');
     await finish(live);
     const closed = await call(app, 'DELETE', '/api/chats/c1/browser', { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin', Origin: PUBLIC_ORIGIN });
     expect(closed.status).toBe(204);
-    expect(browser.close).toHaveBeenCalledWith('c1');
+    expect(browser.close).toHaveBeenCalledWith('c1', undefined);
   });
 
   it("doesn't take the session cookie from another site's page: no live view to watch, nothing to close", async () => {

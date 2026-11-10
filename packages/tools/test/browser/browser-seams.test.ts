@@ -8,7 +8,8 @@ import type { Grant } from '@otherbench/core/ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
-import { BrowserManager } from '../../src/browser/manager.js';
+import { BrowserManager, MAIN_PAGE, type BrowserState } from '../../src/browser/manager.js';
+import { NO_PAGE } from '../../src/browser/tool.js';
 import { OtherBenchToolProvider } from '../../src/provider.js';
 import { FakeFactory, fakeProxy } from './fakes.js';
 
@@ -229,6 +230,10 @@ interface TurnOptions {
   /** The parent's and the other profile's browser site lists. */
   parentSites?: string[];
   otherSites?: string[];
+  /** Runs inside the sub-agent once its calls are made, while its page is still open (it closes when the sub-agent ends). */
+  /** How many sub-agents the parent starts at once, each making `subCalls` (1 by default). */
+  subagentCount?: number;
+  whileSubRuns?: (r: { factory: FakeFactory; proxy: ReturnType<typeof fakeProxy>; manager: BrowserManager }) => void;
 }
 
 async function turn(o: TurnOptions = {}) {
@@ -262,6 +267,7 @@ async function turn(o: TurnOptions = {}) {
         for (const [i, args] of (o.subCalls ?? []).entries()) {
           seen.results.push(tool ? await tool.execute(args, toolContextFor(req, req.signal, `sub-${i}`)) : 'not offered');
         }
+        o.whileSubRuns?.({ factory, proxy, manager });
         yield { type: 'text-delta', text: 'Finished.' };
         yield finish;
         return;
@@ -271,9 +277,11 @@ async function turn(o: TurnOptions = {}) {
         seen.parentOpened.push(browser ? await browser.execute({ command: 'open', url }, toolContextFor(req, req.signal, `open-${i}`)) : 'not offered');
       }
       const tool = req.tools.find((t) => t.name === 'subagent');
-      seen.parent = tool
-        ? await tool.execute({ description: 'Helper', prompt: 'Do the work.', ...(other ? { profile: 'Other' } : {}) }, toolContextFor(req, req.signal, 'call-1'))
-        : 'not offered';
+      // Several sub-agents are started in one step, so they run at once.
+      const started = Array.from({ length: o.subagentCount ?? 1 }, (_, i) =>
+        tool ? tool.execute({ description: 'Helper', prompt: 'Do the work.', ...(other ? { profile: 'Other' } : {}) }, toolContextFor(req, req.signal, `call-${i + 1}`)) : Promise.resolve('not offered')
+      );
+      seen.parent = (await Promise.all(started))[0];
       yield finish;
     },
     async listModels() {
@@ -289,7 +297,7 @@ async function turn(o: TurnOptions = {}) {
     ...(o.unattended ? { unattended: true } : {}),
   });
   await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
-  return { store, broker, seen, cards, factory, proxy, audit: store.audit.list('chat-1') };
+  return { store, broker, seen, cards, factory, proxy, manager, audit: store.audit.list('chat-1') };
 }
 
 const openOf = (url: string): Record<string, unknown> => ({ command: 'open', url });
@@ -318,11 +326,17 @@ describe("a sub-agent and the model's browser", () => {
   });
 
   it('may use no site either profile blocks: the broker refuses it before any card, and the proxy is given both lists', async () => {
+    const checks: (string | null)[] = [];
     const r = await turn({
       parent: { browserBlockedHosts: ['ads.test'] },
       other: { browserBlockedHosts: ['casino.test'] },
       subCalls: [openOf('https://ads.test/'), openOf('https://play.casino.test/'), openOf('https://example.com/')],
       answer: 'once',
+      // What the page itself may fetch is held to both lists too: asked while the sub-agent's page is open.
+      whileSubRuns: ({ factory, proxy }) => {
+        const user = factory.sessions[0]!.proxy.username;
+        for (const host of ['ads.test', 'cdn.casino.test', 'example.com']) checks.push(proxy.options().check(user, host, 443));
+      },
     });
     expect(r.seen.child!.profile.toolPolicy.browserBlockedHosts).toEqual(['ads.test', 'casino.test']);
     expect(isError(r.seen.results[0], 'permission_denied')).toBe(true);
@@ -334,11 +348,7 @@ describe("a sub-agent and the model's browser", () => {
     expect(r.cards.map((c) => [c.summary, c.subagent?.label, c.subagent?.profileName])).toEqual([['Use example.com: open https://example.com/', 'Helper', 'Other']]);
     const session = r.factory.sessions[0]!;
     expect(session.actions).toEqual(['open https://example.com/']);
-    // What the page itself may fetch is held to both lists too.
-    const check = r.proxy.options().check;
-    expect(check(session.proxy.username, 'ads.test', 443)).toBe('ads.test is blocked for this profile.');
-    expect(check(session.proxy.username, 'cdn.casino.test', 443)).toBe('cdn.casino.test is blocked for this profile.');
-    expect(check(session.proxy.username, 'example.com', 443)).toBeNull();
+    expect(checks).toEqual(['ads.test is blocked for this profile.', 'cdn.casino.test is blocked for this profile.', null]);
   });
 
   it("never uses a site grant of the profile it runs as; the parent's counts, and its own answer is stored under the parent's profile", async () => {
@@ -355,17 +365,19 @@ describe("a sub-agent and the model's browser", () => {
   });
 
   it("asks before every browser call when either profile asks before every call", async () => {
-    // The parent reads without a card; run as an always-ask profile, the sub-agent's read of the same page asks.
+    // The parent reads without a card; run as an always-ask profile, the sub-agent's read of its own page asks.
     const r = await turn({
       other: { approvalMode: 'always_ask' },
       parentOpens: ['https://example.com/'],
-      subCalls: [{ command: 'snapshot' }],
+      subCalls: [openOf('https://example.com/'), { command: 'snapshot' }],
       answer: 'once',
     });
     expect(isError(r.seen.parentOpened[0])).toBe(false);
     expect(isError(r.seen.results[0])).toBe(false);
+    expect(isError(r.seen.results[1])).toBe(false);
     expect(r.cards.map((c) => [c.summary, c.subagent?.label ?? null])).toEqual([
       ['Use example.com: open https://example.com/', null],
+      ['Use example.com: open https://example.com/', 'Helper'],
       ['Use example.com: read the page', 'Helper'],
     ]);
   });
@@ -424,13 +436,42 @@ describe("a sub-agent and the model's browser", () => {
     expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['site_list:example.com', 'site_list:example.com', 'deny:unattended']);
   });
 
-  it("shares the chat's one browser with the reply that started it: same page, same holder", async () => {
-    const r = await turn({ parentOpens: ['https://example.com/'], subCalls: [{ command: 'snapshot' }, { command: 'click', ref: 'e3' }], grants: [siteGrant('g-main', 'example.com')] });
+  it('gets a page of its own, apart from the reply that started it, which closes when the sub-agent ends', async () => {
+    let during: BrowserState | null = null;
+    const r = await turn({
+      parentOpens: ['https://example.com/'],
+      // The parent's page is open, but not the sub-agent's: it has to open its own first.
+      subCalls: [{ command: 'snapshot' }, openOf('https://example.com/other'), { command: 'click', ref: 'e3' }],
+      grants: [siteGrant('g-main', 'example.com')],
+      whileSubRuns: ({ manager }) => {
+        during = manager.state('chat-1');
+      },
+    });
     expect(isError(r.seen.parentOpened[0])).toBe(false);
-    expect(r.seen.results[0]).toMatchObject({ url: 'https://example.com/' });
+    expect(isError(r.seen.results[0], 'permission_denied')).toBe(true);
+    expect(messageOf(r.seen.results[0])).toBe(NO_PAGE);
     expect(isError(r.seen.results[1])).toBe(false);
-    // One browser for the chat, used by both: the sub-agent's click landed on the page the parent opened.
-    expect(r.factory.sessions).toHaveLength(1);
-    expect(r.factory.sessions[0]!.actions).toEqual(['open https://example.com/', 'click e3']);
+    expect(isError(r.seen.results[2])).toBe(false);
+    // Two pages, one each, with their own proxy users: the sub-agent's click landed on its own page, never the parent's.
+    expect(r.factory.sessions).toHaveLength(2);
+    const [parent, sub] = r.factory.sessions;
+    expect(parent!.actions).toEqual(['open https://example.com/']);
+    expect(sub!.actions).toEqual(['open https://example.com/other', 'click e3']);
+    expect(sub!.proxy.username).not.toBe(parent!.proxy.username);
+    // While it ran the panel listed both, the chat's own first; once it ended its page closed and the parent's stayed.
+    expect(during!.pages).toEqual([
+      { id: MAIN_PAGE, subagent: null, host: 'example.com' },
+      { id: expect.stringMatching(/^[0-9a-f]{16}$/), subagent: 'Helper', host: 'example.com' },
+    ]);
+    await vi.waitFor(() => expect(sub!.closed).toBe(true));
+    expect(parent!.closed).toBe(false);
+    expect(r.manager.state('chat-1').pages.map((p) => p.id)).toEqual([MAIN_PAGE]);
+  });
+
+  it('lets two sub-agents running at once each keep their own refs', async () => {
+    const r = await turn({ subCalls: [openOf('https://example.com/'), { command: 'click', ref: 'e3' }], grants: [siteGrant('g-main', 'example.com')], subagentCount: 2 });
+    expect(r.seen.results.every((x) => !isError(x))).toBe(true);
+    expect(r.factory.sessions).toHaveLength(2);
+    for (const session of r.factory.sessions) expect(session.actions).toEqual(['open https://example.com/', 'click e3']);
   });
 });

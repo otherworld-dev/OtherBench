@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react';
 import { useChanged } from '../lib/useChanged.js';
-import { api, type BrowserLiveEvent, type BrowserLiveState, type BrowserPanelInput } from '../state/api.js';
+import { api, browserPageQuery, MAIN_BROWSER_PAGE, type BrowserLiveEvent, type BrowserLiveState, type BrowserPageSummary, type BrowserPanelInput } from '../state/api.js';
 import { SseClient, type SseConnect } from '../state/sse.js';
 import { streamApiUrl } from '../state/transport.js';
 import { oneLine } from './browser.js';
@@ -50,13 +50,45 @@ function ForgetSignIns(): JSX.Element {
 }
 
 /**
+ * The chat's pages when it has more than its own: a sub-agent's page is listed
+ * by its label (the model's words, so cleaned) and its site, and choosing one
+ * shows it. Nothing when the chat has only its own page.
+ */
+function PageList({ pages, current, onPick }: { pages: readonly BrowserPageSummary[]; current: string; onPick: (page: string) => void }): JSX.Element | null {
+  if (!pages.some((p) => p.subagent !== null) && current === MAIN_BROWSER_PAGE) return null;
+  const listed = pages.some((p) => p.id === MAIN_BROWSER_PAGE) ? pages : [{ id: MAIN_BROWSER_PAGE, subagent: null, host: null }, ...pages];
+  return (
+    <nav aria-label="Browser pages" className="flex flex-wrap gap-1 border-b border-[var(--border)] px-3 py-1 text-xs">
+      {listed.map((p) => {
+        const host = oneLine(p.host);
+        return (
+          <button key={p.id} type="button" aria-pressed={p.id === current} onClick={() => onPick(p.id)} title={host || undefined} className="btn max-w-[16rem] truncate px-2 py-0.5">
+            {p.subagent === null ? (
+              "This chat's page"
+            ) : (
+              <>
+                Sub-agent: <bdi>{oneLine(p.subagent) || 'unnamed'}</bdi>
+              </>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/**
  * The model's browser in a chat's viewer (spec 2026-10-12-model-browser-design
  * §6): JPEG frames from the server's screencast, the page's address and title,
  * and Close browser. Clicks, scrolling, typing and pasting on the picture go to
  * the page, so a person can step in from any device; where the browser is a
- * real window, Show window brings it up. `connect` is for tests.
+ * real window, Show window brings it up. It shows the chat's own page; while
+ * sub-agents have pages of their own, they are listed above it and a click
+ * shows one instead (and, when it closes, the chat's own again). `connect` is
+ * for tests.
  */
 export function BrowserView({ chatId, connect }: { chatId: string; connect?: SseConnect }): JSX.Element {
+  const [page, setPage] = useState(MAIN_BROWSER_PAGE);
   const [state, setState] = useState<BrowserLiveState | null>(null);
   const [frame, setFrame] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,19 +97,26 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
   const wheel = useRef<{ x: number; y: number; dy: number; timer: ReturnType<typeof setTimeout> | null }>({ x: 0, y: 0, dy: 0, timer: null });
   const surface = useRef<HTMLDivElement>(null);
 
-  // Another chat's browser starts blank, in the same render, so the last one's page never shows under it.
-  if (useChanged([chatId, connect])) {
+  // Another chat starts on its own page.
+  if (useChanged([chatId])) setPage(MAIN_BROWSER_PAGE);
+  // Another chat's browser, or another page, starts blank, in the same render, so the last one's page never shows under it.
+  if (useChanged([chatId, connect, page])) {
     setState(null);
     setFrame(null);
   }
   useEffect(() => {
     const show = (s: BrowserLiveState | null | undefined): void => {
       if (!s || typeof s !== 'object') return;
+      // A sub-agent's page closes when the sub-agent ends: back to the chat's own.
+      if (!s.open && page !== MAIN_BROWSER_PAGE && !s.elsewhere) {
+        setPage(MAIN_BROWSER_PAGE);
+        return;
+      }
       setState(s);
       if (!s.open) setFrame(null);
     };
     const client = new SseClient<BrowserLiveState, BrowserLiveEvent>({
-      url: streamApiUrl(`/chats/${encodeURIComponent(chatId)}/browser/live`),
+      url: streamApiUrl(`/chats/${encodeURIComponent(chatId)}/browser/live${browserPageQuery(page)}`),
       readHello: (payload) => payload as BrowserLiveState,
       onHello: show,
       onEvent: (e) => {
@@ -91,10 +130,10 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
     });
     client.connect();
     return () => client.close();
-  }, [chatId, connect]);
+  }, [chatId, connect, page]);
 
   function send(event: BrowserPanelInput): void {
-    sending.current = sending.current.then(() => api.browser.input(chatId, event)).catch(() => setError("That didn't reach the page. Please try again."));
+    sending.current = sending.current.then(() => api.browser.input(chatId, event, page)).catch(() => setError("That didn't reach the page. Please try again."));
   }
 
   function onWheel(e: WheelEvent<HTMLImageElement>): void {
@@ -118,7 +157,7 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
   async function show(): Promise<void> {
     setError(null);
     try {
-      await api.browser.show(chatId);
+      await api.browser.show(chatId, page);
     } catch {
       setError("Couldn't bring the window up. Please try again.");
     }
@@ -127,7 +166,7 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
   async function close(): Promise<void> {
     setError(null);
     try {
-      await api.browser.close(chatId);
+      await api.browser.close(chatId, page);
     } catch {
       setError("Couldn't close the browser. Please try again.");
     }
@@ -135,17 +174,25 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
 
   if (state?.elsewhere) return <p className="p-3 text-sm text-[var(--text-muted)]">The browser is on {oneLine(state.elsewhere)}.</p>;
   if (!state) return <p className="p-3 text-sm text-[var(--text-faint)]">Connecting…</p>;
+  const pages = Array.isArray(state.pages) ? state.pages : [];
+  const pageList = <PageList pages={pages} current={page} onPick={setPage} />;
   if (!state.open) {
     return (
-      <div className="space-y-2 p-3">
-        <p className="text-sm text-[var(--text-muted)]">The model hasn't opened a page in this chat.</p>
-        <ForgetSignIns />
+      <div className="flex h-full min-h-0 flex-col">
+        {pageList}
+        <div className="space-y-2 p-3">
+          <p className="text-sm text-[var(--text-muted)]">
+            {pages.length > 0 ? "The chat's own page isn't open. Its sub-agents' pages are listed above." : "The model hasn't opened a page in this chat."}
+          </p>
+          <ForgetSignIns />
+        </div>
       </div>
     );
   }
   const url = oneLine(state.url);
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {pageList}
       <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-1 text-xs">
         <div className="min-w-0 flex-1">
           {/* The page's own words: <bdi> keeps their direction from spilling into the rest of the bar. */}
@@ -163,7 +210,7 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
           </button>
         )}
         <button type="button" onClick={() => void close()} className="btn px-2 py-0.5">
-          Close browser
+          {page === MAIN_BROWSER_PAGE ? 'Close browser' : 'Close page'}
         </button>
       </div>
       {error && (

@@ -11,8 +11,10 @@ import type { Container } from '../../src/container.js';
 import type { BrowserPort } from '../../src/routes/browser.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
-const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true };
-const CLOSED: BrowserState = { open: false, url: null, title: null, host: null, holder: null, visible: false };
+const OPEN: BrowserState = { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true, page: 'main', pages: [{ id: 'main', subagent: null, host: 'example.com' }] };
+const CLOSED: BrowserState = { open: false, url: null, title: null, host: null, holder: null, visible: false, page: 'main', pages: [] };
+/** A sub-agent page's id, as the manager makes them. */
+const SUB = '0123456789abcdef';
 
 let container: Container;
 let dir: string;
@@ -67,7 +69,7 @@ describe('a person using the page', () => {
   it('passes on clicks, scrolling, keys and text', async () => {
     for (const event of [{ type: 'click', x: 0.5, y: 1 }, { type: 'wheel', x: 0, y: 0, dy: -300 }, { type: 'key', key: 'Control+A' }, { type: 'text', text: 'hello' }]) {
       expect((await post('/api/chats/c1/browser/input', event)).status).toBe(204);
-      expect(browser.input).toHaveBeenLastCalledWith('c1', event);
+      expect(browser.input).toHaveBeenLastCalledWith('c1', event, 'main');
     }
   });
 
@@ -97,7 +99,27 @@ describe('a person using the page', () => {
 
   it('brings up the window', async () => {
     expect((await post('/api/chats/c1/browser/show')).status).toBe(204);
-    expect(browser.show).toHaveBeenCalledWith('c1');
+    expect(browser.show).toHaveBeenCalledWith('c1', 'main');
+  });
+
+  it("reaches a sub-agent's page by its id, and refuses anything that isn't a page id", async () => {
+    expect((await post(`/api/chats/c1/browser/input?page=${SUB}`, { type: 'text', text: 'x' })).status).toBe(204);
+    expect(browser.input).toHaveBeenLastCalledWith('c1', { type: 'text', text: 'x' }, SUB);
+    expect(browser.state).toHaveBeenLastCalledWith('c1', SUB);
+    expect((await post(`/api/chats/c1/browser/show?page=${SUB}`)).status).toBe(204);
+    expect(browser.show).toHaveBeenLastCalledWith('c1', SUB);
+    for (const page of ['', 'MAIN', '0123', '0123456789abcdeg', '../x', 'main ']) {
+      expect((await post(`/api/chats/c1/browser/input?page=${encodeURIComponent(page)}`, { type: 'text', text: 'x' })).status, page).toBe(400);
+      expect((await app().request(`/api/chats/c1/browser?page=${encodeURIComponent(page)}`)).status, page).toBe(400);
+    }
+    expect(browser.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a sub-agent's page has closed", async () => {
+    browser.state.mockReturnValue({ ...CLOSED, page: SUB });
+    const res = await post(`/api/chats/c1/browser/show?page=${SUB}`);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('That page has closed.');
   });
 
   it('forgets the saved sign-ins', async () => {
@@ -121,7 +143,9 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, needle
 describe('browser routes', () => {
   it("gives a chat's browser state, 404 for an unknown chat", async () => {
     expect(await json(await app().request('/api/chats/c1/browser'))).toEqual(OPEN);
-    expect(browser.state).toHaveBeenCalledWith('c1');
+    expect(browser.state).toHaveBeenCalledWith('c1', 'main');
+    await app().request(`/api/chats/c1/browser?page=${SUB}`);
+    expect(browser.state).toHaveBeenLastCalledWith('c1', SUB);
     expect((await app().request('/api/chats/nope/browser')).status).toBe(404);
   });
 
@@ -129,7 +153,10 @@ describe('browser routes', () => {
     expect((await app().request('/api/chats/c1/browser', { method: 'DELETE' })).status).toBe(415);
     const res = await app().request('/api/chats/c1/browser', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
     expect(res.status).toBe(204);
-    expect(browser.close).toHaveBeenCalledWith('c1');
+    // No page: every page of the chat; a page: that one only.
+    expect(browser.close).toHaveBeenCalledWith('c1', undefined);
+    await app().request(`/api/chats/c1/browser?page=${SUB}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+    expect(browser.close).toHaveBeenLastCalledWith('c1', SUB);
   });
 
   it('streams a hello, frames at most five a second (newest wins), state changes and keepalives', async () => {

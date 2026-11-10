@@ -261,7 +261,8 @@ async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext)
     // The host is the parsed address's own; whatever `host` or `target` the model sent is gone.
     return { args: { ...callArgs(call), url: target.href, host: target.site }, risk };
   }
-  const chat = manager.peek(ctx.chatId);
+  // The caller's own page: the chat's, or the sub-agent's when a sub-agent calls (BrowserManager's `PageOwner`).
+  const chat = manager.peek(ctx);
   const url = chat ? chat.session.url() : null;
   const host = url !== null ? siteOf(url) : null;
   if (!chat || url === null || host === null) return { refuse: NO_PAGE };
@@ -395,19 +396,20 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     const target = openTarget(call.url!);
     if (target === null || target.site !== host) return failure('bad_call', NO_APPROVAL);
     call.url = target.href;
-  } else if (manager.peek(ctx.chatId) === null) {
+  } else if (manager.peek(ctx) === null) {
     // The browser went away since the call was described (closed in the viewer, idle, chat deleted): don't start a new one for this.
     return call.command === 'close' ? { closed: true } : failure('browser_error', NO_PAGE);
   }
   let chat: ChatBrowser;
   try {
-    chat = await manager.acquire(ctx.chatId, ctx.messageId, ctx.signal, policy.browserBlockedHosts ?? []);
+    chat = await manager.acquire(ctx, ctx.messageId, ctx.signal, policy.browserBlockedHosts ?? []);
   } catch (err) {
     return err instanceof BrowserBusyError ? failure('browser_busy', err.message) : pageFailure('browser_unavailable', firstLine(err), host);
   }
   if (call.command === 'close') {
     try {
-      await manager.close(ctx.chatId);
+      // Only the caller's own page: a sub-agent's close leaves the reply's page and the other sub-agents' alone, and the reply's leaves theirs.
+      await manager.close(ctx.chatId, chat.pageId);
     } catch (err) {
       return pageFailure('browser_error', firstLine(err), siteNow(chat, host));
     }
@@ -463,7 +465,9 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
  * names the website a call touches (open's URL, or the open page's) before the
  * broker decides; `execute` receives those described arguments and checks the
  * page is still on that site before it acts. `policy` supplies the profile's
- * blocked hosts, which the proxy also enforces.
+ * blocked hosts, which the proxy also enforces. A call works on its caller's
+ * own page: the chat's for a reply, or the sub-agent's own for a call carrying
+ * a sub-agent tag (`ctx.subagent`), both when it is described and when it runs.
  */
 export function browserTool(manager: BrowserManager, policy: { browserBlockedHosts?: readonly string[] }, askUser?: BrowserAskFn): ToolSpec {
   return {
