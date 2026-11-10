@@ -1007,7 +1007,7 @@ this on startup.
 | `packages/store-sqlite/src/blob-store.ts`, `packages/store-sqlite/src/blob-gc.ts` | The per-database attachment roots, the legacy-root fallback, and the GC sweep — same rule: read the module comments directly |
 | `docs/integration.md` | How the Cowork-parity branches were merged (October 2026), the migration renumbering, how computer use meets the rest |
 | `docs/deviations.md` | Where the build differs from the specs and plans, and why |
-| `docs/testing.md` | How the test setup behaves (test typechecking, source resolution, the drive-letter case, time limits) |
+| `docs/testing.md` | How the test setup behaves (test typechecking, source resolution, the drive-letter case, time limits, the desktop smoke suite) |
 
 ## If you're picking this back up
 

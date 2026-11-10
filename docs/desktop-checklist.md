@@ -1,6 +1,8 @@
 # Desktop and two-machine checklist
 
-What the automated tests can't cover: the desktop shell's tray, hotkey and
+The desktop smoke suite (`npm run e2e:desktop`, packages/web/e2e-desktop/README.md)
+covers launch, a streamed reply, drag and drop in the window, undocking and
+several windows streaming at once. What the automated tests can't cover: the desktop shell's tray, hotkey and
 notifications, and two physical machines. Run through it on Windows (the PC
 and the laptop) after desktop or peer changes. Linux is in the v2 plan but
 not a priority; the Linux notes are for when it is.

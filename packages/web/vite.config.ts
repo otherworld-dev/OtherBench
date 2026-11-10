@@ -23,7 +23,7 @@ export default defineConfig({
     // `e2e/**` holds @playwright/test specs (playwright.config.ts's own
     // testDir), which use a different `test`/`expect` -- vitest's default
     // include pattern (`**/*.spec.ts`) would otherwise try to collect them
-    // too and fail on the import.
-    exclude: [...configDefaults.exclude, 'e2e/**'],
+    // too and fail on the import. `e2e-desktop/**` is the same for the desktop app.
+    exclude: [...configDefaults.exclude, 'e2e/**', 'e2e-desktop/**'],
   },
 });

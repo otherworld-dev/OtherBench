@@ -11,7 +11,7 @@ export default defineConfig(
   // .claude/ holds agents' worktrees, each a full copy of the repo: walking them runs eslint out of memory.
   { ignores: ['**/dist/**', '**/node_modules/**', 'desktop/**', '.claude/**', '**/*.js', '**/*.mjs', '**/*.cjs'] },
   {
-    files: ['packages/*/{src,test,e2e}/**/*.{ts,tsx}'],
+    files: ['packages/*/{src,test,e2e,e2e-desktop}/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: { project: ['packages/*/tsconfig.test.json'], tsconfigRootDir: import.meta.dirname },

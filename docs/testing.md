@@ -42,3 +42,28 @@ How the test setup behaves and why, moved out of `HANDOVER.md` on 2026-11-09. Co
   `blob-gc.test.ts`'s "real timing" sweep (3,000 blobs, its own 30 s), which
   timed out in loaded runs on 2026-11-04, and `provider-live.test.ts`'s
   300 ms live-call limit.
+- **The desktop app has its own smoke suite** (`packages/web/e2e-desktop/`,
+  added 2026-11-10; its README has the details). The browser e2e runs the UI
+  in Chromium, which never showed three bugs the Tauri window did: WebView2
+  swallowing HTML5 drag and drop unless `dragDropEnabled: false`, the six
+  connections per host shared by every window, and `listen()` hearing every
+  window unless scoped to its label. Five checks drive the real app over CDP:
+
+  ```sh
+  npm run build
+  npm run app:e2e -w @otherbench/desktop   # tauri build --debug --no-bundle + tauri.e2e.conf.json
+  npm run e2e:desktop
+  ```
+
+  The test build is a separate app (identifier `dev.otherworld.otherbench.e2e`,
+  exe `otherbench-e2e.exe`) and its server's database, home folder, AppData,
+  webview storage and ports are all scratch, so it never touches an installed
+  OtherBench or its data, running or not. `OTHERBENCH_E2E_DATA_DIR` is read
+  only by that build, which won't start its server without it. Two things
+  learned building it: Playwright's `dragTo` is synthesised inside Chromium and
+  passes with WebView2's drop handler on, so the drag check moves the real
+  mouse (`real-drag.ps1`); and a fresh server took 18-25 s to start on a
+  machine at 100% CPU, past the shell's 15 s, so the test build waits 90 s.
+  WebView2's browser process outlives a killed app by a minute or more and
+  `taskkill` can't end it; the harness closes it over CDP first. Not in CI
+  (the drag check needs the real mouse and a visible window).
