@@ -10,5 +10,5 @@
     "jsx": "react-jsx",
     "types": ["vite/client", "@testing-library/jest-dom/vitest"]
   },
-  "include": ["src", "test", "e2e"]
+  "include": ["src", "test", "e2e", "e2e-desktop"]
 }

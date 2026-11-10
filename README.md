@@ -416,7 +416,12 @@ add one by hand via `POST /api/models`) and create a profile against a real
 npm test                    # unit + integration (vitest, every package)
 npm run typecheck
 cd packages/web && npx playwright test   # e2e, requires npm run build first
+npm run app:e2e -w @otherbench/desktop && npm run e2e:desktop   # desktop app smoke tests, Windows
 ```
+
+The desktop smoke tests drive the real Tauri app over CDP, as a separate test
+build with scratch data that never touches an installed OtherBench; see
+`packages/web/e2e-desktop/README.md`.
 
 Tests import the other workspace packages from their TypeScript source
 (`vitest.workspace.ts`), so a change to core is seen by the server's tests

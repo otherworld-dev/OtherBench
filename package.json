@@ -18,7 +18,8 @@
     "test": "node scripts/vitest.mjs run",
     "test:watch": "node scripts/vitest.mjs",
     "dev": "npm run dev -w @otherbench/server",
-    "serve": "node packages/server/dist/cli.js serve"
+    "serve": "node packages/server/dist/cli.js serve",
+    "e2e:desktop": "playwright test --config packages/web/e2e-desktop/playwright.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
