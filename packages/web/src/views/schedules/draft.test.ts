@@ -135,6 +135,20 @@ describe('previewRuns', () => {
     expect(previewRuns(valid(), 'Europe/London', MONDAY_NOON)).toEqual(['Tuesday 13 October 2026, 09:00', 'Wednesday 14 October 2026, 09:00', 'Thursday 15 October 2026, 09:00']);
   });
 
+  it("previews L, W and # rules, and says what is wrong with them", () => {
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 LW * *' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Friday 30 October 2026, 09:00',
+      'Monday 30 November 2026, 09:00',
+      'Thursday 31 December 2026, 09:00',
+    ]);
+    expect(previewRuns(valid({ cadence: 'cron', cron: '30 8 * * 1#1,5L' }), 'Europe/London', MONDAY_NOON)).toEqual([
+      'Friday 30 October 2026, 08:30',
+      'Monday 2 November 2026, 08:30',
+      'Friday 27 November 2026, 08:30',
+    ]);
+    expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 * * 5#6' }), 'Europe/London', MONDAY_NOON)).toBe('The day of week field\'s "5#6" asks for week 6: "#" takes 1 to 5.');
+  });
+
   it('says what is wrong instead, so a typo shows as it is typed', () => {
     expect(previewRuns(valid({ cadence: 'cron', cron: '0 9 * * 1-' }), 'Europe/London', MONDAY_NOON)).toBe('The day of week field\'s "1-" isn\'t a value, a range or "*".');
     expect(previewRuns(valid({ cadence: 'cron', cron: '0 0 31 2 *' }), 'Europe/London', MONDAY_NOON)).toBe('It never runs: none of those months has any of those days.');

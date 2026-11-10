@@ -259,7 +259,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
               className={`${FIELD} font-mono`}
             />
             <p id={`${id}-cron-help`} className="text-xs text-[var(--text-muted)]">
-              Minute, hour, day of month, month and day of week, in {timezone}. For example 0 9 * * 1-5 is 09:00 on weekdays.
+              Minute, hour, day of month, month and day of week, in {timezone}. For example 0 9 * * 1-5 is 09:00 on weekdays. L is the month's last day, 15W the weekday nearest the 15th, 5L the last Friday and 5#3 the third.
             </p>
           </div>
         )}

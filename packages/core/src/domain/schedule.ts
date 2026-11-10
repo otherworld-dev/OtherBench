@@ -267,7 +267,10 @@ function planFor(rule: ScheduleRule): RulePlan {
     case 'cron': {
       const spec = parseCron(rule.cron);
       if (typeof spec === 'string') throw new Error(`Bad cron rule "${rule.cron}": ${spec}`);
-      return { matches: (date) => cronMatchesDate(spec, date.month, date.day, weekdayOf(date)), minutes: cronMinutesOfDay(spec) };
+      return {
+        matches: (date) => cronMatchesDate(spec, date.month, date.day, weekdayOf(date), daysInMonth(date.year, date.month)),
+        minutes: cronMinutesOfDay(spec),
+      };
     }
   }
 }
@@ -303,7 +306,8 @@ function firstSlotAfter(date: WallDate, minutes: number[], timezone: string, aft
  * How far `nextRunAt` looks. The fixed kinds need 400 days at most. A cron
  * rule for 29 February can be 8 years off across 2100, and one that needs a
  * date to fall on a given weekday too (Vixie's both-fields case) can be 11;
- * for 29 February on a weekday, about 40 across 2100. 50 years covers every rule `parseCron` accepts, and
+ * for 29 February on a weekday, about 40 across 2100 (`5#5` in February is the same: 29 February on a Friday).
+ * 50 years covers every rule `parseCron` accepts, and
  * the walk only gets that far for such a rule.
  */
 const WALK_DAYS = 50 * 366;
