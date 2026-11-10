@@ -881,7 +881,7 @@ this on startup.
   cookie opens nothing by itself). Renewed `--tls-cert`/`--tls-key` files
   are loaded while running; the sign-in limits still reset on a restart.
 - **MCP sign-in, phase 2** (Deck #931). Not built: registering the public and loopback redirect addresses side by side (each change of address registers again), revoking tokens at the provider on sign-out (RFC 7009), a fixed callback port for providers that pin it, a sign-in button in the Inspector, and URL-based client IDs (SEP-991). In open or token mode with `--host ::1` or one specific non-loopback address, `127.0.0.1` isn't served, so the callback can't arrive; paste-back still works. Tool-call error text from an MCP server isn't redacted (only lifecycle errors are). After a URL change and a new sign-in, a stale refresh on the old URL can force one more sign-in; it never discloses a token.
-- **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Another LAN device's global IPv6 address outside this machine's own /64s is treated as the internet. Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. In a scheduled run a site needs an Always grant made beforehand, or to be on the profile's site list. That list is checked without a Public Suffix List, so a wildcard over a suffix outside its rules (`*.k12.ca.us`) is accepted, and a real site that happens to look like a registry (a two-label name such as `co.xx`) is refused as a wildcard base. Sub-agents share the chat's one browser.
+- **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Another LAN device's global IPv6 address outside this machine's own /64s is treated as the internet. Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. In a scheduled run a site needs an Always grant made beforehand, or to be on the profile's site list. That list is checked without a Public Suffix List, so a wildcard over a suffix outside its rules (`*.k12.ca.us`) is accepted, and a real site that happens to look like a registry (a two-label name such as `co.xx`) is refused as a wildcard base. Each sub-agent has a page of its own, but Claude Code's own helpers (Task/Agent) still use the chat's page with their reply.
 - **Computer use** (Deck #927). Ships switched off and none of its desktop side has run; a Claude Code helper's screenshots aren't stored or shown (the turn's own are). Scheduled runs, Plan mode and sub-agents never get it (see `docs/integration.md`). The full list is under *Computer use* above.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 - **Office files (Deck #928): the writers' output has been opened in real
@@ -995,15 +995,6 @@ this on startup.
   the thread. A chat's own commands appear in the `/` menu only after its first
   reply since the server started; listing them any other way would run the
   folder's SessionStart hooks.
-- **`open` is refused while planning.** In Plan mode a reply may read the
-  page that is already open and nothing else, so it can't start browsing
-  until its plan is approved. This is the fail-closed choice: `open` is a
-  request to an address the model chose. Claude Code's own WebFetch is
-  allowed while planning, so allowing `open` on a site that already has a
-  grant would be consistent; it wasn't done.
-- **Sub-agents share the chat's one browser page** (see the browser section).
-  A browser per sub-agent would need `BrowserManager` keyed on more than the
-  chat.
 
 ## Where to look
 

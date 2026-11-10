@@ -33,7 +33,8 @@ export type { AdoptLocationBody, InferLocationResult, LocationView, PairingView,
 export type { CreateScheduleBody, PatchScheduleBody } from './api/schedules.js';
 export type { ArtifactDetail, ArtifactSummary, LiveOutcome, LiveStatus } from './api/artifacts.js';
 export type { ViewEntry, ViewKind, ViewOpened, ViewRoot, ViewText } from './api/view.js';
-export type { BrowserLiveEvent, BrowserLiveState, BrowserPanelInput } from './api/browser.js';
+export type { BrowserLiveEvent, BrowserLiveState, BrowserPageSummary, BrowserPanelInput } from './api/browser.js';
+export { browserPageQuery, MAIN_BROWSER_PAGE } from './api/browser.js';
 export type { ClaudeDesktopImportResult, ClaudeDesktopListing, ClaudeDesktopServerView, CreateMcpServerBody } from './api/tools.js';
 
 /**

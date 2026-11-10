@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { CLOSED_STATE, type BrowserManager, type BrowserState } from '@otherbench/tools/browser/manager.js';
+import { CLOSED_STATE, isPageId, MAIN_PAGE, type BrowserManager, type BrowserState } from '@otherbench/tools/browser/manager.js';
 import type { BrowserInput } from '@otherbench/tools/browser/session.js';
 import type { Container } from '../container.js';
 import { sseStream } from '../stream/sse.js';
@@ -42,17 +42,29 @@ export function parseBrowserInput(raw: unknown): BrowserInput | null {
  * the browser runs where the turn runs, and a chat running elsewhere just says
  * so. Frames are base64 JPEG data; the client renders them with a fixed
  * `data:image/jpeg;base64,` prefix and never takes a type from the wire.
+ *
+ * A chat has its own page and one per running sub-agent. Every route but the
+ * profile's takes `?page=` (MAIN_PAGE, the chat's own, when left out; a
+ * sub-agent page's id from the state's `pages` list otherwise); `DELETE
+ * /chats/:id/browser` with no `page` closes every page of the chat.
  */
 export function browserRoutes(container: Container): Hono {
   const app = new Hono();
 
-  const viewOf = (chatId: string): BrowserView => {
+  const viewOf = (chatId: string, page: string = MAIN_PAGE): BrowserView => {
     const chat = container.store.chats.get(chatId);
     if (!chat) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
     if (chat.runsOn !== container.store.nodes.self().id) {
       return { open: false, elsewhere: container.store.peers.get(chat.runsOn)?.name ?? 'another machine' };
     }
-    return container.browser?.state(chatId) ?? CLOSED_STATE;
+    return container.browser?.state(chatId, page) ?? { ...CLOSED_STATE, page };
+  };
+
+  /** The `page` a request names: the chat's own when it names none. Anything that isn't a page id is refused. */
+  const pageOf = (raw: string | undefined): string => {
+    if (raw === undefined) return MAIN_PAGE;
+    if (!isPageId(raw)) throw new HTTPException(400, { message: "That isn't a browser page." });
+    return raw;
   };
 
   const requireJson = (contentType: string | undefined): void => {
@@ -61,15 +73,15 @@ export function browserRoutes(container: Container): Hono {
     }
   };
 
-  /** The chat's browser, for what a person does to it. It must be here and open. */
-  const hereOrRefuse = (chatId: string): BrowserPort => {
-    const view = viewOf(chatId);
+  /** The chat's browser, for what a person does to one of its pages. It must be here and that page open. */
+  const hereOrRefuse = (chatId: string, page: string): BrowserPort => {
+    const view = viewOf(chatId, page);
     if ('elsewhere' in view) throw new HTTPException(409, { message: `The browser is on ${view.elsewhere}.` });
-    if (!view.open || !container.browser) throw new HTTPException(409, { message: 'This chat has no browser open.' });
+    if (!view.open || !container.browser) throw new HTTPException(409, { message: page === MAIN_PAGE ? 'This chat has no browser open.' : 'That page has closed.' });
     return container.browser;
   };
 
-  app.get('/chats/:id/browser', (c) => c.json(viewOf(c.req.param('id'))));
+  app.get('/chats/:id/browser', (c) => c.json(viewOf(c.req.param('id'), pageOf(c.req.query('page')))));
 
   // A person's own use of the page: never the model's, so no broker and no card. Like every
   // change under /api it is behind sign-in, the Host check and the cross-site write check, and
@@ -79,15 +91,17 @@ export function browserRoutes(container: Container): Hono {
     const event = parseBrowserInput(await c.req.json().catch(() => null));
     if (!event) throw new HTTPException(400, { message: "That isn't something the browser panel sends." });
     const chatId = c.req.param('id');
+    const page = pageOf(c.req.query('page'));
     // A key Playwright doesn't know, or a page that went away mid-call: the person's click just does nothing.
-    await hereOrRefuse(chatId).input(chatId, event).catch(() => undefined);
+    await hereOrRefuse(chatId, page).input(chatId, event, page).catch(() => undefined);
     return c.body(null, 204);
   });
 
   app.post('/chats/:id/browser/show', async (c) => {
     requireJson(c.req.header('Content-Type'));
     const chatId = c.req.param('id');
-    await hereOrRefuse(chatId).show(chatId);
+    const page = pageOf(c.req.query('page'));
+    await hereOrRefuse(chatId, page).show(chatId, page);
     return c.body(null, 204);
   });
 
@@ -100,14 +114,17 @@ export function browserRoutes(container: Container): Hono {
   app.delete('/chats/:id/browser', async (c) => {
     requireJson(c.req.header('Content-Type'));
     const chatId = c.req.param('id');
-    const view = viewOf(chatId);
-    if (!('elsewhere' in view)) await container.browser?.close(chatId);
+    const raw = c.req.query('page');
+    const page = raw === undefined ? undefined : pageOf(raw);
+    const view = viewOf(chatId, page);
+    if (!('elsewhere' in view)) await container.browser?.close(chatId, page);
     return c.body(null, 204);
   });
 
   app.get('/chats/:id/browser/live', (c) => {
     const chatId = c.req.param('id');
-    const first = viewOf(chatId);
+    const page = pageOf(c.req.query('page'));
+    const first = viewOf(chatId, page);
     const keepaliveMs = container.streamTimings?.keepaliveMs ?? EVENTS_KEEPALIVE_MS;
     const browser = container.browser;
     return sseStream((sink) => {
@@ -140,7 +157,8 @@ export function browserRoutes(container: Container): Hono {
           pending = frame; // a newer frame replaces one not sent yet
           schedule();
         },
-        (state) => sink.send(null, { type: 'state', state })
+        (state) => sink.send(null, { type: 'state', state }),
+        page
       );
       return () => {
         clearInterval(keepalive);

@@ -66,10 +66,10 @@ describe('BrowserView', () => {
     const picture = screen.getByRole('img', { name: "Live view of the model's browser" });
     vi.spyOn(picture, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 50, width: 200, height: 100 } as DOMRect);
     fireEvent.click(picture, { clientX: 150, clientY: 75 });
-    await vi.waitFor(() => expect(api.browser.input).toHaveBeenCalledWith('c1', { type: 'click', x: 0.25, y: 0.25 }));
+    await vi.waitFor(() => expect(api.browser.input).toHaveBeenCalledWith('c1', { type: 'click', x: 0.25, y: 0.25 }, 'main'));
     expect(screen.getByRole('group', { name: /use it yourself/ })).toHaveFocus();
     await userEvent.keyboard('h');
-    await vi.waitFor(() => expect(api.browser.input).toHaveBeenCalledWith('c1', { type: 'text', text: 'h' }));
+    await vi.waitFor(() => expect(api.browser.input).toHaveBeenCalledWith('c1', { type: 'text', text: 'h' }, 'main'));
   });
 
   it('offers Show window only for a real window', async () => {
@@ -79,7 +79,7 @@ describe('BrowserView', () => {
     expect(screen.queryByRole('button', { name: 'Show window' })).not.toBeInTheDocument();
     s.emit('message', { type: 'state', state: { open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: null, visible: true } });
     await userEvent.click(screen.getByRole('button', { name: 'Show window' }));
-    expect(api.browser.show).toHaveBeenCalledWith('c1');
+    expect(api.browser.show).toHaveBeenCalledWith('c1', 'main');
   });
 
   it('asks once more before forgetting sign-ins', async () => {
@@ -103,7 +103,7 @@ describe('BrowserView', () => {
     expect(screen.getByText('Example')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/')).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close browser' }));
-    expect(api.browser.close).toHaveBeenCalledWith('c1');
+    expect(api.browser.close).toHaveBeenCalledWith('c1', 'main');
     s.emit('message', { type: 'state', state: { open: false } });
     expect(screen.getByText("The model hasn't opened a page in this chat.")).toBeInTheDocument();
   });
@@ -168,6 +168,46 @@ describe('BrowserView', () => {
     expect(s.closedUrls).toHaveLength(2);
     expect(s.closedUrls[1]).toMatch(/\/chats\/c2\/browser\/live$/);
     expect(s.closed()).toBe(true);
+  });
+
+  it("lists sub-agents' pages beside the chat's own, shows the one picked, and acts on that one", async () => {
+    const s = fakeConnect();
+    render(<BrowserView chatId="c1" connect={s.connect} />);
+    const pages = [
+      { id: 'main', subagent: null, host: 'example.com' },
+      { id: '0123456789abcdef', subagent: 'Price \u202Echecker', host: 'shop.test' },
+    ];
+    // Only the chat's own page: no list.
+    s.emit('hello', { open: true, url: 'https://example.com/', title: 'Example', page: 'main', pages: pages.slice(0, 1) });
+    expect(screen.queryByRole('navigation', { name: 'Browser pages' })).toBeNull();
+    s.emit('message', { type: 'state', state: { open: true, url: 'https://example.com/', title: 'Example', page: 'main', pages } });
+    const own = screen.getByRole('button', { name: "This chat's page" });
+    expect(own).toHaveAttribute('aria-pressed', 'true');
+    // The label is the model's words: one plain line, with no bidi controls.
+    const helper = screen.getByRole('button', { name: 'Sub-agent: Price checker' });
+    expect(helper).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(helper);
+    expect(s.urls.at(-1)).toMatch(/\/chats\/c1\/browser\/live\?page=0123456789abcdef$/);
+    expect(s.closedUrls.at(-1)).toMatch(/\/chats\/c1\/browser\/live$/);
+    s.emit('hello', { open: true, url: 'https://shop.test/', title: 'Shop', page: '0123456789abcdef', pages });
+    expect(screen.getByText('Shop')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sub-agent: Price checker' })).toHaveAttribute('aria-pressed', 'true');
+    s.emit('message', { type: 'frame', seq: 1, jpeg: 'AAAA' });
+    fireEvent.click(screen.getByRole('img', { name: "Live view of the model's browser" }));
+    await vi.waitFor(() => expect(api.browser.input).toHaveBeenLastCalledWith('c1', expect.objectContaining({ type: 'click' }), '0123456789abcdef'));
+    await userEvent.click(screen.getByRole('button', { name: 'Close page' }));
+    expect(api.browser.close).toHaveBeenLastCalledWith('c1', '0123456789abcdef');
+    // The sub-agent ends and its page closes: back to the chat's own.
+    s.emit('message', { type: 'state', state: { open: false, page: '0123456789abcdef', pages: pages.slice(0, 1) } });
+    expect(s.urls.at(-1)).toMatch(/\/chats\/c1\/browser\/live$/);
+  });
+
+  it("says the chat's own page isn't open while only sub-agents have one", () => {
+    const s = fakeConnect();
+    render(<BrowserView chatId="c1" connect={s.connect} />);
+    s.emit('hello', { open: false, page: 'main', pages: [{ id: '0123456789abcdef', subagent: 'Helper', host: null }] });
+    expect(screen.getByText(/The chat's own page isn't open/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sub-agent: Helper' })).toBeInTheDocument();
   });
 
   it('shows an error when closing fails', async () => {

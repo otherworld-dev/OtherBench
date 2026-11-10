@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { classifyAgentTool } from '../src/domain/agent-tools.js';
-import { allowedWhilePlanning, PermissionBroker } from '../src/domain/permissions.js';
+import { allowedWhilePlanning, PermissionBroker, PLAN_BROWSER_OPEN_REFUSAL } from '../src/domain/permissions.js';
 import { createPlanGate, PLAN_REFUSAL } from '../src/domain/thread-tools.js';
+import type { Grant } from '../src/ports/store.js';
 import type { RiskClass, ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import type { ToolPolicy, ToolSource } from '../src/types/config.js';
+import type { Profile, ToolPolicy, ToolSource } from '../src/types/config.js';
 
 const tool = (name: string, source: ToolSource, risk: RiskClass, o: Partial<ToolSpec> = {}): ToolSpec => ({ name, description: '', parameters: {}, risk, source, execute: async () => null, ...o });
 const agent = (name: string): ToolSpec => tool(name, 'agent', classifyAgentTool(name).risk);
@@ -138,8 +139,9 @@ describe('plan mode in the broker', () => {
   });
 
   // Integration with the model's browser: a planning reply may read the page
-  // that is already open, and nothing else.
-  it('lets a planning reply read the open page, and refuses opening one and every change to it, with no card and whatever grants there are', () => {
+  // that is already open, and open a site that already has a standing grant
+  // (below); every change to a page is refused.
+  it('lets a planning reply read the open page, and refuses every change to it, with no card and whatever grants there are', () => {
     const store = new InMemoryStore();
     const b = new PermissionBroker(store);
     const browser = (risk: RiskClass = 'mutate'): ToolSpec => tool('browser', 'browser', risk);
@@ -148,7 +150,6 @@ describe('plan mode in the broker', () => {
     store.grants.create({ id: 'g-site', chatId: null, profileId: 'p1', toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null });
     const page = { host: 'example.com', nav: 1 };
     const changes: Record<string, unknown>[] = [
-      { command: 'open', url: 'https://example.com/?q=secret', host: 'example.com' },
       { command: 'click', ref: 'e1', gen: 1, ...page },
       { command: 'click', ref: 'e1', double: true, gen: 1, ...page },
       { command: 'type', ref: 'e2', text: 'hello', gen: 1, ...page },
@@ -162,6 +163,8 @@ describe('plan mode in the broker', () => {
     ];
     const reads: Record<string, unknown>[] = [{ command: 'snapshot', ...page }, { command: 'scroll', direction: 'down', ...page }, { command: 'close', host: 'example.com' }];
     for (const args of changes) expect(allowedWhilePlanning(browser(), args), JSON.stringify(args)).toBe(false);
+    // `open` is not on the plain list: it goes through only with a standing grant (see 'open while planning').
+    expect(allowedWhilePlanning(browser(), { command: 'open', url: 'https://example.com/', host: 'example.com' })).toBe(false);
     for (const args of reads) expect(allowedWhilePlanning(browser(), args), JSON.stringify(args)).toBe(true);
     // By command name, never by declared risk: a click that calls itself a read is still refused.
     expect(allowedWhilePlanning(browser('read'), { command: 'click', ref: 'e1', ...page })).toBe(false);
@@ -192,16 +195,123 @@ describe('plan mode in the broker', () => {
     // Once the plan is approved the changes are back to the site's grant.
     const gate = createPlanGate();
     gate.approve();
-    for (const args of changes.slice(0, 8)) {
+    for (const args of changes.slice(0, 7)) {
       expect(b.decide(browser(), args, on(), ctx({ plan: gate })), JSON.stringify(args)).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
     }
+  });
+
+  // Claude Code's WebFetch is allowed while planning, so the browser may open
+  // a site too, but only one a person already let it use: a stored grant or
+  // the profile's site list. Never a card, which would let a planning reply
+  // reach a new site, and in a scheduled run nothing more than it gets anyway.
+  describe('open while planning', () => {
+    const browser = (): ToolSpec => tool('browser', 'browser', 'mutate');
+    const on = (o: Partial<ToolPolicy> = {}): ToolPolicy => policy({ browser: true, ...o });
+    const open = (host = 'example.com'): Record<string, unknown> => ({ command: 'open', url: `https://${host}/?q=1`, host });
+    const refusal = { kind: 'deny', reason: PLAN_BROWSER_OPEN_REFUSAL, plan: true };
+    const grant = (o: Partial<Grant> = {}): Grant => ({ id: 'g-site', chatId: null, profileId: 'p1', toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null, ...o });
+    const profile = (browserAllowedSites: string[]): Profile => ({
+      id: 'p1', name: 'p1', description: null, colour: null, connectionId: 'c', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: on(), isDefault: false, archivedAt: null, browserAllowedSites,
+    });
+
+    it("says what to do in the refusal, and keeps the plan gate's own words", () => {
+      expect(PLAN_BROWSER_OPEN_REFUSAL).toContain(PLAN_REFUSAL);
+      expect(PLAN_BROWSER_OPEN_REFUSAL).toMatch(/site list/);
+    });
+
+    it('opens a site with an Always grant or a grant for this chat, under either approval mode', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      store.grants.create(grant());
+      store.grants.create(grant({ id: 'g-chat', chatId: 'c1', scope: 'chat', constraint: { host: 'docs.test' } }));
+      for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+        expect(b.decide(browser(), open(), on({ approvalMode }), planning())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
+        expect(b.decide(browser(), open('docs.test'), on({ approvalMode }), planning())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-chat' });
+      }
+    });
+
+    it("opens a site on the profile's site list", () => {
+      const store = new InMemoryStore();
+      store.profiles.create(profile(['*.example.org']));
+      const b = new PermissionBroker(store);
+      expect(b.decide(browser(), open('docs.example.org'), on(), planning())).toEqual({ kind: 'allow', grantedBy: 'site_list', siteEntry: '*.example.org' });
+    });
+
+    it('refuses a site with no standing grant, with no card, under either approval mode', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      // Grants that don't cover it: another site, another chat, another profile, the sandbox's network, an expired one.
+      store.grants.create(grant({ id: 'g-other', constraint: { host: 'other.test' } }));
+      store.grants.create(grant({ id: 'g-other-chat', chatId: 'c2', scope: 'chat' }));
+      store.grants.create(grant({ id: 'g-other-profile', profileId: 'p2' }));
+      store.grants.create(grant({ id: 'g-network', source: 'network' }));
+      store.grants.create(grant({ id: 'g-expired', expiresAt: Date.now() - 1000 }));
+      for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+        expect(b.decide(browser(), open(), on({ approvalMode }), planning())).toEqual(refusal);
+      }
+      expect(b.pendingCount).toBe(0);
+      // Nor when the profile's site list names a different site.
+      store.profiles.create(profile(['example.org']));
+      expect(b.decide(browser(), open(), on(), planning())).toEqual(refusal);
+      expect(b.pendingCount).toBe(0);
+    });
+
+    it('never lifts a refusal: a blocked, local or private site is refused as itself, grant or not', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      store.grants.create(grant());
+      store.grants.create(grant({ id: 'g-lan', constraint: { host: '192.168.1.1' } }));
+      expect(b.decide(browser(), open(), on({ browserBlockedHosts: ['example.com'] }), planning())).toEqual({ kind: 'deny', reason: 'example.com is blocked for this profile.' });
+      expect(b.decide(browser(), open('192.168.1.1'), on(), planning())).toMatchObject({ kind: 'deny', reason: expect.stringContaining('local or private') });
+      expect(b.decide(browser(), open(), policy(), planning())).toEqual({ kind: 'deny', reason: 'The browser is turned off for this profile.' });
+      // An open that names no site at all.
+      expect(b.decide(browser(), { command: 'open', url: 'x' }, on(), planning())).toMatchObject({ kind: 'deny' });
+      expect(b.pendingCount).toBe(0);
+    });
+
+    it("matches a sub-agent's open under its parent reply's profile, never the one it runs as", () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      // toolContextFor puts the parent's profile in ctx.profileId; a grant held by the profile the sub-agent runs as counts for nothing.
+      store.grants.create(grant({ id: 'g-own', profileId: 'p-sub' }));
+      const asSubagent = (): ToolContext => ctx({ plan: createPlanGate(), subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p1', profileName: 'Sub' } });
+      expect(b.decide(browser(), open(), on(), asSubagent())).toEqual(refusal);
+      store.grants.create(grant());
+      expect(b.decide(browser(), open(), on(), asSubagent())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
+    });
+
+    it('in a scheduled run, opens only what an unattended run may anyway, and is refused, not left for a card, otherwise', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      store.grants.create(grant());
+      const unattended = (): ToolContext => ctx({ plan: createPlanGate(), unattended: true });
+      expect(b.decide(browser(), open(), on(), unattended())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
+      expect(b.decide(browser(), open('other.test'), on(), unattended())).toEqual(refusal);
+      expect(b.pendingCount).toBe(0);
+    });
+
+    it('consumes a once grant like any other call', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      store.grants.create(grant({ id: 'g-once', chatId: 'c1', scope: 'once' }));
+      expect(b.decide(browser(), open(), on(), planning())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-once' });
+      expect(b.decide(browser(), open(), on(), planning())).toEqual(refusal);
+    });
+
+    it('goes back to the usual card once the plan is approved', () => {
+      const b = new PermissionBroker(new InMemoryStore());
+      const gate = createPlanGate();
+      gate.approve();
+      expect(b.decide(browser(), open(), on(), ctx({ plan: gate })).kind).toBe('ask');
+    });
   });
 
   it("holds a sub-agent's browser to its parent's plan gate too", () => {
     const b = new PermissionBroker(new InMemoryStore());
     const asSubagent = ctx({ plan: createPlanGate(), subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p1' } });
     const on = policy({ browser: true });
-    expect(b.decide(tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/', host: 'example.com' }, on, asSubagent)).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+    expect(b.decide(tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/', host: 'example.com' }, on, asSubagent)).toEqual({ kind: 'deny', reason: PLAN_BROWSER_OPEN_REFUSAL, plan: true });
+    expect(b.decide(tool('browser', 'browser', 'mutate'), { command: 'click', ref: 'e1', gen: 1, host: 'example.com', nav: 1 }, on, asSubagent)).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
     expect(b.decide(tool('browser', 'browser', 'read'), { command: 'snapshot', host: 'example.com', nav: 1 }, on, asSubagent)).toEqual({ kind: 'allow', grantedBy: 'auto_read' });
     expect(b.pendingCount).toBe(0);
   });

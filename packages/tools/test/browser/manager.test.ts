@@ -1,18 +1,20 @@
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_IDLE_MS, BrowserManager, CHAT_IDLE_MS, CLOSED_STATE, type BrowserFrame, type BrowserState } from '../../src/browser/manager.js';
+import { BROWSER_IDLE_MS, BrowserManager, CHAT_IDLE_MS, CLOSED_STATE, isPageId, MAIN_PAGE, MAX_CHAT_PAGES, MAX_OPEN_BROWSERS, type BrowserFrame, type BrowserState } from '../../src/browser/manager.js';
 import { startEgressProxy } from '../../src/browser/proxy.js';
 import { BrowserBusyError } from '../../src/browser/session.js';
 import { FakeFactory, fakeProxy, gate } from './fakes.js';
 
-function make(o: { allowLoopbackPorts?: number[]; maxOpen?: number } = {}) {
+function make(o: { allowLoopbackPorts?: number[]; maxOpen?: number; maxChatPages?: number } = {}) {
   const factory = new FakeFactory();
   const proxy = fakeProxy();
   const manager = new BrowserManager({ factory, startProxy: proxy.start, ...o });
   return { factory, proxy, manager };
 }
 const turn = () => new AbortController();
+/** A sub-agent's tool call context, as the browser tool hands it to the manager. */
+const sub = (chatId: string, messageId: string, callId: string, label = 'Helper') => ({ chatId, messageId, subagent: { callId, label } });
 
 afterEach(() => vi.useRealTimers());
 
@@ -71,8 +73,8 @@ describe('BrowserManager', () => {
     expect(factory.shutdowns).toBe(1);
   });
 
-  it('keeps at most four open: a fifth closes the least recently used one nobody holds, or is refused', async () => {
-    const { manager } = make();
+  it('keeps at most maxOpen open: one more closes the least recently used one nobody holds, or is refused', async () => {
+    const { manager } = make({ maxOpen: 4 });
     const turns = [turn(), turn(), turn(), turn()];
     for (const [i, t] of turns.entries()) await manager.acquire(`c${i}`, `m${i}`, t.signal, []);
     await expect(manager.acquire('c4', 'm4', turn().signal, [])).rejects.toThrow(/in use/);
@@ -103,7 +105,12 @@ describe('BrowserManager', () => {
     session.onFrame!(Buffer.from('jpeg-1'));
     expect(frames).toEqual([{ seq: 1, jpeg: Buffer.from('jpeg-1').toString('base64') }]);
     session.navigate('https://example.com/', 'Example');
-    await vi.waitFor(() => expect(states.at(-1)).toEqual({ open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: 'm1', visible: true }));
+    await vi.waitFor(() =>
+      expect(states.at(-1)).toEqual({
+        open: true, url: 'https://example.com/', title: 'Example', host: 'example.com', holder: 'm1', visible: true,
+        page: MAIN_PAGE, pages: [{ id: MAIN_PAGE, subagent: null, host: 'example.com' }],
+      })
+    );
     stop();
     await vi.waitFor(() => expect(session.onFrame).toBeNull());
   });
@@ -338,6 +345,178 @@ describe('BrowserManager', () => {
     expect(factory.sessions.every((s) => s.closed)).toBe(true);
     expect(factory.shutdowns).toBe(1);
     expect(proxy.closes()).toBe(1);
+  });
+});
+
+describe("BrowserManager: a page for each sub-agent", () => {
+  it('caps pages at eight across chats and five in a chat (its own and four sub-agents)', () => {
+    expect(MAX_OPEN_BROWSERS).toBe(8);
+    expect(MAX_CHAT_PAGES).toBe(5);
+  });
+
+  it("gives each sub-agent its own page and proxy user, apart from the chat's, with no busy refusal between them", async () => {
+    const { factory, manager } = make();
+    const reply = turn();
+    const helperA = turn();
+    const helperB = turn();
+    const main = await manager.acquire('c1', 'm1', reply.signal, []);
+    // A tool call's context with no sub-agent tag is the chat's own page.
+    expect(await manager.acquire({ chatId: 'c1', messageId: 'm1' }, 'm1', reply.signal, [])).toBe(main);
+    const a = await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helperA.signal, []);
+    const b = await manager.acquire(sub('c1', 'm1', 'call-b', 'Other helper'), 'm1', helperB.signal, []);
+    expect(new Set([main, a, b]).size).toBe(3);
+    expect(factory.sessions).toHaveLength(3);
+    expect(new Set(factory.sessions.map((s) => s.proxy.username)).size).toBe(3);
+    // The same sub-agent finds its page again; a sub-agent of another reply with the same call id gets its own.
+    expect(await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helperA.signal, [])).toBe(a);
+    expect(manager.peek(sub('c1', 'm1', 'call-a'))).toBe(a);
+    expect(manager.peek(sub('c1', 'm2', 'call-a'))).toBeNull();
+    expect(manager.peek('c1')).toBe(main);
+    expect([main.pageId, a.subagent, b.subagent]).toEqual([MAIN_PAGE, 'Helper', 'Other helper']);
+    expect(isPageId(a.pageId) && isPageId(b.pageId) && a.pageId !== b.pageId && a.pageId !== MAIN_PAGE).toBe(true);
+    expect(manager.state('c1').pages).toEqual([
+      { id: MAIN_PAGE, subagent: null, host: null },
+      { id: a.pageId, subagent: 'Helper', host: null },
+      { id: b.pageId, subagent: 'Other helper', host: null },
+    ]);
+    // Another reply still finds the chat's own page busy.
+    await expect(manager.acquire('c1', 'm2', turn().signal, [])).rejects.toThrow(BrowserBusyError);
+  });
+
+  it("closes a sub-agent's page when the sub-agent ends, and only releases the chat's own when the reply does", async () => {
+    const { factory, manager } = make();
+    const reply = turn();
+    const helper = turn();
+    await manager.acquire('c1', 'm1', reply.signal, []);
+    const page = await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helper.signal, []);
+    helper.abort();
+    await vi.waitFor(() => expect(factory.sessions[1]!.closed).toBe(true));
+    expect(manager.peek(sub('c1', 'm1', 'call-a'))).toBeNull();
+    expect(manager.state('c1', page.pageId)).toMatchObject({ open: false, page: page.pageId });
+    reply.abort();
+    expect(factory.sessions[0]!.closed).toBe(false);
+    expect(manager.state('c1')).toMatchObject({ open: true, holder: null });
+  });
+
+  it("closes a sub-agent's page at once when the sub-agent was stopped while its page was starting", async () => {
+    const { factory, manager } = make();
+    const opening = gate();
+    factory.openGate = opening.promise;
+    const helper = turn();
+    const starting = manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helper.signal, []);
+    helper.abort();
+    opening.open();
+    await starting;
+    await vi.waitFor(() => expect(factory.sessions[0]!.closed).toBe(true));
+    expect(manager.state('c1').pages).toEqual([]);
+  });
+
+  it("closes one page by id, or every page of the chat, and leaves other chats' alone", async () => {
+    const { factory, manager } = make();
+    await manager.acquire('c1', 'm1', turn().signal, []);
+    const a = await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', turn().signal, []);
+    await manager.acquire(sub('c1', 'm1', 'call-b'), 'm1', turn().signal, []);
+    await manager.acquire('c2', 'm9', turn().signal, []);
+    await manager.close('c1', a.pageId);
+    expect(factory.sessions.map((s) => s.closed)).toEqual([false, true, false, false]);
+    await manager.close('c1', 'feedfacefeedface'); // no such page: harmless
+    await manager.close('c1');
+    expect(factory.sessions.map((s) => s.closed)).toEqual([true, true, true, false]);
+    expect(manager.state('c1')).toEqual(CLOSED_STATE);
+    expect(manager.state('c2').open).toBe(true);
+  });
+
+  it("closing a chat waits for a sub-agent's page still starting, and closes it too", async () => {
+    const { factory, manager } = make();
+    const opening = gate();
+    factory.openGate = opening.promise;
+    const starting = manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', turn().signal, []).catch(() => null);
+    const closing = manager.close('c1');
+    opening.open();
+    await Promise.all([starting, closing]);
+    expect(factory.sessions[0]!.closed).toBe(true);
+    expect(manager.state('c1').pages).toEqual([]);
+  });
+
+  it("holds each page's proxy user to the blocked list its own calls bring", async () => {
+    const { factory, proxy, manager } = make();
+    await manager.acquire('c1', 'm1', turn().signal, ['ads.test']);
+    await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', turn().signal, ['ads.test', 'casino.test']);
+    const [main, helper] = factory.sessions.map((s) => s.proxy.username);
+    const check = (user: string, host: string): string | null => proxy.options().check(user, host, 443);
+    expect(check(main!, 'ads.test')).toBe('ads.test is blocked for this profile.');
+    expect(check(main!, 'casino.test')).toBeNull();
+    expect(check(helper!, 'casino.test')).toBe('casino.test is blocked for this profile.');
+    // A request refused for the sub-agent's page is noted on its result, not the reply's.
+    proxy.options().onRefused!(helper!, '10.0.0.1', 'x');
+    expect(manager.peek('c1')!.takeNotes()).toEqual([]);
+    expect(manager.peek(sub('c1', 'm1', 'call-a'))!.takeNotes()).toEqual(['1 request to a blocked or local address was refused.']);
+  });
+
+  it("caps a chat's pages: one more closes the chat's least recently used page nobody holds, never another chat's, or is refused", async () => {
+    const { factory, manager } = make({ maxChatPages: 3 });
+    const reply = turn();
+    await manager.acquire('c2', 'm9', turn().signal, []); // another chat, unheld soon
+    await manager.acquire('c1', 'm1', reply.signal, []);
+    const helpers = [turn(), turn()];
+    await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helpers[0]!.signal, []);
+    await manager.acquire(sub('c1', 'm1', 'call-b'), 'm1', helpers[1]!.signal, []);
+    await expect(manager.acquire(sub('c1', 'm1', 'call-c'), 'm1', turn().signal, [])).rejects.toThrow(/This chat already has 3 browser pages open/);
+    // The reply ends: its page is the chat's one nobody holds, so it makes way, and c2's is left alone.
+    reply.abort();
+    await manager.acquire(sub('c1', 'm2', 'call-c'), 'm2', turn().signal, []);
+    expect(factory.sessions[1]!.closed).toBe(true);
+    expect(factory.sessions[0]!.closed).toBe(false);
+    expect(manager.state('c1').pages.map((p) => p.subagent)).toEqual(['Helper', 'Helper', 'Helper']);
+  });
+
+  it('counts sub-agent pages against the cap across chats', async () => {
+    const { manager } = make({ maxOpen: 3 });
+    await manager.acquire('c1', 'm1', turn().signal, []);
+    await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', turn().signal, []);
+    await manager.acquire(sub('c1', 'm1', 'call-b'), 'm1', turn().signal, []);
+    await expect(manager.acquire('c2', 'm2', turn().signal, [])).rejects.toThrow(/^3 browser pages are already open/);
+  });
+
+  it("closes an idle sub-agent page after 15 minutes like any other", async () => {
+    vi.useFakeTimers();
+    const { factory, manager } = make();
+    await manager.acquire('c1', 'm1', turn().signal, []);
+    await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', turn().signal, []);
+    await vi.advanceTimersByTimeAsync(CHAT_IDLE_MS);
+    await vi.waitFor(() => expect(factory.sessions.every((s) => s.closed)).toBe(true));
+  });
+
+  it("streams a page's frames only to its own watchers, and tells every watcher of the chat when the list of pages changes", async () => {
+    const { factory, manager } = make();
+    const mainFrames: BrowserFrame[] = [];
+    const mainStates: BrowserState[] = [];
+    manager.watch('c1', (f) => mainFrames.push(f), (s) => mainStates.push(s));
+    await manager.acquire('c1', 'm1', turn().signal, []);
+    const helper = turn();
+    const page = await manager.acquire(sub('c1', 'm1', 'call-a'), 'm1', helper.signal, []);
+    // The chat's own page's watcher hears of the new page, and keeps being shown its own.
+    await vi.waitFor(() => expect(mainStates.at(-1)!.pages.map((p) => p.id)).toEqual([MAIN_PAGE, page.pageId]));
+    expect(mainStates.at(-1)!.page).toBe(MAIN_PAGE);
+    const subFrames: BrowserFrame[] = [];
+    const subStates: BrowserState[] = [];
+    const stop = manager.watch('c1', (f) => subFrames.push(f), (s) => subStates.push(s), page.pageId);
+    const [mainSession, subSession] = factory.sessions;
+    await vi.waitFor(() => expect(subSession!.onFrame).not.toBeNull());
+    subSession!.onFrame!(Buffer.from('sub'));
+    expect(subFrames).toHaveLength(1);
+    expect(mainFrames).toHaveLength(0);
+    await vi.waitFor(() => expect(mainSession!.onFrame).not.toBeNull());
+    mainSession!.onFrame!(Buffer.from('main'));
+    expect(mainFrames).toHaveLength(1);
+    expect(subFrames).toHaveLength(1);
+    subSession!.navigate('https://example.org/', 'Org');
+    await vi.waitFor(() => expect(subStates.at(-1)).toMatchObject({ open: true, page: page.pageId, url: 'https://example.org/', title: 'Org', host: 'example.org' }));
+    // The sub-agent ends: both watchers hear its page has gone.
+    helper.abort();
+    await vi.waitFor(() => expect(subStates.at(-1)).toMatchObject({ open: false, page: page.pageId, pages: [{ id: MAIN_PAGE }] }));
+    expect(mainStates.at(-1)!.pages.map((p) => p.id)).toEqual([MAIN_PAGE]);
+    stop();
   });
 });
 

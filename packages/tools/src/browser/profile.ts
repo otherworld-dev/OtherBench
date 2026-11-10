@@ -14,20 +14,26 @@ const EMPTY: ProfileState = { cookies: [], origins: [] };
 const cookieKey = (c: Cookie): string => `${c.domain}\n${c.path}\n${c.name}`;
 
 /**
- * `stored` with what one chat's browser changed since it opened: what it added
+ * `stored` with what one page's browser changed since it opened: what it added
  * or changed goes in, and what it removed comes out (signing out has to stick).
- * What other chats saved meanwhile is left alone, so two browsers open at once
- * don't undo each other.
+ * Only what changed: a cookie or a site's storage it still holds just as it
+ * was given them is left as `stored` has it now. Pages open at once (two
+ * chats', or a chat's and its sub-agents') each start from the same copy, so
+ * writing back an unchanged one would undo what another page saved meanwhile:
+ * put back a cookie another page signed out of, or an older value of one it
+ * changed. What other pages saved is left alone.
  */
 export function mergeProfile(stored: ProfileState, before: ProfileState, after: ProfileState): ProfileState {
   const cookies = new Map(stored.cookies.map((c) => [cookieKey(c), c]));
   const kept = new Set(after.cookies.map(cookieKey));
+  const cookiesWere = new Map(before.cookies.map((c) => [cookieKey(c), JSON.stringify(c)]));
   for (const c of before.cookies) if (!kept.has(cookieKey(c))) cookies.delete(cookieKey(c));
-  for (const c of after.cookies) cookies.set(cookieKey(c), c);
+  for (const c of after.cookies) if (cookiesWere.get(cookieKey(c)) !== JSON.stringify(c)) cookies.set(cookieKey(c), c);
   const origins = new Map(stored.origins.map((o) => [o.origin, o]));
   const left = new Set(after.origins.map((o) => o.origin));
+  const originsWere = new Map(before.origins.map((o) => [o.origin, JSON.stringify(o)]));
   for (const o of before.origins) if (!left.has(o.origin)) origins.delete(o.origin);
-  for (const o of after.origins) origins.set(o.origin, o);
+  for (const o of after.origins) if (originsWere.get(o.origin) !== JSON.stringify(o)) origins.set(o.origin, o);
   return { cookies: [...cookies.values()], origins: [...origins.values()] };
 }
 

@@ -91,8 +91,10 @@ describe("PermissionBroker: the profile's browser site list", () => {
     for (const host of ['localhost', '127.0.0.1', '10.0.0.5', '192.168.1.1', 'router', 'printer.local', '::1']) {
       expect(broker.decide(BROWSER(), open(host), policy(), ctx()), host).toMatchObject({ kind: 'deny' });
     }
+    // While planning a listed site may be opened (a standing grant), but nothing on it may be changed.
     const plan = createPlanGate();
-    expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx({ plan }))).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+    expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx({ plan }))).toMatchObject({ kind: 'allow', grantedBy: 'site_list' });
+    expect(broker.decide(BROWSER(), { command: 'click', ref: 'e1', gen: 1, nav: 1, host: 'example.com' }, policy(), ctx({ plan }))).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
     expect(broker.decide(BROWSER(), open('example.com'), policy({ browser: false }), ctx())).toMatchObject({ kind: 'deny' });
     expect(broker.pendingCount).toBe(0);
     // An entry over a public suffix never matched in the first place: the site gets its card.

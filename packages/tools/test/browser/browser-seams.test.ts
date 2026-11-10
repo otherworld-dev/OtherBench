@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PermissionBroker, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
+import { PermissionBroker, PLAN_BROWSER_OPEN_REFUSAL, UNATTENDED_REASON } from '@otherbench/core/domain/permissions.js';
 import { createPlanGate, PLAN_REFUSAL } from '@otherbench/core/domain/thread-tools.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
@@ -8,7 +8,8 @@ import type { Grant } from '@otherbench/core/ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { Connection, Profile, ResolvedProfile, ToolPolicy } from '@otherbench/core/types/config.js';
-import { BrowserManager } from '../../src/browser/manager.js';
+import { BrowserManager, MAIN_PAGE, type BrowserState } from '../../src/browser/manager.js';
+import { NO_PAGE } from '../../src/browser/tool.js';
 import { OtherBenchToolProvider } from '../../src/provider.js';
 import { FakeFactory, fakeProxy } from './fakes.js';
 
@@ -46,22 +47,31 @@ function setup(o: { answer?: ApprovalChoice['choice']; grants?: Grant[] } = {}) 
 }
 
 describe('the browser in a Plan-mode chat', () => {
-  it('refuses opening a page and every change to one until the plan is approved, with no card and no browser started', async () => {
+  it('refuses opening a site with no standing grant until the plan is approved, with no card and no browser started', async () => {
+    const s = setup({ answer: 'once', grants: [siteGrant('g1', 'example.com')] });
+    const plan = createPlanGate();
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      const tool = await s.browser(policy({ approvalMode }));
+      const opened = await tool.execute({ command: 'open', url: 'https://other.test/' }, ctx({ plan }));
+      expect(isError(opened, 'plan_mode'), approvalMode).toBe(true);
+      expect(messageOf(opened)).toBe(PLAN_BROWSER_OPEN_REFUSAL);
+    }
+    expect(s.factory.sessions).toHaveLength(0);
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:deny:plan', 'browser:deny:plan']);
+    expect(s.broker.pendingCount).toBe(0);
+  });
+
+  it("opens a site with a standing grant while planning, reads it, and changes nothing on it until the plan is approved", async () => {
     const s = setup({ answer: 'once', grants: [siteGrant('g1', 'example.com')] });
     const tool = await s.browser();
     const plan = createPlanGate();
-    const opened = await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx({ plan }));
-    expect(isError(opened, 'plan_mode')).toBe(true);
-    expect(messageOf(opened)).toBe(PLAN_REFUSAL);
-    expect(s.factory.sessions).toHaveLength(0);
-    expect(s.cards).toEqual([]);
-    expect(s.audit()).toEqual(['browser:deny:plan']);
-    expect(s.broker.pendingCount).toBe(0);
-
-    // A page opened before the plan was asked for (another reply of the chat, with no gate).
-    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx()))).toBe(false);
+    // The site has an Always grant: a planning reply may open it, with no card.
+    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx({ plan })))).toBe(false);
     const session = s.factory.sessions[0]!;
     expect(session.actions).toEqual(['open https://example.com/']);
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:grant:g1']);
 
     // The planning reply may read it...
     const read = await tool.execute({ command: 'snapshot' }, ctx({ plan }));
@@ -75,19 +85,21 @@ describe('the browser in a Plan-mode chat', () => {
       { command: 'select', ref: 'e2', values: ['x'] },
       { command: 'press', key: 'Enter' },
       { command: 'back' },
-      { command: 'open', url: 'https://example.com/next' },
     ]) {
       const refused = await tool.execute(args, ctx({ plan }));
       expect(isError(refused, 'plan_mode'), JSON.stringify(args)).toBe(true);
       expect(messageOf(refused)).toBe(PLAN_REFUSAL);
     }
-    expect(session.actions).toEqual(['open https://example.com/', 'scroll down']);
+    // Another page on the granted site opens; one on a site with no grant does not, and raises no card.
+    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/next' }, ctx({ plan })))).toBe(false);
+    expect(isError(await tool.execute({ command: 'open', url: 'https://other.test/' }, ctx({ plan })), 'plan_mode')).toBe(true);
+    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'open https://example.com/next']);
     expect(s.cards).toEqual([]);
 
     // The same gate, approved: the click goes on to the site's grant and runs.
     plan.approve();
     expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, ctx({ plan })))).toBe(false);
-    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'click e3']);
+    expect(session.actions).toEqual(['open https://example.com/', 'scroll down', 'open https://example.com/next', 'click e3']);
   });
 
   it("refuses the relayed browser the same way: Claude Code's gate gets the plan refusal, and no ticket's worth of arguments", async () => {
@@ -95,7 +107,16 @@ describe('the browser in a Plan-mode chat', () => {
     const [spec] = (await s.provider.relayTools(policy()));
     expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
     const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ plan: createPlanGate() }));
-    expect(outcome).toEqual({ allowed: false, reason: PLAN_REFUSAL });
+    expect(outcome).toEqual({ allowed: false, reason: PLAN_BROWSER_OPEN_REFUSAL });
+    expect(s.cards).toEqual([]);
+    expect(s.audit()).toEqual(['browser:deny:plan']);
+  });
+
+  it('never lets auto mode approve a planning open in place of a card', async () => {
+    const s = setup({ answer: 'once' });
+    const [spec] = await s.provider.relayTools(policy());
+    const outcome = await s.provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, policy(), ctx({ plan: createPlanGate() }), { deferAsk: true });
+    expect(outcome).toEqual({ allowed: false, reason: PLAN_BROWSER_OPEN_REFUSAL });
     expect(s.cards).toEqual([]);
     expect(s.audit()).toEqual(['browser:deny:plan']);
   });
@@ -209,6 +230,10 @@ interface TurnOptions {
   /** The parent's and the other profile's browser site lists. */
   parentSites?: string[];
   otherSites?: string[];
+  /** Runs inside the sub-agent once its calls are made, while its page is still open (it closes when the sub-agent ends). */
+  /** How many sub-agents the parent starts at once, each making `subCalls` (1 by default). */
+  subagentCount?: number;
+  whileSubRuns?: (r: { factory: FakeFactory; proxy: ReturnType<typeof fakeProxy>; manager: BrowserManager }) => void;
 }
 
 async function turn(o: TurnOptions = {}) {
@@ -242,6 +267,7 @@ async function turn(o: TurnOptions = {}) {
         for (const [i, args] of (o.subCalls ?? []).entries()) {
           seen.results.push(tool ? await tool.execute(args, toolContextFor(req, req.signal, `sub-${i}`)) : 'not offered');
         }
+        o.whileSubRuns?.({ factory, proxy, manager });
         yield { type: 'text-delta', text: 'Finished.' };
         yield finish;
         return;
@@ -251,9 +277,11 @@ async function turn(o: TurnOptions = {}) {
         seen.parentOpened.push(browser ? await browser.execute({ command: 'open', url }, toolContextFor(req, req.signal, `open-${i}`)) : 'not offered');
       }
       const tool = req.tools.find((t) => t.name === 'subagent');
-      seen.parent = tool
-        ? await tool.execute({ description: 'Helper', prompt: 'Do the work.', ...(other ? { profile: 'Other' } : {}) }, toolContextFor(req, req.signal, 'call-1'))
-        : 'not offered';
+      // Several sub-agents are started in one step, so they run at once.
+      const started = Array.from({ length: o.subagentCount ?? 1 }, (_, i) =>
+        tool ? tool.execute({ description: 'Helper', prompt: 'Do the work.', ...(other ? { profile: 'Other' } : {}) }, toolContextFor(req, req.signal, `call-${i + 1}`)) : Promise.resolve('not offered')
+      );
+      seen.parent = (await Promise.all(started))[0];
       yield finish;
     },
     async listModels() {
@@ -269,7 +297,7 @@ async function turn(o: TurnOptions = {}) {
     ...(o.unattended ? { unattended: true } : {}),
   });
   await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
-  return { store, broker, seen, cards, factory, proxy, audit: store.audit.list('chat-1') };
+  return { store, broker, seen, cards, factory, proxy, manager, audit: store.audit.list('chat-1') };
 }
 
 const openOf = (url: string): Record<string, unknown> => ({ command: 'open', url });
@@ -298,11 +326,17 @@ describe("a sub-agent and the model's browser", () => {
   });
 
   it('may use no site either profile blocks: the broker refuses it before any card, and the proxy is given both lists', async () => {
+    const checks: (string | null)[] = [];
     const r = await turn({
       parent: { browserBlockedHosts: ['ads.test'] },
       other: { browserBlockedHosts: ['casino.test'] },
       subCalls: [openOf('https://ads.test/'), openOf('https://play.casino.test/'), openOf('https://example.com/')],
       answer: 'once',
+      // What the page itself may fetch is held to both lists too: asked while the sub-agent's page is open.
+      whileSubRuns: ({ factory, proxy }) => {
+        const user = factory.sessions[0]!.proxy.username;
+        for (const host of ['ads.test', 'cdn.casino.test', 'example.com']) checks.push(proxy.options().check(user, host, 443));
+      },
     });
     expect(r.seen.child!.profile.toolPolicy.browserBlockedHosts).toEqual(['ads.test', 'casino.test']);
     expect(isError(r.seen.results[0], 'permission_denied')).toBe(true);
@@ -314,11 +348,7 @@ describe("a sub-agent and the model's browser", () => {
     expect(r.cards.map((c) => [c.summary, c.subagent?.label, c.subagent?.profileName])).toEqual([['Use example.com: open https://example.com/', 'Helper', 'Other']]);
     const session = r.factory.sessions[0]!;
     expect(session.actions).toEqual(['open https://example.com/']);
-    // What the page itself may fetch is held to both lists too.
-    const check = r.proxy.options().check;
-    expect(check(session.proxy.username, 'ads.test', 443)).toBe('ads.test is blocked for this profile.');
-    expect(check(session.proxy.username, 'cdn.casino.test', 443)).toBe('cdn.casino.test is blocked for this profile.');
-    expect(check(session.proxy.username, 'example.com', 443)).toBeNull();
+    expect(checks).toEqual(['ads.test is blocked for this profile.', 'cdn.casino.test is blocked for this profile.', null]);
   });
 
   it("never uses a site grant of the profile it runs as; the parent's counts, and its own answer is stored under the parent's profile", async () => {
@@ -335,37 +365,44 @@ describe("a sub-agent and the model's browser", () => {
   });
 
   it("asks before every browser call when either profile asks before every call", async () => {
-    // The parent reads without a card; run as an always-ask profile, the sub-agent's read of the same page asks.
+    // The parent reads without a card; run as an always-ask profile, the sub-agent's read of its own page asks.
     const r = await turn({
       other: { approvalMode: 'always_ask' },
       parentOpens: ['https://example.com/'],
-      subCalls: [{ command: 'snapshot' }],
+      subCalls: [openOf('https://example.com/'), { command: 'snapshot' }],
       answer: 'once',
     });
     expect(isError(r.seen.parentOpened[0])).toBe(false);
     expect(isError(r.seen.results[0])).toBe(false);
+    expect(isError(r.seen.results[1])).toBe(false);
     expect(r.cards.map((c) => [c.summary, c.subagent?.label ?? null])).toEqual([
       ['Use example.com: open https://example.com/', null],
+      ['Use example.com: open https://example.com/', 'Helper'],
       ['Use example.com: read the page', 'Helper'],
     ]);
   });
 
-  it("is held to its parent's plan gate: it may read the page the chat has open, and open or change nothing", async () => {
+  it("is held to its parent's plan gate: it may open a site its parent's profile has a grant for and read it, and open nothing else or change anything", async () => {
     const r = await turn({
       planMode: true,
-      subCalls: [openOf('https://example.com/'), { command: 'snapshot' }],
-      grants: [siteGrant('g-main', 'example.com')],
+      subCalls: [openOf('https://other.test/'), openOf('https://example.com/'), { command: 'snapshot' }, { command: 'click', ref: 'e3' }],
+      grants: [siteGrant('g-main', 'example.com'), siteGrant('g-other', 'other.test', 'p-other')],
+      other: {},
       answer: 'once',
     });
     expect(r.seen.parent).toBe('Finished.');
     expect(r.seen.child!.plan!.approved).toBe(false);
+    // A grant held by the profile it runs as counts for nothing.
     expect(isError(r.seen.results[0], 'plan_mode')).toBe(true);
-    expect(messageOf(r.seen.results[0])).toBe(PLAN_REFUSAL);
-    // No page is open, so there is nothing to read either: refused before the broker, as for any reply.
-    expect(isError(r.seen.results[1], 'permission_denied')).toBe(true);
-    expect(r.factory.sessions).toHaveLength(0);
+    expect(messageOf(r.seen.results[0])).toBe(PLAN_BROWSER_OPEN_REFUSAL);
+    expect(isError(r.seen.results[1])).toBe(false);
+    expect(isError(r.seen.results[2])).toBe(false);
+    expect(isError(r.seen.results[3], 'plan_mode')).toBe(true);
+    expect(messageOf(r.seen.results[3])).toBe(PLAN_REFUSAL);
+    expect(r.factory.sessions).toHaveLength(1);
+    expect(r.factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
     expect(r.cards).toEqual([]);
-    expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['deny:plan', 'deny:policy']);
+    expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['deny:plan', 'grant:g-main', 'auto_read', 'deny:plan']);
   });
 
   it("is unattended in a scheduled run: a new site is refused without a card, and a site the parent's profile has an Always grant for works", async () => {
@@ -399,13 +436,42 @@ describe("a sub-agent and the model's browser", () => {
     expect(r.audit.filter((a) => a.toolName === 'browser').map((a) => a.grantedBy)).toEqual(['site_list:example.com', 'site_list:example.com', 'deny:unattended']);
   });
 
-  it("shares the chat's one browser with the reply that started it: same page, same holder", async () => {
-    const r = await turn({ parentOpens: ['https://example.com/'], subCalls: [{ command: 'snapshot' }, { command: 'click', ref: 'e3' }], grants: [siteGrant('g-main', 'example.com')] });
+  it('gets a page of its own, apart from the reply that started it, which closes when the sub-agent ends', async () => {
+    let during: BrowserState | null = null;
+    const r = await turn({
+      parentOpens: ['https://example.com/'],
+      // The parent's page is open, but not the sub-agent's: it has to open its own first.
+      subCalls: [{ command: 'snapshot' }, openOf('https://example.com/other'), { command: 'click', ref: 'e3' }],
+      grants: [siteGrant('g-main', 'example.com')],
+      whileSubRuns: ({ manager }) => {
+        during = manager.state('chat-1');
+      },
+    });
     expect(isError(r.seen.parentOpened[0])).toBe(false);
-    expect(r.seen.results[0]).toMatchObject({ url: 'https://example.com/' });
+    expect(isError(r.seen.results[0], 'permission_denied')).toBe(true);
+    expect(messageOf(r.seen.results[0])).toBe(NO_PAGE);
     expect(isError(r.seen.results[1])).toBe(false);
-    // One browser for the chat, used by both: the sub-agent's click landed on the page the parent opened.
-    expect(r.factory.sessions).toHaveLength(1);
-    expect(r.factory.sessions[0]!.actions).toEqual(['open https://example.com/', 'click e3']);
+    expect(isError(r.seen.results[2])).toBe(false);
+    // Two pages, one each, with their own proxy users: the sub-agent's click landed on its own page, never the parent's.
+    expect(r.factory.sessions).toHaveLength(2);
+    const [parent, sub] = r.factory.sessions;
+    expect(parent!.actions).toEqual(['open https://example.com/']);
+    expect(sub!.actions).toEqual(['open https://example.com/other', 'click e3']);
+    expect(sub!.proxy.username).not.toBe(parent!.proxy.username);
+    // While it ran the panel listed both, the chat's own first; once it ended its page closed and the parent's stayed.
+    expect(during!.pages).toEqual([
+      { id: MAIN_PAGE, subagent: null, host: 'example.com' },
+      { id: expect.stringMatching(/^[0-9a-f]{16}$/), subagent: 'Helper', host: 'example.com' },
+    ]);
+    await vi.waitFor(() => expect(sub!.closed).toBe(true));
+    expect(parent!.closed).toBe(false);
+    expect(r.manager.state('chat-1').pages.map((p) => p.id)).toEqual([MAIN_PAGE]);
+  });
+
+  it('lets two sub-agents running at once each keep their own refs', async () => {
+    const r = await turn({ subCalls: [openOf('https://example.com/'), { command: 'click', ref: 'e3' }], grants: [siteGrant('g-main', 'example.com')], subagentCount: 2 });
+    expect(r.seen.results.every((x) => !isError(x))).toBe(true);
+    expect(r.factory.sessions).toHaveLength(2);
+    for (const session of r.factory.sessions) expect(session.actions).toEqual(['open https://example.com/', 'click e3']);
   });
 });
