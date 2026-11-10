@@ -120,11 +120,13 @@ function statusForClassifiedError(kind: ErrorKind): 400 | 429 | 502 {
  * a connection kind whose discovery reports real values (currently only
  * Ollama, via `AiSdkChatEngine.seedOllamaCapabilities`), a `discovered` row
  * left unedited keeps tracking the provider on every re-run -- only an
- * edited row opts out.
+ * edited row opts out. Every model one run inserts gets the same
+ * `firstSeenAt`, which the Models page uses to tag what the latest run added.
  */
 function upsertDiscoveredModels(container: Container, connectionId: string, discovered: DiscoveredModel[]): ModelInfo[] {
   const existingByModelId = new Map(container.store.models.list(connectionId).map((m) => [m.modelId, m]));
   const result: ModelInfo[] = [];
+  const now = Date.now();
 
   for (const d of discovered) {
     const current = existingByModelId.get(d.modelId);
@@ -145,6 +147,7 @@ function upsertDiscoveredModels(container: Container, connectionId: string, disc
           priceOutPer1m: null,
           priceCachedPer1m: null,
           currency: 'USD',
+          firstSeenAt: now,
         })
       );
     } else if (current.source === 'discovered') {

@@ -15,6 +15,13 @@ panel under `packages/web/src/views/settings/`:
   (`priceInPer1m`/`priceOutPer1m`/`priceCachedPer1m`). A hand-edited row is
   marked `source: 'manual'` server-side (`routes/models.ts`) so a later
   re-discovery from the same connection doesn't silently overwrite it.
+  Models are a table, one line each (name and model id, connection, Vision,
+  Tools, price), with a search box over the name and id and a sort on every
+  column heading (`model-table.ts`); clicking a line opens its edit form
+  under it, one at a time. Discover stamps the models each run adds with one
+  `firstSeenAt` (migration 048), and the ones the latest run on a connection
+  added carry a **New** tag. A connection's first run tags nothing, since
+  it found everything, and models from before 048 have no stamp.
 - **Profiles** (`ProfilesPanel.tsx`) — system prompt, sampling params
   (temperature, top-p, max output tokens, thinking budget), and tool policy
   (fs mode, shell on/off, approval mode, and an MCP-server allowlist

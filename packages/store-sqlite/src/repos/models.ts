@@ -22,6 +22,7 @@ const mapping: CrudMapping<ModelInfo> = {
     'price_out_per_1m',
     'price_cached_per_1m',
     'currency',
+    'first_seen_at',
   ],
   toRow: (m) => [
     m.id,
@@ -38,6 +39,7 @@ const mapping: CrudMapping<ModelInfo> = {
     m.priceOutPer1m,
     m.priceCachedPer1m,
     m.currency,
+    m.firstSeenAt ?? null,
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -54,6 +56,7 @@ const mapping: CrudMapping<ModelInfo> = {
     priceOutPer1m: row.price_out_per_1m as number | null,
     priceCachedPer1m: row.price_cached_per_1m as number | null,
     currency: row.currency as string,
+    firstSeenAt: row.first_seen_at as number | null,
   }),
 };
 

@@ -547,6 +547,30 @@ describe('POST /api/connections/:id/discover-models', () => {
     expect(stored[0]).toMatchObject({ displayName: 'GPT-4o (new name)', contextWindow: 200_000 });
   });
 
+  it('stamps the models one run adds with the same first-seen time, and never moves it on a re-run', async () => {
+    const created = await json(
+      await app().request('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Discoverable', kind: 'openai', apiKey: 'sk-discover' }),
+      })
+    );
+    const id = created['id'] as string;
+    const model = (modelId: string): DiscoveredModel => ({ modelId, displayName: modelId, contextWindow: null, supportsVision: null, supportsTools: null });
+    engine.models = [model('gpt-4o'), model('gpt-4o-mini')];
+    await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+    const first = new Map(container.store.models.list(id).map((m) => [m.modelId, m.firstSeenAt]));
+    expect(typeof first.get('gpt-4o')).toBe('number');
+    expect(first.get('gpt-4o-mini')).toBe(first.get('gpt-4o'));
+
+    await new Promise((r) => setTimeout(r, 5));
+    engine.models = [model('gpt-4o'), model('gpt-4o-mini'), model('gpt-5')];
+    await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+    const second = new Map(container.store.models.list(id).map((m) => [m.modelId, m.firstSeenAt]));
+    expect(second.get('gpt-4o')).toBe(first.get('gpt-4o'));
+    expect(second.get('gpt-5')).toBeGreaterThan(first.get('gpt-4o')!);
+  });
+
   it('returns 404 for an unknown connection', async () => {
     const res = await app().request('/api/connections/nope/discover-models', { method: 'POST' });
     expect(res.status).toBe(404);

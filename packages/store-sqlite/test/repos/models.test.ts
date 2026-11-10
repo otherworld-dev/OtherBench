@@ -69,7 +69,28 @@ describe('SqliteModelRepo', () => {
       priceOutPer1m: 15,
       priceCachedPer1m: 0.3,
       currency: 'USD',
+      firstSeenAt: null,
     });
+    db.close();
+  });
+
+  it('stores firstSeenAt, and an update leaves it alone', () => {
+    const db = freshDb();
+    new SqliteConnectionRepo(db).create({
+      id: 'conn-a',
+      name: 'C',
+      kind: 'mock',
+      baseUrl: null,
+      secretRef: null,
+      extraHeaders: {},
+      status: 'unknown',
+      statusMessage: null,
+      checkedAt: null,
+    });
+    const repo = new SqliteModelRepo(db);
+    repo.create(makeModel({ id: 'model-a', connectionId: 'conn-a', firstSeenAt: 1_794_000_000_000 }));
+    expect(repo.get('model-a')!.firstSeenAt).toBe(1_794_000_000_000);
+    expect(repo.update('model-a', { displayName: 'Renamed' }).firstSeenAt).toBe(1_794_000_000_000);
     db.close();
   });
 
