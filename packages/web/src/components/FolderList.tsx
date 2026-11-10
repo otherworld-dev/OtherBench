@@ -3,6 +3,7 @@ import type { FolderAccess, FolderView } from '@otherbench/core/types/workspace.
 import { pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, type FolderEntry } from '../state/api.js';
+import { PeerFolderBrowser } from './PeerFolderBrowser.js';
 
 const ACCESS_LABEL: Record<FolderAccess, string> = { read: 'Read-only', readwrite: 'Read & write' };
 
@@ -21,18 +22,22 @@ function kept(views: FolderView[]): FolderEntry[] {
 /**
  * An editable list of extra folders (a chat's or a project's): each with its
  * access and Remove, plus a path to add (or Choose…, the native picker, when
- * the folder would be on this machine). Every change saves the whole list.
+ * the folder would be on this machine, or Browse, the locations of the paired
+ * machine it would be on). Every change saves the whole list.
  */
 export function FolderList({
   label,
   views,
   canPick,
+  browse = null,
   onSave,
 }: {
   /** Whose folders these are, for labels: "this chat", "the project". */
   label: string;
   views: FolderView[];
   canPick: boolean;
+  /** The reachable paired machine the folders are on (the chat runs there), whose locations can be browsed. */
+  browse?: { nodeId: string; name: string } | null;
   onSave: (folders: FolderEntry[]) => Promise<void>;
 }): JSX.Element {
   const serverPlatform = useServerPlatform();
@@ -40,6 +45,7 @@ export function FolderList({
   const [access, setAccess] = useState<FolderAccess>('read');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   async function save(folders: FolderEntry[]): Promise<boolean> {
     setSaving(true);
@@ -139,7 +145,23 @@ export function FolderList({
             Choose…
           </button>
         )}
+        {browse && !browsing && (
+          <button type="button" disabled={saving} onClick={() => setBrowsing(true)} className="btn px-2 py-1">
+            Browse {browse.name}…
+          </button>
+        )}
       </div>
+      {browse && browsing && (
+        <PeerFolderBrowser
+          nodeId={browse.nodeId}
+          machine={browse.name}
+          onPick={(picked) => {
+            setBrowsing(false);
+            void add(picked);
+          }}
+          onClose={() => setBrowsing(false)}
+        />
+      )}
       {error && (
         <p role="alert" className="text-xs text-[var(--danger)]">
           {error}

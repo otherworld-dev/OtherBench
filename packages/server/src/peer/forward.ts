@@ -14,6 +14,7 @@ import { notesRoutes } from '../routes/notes.js';
 import { chatToolStateRoutes, parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
+import { listLocationDirs } from './location-dirs.js';
 import { PeerError } from './service.js';
 
 /**
@@ -769,8 +770,10 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
  * server already set up here), stopping a reply still running here
  * in a chat moved elsewhere, stopping a computer-use session held here,
  * and, while this machine lets it (`peerComputerControl`, off until turned on in this machine's desktop app),
- * asking to start one here (its own start dialog asks the person here, naming the paired machine). Nothing else --
- * no settings (so the setting can't be turned on from there), no folder browsing, no attaching files by path. The approving machine is the caller's authenticated
+ * asking to start one here (its own start dialog asks the person here, naming the paired machine), and listing the
+ * sub-folders of a folder inside one of this machine's own locations (`/locations/dirs`). Nothing else -- no
+ * settings (so the setting can't be turned on from there), no folder browsing anywhere else (`/fs/dirs` is never
+ * mounted here), no attaching files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
 export interface ForwardedEnv {
@@ -897,6 +900,15 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     const replies = container.store.messages.listByStatus('streaming').filter((m) => m.chatId === chat.id);
     const asked = replies.flatMap((m) => (m.parentId ? [container.store.messages.get(m.parentId)] : [])).filter((m): m is CanonMessage => m !== null && m.chatId === chat.id);
     return c.json({ messages: [...asked, ...replies], headMessageId: chat.headMessageId });
+  });
+
+  // Choosing a folder for a chat that runs here, from the paired machine's UI: sub-folder names inside this
+  // machine's own locations only, every path through containPath (location-dirs.ts). Not `/fs/dirs`, which lists
+  // anywhere and is never mounted here. A read, so it marks nothing and passes the desktop-only gate.
+  app.get('/locations/dirs', async (c) => {
+    const listing = await listLocationDirs(container.store, c.req.query('path'));
+    if ('status' in listing) return c.json({ error: listing.error, kind: listing.kind }, listing.status);
+    return c.json(listing);
   });
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.

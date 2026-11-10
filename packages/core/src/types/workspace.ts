@@ -50,6 +50,32 @@ export interface LocationPath {
   path: string;
 }
 
+/** One of a machine's locations as its folder browser shows it: the location and that machine's path for it. */
+export interface PeerFolderLocation {
+  id: string;
+  name: string;
+  root: string;
+}
+
+/**
+ * One folder of a paired machine, for choosing a folder for a chat that runs there (`GET /api/peers/:id/dirs`,
+ * answered there by `GET /api/locations/dirs` on its peer listener). Only inside that machine's own locations, and
+ * only sub-folder names and their paths as that machine writes them: never a file, never anything read inside one.
+ */
+export interface PeerFolderListing {
+  /** The folder listed; null for the list of its locations, where browsing starts. */
+  path: string | null;
+  /** The folder above it while that is still in the location; null at the location's root and for the list. */
+  parent: string | null;
+  /** The location the folder is in; null for the list. */
+  location: PeerFolderLocation | null;
+  dirs: { name: string; path: string }[];
+  /** More sub-folders than were listed. */
+  truncated: boolean;
+  /** That machine's locations with a path there. */
+  locations: PeerFolderLocation[];
+}
+
 /** One OtherBench install. */
 export interface NodeInfo {
   id: string;
