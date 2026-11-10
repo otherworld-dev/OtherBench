@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@otherbench/core/domain/schedule.js';
-import { SCHEDULE_PEER_CHANGES_KEPT } from '@otherbench/core/domain/schedule-peers.js';
+import { ROUTINE_SCHEDULE_PEER_CHANGES, SCHEDULE_PEER_CHANGE_DAYS_KEPT, SCHEDULE_PEER_ROUTINE_KEPT } from '@otherbench/core/domain/schedule-peers.js';
 import type {
   NewSchedule,
   NewScheduleRun,
@@ -254,9 +254,25 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     this.db
       .prepare('INSERT INTO schedule_peer_change (id, schedule_id, schedule_name, action, from_node, run_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(full.id, full.scheduleId, full.scheduleName, full.action, full.fromNode, full.runId, full.at);
+    // Only by age for everything; a create, an edit or a delete is never dropped to make room.
+    this.db.prepare('DELETE FROM schedule_peer_change WHERE at < ?').run(full.at - SCHEDULE_PEER_CHANGE_DAYS_KEPT * 86_400_000);
+    // This schedule's routine changes beyond the newest few, keeping the newest pause, resume and Run now whatever.
+    const routine = ROUTINE_SCHEDULE_PEER_CHANGES.map(() => '?').join(', ');
+    const newestOf = "SELECT id FROM (SELECT id FROM schedule_peer_change WHERE schedule_id = ? AND action = ? ORDER BY at DESC, rowid DESC LIMIT 1)";
     this.db
-      .prepare('DELETE FROM schedule_peer_change WHERE id NOT IN (SELECT id FROM schedule_peer_change ORDER BY at DESC, rowid DESC LIMIT ?)')
-      .run(SCHEDULE_PEER_CHANGES_KEPT);
+      .prepare(
+        `DELETE FROM schedule_peer_change WHERE schedule_id = ? AND action IN (${routine})
+           AND id NOT IN (SELECT id FROM schedule_peer_change WHERE schedule_id = ? AND action IN (${routine}) ORDER BY at DESC, rowid DESC LIMIT ?)
+           AND id NOT IN (${ROUTINE_SCHEDULE_PEER_CHANGES.map(() => newestOf).join(' UNION ')})`
+      )
+      .run(
+        full.scheduleId,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES,
+        full.scheduleId,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES,
+        SCHEDULE_PEER_ROUTINE_KEPT,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES.flatMap((action) => [full.scheduleId, action])
+      );
     return full;
   }
 

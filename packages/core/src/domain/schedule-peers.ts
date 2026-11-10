@@ -7,29 +7,56 @@
 /** What a paired machine did to a schedule. `ran` is Run now. */
 export type SchedulePeerChangeAction = 'created' | 'edited' | 'paused' | 'resumed' | 'deleted' | 'ran';
 
-/** How many changes from paired machines a machine keeps, newest first, across all its schedules. */
-export const SCHEDULE_PEER_CHANGES_KEPT = 500;
-
-/** How a change reads after "Changed from Laptop": "paused", "run now". */
-export const SCHEDULE_PEER_CHANGE_TEXT: Record<SchedulePeerChangeAction, string> = {
-  created: 'made',
-  edited: 'edited',
-  paused: 'paused',
-  resumed: 'resumed',
-  deleted: 'deleted',
-  ran: 'run now',
-};
+/**
+ * The cheap, repeatable changes: a pause, a resume, a Run now. Only these are ever trimmed by count, per schedule,
+ * so a paired machine can't push the record of a create, an edit or a delete out by sending many of them.
+ */
+export const ROUTINE_SCHEDULE_PEER_CHANGES: readonly SchedulePeerChangeAction[] = ['paused', 'resumed', 'ran'];
 
 /**
- * What a PATCH body did, for the record: a body that only sets `enabled` is a pause or a resume (as the row's
- * Pause and Resume send it), anything else is an edit.
+ * How long the record of a paired machine's change is kept, in days. A create, an edit or a delete is only ever
+ * dropped for age, never to make room.
  */
-export function patchAction(body: unknown, wasEnabled: boolean): SchedulePeerChangeAction {
-  const keys = typeof body === 'object' && body !== null && !Array.isArray(body) ? Object.keys(body) : [];
-  if (keys.length === 1 && keys[0] === 'enabled') {
-    const enabled = (body as { enabled: unknown }).enabled;
-    if (enabled === false) return 'paused';
-    if (enabled === true) return wasEnabled ? 'edited' : 'resumed';
-  }
-  return 'edited';
+export const SCHEDULE_PEER_CHANGE_DAYS_KEPT = 90;
+
+/** How many routine changes (pause, resume, Run now) are kept per schedule, besides the newest of each kind. */
+export const SCHEDULE_PEER_ROUTINE_KEPT = 20;
+
+/** How a change reads before "from Laptop, 2 min ago" on a schedule's row: "Paused", "Run now". */
+export const SCHEDULE_PEER_CHANGE_TEXT: Record<SchedulePeerChangeAction, string> = {
+  created: 'Made',
+  edited: 'Edited',
+  paused: 'Paused',
+  resumed: 'Resumed',
+  deleted: 'Deleted',
+  ran: 'Run now',
+};
+
+/** The fields of a schedule whose change is an edit (`schedulePatchAction`). */
+export interface ScheduleEditedFields {
+  name: string;
+  prompt: string;
+  profileId: string;
+  rule: unknown;
+  autoMode: boolean;
+  timeLimitMinutes: number | null;
+  enabled: boolean;
+}
+
+/**
+ * What a PATCH did, read from the schedule before and after it rather than from what was sent: a change to its
+ * name, prompt, profile, rule, auto mode or time limit is an edit (kept until it ages out, however many pauses
+ * follow); a change only to whether it is on is a pause or a resume; nothing changed is null, and nothing is recorded.
+ */
+export function schedulePatchAction(before: ScheduleEditedFields, after: ScheduleEditedFields): SchedulePeerChangeAction | null {
+  const edited =
+    before.name !== after.name ||
+    before.prompt !== after.prompt ||
+    before.profileId !== after.profileId ||
+    JSON.stringify(before.rule) !== JSON.stringify(after.rule) ||
+    before.autoMode !== after.autoMode ||
+    before.timeLimitMinutes !== after.timeLimitMinutes;
+  if (edited) return 'edited';
+  if (before.enabled !== after.enabled) return after.enabled ? 'resumed' : 'paused';
+  return null;
 }

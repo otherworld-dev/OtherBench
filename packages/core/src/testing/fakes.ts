@@ -104,7 +104,7 @@ import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
-import { SCHEDULE_PEER_CHANGES_KEPT } from '../domain/schedule-peers.js';
+import { ROUTINE_SCHEDULE_PEER_CHANGES, SCHEDULE_PEER_CHANGE_DAYS_KEPT, SCHEDULE_PEER_ROUTINE_KEPT } from '../domain/schedule-peers.js';
 import { laterThrough } from '../domain/sync.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
@@ -1715,7 +1715,15 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange {
     const full: SchedulePeerChange = { ...c, at: c.at ?? Date.now() };
     this.peerChangeRows.push({ change: full, seq: this.seq++ });
-    this.peerChangeRows = this.sortedPeerChanges().slice(0, SCHEDULE_PEER_CHANGES_KEPT);
+    const cutoff = full.at - SCHEDULE_PEER_CHANGE_DAYS_KEPT * 86_400_000;
+    const sorted = this.sortedPeerChanges().filter((x) => x.change.at >= cutoff);
+    const routine = sorted.filter((x) => x.change.scheduleId === full.scheduleId && ROUTINE_SCHEDULE_PEER_CHANGES.includes(x.change.action));
+    const keep = new Set(routine.slice(0, SCHEDULE_PEER_ROUTINE_KEPT));
+    for (const action of ROUTINE_SCHEDULE_PEER_CHANGES) {
+      const newest = routine.find((x) => x.change.action === action);
+      if (newest) keep.add(newest);
+    }
+    this.peerChangeRows = sorted.filter((x) => !routine.includes(x) || keep.has(x));
     return { ...full };
   }
 

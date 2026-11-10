@@ -147,8 +147,11 @@ export interface ScheduleRepo {
   /** Points a chat schedule at another chat (a handover's new chat). Throws for a project schedule. */
   retarget(id: string, chatId: string): void;
   /**
-   * Records a change a paired machine made (`at` defaults to now) and prunes the record to the newest
-   * `SCHEDULE_PEER_CHANGES_KEPT` across all schedules. Not tied to the schedule: deleting it keeps its record.
+   * Records a change a paired machine made (`at` defaults to now), then prunes: every change older than
+   * `SCHEDULE_PEER_CHANGE_DAYS_KEPT` before this one, and this schedule's routine changes (pause, resume, Run now)
+   * beyond its newest `SCHEDULE_PEER_ROUTINE_KEPT`, always keeping the newest of each kind. A create, an edit or a
+   * delete is never pruned to make room, so flooding routine changes can't push one out. Not tied to the schedule:
+   * deleting it keeps its record.
    */
   recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange;
   /** Changes paired machines made, newest first (then the newest recorded); every schedule's when `scheduleId` is left out. */

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Hono, type Context, type Next } from 'hono';
-import { patchAction, type SchedulePeerChangeAction } from '@otherbench/core/domain/schedule-peers.js';
+import { schedulePatchAction, type SchedulePeerChangeAction } from '@otherbench/core/domain/schedule-peers.js';
 import type { Container } from '../container.js';
 import { schedulesRoutes } from '../routes/schedules.js';
 
@@ -21,7 +21,9 @@ import { schedulesRoutes } from '../routes/schedules.js';
  * The handlers are `/api/schedules`'s own (`schedulesRoutes`), so a paired machine's create or edit goes through the
  * same checks as this machine's UI: the rule, the time limit, a profile that isn't archived, a target chat that runs
  * here, the zone being this machine's. Each change that succeeds is recorded with the machine it came from
- * (`ScheduleRepo.recordPeerChange`, the caller's authenticated node id, never a header) and logged.
+ * (`ScheduleRepo.recordPeerChange`, the caller's authenticated node id, never a header) and logged. A create, an edit
+ * (read from what changed, not what was sent) or a delete stays on record until it is 90 days old: only pauses,
+ * resumes and Run nows are trimmed to make room, so the paired machine can't bury an edit under a flood of them.
  *
  * A change made here never marks a chat as the paired machine's for computer use (`PeerInfluence`), unlike a turn:
  * a scheduled run is unattended, and computer use refuses an unattended run (`COMPUTER_UNATTENDED_REASON`), so there
@@ -85,12 +87,10 @@ export function peerScheduleRoutes(container: Container): Hono<PeerScheduleEnv> 
     if (route.action === 'list') return next();
 
     const before = route.scheduleId !== null ? store.schedules.get(route.scheduleId) : null;
-    // Read before the handler, which gets the same parsed body (Hono keeps it).
-    const body: unknown = route.action === 'patch' ? await c.req.json().catch(() => undefined) : undefined;
     await next();
     if (c.res.status >= 300) return;
 
-    let action: SchedulePeerChangeAction;
+    let action: SchedulePeerChangeAction | null;
     let scheduleId = route.scheduleId;
     let scheduleName = before?.name ?? '';
     let runId: string | null = null;
@@ -100,8 +100,11 @@ export function peerScheduleRoutes(container: Container): Hono<PeerScheduleEnv> 
       scheduleId = typeof made?.['id'] === 'string' ? made['id'] : null;
       scheduleName = typeof made?.['name'] === 'string' ? made['name'] : '';
     } else if (route.action === 'patch') {
-      action = patchAction(body, before?.enabled ?? false);
-      scheduleName = (scheduleId !== null ? store.schedules.get(scheduleId)?.name : undefined) ?? scheduleName;
+      // From what changed, not what was sent: an edit is kept until it ages out, however many pauses follow it, and
+      // a call that changed nothing records nothing.
+      const after = scheduleId !== null ? store.schedules.get(scheduleId) : null;
+      action = before && after ? schedulePatchAction(before, after) : null;
+      scheduleName = after?.name ?? scheduleName;
     } else if (route.action === 'run') {
       const run = await jsonOf(c.res);
       action = 'ran';
@@ -109,7 +112,7 @@ export function peerScheduleRoutes(container: Container): Hono<PeerScheduleEnv> 
     } else {
       action = 'deleted';
     }
-    if (scheduleId === null) return;
+    if (scheduleId === null || action === null) return;
     store.schedules.recordPeerChange({ id: randomUUID(), scheduleId, scheduleName, action, fromNode, runId });
     console.info(`[otherbench-server] schedule "${scheduleName}" (${scheduleId}) ${action} from paired machine ${from} (${fromNode}).`);
     // Its row here says so: the list re-reads.

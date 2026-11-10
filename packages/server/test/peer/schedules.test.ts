@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SCHEDULE_PEER_ROUTINE_KEPT } from '@otherbench/core/domain/schedule-peers.js';
 import type { PeerScheduleSummary, PeerSchedules } from '@otherbench/core/types/peer.js';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
@@ -431,6 +432,22 @@ describe('schedules across two real servers', () => {
     expect(pc.container.store.schedules.peerChanges()).toHaveLength(6);
     // The history stays readable.
     expect((await laptop.api('GET', at(`/${scheduleId}/runs`))).status).toBe(200);
+  }, 60_000);
+
+  it("a paired machine can't bury its edit under a flood of pauses and resumes, and a call that changes nothing records nothing", async () => {
+    const { pc, laptop, scheduleId } = await setup();
+    pc.container.store.settings.update({ peerScheduleControl: true });
+    const at = `/api/peers/${pc.id}/schedules/${scheduleId}`;
+    expect((await laptop.api('PATCH', at, { prompt: 'QUIETLY CHANGED' })).status).toBe(200);
+    // Sending only `enabled` doesn't make it a pause: the record is read from what changed.
+    expect((await laptop.api('PATCH', at, { enabled: true, name: 'Morning report' })).status).toBe(200);
+    expect(pc.container.store.schedules.peerChanges(scheduleId).map((c) => c.action)).toEqual(['edited']);
+    const flood = SCHEDULE_PEER_ROUTINE_KEPT * 3;
+    for (let i = 0; i < flood; i++) expect((await laptop.api('PATCH', at, { enabled: i % 2 === 1 })).status).toBe(200);
+    const kept = pc.container.store.schedules.peerChanges(scheduleId);
+    expect(kept.filter((c) => c.action === 'edited').map((c) => c.fromNode)).toEqual([laptop.id]);
+    expect(kept.filter((c) => c.action !== 'edited')).toHaveLength(SCHEDULE_PEER_ROUTINE_KEPT);
+    expect(pc.container.store.schedules.get(scheduleId)!.prompt).toBe('QUIETLY CHANGED');
   }, 60_000);
 
   it('ownSchedules leaves out the prompt, the warnings and the run in progress', async () => {

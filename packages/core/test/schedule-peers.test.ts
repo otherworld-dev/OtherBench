@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { patchAction } from '../src/domain/schedule-peers.js';
+import { schedulePatchAction, type ScheduleEditedFields } from '../src/domain/schedule-peers.js';
 import { DEFAULT_APP_SETTINGS } from '../src/domain/settings.js';
+
+const fields = (over: Partial<ScheduleEditedFields> = {}): ScheduleEditedFields => ({
+  name: 'Report', prompt: 'hello', profileId: 'p1', rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30, enabled: true, ...over,
+});
 
 describe('managing schedules from a paired machine', () => {
   it('is off by default', () => {
     expect(DEFAULT_APP_SETTINGS.peerScheduleControl).toBe(false);
   });
 
-  it('records a body that only sets enabled as a pause or a resume, and anything else as an edit', () => {
-    expect(patchAction({ enabled: false }, true)).toBe('paused');
-    expect(patchAction({ enabled: false }, false)).toBe('paused');
-    expect(patchAction({ enabled: true }, false)).toBe('resumed');
-    // Already on: nothing was resumed.
-    expect(patchAction({ enabled: true }, true)).toBe('edited');
-    expect(patchAction({ enabled: false, name: 'x' }, true)).toBe('edited');
-    expect(patchAction({ prompt: 'x' }, true)).toBe('edited');
-    expect(patchAction({}, true)).toBe('edited');
-    expect(patchAction(null, true)).toBe('edited');
-    expect(patchAction({ enabled: 'no' }, true)).toBe('edited');
+  it('records what actually changed: an edit wins over a pause, a change only to on or off is a pause or resume, nothing is nothing', () => {
+    expect(schedulePatchAction(fields(), fields({ enabled: false }))).toBe('paused');
+    expect(schedulePatchAction(fields({ enabled: false }), fields())).toBe('resumed');
+    for (const over of [{ name: 'x' }, { prompt: 'x' }, { profileId: 'p2' }, { rule: { cadence: 'daily', time: '10:00' } }, { autoMode: true }, { timeLimitMinutes: null }]) {
+      expect(schedulePatchAction(fields(), fields(over)), JSON.stringify(over)).toBe('edited');
+      // Paused in the same call: still an edit, so it is kept like one.
+      expect(schedulePatchAction(fields(), fields({ ...over, enabled: false })), JSON.stringify(over)).toBe('edited');
+    }
+    expect(schedulePatchAction(fields(), fields())).toBeNull();
+    expect(schedulePatchAction(fields({ rule: { cadence: 'daily', time: '09:00' } }), fields())).toBeNull();
   });
 });
