@@ -79,8 +79,9 @@ paired machine can run a chat here, and that chat's turn can run the
 unsandboxed shell tool once a person approves it. The defences: mutual TLS
 with both certificates pinned at pairing plus a per-peer token; the
 listener off until pairing and bound only to the chosen hosts (default:
-every interface; `--peer-host` to narrow it); only the chat-running routes
-and `/peer/*` mounted on it, never settings, folder browsing or attaching
+every interface; `--peer-host` to narrow it); only the chat-running routes,
+the schedule routes (history always, management only with this machine's
+opt-in) and `/peer/*` mounted on it, never settings, folder browsing or attaching
 by path; immediate revocation; approvals never delegated (each tool call
 still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
@@ -188,21 +189,56 @@ that syncs anyway). The computer-use status route and `/api/events` are
 still not on the listener. Grants, the audit trail and MCP health are
 readable for a chat that runs here since 2026-11-07 (next paragraph but one).
 
-**A paired machine can read this machine's schedules, and do nothing else
-with them.** The `/peer/events` stream carries a `schedules` announcement:
-for each schedule its id, name, rule in words, zone, whether it is on or
-paused, next run, whether its rule is unreadable, its target's and
-profile's ids (the other machine names them from rows it already has by
-sync), whether it runs in auto mode, its time limit, whether a run is going,
-and its last run's result, start time and chat id (`PeerScheduleSummary`,
-`peer/schedules.ts`). Never the prompt, the warnings or the message id of a
-run in progress. It is a read, so it needs no opt-in; the receiving side
-checks and bounds every field and keeps at most 100. There is no schedule
-route on the peer listener, read or write: `/api/schedules` isn't in
-`forwardedApi` and nothing under `/peer/` touches schedules, so a paired
-machine can't create, edit, pause, delete, run or stop one here
-(`server/test/peer/schedules.test.ts` calls each path over real TLS and
-checks the store is unchanged).
+**A paired machine can read this machine's schedules and their history,
+and manage them only once this machine lets it.** The `/peer/events`
+stream carries a `schedules` announcement: for each schedule its id, name,
+rule in words, zone, whether it is on or paused, next run, whether its rule
+is unreadable, its target's and profile's ids (the other machine names them
+from rows it already has by sync), whether it runs in auto mode, its time
+limit, whether a run is going, and its last run's result, start time and
+chat id (`PeerScheduleSummary`, `peer/schedules.ts`), plus whether this
+machine lets paired machines manage them and the zone it makes them in.
+Never the prompt, the warnings or the message id of a run in progress. The
+receiving side checks and bounds every field and keeps at most 100. A
+schedule's run history (`GET /api/schedules/:id/runs` on the peer
+listener) is readable with no opt-in, as a read like the announcement:
+times, results, error text, refused-call counts and the runs' chat and
+message ids, whose chats sync anyway. Everything else is behind
+*Let paired machines manage this machine's schedules* (Settings →
+Machines, `peerScheduleControl`), which is **off by default**, machine-local
+and never synced, and can't be turned on from a paired machine (no settings
+route on the listener). While it is off, the listener's schedule paths other
+than the history answer 404 and change nothing
+(`server/test/peer/schedules.test.ts` calls each one over real TLS, with
+computer control on and off, and checks the store is unchanged). While it
+is on, a paired machine can list the schedules with their prompts, create,
+edit, pause, resume and delete them and press Run now, through
+`/api/schedules`'s own handlers behind an exact allowlist
+(`peer/schedule-control.ts`), so it gets the same validation as this
+machine's UI, the zone stays this machine's and a target chat must run
+here. The setting is read on every call. Each change is recorded with the
+caller's authenticated node id in `schedule_peer_change` and logged, and the
+schedule's row here names the machine; edits (read from what actually
+changed), creates and deletes are kept 90 days whatever else happens, and
+only pauses, resumes and Run nows are trimmed per schedule, so a paired
+machine can't bury an edit under a flood of cheap calls. Why it is an
+opt-in at all: a schedule makes unattended runs on this machine, again and
+again, with nobody here watching, which is more than a chat a paired
+machine runs here while someone watches it. It adds no new tool power: a
+scheduled run is unattended, so every call that would raise a card is
+refused (`approval_unavailable`), and only what needs no card runs (see
+*Scheduled runs act with nobody watching*: Always grants, read-only tools,
+sandboxed commands, allowed web tools, the profile's site list, and Claude
+Code's classifier for a schedule with auto mode on). So with it on, a
+paired machine can choose *what* those runs ask for and *when* (including
+turning on auto mode for a Claude Code profile, and writing a prompt that a
+grant already here would carry out), which it could already do by sync to a
+profile's tool policy or by running a chat here; what is new is that
+nobody here sees it happen. A schedule change doesn't mark a chat for
+computer use (`PeerInfluence`), because computer use refuses unattended
+runs. The schedule routes sit behind the listener's desktop-only gate, so
+while computer use may be in control here they are refused unless paired
+machines may drive computer use.
 
 **A paired machine can read the Inspector's tool state of a chat that runs
 here, and only take things away.** So that the Inspector shows the tools a
@@ -775,8 +811,8 @@ this on startup.
   re-reading lists, not row by row. Running replies, cards waiting, background
   tasks and computer-use sessions on the other machine are live (its
   `activity`, see *Live state between machines*), and so is the other
-  machine's list of schedules, read-only (its `schedules` announcement, see
-  *Scheduled tasks*). Apart from that, what doesn't sync never shows:
+  machine's list of schedules (its `schedules` announcement, see
+  *Scheduled tasks*; managing them needs that machine's opt-in). Apart from that, what doesn't sync never shows:
   grants, MCP servers, the audit log, settings.
 - **The laptop isn't told when the PC declines its start.** A remote
   start is accepted at the PC by design (its dialog asks, naming the
@@ -954,7 +990,7 @@ this on startup.
   the guidance alone; an `update` that leaves the calls alone keeps the
   approval and one that changes args asks for that call only; a Claude Code
   chat making one with relayed tool names; viewing from the paired laptop.
-- **Scheduled tasks phase 2 is partly built.** Every-N-hours and cron rules, browser notifications for scheduled runs and the schedule count in the chat and project delete dialogs are done (see "Scheduled tasks"). A paired machine's schedules now show in the overlay, read-only, while it is reachable. Still missing: schedules don't sync or move between machines and can only be run, changed or deleted on the machine that holds them (there is no route for that on the peer listener, deliberately), a schedule's run history (the History list) isn't shown for another machine's, there are no phone notifications and no attachments in the prompt. A cron rule has no `L`, `W`, `#` or seconds, and a schedule's zone can't be changed. Deleting a profile still removes its schedules without a mention, and the e2e spec doesn't cover the new rule kinds.
+- **Scheduled tasks phase 2 is partly built.** Every-N-hours and cron rules, browser notifications for scheduled runs and the schedule count in the chat and project delete dialogs are done (see "Scheduled tasks"). A paired machine's schedules show in the overlay while it is reachable, with their run history, and can be run, paused, edited, deleted and made from there once the machine holding them turns on "Let paired machines manage this machine's schedules". Still missing: schedules don't sync or move between machines, a running scheduled run can't be stopped from another machine's Scheduled overlay (only from its chat), the record of changes from paired machines (`schedule_peer_change`) has no view beyond the row's newest line, there are no phone notifications and no attachments in the prompt. A cron rule has no `L`, `W`, `#` or seconds, and a schedule's zone can't be changed. Deleting a profile still removes its schedules without a mention, and the e2e spec doesn't cover the new rule kinds or a paired machine's schedules.
 - **Slash commands.** Claude Code's own automatic compaction draws no line in
   the thread. A chat's own commands appear in the `/` menu only after its first
   reply since the server started; listing them any other way would run the

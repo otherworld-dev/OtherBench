@@ -18,7 +18,7 @@ vi.mock('../state/api.js', () => ({
   api: {
     schedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), runs: vi.fn(), run: vi.fn() },
     turns: { cancel: vi.fn() },
-    peers: { schedules: vi.fn() },
+    peers: { schedules: vi.fn(), machineSchedules: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), run: vi.fn(), runs: vi.fn() } },
   },
 }));
 
@@ -33,6 +33,14 @@ const create = vi.mocked(api.schedules.create);
 const runs = vi.mocked(api.schedules.runs);
 const cancel = vi.mocked(api.turns.cancel);
 const peerSchedules = vi.mocked(api.peers.schedules);
+const there = {
+  list: vi.mocked(api.peers.machineSchedules.list),
+  create: vi.mocked(api.peers.machineSchedules.create),
+  patch: vi.mocked(api.peers.machineSchedules.patch),
+  delete: vi.mocked(api.peers.machineSchedules.delete),
+  run: vi.mocked(api.peers.machineSchedules.run),
+  runs: vi.mocked(api.peers.machineSchedules.runs),
+};
 
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
@@ -370,10 +378,10 @@ describe('SchedulesView', () => {
       };
     }
     function machine(over: Partial<PeerSchedules> = {}): PeerSchedules {
-      return { nodeId: 'node-pc', name: 'PC', status: 'reachable', shared: true, schedules: [peerRow()], ...over };
+      return { nodeId: 'node-pc', name: 'PC', status: 'reachable', shared: true, manage: false, timezone: 'Europe/London', schedules: [peerRow()], ...over };
     }
 
-    it('shows them in their own section, marked as running there, with what a row shows and no way to change them', async () => {
+    it('shows them in their own section, marked as running there, with what a row shows and, unless it allows it, no way to change them', async () => {
       list.mockResolvedValue([view()]);
       peerSchedules.mockResolvedValue([
         machine({
@@ -397,11 +405,109 @@ describe('SchedulesView', () => {
       const other = within(section).getByTestId('peer-schedule-row-ps2');
       expect(other).toHaveTextContent('New chat each run in a project not on this machine yet · a profile not on this machine yet');
       expect(within(other).getByTestId('schedule-next')).toHaveTextContent('Next run: Paused');
-      // Read-only: only Open, for the last run's chat; none of the local row's buttons.
-      expect(within(section).getAllByRole('button').map((b) => b.textContent)).toEqual(['Open']);
-      for (const name of ['Run now', 'Pause', 'Resume', 'Edit', 'History', 'Delete…', 'Stop']) expect(within(section).queryByRole('button', { name })).not.toBeInTheDocument();
+      // Read-only: Open, for the last run's chat, and each row's History; none of the local row's other buttons.
+      expect(within(section).getAllByRole('button').map((b) => b.textContent)).toEqual(['Open', 'History', 'History']);
+      for (const name of ['Run now', 'Pause', 'Resume', 'Edit', 'Delete…', 'Stop', 'New schedule on PC']) expect(within(section).queryByRole('button', { name })).not.toBeInTheDocument();
       // The local row keeps its own.
       expect(within(screen.getByTestId('schedule-row-s1')).getByRole('button', { name: 'Run now' })).toBeInTheDocument();
+    });
+
+    it("opens a row's History, read from that machine, with Open only for a run whose chat is here", async () => {
+      useOtherBenchStore.setState({ chats: [{ id: 'pc-chat', title: 'Backups', archivedAt: null, runsOn: 'node-pc', createdAt: 1 }] as never });
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine()]);
+      there.runs.mockResolvedValue([
+        { id: 'r2', scheduleId: 'ps1', trigger: 'manual', dueAt: null, startedAt: Date.parse('2099-10-12T01:00:00Z'), finishedAt: null, status: 'complete', detail: null, chatId: 'pc-chat', createdChat: false, userMessageId: null, messageId: null, refusedCalls: 2 },
+        { id: 'r1', scheduleId: 'ps1', trigger: 'scheduled', dueAt: 1, startedAt: Date.parse('2099-10-11T01:00:00Z'), finishedAt: null, status: 'error', detail: 'boom', chatId: 'not-here', createdChat: true, userMessageId: null, messageId: null, refusedCalls: 0 },
+      ]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      const row = await screen.findByTestId('peer-schedule-row-ps1');
+      fireEvent.click(within(row).getByRole('button', { name: 'History' }));
+      const history = await within(row).findByTestId('schedule-history-ps1');
+      expect(there.runs).toHaveBeenCalledWith('node-pc', 'ps1');
+      expect(within(history).getByTestId('schedule-run-r2')).toHaveTextContent('By hand');
+      expect(within(history).getByTestId('schedule-run-r2')).toHaveTextContent('2 tool calls refused');
+      expect(within(history).getByTestId('schedule-run-r1')).toHaveTextContent('boom');
+      expect(within(within(history).getByTestId('schedule-run-r2')).getByRole('button', { name: 'Open' })).toBeInTheDocument();
+      expect(within(within(history).getByTestId('schedule-run-r1')).queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+      // Nothing that changes a schedule was called.
+      for (const fn of [there.list, there.create, there.patch, there.delete, there.run]) expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('when the machine lets this one manage them, offers Run now, Pause, Edit, Delete and New schedule, each sent to that machine', async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ manage: true })]);
+      there.run.mockResolvedValue({} as never);
+      there.patch.mockResolvedValue(view({ id: 'ps1' }));
+      there.delete.mockResolvedValue(undefined);
+      render(<SchedulesView onClose={vi.fn()} />);
+      const section = await screen.findByTestId('peer-schedules-node-pc');
+      expect(within(section).getByTestId('peer-schedules-note')).toHaveTextContent('which lets this machine run, pause, edit and delete them');
+      const row = within(section).getByTestId('peer-schedule-row-ps1');
+      fireEvent.click(within(row).getByRole('button', { name: 'Run now' }));
+      await waitFor(() => expect(there.run).toHaveBeenCalledWith('node-pc', 'ps1'));
+      fireEvent.click(within(row).getByRole('button', { name: 'Pause' }));
+      await waitFor(() => expect(there.patch).toHaveBeenCalledWith('node-pc', 'ps1', { enabled: false }));
+      fireEvent.click(within(row).getByRole('button', { name: 'Delete…' }));
+      expect(await screen.findByText("Delete schedule 'Nightly backup' on PC?")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(there.delete).toHaveBeenCalledWith('node-pc', 'ps1'));
+      // Nothing went to this machine's own schedules.
+      expect(patch).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("shows that machine's refusal on the row, as when it has since turned the setting off", async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ manage: true })]);
+      there.run.mockRejectedValue(new ApiError(404, "PC doesn't let paired machines manage its schedules, so Laptop can't change them."));
+      render(<SchedulesView onClose={vi.fn()} />);
+      const row = await screen.findByTestId('peer-schedule-row-ps1');
+      fireEvent.click(within(row).getByRole('button', { name: 'Run now' }));
+      expect(await within(row).findByRole('alert')).toHaveTextContent("PC doesn't let paired machines manage its schedules");
+    });
+
+    it("edits one in that machine's editor, with its prompt read from there, and saves it there", async () => {
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ manage: true })]);
+      there.list.mockResolvedValue([view({ id: 'ps1', name: 'Nightly backup', prompt: 'Back up the photos', profileId: 'p1', target: { kind: 'chat', chatId: 'pc-chat' }, targetName: 'Backups' })]);
+      there.patch.mockResolvedValue(view({ id: 'ps1' }));
+      render(<SchedulesView onClose={vi.fn()} />);
+      const row = await screen.findByTestId('peer-schedule-row-ps1');
+      fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveTextContent('Edit schedule on PC');
+      expect(within(dialog).getByLabelText('Prompt')).toHaveValue('Back up the photos');
+      fireEvent.change(within(dialog).getByLabelText('Prompt'), { target: { value: 'Back up everything' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(there.patch).toHaveBeenCalledWith('node-pc', 'ps1', { prompt: 'Back up everything' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("makes a new one there, offering only that machine's chats and showing its zone", async () => {
+      useOtherBenchStore.setState({
+        chats: [
+          { id: 'pc-chat', title: 'On the PC', archivedAt: null, runsOn: 'node-pc', createdAt: 2, profileId: 'p1', projectId: null, workspace: null },
+          { id: 'here-chat', title: 'On this laptop', archivedAt: null, runsOn: 'node-laptop', createdAt: 1, profileId: 'p1', projectId: null, workspace: null },
+        ] as never,
+      });
+      list.mockResolvedValue([]);
+      peerSchedules.mockResolvedValue([machine({ manage: true, timezone: 'America/New_York' })]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'New schedule on PC' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveTextContent('New schedule on PC');
+      expect(dialog).toHaveTextContent('America/New_York');
+      const chats = within(within(dialog).getByRole('combobox', { name: 'Chat' })).getAllByRole('option').map((o) => o.textContent);
+      expect(chats).toEqual(['Choose a chat…', 'On the PC']);
+    });
+
+    it('says on a local row which paired machine last changed it', async () => {
+      list.mockResolvedValue([view({ changedFrom: { nodeId: 'node-laptop', machine: 'Laptop', action: 'paused', at: Date.now() - 2 * 60_000 } })]);
+      render(<SchedulesView onClose={vi.fn()} />);
+      const row = await screen.findByTestId('schedule-row-s1');
+      expect(within(row).getByTestId('schedule-changed-from')).toHaveTextContent(/^Paused from Laptop, /);
     });
 
     it("opens the last run's chat here", async () => {

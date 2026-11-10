@@ -2,7 +2,9 @@
 import type { Location, LocationPath, NodeInfo } from '@otherbench/core/types/workspace.js';
 import type { InferredMapping } from '@otherbench/core/domain/workspace.js';
 import type { PeerSchedules, PublicPeer } from '@otherbench/core/types/peer.js';
+import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
 import { request, post, put, patch, del } from './http.js';
+import type { CreateScheduleBody, PatchScheduleBody } from './schedules.js';
 
 /** A location with every machine's path for it (`GET /api/locations`). */
 export interface LocationView extends Location {
@@ -98,8 +100,22 @@ export const peersApi = {
   patch: (nodeId: string, body: { name?: string; addresses?: string[] }) => patch<PublicPeer>(`/peers/${nodeId}`, body),
   remove: (nodeId: string) => request<{ notified: boolean }>(`/peers/${nodeId}`, { method: 'DELETE' }),
   sync: (nodeId: string) => post<{ applied: number }>(`/peers/${nodeId}/sync`),
-  /** Each paired machine's schedules, as it last said: read-only, none while it isn't reachable. */
+  /** Each paired machine's schedules, as it last said, and whether it lets this one manage them; none while it isn't reachable. */
   schedules: () => request<PeerSchedules[]>('/peers/schedules'),
+  /**
+   * A paired machine's schedules, called on that machine. `runs` (a schedule's history) always works; the rest only
+   * while it lets paired machines manage its schedules (otherwise its refusal comes back as an `ApiError`).
+   */
+  machineSchedules: {
+    /** The full list there, prompts included, for editing. */
+    list: (nodeId: string) => request<ScheduleView[]>(`/peers/${encodeURIComponent(nodeId)}/schedules`),
+    create: (nodeId: string, body: CreateScheduleBody) => post<ScheduleView>(`/peers/${encodeURIComponent(nodeId)}/schedules`, body),
+    patch: (nodeId: string, id: string, body: PatchScheduleBody) => patch<ScheduleView>(`/peers/${encodeURIComponent(nodeId)}/schedules/${encodeURIComponent(id)}`, body),
+    delete: (nodeId: string, id: string) => del(`/peers/${encodeURIComponent(nodeId)}/schedules/${encodeURIComponent(id)}`),
+    run: (nodeId: string, id: string) => post<ScheduleRun>(`/peers/${encodeURIComponent(nodeId)}/schedules/${encodeURIComponent(id)}/run`),
+    /** Newest first. */
+    runs: (nodeId: string, id: string) => request<ScheduleRun[]>(`/peers/${encodeURIComponent(nodeId)}/schedules/${encodeURIComponent(id)}/runs`),
+  },
 };
 
 /** This machine. */

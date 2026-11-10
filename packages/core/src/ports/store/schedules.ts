@@ -1,4 +1,5 @@
 import type { ScheduleRule, ScheduleRunStatus, ScheduleTarget, ScheduleTrigger } from '../../domain/schedule.js';
+import type { SchedulePeerChangeAction } from '../../domain/schedule-peers.js';
 
 // --- schedules (spec 2026-10-12-scheduled-tasks-design) ------------------------
 
@@ -91,6 +92,26 @@ export interface ScheduleView extends Schedule {
   lastRun: ScheduleRun | null;
   /** `unattendedWarnings` for its profile and target. */
   warnings: string[];
+  /** The newest change a paired machine made to it (`ScheduleRepo.peerChanges`), named; absent when none has. */
+  changedFrom?: { nodeId: string; machine: string; action: SchedulePeerChangeAction; at: number };
+}
+
+/**
+ * A change a paired machine made to one of this machine's schedules over the peer listener, while this machine let
+ * it (`AppSettings.peerScheduleControl`). Kept after the schedule is deleted, with the name it had, so a delete is
+ * recorded too.
+ */
+export interface SchedulePeerChange {
+  id: string;
+  scheduleId: string;
+  /** The schedule's name when the change was made. */
+  scheduleName: string;
+  action: SchedulePeerChangeAction;
+  /** The paired machine it came from: the caller's authenticated node id, never anything it sent. */
+  fromNode: string;
+  /** The run it started, for Run now (`ran`); null otherwise. */
+  runId: string | null;
+  at: number;
 }
 
 /**
@@ -125,4 +146,14 @@ export interface ScheduleRepo {
   madeChat(chatId: string): boolean;
   /** Points a chat schedule at another chat (a handover's new chat). Throws for a project schedule. */
   retarget(id: string, chatId: string): void;
+  /**
+   * Records a change a paired machine made (`at` defaults to now), then prunes: every change older than
+   * `SCHEDULE_PEER_CHANGE_DAYS_KEPT` before this one, and this schedule's routine changes (pause, resume, Run now)
+   * beyond its newest `SCHEDULE_PEER_ROUTINE_KEPT`, always keeping the newest of each kind. A create, an edit or a
+   * delete is never pruned to make room, so flooding routine changes can't push one out. Not tied to the schedule:
+   * deleting it keeps its record.
+   */
+  recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange;
+  /** Changes paired machines made, newest first (then the newest recorded); every schedule's when `scheduleId` is left out. */
+  peerChanges(scheduleId?: string): SchedulePeerChange[];
 }

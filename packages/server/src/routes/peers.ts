@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { shortFingerprint } from '@otherbench/core/domain/pairing.js';
 import type { Container } from '../container.js';
@@ -63,17 +63,52 @@ export function peersRoutes(container: Container): Hono {
 
   /**
    * Each paired machine's schedules, as it last said on its `/peer/events` stream, named from this machine's synced
-   * rows: for the Schedules view, read-only. None while a machine isn't reachable, so its last list is never shown
-   * stale. Nothing here, or on the peer listener, runs or changes a schedule on another machine.
+   * rows, with whether it lets this machine manage them: for the Schedules view. None while a machine isn't
+   * reachable, so its last list is never shown stale.
    */
   app.get('/schedules', (c) => {
     const peers = service(container);
     const out: PeerSchedules[] = peers.list().map((p) => {
       const said = peers.schedules(p.nodeId);
-      return { nodeId: p.nodeId, name: p.name, status: peers.status(p.nodeId).status, shared: said !== null, schedules: said ? namedPeerSchedules(container.store, said) : [] };
+      const control = peers.scheduleControl(p.nodeId);
+      return {
+        nodeId: p.nodeId, name: p.name, status: peers.status(p.nodeId).status, shared: said !== null, manage: said !== null && control.manage,
+        timezone: control.timezone, schedules: said ? namedPeerSchedules(container.store, said) : [],
+      };
     });
     return c.json(out);
   });
+
+  /**
+   * A paired machine's schedules, called on that machine over its peer listener (`peerScheduleRoutes` there): a
+   * schedule's run history always, and the full list, create, edit, pause, resume, delete and Run now only while that
+   * machine lets paired machines manage them, which it decides on every call (otherwise its 404 and reason come back
+   * as they are). A create or edit has that machine pull from this one first, so a chat, project or profile just
+   * made here is there for it to check. Nothing is decided or kept here.
+   */
+  const onPeer = async (c: Context, method: string, path: string, opts: { body?: boolean; syncFirst?: boolean } = {}): Promise<Response> => {
+    const peers = service(container);
+    const nodeId = c.req.param('id') ?? '';
+    if (!peers.peer(nodeId)) throw new HTTPException(404, { message: `No paired machine "${nodeId}".` });
+    const body: unknown = opts.body ? await c.req.json().catch(() => ({})) : undefined;
+    try {
+      if (opts.syncFirst) await peers.call(nodeId, { method: 'POST', path: '/peer/sync-request' });
+      const res = await peers.call(nodeId, { method, path: `/api/schedules${path}`, ...(body !== undefined ? { body } : {}) });
+      if (res.status === 204) return c.body(null, 204);
+      return c.json(res.body ?? {}, res.status as 200);
+    } catch (err) {
+      if (err instanceof PeerError && err.status === 503) return c.json({ error: err.message, kind: 'peer_unreachable', nodeId }, 503);
+      if (err instanceof PeerError) throw new HTTPException(err.status, { message: err.message });
+      throw err;
+    }
+  };
+  const sid = (c: Context): string => encodeURIComponent(c.req.param('sid') ?? '');
+  app.get('/:id/schedules', (c) => onPeer(c, 'GET', ''));
+  app.post('/:id/schedules', (c) => onPeer(c, 'POST', '', { body: true, syncFirst: true }));
+  app.patch('/:id/schedules/:sid', (c) => onPeer(c, 'PATCH', `/${sid(c)}`, { body: true, syncFirst: true }));
+  app.delete('/:id/schedules/:sid', (c) => onPeer(c, 'DELETE', `/${sid(c)}`));
+  app.post('/:id/schedules/:sid/run', (c) => onPeer(c, 'POST', `/${sid(c)}/run`));
+  app.get('/:id/schedules/:sid/runs', (c) => onPeer(c, 'GET', `/${sid(c)}/runs`));
 
   /** Shows a code (starting the peer listener) for the other machine to enter. */
   app.post('/pairing', async (c) => c.json(await guarded(() => service(container).startPairing()), 201));

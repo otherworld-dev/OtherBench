@@ -105,6 +105,8 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
   const profile = store.profiles.get(s.profileId);
   const connection = profile ? store.connections.get(profile.connectionId) : null;
   const hasFolder = (chat?.workspace ?? project?.workspace ?? null) !== null;
+  // The newest change a paired machine made to it (peer/schedule-control.ts), named from this machine's peers.
+  const peerChange = store.schedules.peerChanges(s.id)[0];
   return {
     ...s,
     targetName: chat?.title ?? (project ? projectDisplayName(project, (id) => store.projects.get(id)) : null) ?? '',
@@ -113,14 +115,18 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
     activeRun: container.schedules?.activeRun(s.id) ?? null,
     lastRun: store.schedules.lastRun(s.id),
     warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder, s.autoMode) : [],
+    ...(peerChange
+      ? { changedFrom: { nodeId: peerChange.fromNode, machine: store.peers.get(peerChange.fromNode)?.name ?? 'a machine no longer paired', action: peerChange.action, at: peerChange.at } }
+      : {}),
   };
 }
 
 /**
  * Scheduled tasks (spec 2026-10-12-scheduled-tasks-design §4), at /api/schedules.
- * Behind the app's token, Host and cross-site checks; never on the peer
- * listener (peer/forward.ts mounts only the turns routes). The time zone is
- * this server's, never the body's.
+ * Behind the app's token, Host and cross-site checks. On the peer listener
+ * only through `peerScheduleRoutes` (peer/schedule-control.ts): the run
+ * history always, the rest only while this machine lets paired machines
+ * manage its schedules. The time zone is this server's, never the body's.
  */
 export function schedulesRoutes(container: Container): Hono {
   const app = new Hono();

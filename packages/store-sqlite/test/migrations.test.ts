@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-21).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends']);
+    expect(MIGRATIONS.slice(-22).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(44);
+      expect(SCHEMA_VERSION).toBe(45);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch', 'context_tokens', 'handover_ask_at', 'handover_suggest']));
     } finally {
@@ -1008,6 +1008,23 @@ describe('migration 044: chat sends', () => {
       for (const col of ['from_message_id', 'to_reply_id', 'chain_id', 'resumed_as']) expect(indexes.some((n) => n.includes(col))).toBe(true);
       const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_send'").all();
       expect(triggers).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('migration 045: schedule peer changes', () => {
+  it('adds the local schedule_peer_change table, with no sync triggers and no foreign key to the schedule it records', () => {
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS);
+      expect(tableNames(db)).toContain('schedule_peer_change');
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'schedule_peer_change'").all()).toEqual([]);
+      expect(db.prepare('PRAGMA foreign_key_list(schedule_peer_change)').all()).toEqual([]);
+      // A delete is recorded after the schedule has gone.
+      db.prepare("INSERT INTO schedule_peer_change (id, schedule_id, schedule_name, action, from_node, run_id, at) VALUES ('x', 'gone', 'Report', 'deleted', 'node-laptop', NULL, 1)").run();
+      expect(() => db.prepare("INSERT INTO schedule_peer_change (id, schedule_id, schedule_name, action, from_node, run_id, at) VALUES ('y', 's', 'R', 'exploded', 'n', NULL, 1)").run()).toThrow();
     } finally {
       db.close();
     }

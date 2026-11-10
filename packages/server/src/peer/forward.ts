@@ -12,6 +12,7 @@ import { COMPUTER_NO_SESSION_REASON } from '../computer/sessions.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
 import { chatToolStateRoutes, parseApprovalChoice, parseAskReply } from '../routes/tools.js';
+import { peerScheduleRoutes } from './schedule-control.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { PeerError } from './service.js';
@@ -769,7 +770,9 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
  * server already set up here), stopping a reply still running here
  * in a chat moved elsewhere, stopping a computer-use session held here,
  * and, while this machine lets it (`peerComputerControl`, off until turned on in this machine's desktop app),
- * asking to start one here (its own start dialog asks the person here, naming the paired machine). Nothing else --
+ * asking to start one here (its own start dialog asks the person here, naming the paired machine). Reading a
+ * schedule's run history, and, while this machine lets it (`peerScheduleControl`, off until turned on in Settings
+ * here), managing its schedules (`peerScheduleRoutes`). Nothing else --
  * no settings (so the setting can't be turned on from there), no folder browsing, no attaching files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
@@ -788,6 +791,11 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // off by default and only turned on with an OK in this machine's desktop app's native dialog (routes/settings.ts).
   const desktopOnly = changesOnlyFromTheDesktopApp(container.computer, []);
   app.use('*', async (c, next) => (container.store.settings.get().peerComputerControl ? next() : desktopOnly(c, next)));
+
+  // This machine's schedules: each one's run history, and, only while this machine lets paired machines manage them
+  // (`peerScheduleControl`, off by default), the rest (schedule-control.ts). Behind the gate above, and ahead of the
+  // chat marking below: a scheduled run is unattended, so computer use never runs in it and there is nothing to mark.
+  app.route('/', peerScheduleRoutes(container));
 
   // Every write a paired machine sends that isn't a stop puts input into a chat: the chat is marked as that
   // machine's before the write is handled, so whatever reply it starts or reaches counts as that machine's for

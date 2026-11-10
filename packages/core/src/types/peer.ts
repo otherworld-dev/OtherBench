@@ -40,8 +40,9 @@ export interface PeerInfo {
 
 /**
  * One schedule as a machine tells its paired machines, on the `schedules` announcement of `/peer/events`: what a row
- * in the Schedules view shows, and nothing else. Never the prompt, the warnings or the run in progress, and nothing a
- * paired machine could use to run, change or stop it: schedules are read-only across machines.
+ * in the Schedules view shows, and nothing else. Never the prompt, the warnings or the run in progress. A paired
+ * machine can change a schedule only while the machine holding it lets it (`peerScheduleControl`), and then through
+ * that machine's own schedule routes, never through this announcement.
  */
 export interface PeerScheduleSummary {
   id: string;
@@ -81,5 +82,23 @@ export interface PeerSchedules {
   name: string;
   status: 'unknown' | 'reachable' | 'unreachable';
   shared: boolean;
+  /**
+   * It lets paired machines run, pause, edit, delete and create its schedules (its `peerScheduleControl`), as it last
+   * said. Only decides whether this machine's UI offers the buttons: the machine holding them checks its own setting
+   * on every call. False while it isn't reachable or never said.
+   */
+  manage: boolean;
+  /** The zone a schedule made there is stored in, as it says; null when it didn't say. */
+  timezone: string | null;
   schedules: PeerScheduleRow[];
+}
+
+/**
+ * The `schedules` announcement on `/peer/events`, whole each time: the rows, whether the sender lets paired machines
+ * manage them (`peerScheduleControl`) and the zone it makes schedules in. An older build sends only `schedules`.
+ */
+export interface PeerSchedulesAnnouncement {
+  schedules: PeerScheduleSummary[];
+  manage: boolean;
+  timezone: string;
 }

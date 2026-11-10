@@ -1,10 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, parseRule, SCHEDULE_RUNS_KEPT, type ScheduleRule } from '@otherbench/core/domain/schedule.js';
+import { ROUTINE_SCHEDULE_PEER_CHANGES, SCHEDULE_PEER_CHANGE_DAYS_KEPT, SCHEDULE_PEER_ROUTINE_KEPT } from '@otherbench/core/domain/schedule-peers.js';
 import type {
   NewSchedule,
   NewScheduleRun,
   Schedule,
   SchedulePatch,
+  SchedulePeerChange,
   ScheduleRepo,
   ScheduleRun,
   ScheduleRunPatch,
@@ -245,6 +247,50 @@ export class SqliteScheduleRepo implements ScheduleRepo {
     if (!row) throw new Error(`schedule: not found: ${id}`);
     if (row.chat_id === null) throw new Error(`schedule: ${id} runs in a project, not a chat`);
     this.db.prepare('UPDATE schedule SET chat_id = ?, updated_at = ? WHERE id = ?').run(chatId, Date.now(), id);
+  }
+
+  recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange {
+    const full: SchedulePeerChange = { ...c, at: c.at ?? Date.now() };
+    this.db
+      .prepare('INSERT INTO schedule_peer_change (id, schedule_id, schedule_name, action, from_node, run_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(full.id, full.scheduleId, full.scheduleName, full.action, full.fromNode, full.runId, full.at);
+    // Only by age for everything; a create, an edit or a delete is never dropped to make room.
+    this.db.prepare('DELETE FROM schedule_peer_change WHERE at < ?').run(full.at - SCHEDULE_PEER_CHANGE_DAYS_KEPT * 86_400_000);
+    // This schedule's routine changes beyond the newest few, keeping the newest pause, resume and Run now whatever.
+    const routine = ROUTINE_SCHEDULE_PEER_CHANGES.map(() => '?').join(', ');
+    const newestOf = "SELECT id FROM (SELECT id FROM schedule_peer_change WHERE schedule_id = ? AND action = ? ORDER BY at DESC, rowid DESC LIMIT 1)";
+    this.db
+      .prepare(
+        `DELETE FROM schedule_peer_change WHERE schedule_id = ? AND action IN (${routine})
+           AND id NOT IN (SELECT id FROM schedule_peer_change WHERE schedule_id = ? AND action IN (${routine}) ORDER BY at DESC, rowid DESC LIMIT ?)
+           AND id NOT IN (${ROUTINE_SCHEDULE_PEER_CHANGES.map(() => newestOf).join(' UNION ')})`
+      )
+      .run(
+        full.scheduleId,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES,
+        full.scheduleId,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES,
+        SCHEDULE_PEER_ROUTINE_KEPT,
+        ...ROUTINE_SCHEDULE_PEER_CHANGES.flatMap((action) => [full.scheduleId, action])
+      );
+    return full;
+  }
+
+  peerChanges(scheduleId?: string): SchedulePeerChange[] {
+    const rows = (
+      scheduleId === undefined
+        ? this.db.prepare('SELECT * FROM schedule_peer_change ORDER BY at DESC, rowid DESC').all()
+        : this.db.prepare('SELECT * FROM schedule_peer_change WHERE schedule_id = ? ORDER BY at DESC, rowid DESC').all(scheduleId)
+    ) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      id: row.id as string,
+      scheduleId: row.schedule_id as string,
+      scheduleName: row.schedule_name as string,
+      action: row.action as SchedulePeerChange['action'],
+      fromNode: row.from_node as string,
+      runId: row.run_id as string | null,
+      at: row.at as number,
+    }));
   }
 
   private row(id: string): Record<string, unknown> | undefined {

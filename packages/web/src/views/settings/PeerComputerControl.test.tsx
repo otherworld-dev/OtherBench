@@ -7,7 +7,7 @@ import { PeerComputerControl } from './PeerComputerControl.js';
 const shell = vi.hoisted(() => ({ desktop: true }));
 vi.mock('../../desktop/bridge.js', () => ({ isDesktop: () => shell.desktop }));
 
-const settings = (peerComputerControl: boolean) => ({ memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
+const settings = (peerComputerControl: boolean) => ({ memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl, peerScheduleControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
 
 describe('PeerComputerControl', () => {
   beforeEach(() => {

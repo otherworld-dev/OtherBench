@@ -318,10 +318,13 @@ describe('POST /api/schedules/:id/run', () => {
 });
 
 describe('the peer listener', () => {
-  it('has no schedule routes', async () => {
+  it("has no schedule route but the run history while this machine doesn't let paired machines manage its schedules (the default)", async () => {
     setup();
     const made = await create();
-    expect((await forwardedApi(container).request('/schedules')).status).toBe(404);
-    expect((await forwardedApi(container).request(`/schedules/${made.id}/run`, { method: 'POST' })).status).toBe(404);
+    const env = { peerNodeId: 'node-laptop' };
+    expect((await forwardedApi(container).request('/schedules', {}, env)).status).toBe(404);
+    expect((await forwardedApi(container).request(`/schedules/${made.id}/run`, { method: 'POST' }, env)).status).toBe(404);
+    expect(container.store.schedules.runs(made.id)).toEqual([]);
+    expect((await forwardedApi(container).request(`/schedules/${made.id}/runs`, {}, env)).status).toBe(200);
   });
 });
