@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OtherBench E2E",
+  "mainBinaryName": "otherbench-e2e",
+  "identifier": "dev.otherworld.otherbench.e2e",
+  "build": {
+    "beforeBuildCommand": ""
+  },
+  "bundle": {
+    "active": false
+  }
+}

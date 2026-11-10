@@ -24,6 +24,28 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 /// Passed by the autostart entry so a sign-in launch goes straight to the tray.
 const MINIMIZED_FLAG: &str = "--minimized";
 
+/// The desktop smoke tests' build (`tauri.e2e.conf.json`, packages/web/e2e-desktop) has an
+/// identifier ending in this, so its single-instance lock, webview storage, logs and window
+/// state are all its own and never the installed app's.
+const TEST_IDENTIFIER_SUFFIX: &str = ".e2e";
+/// The scratch folder a test build keeps its server's database in. Only a test build reads it.
+const TEST_DATA_DIR_VAR: &str = "OTHERBENCH_E2E_DATA_DIR";
+
+/// Where the server keeps its data: `None` is the default (`~/.otherbench`), which only the real
+/// app uses; it never reads `OTHERBENCH_E2E_DATA_DIR`. A test build starts its server only with
+/// that set to an absolute folder, so it can never open the real database either.
+fn test_data_dir(identifier: &str, value: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, String> {
+    if !identifier.ends_with(TEST_IDENTIFIER_SUFFIX) {
+        return Ok(None);
+    }
+    match value.map(PathBuf::from) {
+        Some(dir) if dir.is_absolute() => Ok(Some(dir)),
+        _ => Err(format!(
+            "This is the desktop smoke tests' build ({identifier}). It starts its server only with {TEST_DATA_DIR_VAR} set to an absolute scratch folder, so it never opens the real ~/.otherbench."
+        )),
+    }
+}
+
 /// What the web app needs to reach its server (web/src/desktop/bridge.ts).
 #[derive(Clone, Serialize)]
 struct Bootstrap {
@@ -272,8 +294,14 @@ fn node_binary(app: &tauri::AppHandle) -> PathBuf {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
     // Before the builder: the webview opens its storage folder as the windows are made.
-    legacy::adopt_webview_data();
+    // Not in a test build, which must leave the installed app's folders alone.
+    if !identifier.ends_with(TEST_IDENTIFIER_SUFFIX) {
+        legacy::adopt_webview_data();
+    }
+    let data_dir = test_data_dir(&identifier, std::env::var_os(TEST_DATA_DIR_VAR));
     let launch = Arc::new(Launch::default());
     let server: Arc<Mutex<Option<sidecar::Server>>> = Arc::new(Mutex::new(None));
 
@@ -355,13 +383,15 @@ fn main() {
             updates.start();
             app.manage(updates);
 
-            let spec = sidecar::LaunchSpec {
+            let log_dir = app.path().app_log_dir()?;
+            let spec = data_dir.map(|data_dir| sidecar::LaunchSpec {
                 node: node_binary(app.handle()),
                 script: server_script(app.handle()),
                 cors_origins: cors_origins(),
-                log_dir: app.path().app_log_dir()?,
+                log_dir,
                 app_version: app.package_info().version.to_string(),
-            };
+                data_dir,
+            });
             // The server's computer-use channel (rpc.rs) is answered here
             // (computer.rs). Off, with no driver at all, unless the switch is set.
             let shell = computer::shell(app.handle());
@@ -370,7 +400,7 @@ fn main() {
             let server = server.clone();
             let handler: Arc<dyn rpc::Handler> = shell;
             std::thread::spawn(move || {
-                let outcome = sidecar::start(&spec, handler).map(|s| {
+                let outcome = spec.and_then(|spec| sidecar::start(&spec, handler)).map(|s| {
                     let boot = Bootstrap { base_url: format!("http://127.0.0.1:{}", s.port), token: s.token.clone() };
                     *server.lock().expect("server lock") = Some(s);
                     boot
@@ -383,7 +413,7 @@ fn main() {
             });
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the OtherBench desktop app");
 
     app.run(move |handle, event| {
@@ -458,6 +488,30 @@ mod tests {
         for command in ["undock", "dock", "undocked", "show_window", "open_in", "focused_window", "open_chat"] {
             assert!(src.contains(&format!("async fn {command}(")), "{command} touches a window, so it must be an async command");
         }
+    }
+
+    #[test]
+    fn only_a_test_build_reads_the_test_data_folder_and_it_needs_one() {
+        use super::{test_data_dir, TEST_IDENTIFIER_SUFFIX};
+        use std::path::PathBuf;
+        let scratch = std::env::temp_dir().join("otherbench-e2e");
+        assert_eq!(test_data_dir("dev.otherworld.otherbench", Some(scratch.clone().into())), Ok(None));
+        assert_eq!(test_data_dir("dev.otherworld.otherbench", None), Ok(None));
+        let test_id = format!("dev.otherworld.otherbench{TEST_IDENTIFIER_SUFFIX}");
+        assert_eq!(test_data_dir(&test_id, Some(scratch.clone().into())), Ok(Some(scratch)));
+        assert!(test_data_dir(&test_id, None).is_err());
+        assert!(test_data_dir(&test_id, Some("".into())).is_err());
+        assert!(test_data_dir(&test_id, Some(PathBuf::from("relative").into())).is_err());
+    }
+
+    #[test]
+    fn the_test_build_config_is_a_separate_app() {
+        let real: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let test: serde_json::Value = serde_json::from_str(include_str!("../tauri.e2e.conf.json")).unwrap();
+        let id = test["identifier"].as_str().unwrap();
+        assert!(id.ends_with(super::TEST_IDENTIFIER_SUFFIX), "{id}");
+        assert_ne!(test["identifier"], real["identifier"]);
+        assert_ne!(test["mainBinaryName"], "otherbench-desktop", "the test exe must not share the installed app's process name");
     }
 
     #[test]

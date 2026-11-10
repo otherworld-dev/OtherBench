@@ -9,6 +9,7 @@
     "app:bundle": "tauri build",
     "web:dev": "npm --prefix .. run build && npm --prefix ../packages/web run dev",
     "web:build": "npm --prefix .. run build",
+    "app:e2e": "tauri build --debug --no-bundle --config src-tauri/tauri.e2e.conf.json",
     "app:installer": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.bundle.conf.json",
     "app:release": "node scripts/stage.mjs && tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.release.conf.json"
   },

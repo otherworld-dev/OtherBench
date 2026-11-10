@@ -36,6 +36,9 @@ pub fn plain_path(path: &Path) -> PathBuf {
 
 /// How long to wait for the announce line before giving up.
 const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
+/// The same for the smoke tests' build, which runs on machines busy with other test runs: a fresh
+/// server took 18-25 s to start on a machine at 100% CPU, where the app's own 15 s failed the run.
+const TEST_ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long the server gets to exit on its own after stdin closes before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
@@ -46,6 +49,22 @@ pub struct LaunchSpec {
     pub log_dir: PathBuf,
     /// This build's version, handed to the server as `OTHERBENCH_APP_VERSION` for paired machines to see.
     pub app_version: String,
+    /// The desktop smoke tests' build only (main.rs `test_data_dir`): the folder its database goes in,
+    /// instead of `~/.otherbench`. Its peer listener then takes any free port, never the real app's 4748.
+    pub data_dir: Option<PathBuf>,
+}
+
+/// The server's arguments: announce mode, the CORS origins, and for a test build its own data folder.
+fn serve_args(spec: &LaunchSpec) -> Vec<String> {
+    let mut args: Vec<String> = ["serve", "--port", "0", "--announce", "--desktop-rpc"].map(String::from).to_vec();
+    for origin in &spec.cors_origins {
+        args.extend(["--cors-origin".to_string(), origin.clone()]);
+    }
+    if let Some(dir) = &spec.data_dir {
+        args.extend(["--db".to_string(), dir.join("otherbench.db").to_string_lossy().into_owned()]);
+        args.extend(["--peer-port".to_string(), "0".to_string()]);
+    }
+    args
 }
 
 pub struct Server {
@@ -95,10 +114,7 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
     let mut log = File::create(&log_path).map_err(|e| format!("cannot create {}: {e}", log_path.display()))?;
 
     let mut cmd = Command::new(plain_path(&spec.node));
-    cmd.arg(plain_path(&spec.script)).args(["serve", "--port", "0", "--announce", "--desktop-rpc"]);
-    for origin in &spec.cors_origins {
-        cmd.args(["--cors-origin", origin]);
-    }
+    cmd.arg(plain_path(&spec.script)).args(serve_args(spec));
     cmd.env("OTHERBENCH_TOKEN", &token)
         .env("OTHERBENCH_APP_VERSION", &spec.app_version)
         .stdin(Stdio::piped())
@@ -165,13 +181,14 @@ pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server
         rpc::pump(reader, word, &pump_writer, &*handler);
     });
 
-    let port = match rx.recv_timeout(ANNOUNCE_TIMEOUT) {
+    let timeout = if spec.data_dir.is_some() { TEST_ANNOUNCE_TIMEOUT } else { ANNOUNCE_TIMEOUT };
+    let port = match rx.recv_timeout(timeout) {
         Ok(Ok(port)) => port,
         Ok(Err(e)) => {
             let _ = writeln!(log, "[otherbench-desktop] {e}");
             return Err(fail(child, job, &log_path, e));
         }
-        Err(_) => return Err(fail(child, job, &log_path, "the server did not announce a port within 15s".into())),
+        Err(_) => return Err(fail(child, job, &log_path, format!("the server did not announce a port within {}s", timeout.as_secs()))),
     };
 
     Ok(Server { writer, child, job, port, token })
@@ -243,6 +260,31 @@ mod tests {
         );
         assert_eq!(plain_path(Path::new(r"\\?\UNC\server\share\cli.js")), PathBuf::from(r"\\server\share\cli.js"));
         assert_eq!(plain_path(Path::new(r"C:\plain\cli.js")), PathBuf::from(r"C:\plain\cli.js"));
+    }
+
+    fn spec(data_dir: Option<PathBuf>) -> LaunchSpec {
+        LaunchSpec {
+            node: PathBuf::from("node"),
+            script: PathBuf::from("cli.js"),
+            cors_origins: vec!["http://tauri.localhost".into()],
+            log_dir: PathBuf::from("logs"),
+            app_version: "0.0.0".into(),
+            data_dir,
+        }
+    }
+
+    #[test]
+    fn the_real_app_uses_the_default_database_and_peer_port() {
+        assert_eq!(serve_args(&spec(None)), ["serve", "--port", "0", "--announce", "--desktop-rpc", "--cors-origin", "http://tauri.localhost"]);
+    }
+
+    #[test]
+    fn a_test_build_gets_its_own_database_and_any_free_peer_port() {
+        let args = serve_args(&spec(Some(PathBuf::from(r"C:\Temp\e2e"))));
+        let db = args.iter().position(|a| a == "--db").expect("--db");
+        assert_eq!(PathBuf::from(&args[db + 1]), PathBuf::from(r"C:\Temp\e2e").join("otherbench.db"));
+        let peer = args.iter().position(|a| a == "--peer-port").expect("--peer-port");
+        assert_eq!(args[peer + 1], "0");
     }
 
     #[test]
