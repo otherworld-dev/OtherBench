@@ -439,7 +439,7 @@ describe('SchedulesView', () => {
       peerSchedules.mockResolvedValue([machine({ manage: true })]);
       there.run.mockResolvedValue({} as never);
       there.patch.mockResolvedValue(view({ id: 'ps1' }));
-      there.delete.mockResolvedValue(undefined as never);
+      there.delete.mockResolvedValue(undefined);
       render(<SchedulesView onClose={vi.fn()} />);
       const section = await screen.findByTestId('peer-schedules-node-pc');
       expect(within(section).getByTestId('peer-schedules-note')).toHaveTextContent('which lets this machine run, pause, edit and delete them');
