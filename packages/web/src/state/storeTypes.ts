@@ -6,7 +6,7 @@ import type { App, AppFolder, Chat, Project } from '@otherbench/core/ports/store
 import type { Connection, ModelInfo, Profile } from '@otherbench/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@otherbench/core/types/messages.js';
 import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
-import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@otherbench/core/types/events.js';
+import type { AppEvent, AppEventsHello, ComputerStartOutcome, PendingApprovalSummary } from '@otherbench/core/types/events.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
 import type { IssueDetail, IssueSummary } from '@otherbench/core/types/code.js';
 import type { Bookmark, DeckBoardView, DeckCardDetail, WikiPage, WikiTree } from '@otherbench/core/types/nextcloud.js';
@@ -142,6 +142,12 @@ export interface OtherBenchState {
   appRunningTurns: Record<string, string>;
   /** Chats controlling this computer (computer use), by chat id, with their last action (`actionSummary`: never typed text). */
   computerSessions: Record<string, { lastAction?: string; startedFrom?: string }>;
+  /**
+   * Computer-use starts this machine asked a paired machine for that didn't start there, by chat id, with that
+   * machine and how it ended (`peer-computer-start`): the chat's Start on PC line says so until it is asked again.
+   */
+  peerComputerStarts: Record<string, { nodeId: string; outcome: ComputerStartOutcome }>;
+  clearPeerComputerStart(chatId: string): void;
   /** Chats with background tasks running anywhere in the app, by chat id, with how many. */
   appBackgroundChats: Record<string, number>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */

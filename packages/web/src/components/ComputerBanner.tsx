@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
+import type { ComputerStartOutcome } from '@otherbench/core/types/events.js';
 import { ApiError, api } from '../state/api.js';
 import { computerSessionElsewhere } from '../state/peerActivity.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -19,16 +20,27 @@ import { oneLine } from '../viewer/browser.js';
  * And for a chat that runs on a reachable paired machine with a profile that
  * uses the computer and no session: "Start on PC", which asks that machine to
  * start one (it decides whether it lets paired machines, and its own start
- * dialog asks the person there).
+ * dialog asks the person there). When that start doesn't happen, that machine
+ * says how it ended (`peer-computer-start`: declined, nobody answered, or
+ * neither) and the line says so until Start is asked again.
  *
  * The last action is the server's `actionSummary` of what was carried out,
  * which never holds typed text; it is still shown as one clean line in a
  * `<bdi>`. The session carries no app, so the banner names none.
  */
+/** How a start asked of `machine` ended without a session, as the Start line says it. */
+function endedText(outcome: ComputerStartOutcome, machine: string): string {
+  if (outcome === 'declined') return `${machine} declined: nobody there said OK, so computer use didn't start.`;
+  if (outcome === 'unanswered') return `Nobody answered on ${machine} in time, so computer use didn't start.`;
+  return `Computer use didn't start on ${machine}.`;
+}
+
 export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
   const local = useOtherBenchStore((s) => s.computerSessions[chat.id]);
   const machines = useOtherBenchStore((s) => s.machines);
   const usesComputer = useOtherBenchStore((s) => s.profiles.find((p) => p.id === chat.profileId)?.toolPolicy.computer === true);
+  const startEnded = useOtherBenchStore((s) => s.peerComputerStarts[chat.id]);
+  const clearStartEnded = useOtherBenchStore((s) => s.clearPeerComputerStart);
   const elsewhere = local ? null : computerSessionElsewhere(machines, chat.id);
   const [busy, setBusy] = useState(false);
   const [startNote, setStartNote] = useState<{ chatId: string; text: string; failed: boolean } | null>(null);
@@ -37,12 +49,15 @@ export function ComputerBanner({ chat }: { chat: Chat }): JSX.Element | null {
   if (!session) {
     const runsOn = machines && chat.runsOn !== machines.self.id ? machines.peers.find((p) => p.nodeId === chat.runsOn && p.status === 'reachable') : undefined;
     if (!runsOn || !usesComputer) return null;
-    const note = startNote?.chatId === chat.id ? startNote : null;
     const machine = oneLine(runsOn.name);
+    // How that machine said the last start ended wins over "Asked PC": it came after.
+    const ended = startEnded?.nodeId === runsOn.nodeId ? { text: endedText(startEnded.outcome, machine), failed: true } : null;
+    const note = ended ?? (startNote?.chatId === chat.id ? startNote : null);
 
     async function start(): Promise<void> {
       setBusy(true);
       setStartNote(null);
+      clearStartEnded(chat.id);
       try {
         await api.chats.startComputer(chat.id);
         setStartNote({ chatId: chat.id, text: `Asked ${machine}. Someone there has to say OK in its dialog before it starts.`, failed: false });

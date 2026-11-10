@@ -12,7 +12,7 @@ import {
 } from '@otherbench/core/domain/pairing.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
-import type { ComputerSessionSummary, ToolStateSection } from '@otherbench/core/types/events.js';
+import { COMPUTER_START_OUTCOMES, type ComputerSessionSummary, type ComputerStartOutcome, type ToolStateSection } from '@otherbench/core/types/events.js';
 import type { Peer, PeerInfo, PeerScheduleSummary, PublicPeer } from '@otherbench/core/types/peer.js';
 import { isIP } from 'node:net';
 import type { Hono } from 'hono';
@@ -148,6 +148,18 @@ export function toolStateOf(said: unknown): { section: ToolStateSection; chatId:
   return { section: section as ToolStateSection, chatId };
 }
 
+/**
+ * A peer's `computer-start` announcement, as far as it is one: a bounded chat id and one of the known outcomes; else
+ * null. Anything else it carries is dropped, so a reason in that machine's words never reaches this one.
+ */
+export function computerStartOf(said: unknown): { chatId: string; outcome: ComputerStartOutcome } | null {
+  if (typeof said !== 'object' || said === null) return null;
+  const { chatId, outcome } = said as Record<string, unknown>;
+  if (typeof chatId !== 'string' || chatId === '' || chatId.length > MAX_COMPUTER_ID) return null;
+  if (!COMPUTER_START_OUTCOMES.includes(outcome as ComputerStartOutcome)) return null;
+  return { chatId, outcome: outcome as ComputerStartOutcome };
+}
+
 /** A peer's `waitingSince`: a finite time for each of `waiting`, the chats it says wait on a card; anything else dropped. */
 function waitingSinceOf(said: unknown, waiting: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -247,6 +259,11 @@ export class PeerService {
         if (event === 'tool-state') {
           const change = toolStateOf(data);
           if (change) options.events?.emit({ type: 'peer-tool-state', nodeId, ...change });
+        }
+        if (event === 'computer-start') {
+          // A computer-use start this machine asked for there didn't start: shown on the chat here.
+          const ended = computerStartOf(data);
+          if (ended) options.events?.emit({ type: 'peer-computer-start', nodeId, ...ended });
         }
       },
     });
@@ -418,6 +435,15 @@ export class PeerService {
   /** Tells every peer listening that this machine has changes for it to pull (Task 51). */
   announce(event: string, data: unknown = {}): void {
     for (const sends of this.streams.values()) for (const send of sends) send(event, data);
+  }
+
+  /**
+   * Tells only `nodeId`, on each `/peer/events` stream it holds open here, and no other paired machine: for what is
+   * that machine's own business (how a computer-use start it asked for came out). Nothing is kept for a stream that
+   * isn't open: a machine that has gone meanwhile isn't told.
+   */
+  announceTo(nodeId: string, event: string, data: unknown = {}): void {
+    for (const send of this.streams.get(nodeId) ?? []) send(event, data);
   }
 
   private get store(): Store {

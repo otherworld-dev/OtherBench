@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OWN_COMMANDS } from '@otherbench/core/domain/context-lines.js';
 import { FakeComputerDriver } from '@otherbench/core/testing/fake-computer.js';
+import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
 import { handleBackground } from '../../src/background.js';
 import { createContainer, type Container } from '../../src/container.js';
@@ -840,13 +841,22 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
     await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
   });
 
-  it('a start the person at the PC declines, or leaves until the dialog closes, starts nothing', async () => {
+  it('a start the person at the PC declines, or leaves until the dialog closes, starts nothing, and the laptop is told which', async () => {
     const driver = new FakeComputerDriver();
     const { pc, laptop, chatId, profileId } = await setup(undefined, driver);
     computerProfile(pc, profileId);
     pc.container.store.settings.update({ peerComputerControl: true });
     await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
-    for (const reason of ["The user didn't let OtherBench control the computer.", "Nobody answered the desktop app's question in time, so OtherBench didn't take control."]) {
+    const told: AppEvent[] = [];
+    laptop.container.events!.subscribe((e) => {
+      if (e.type === 'peer-computer-start') told.push(e);
+    });
+    for (const [reason, outcome] of [
+      ["The user didn't let OtherBench control the computer.", 'declined'],
+      ["Nobody answered the desktop app's question in time, so OtherBench didn't take control.", 'unanswered'],
+      ["The desktop app didn't answer the request to control this computer in time, so nothing was started.", 'unanswered'],
+      ["Computer use isn't available in the desktop app right now.", 'not_started'],
+    ] as const) {
       driver.startAnswer = { ok: false, reason };
       const before = driver.started.length;
       expect((await laptop.api('POST', `/api/chats/${chatId}/computer/start`)).status).toBe(202);
@@ -855,7 +865,15 @@ describe('computer use on a paired machine: the laptop sees and stops the sessio
       await expect.poll(() => pc.container.computer!.holder()).toBeNull();
       expect(driver.hasSession(chatId)).toBe(false);
       expect(pc.container.events!.computerSessions()).toEqual([]);
+      // Only the outcome crosses: never the PC's reason in its own words.
+      await expect.poll(() => told.at(-1)).toEqual({ type: 'peer-computer-start', nodeId: pc.id, chatId, outcome });
     }
+    expect(told).toHaveLength(4);
+    // An OK tells the laptop nothing this way: the session shows on its banner from the PC's activity.
+    driver.startAnswer = { ok: true };
+    expect((await laptop.api('POST', `/api/chats/${chatId}/computer/start`)).status).toBe(202);
+    await expect.poll(sessionsOn(laptop, pc)).toEqual([{ chatId }]);
+    expect(told).toHaveLength(4);
   });
 
   it("refuses the laptop's start when the PC doesn't let paired machines, when the chat's profile doesn't use the computer, and when computer use is off there", async () => {

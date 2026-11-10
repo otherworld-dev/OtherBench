@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type { ComputerStartOutcome } from '@otherbench/core/types/events.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { Hono, type Context, type Next } from 'hono';
 import { encodeHlc } from '@otherbench/core/domain/hlc.js';
@@ -9,6 +10,7 @@ import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbenc
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { COMPUTER_NO_SESSION_REASON } from '../computer/sessions.js';
+import { startOutcomeOf } from '../computer/start-outcome.js';
 import { commandsRoutes } from '../routes/commands.js';
 import { notesRoutes } from '../routes/notes.js';
 import { chatToolStateRoutes, parseApprovalChoice, parseAskReply } from '../routes/tools.js';
@@ -851,7 +853,8 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
    * computer. The start is this machine's own (`ComputerSessions.ensureSession`), so its native start dialog asks the
    * person here, as for any start, and says which paired machine asked; it waits on that, so this answers 202 at once
    * and the session shows on the paired machine once it has started (its activity). Declined or left unanswered, no
-   * session starts. The session is named as started from the paired machine.
+   * session starts, and the paired machine is told which (`computer-start`, to it alone: declined, unanswered or not
+ * started). The session is named as started from the paired machine.
    */
   app.post('/chats/:id/computer/start', async (c) => {
     const chat = container.store.chats.get(c.req.param('id'));
@@ -867,11 +870,21 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     }
     const holder = computer.holder();
     if (holder !== null && holder !== chat.id) return c.json({ error: `Another chat is controlling ${here}. Stop it first.`, kind: 'computer_busy' }, 409);
+    // The machine that asked is told how a start that didn't happen ended (declined, unanswered, or neither), and
+    // only that: the reason in this machine's words stays in its log. A start that happened shows in its activity.
+    const asker = c.env.peerNodeId;
+    const tell = (outcome: ComputerStartOutcome): void => container.peers?.announceTo(asker, 'computer-start', { chatId: chat.id, outcome });
     void computer.ensureSession(chat.id, chat.title, { from }).then(
       (answer) => {
-        if (answer.ok !== true) console.info(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} did not start: ${answer.reason}`);
+        const outcome = startOutcomeOf(answer);
+        if (outcome === null) return;
+        console.info(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} did not start: ${answer.ok ? '' : answer.reason}`);
+        tell(outcome);
       },
-      (err: unknown) => console.error(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} failed to start:`, err)
+      (err: unknown) => {
+        console.error(`[otherbench-server] computer use asked for from ${from} for chat ${chat.id} failed to start:`, err);
+        tell('not_started');
+      }
     );
     return c.json({ starting: true }, 202);
   });

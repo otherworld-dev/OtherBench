@@ -5,6 +5,10 @@ import type { MessageStatus } from './messages.js';
 /** The Inspector's sections that are each machine's own and never sync. */
 export type ToolStateSection = 'mcp' | 'grants' | 'audit';
 
+/** How a computer-use start a paired machine asked for ended without a session (`peer-computer-start`). */
+export type ComputerStartOutcome = 'declined' | 'unanswered' | 'not_started';
+export const COMPUTER_START_OUTCOMES: readonly ComputerStartOutcome[] = ['declined', 'unanswered', 'not_started'];
+
 /**
  * App-wide events (v2 plan, Task 34): what changed anywhere in the app, as
  * opposed to one chat's turn stream. `GET /api/events` sends them so every
@@ -23,6 +27,9 @@ export type ToolStateSection = 'mcp' | 'grants' | 'audit';
  * paired machine reads them over the peer listener for a chat that runs here
  * (`chatToolStateRoutes`), and is told when they change by the `tool-state`
  * announcement (which section, and the chat), arriving as `peer-tool-state`.
+ * A computer-use start a machine asked another for that didn't start there is
+ * told to the machine that asked alone, as the `computer-start` announcement
+ * (the chat and one word), arriving as `peer-computer-start`.
  */
 export type AppEvent =
   | { type: 'chat-created' | 'chat-updated'; chat: Chat }
@@ -50,6 +57,12 @@ export type AppEvent =
   | { type: 'peer-activity'; nodeId: string }
   /** A paired machine said what its schedules are now (read-only here): re-read `GET /api/peers/schedules`. */
   | { type: 'peer-schedules'; nodeId: string }
+  /**
+   * A computer-use start this machine asked a paired machine for didn't start there: its person said no
+   * (`declined`), nobody answered its dialog in time (`unanswered`), or it couldn't start for another reason
+   * (`not_started`). Only the outcome: the reason in that machine's words stays in its log.
+   */
+  | { type: 'peer-computer-start'; nodeId: string; chatId: string; outcome: ComputerStartOutcome }
   /** A paired machine's grants, audit trail or MCP health changed there: re-read that section for a chat running there. `chatId` null: any chat. */
   | { type: 'peer-tool-state'; nodeId: string; section: ToolStateSection; chatId: string | null }
   /** A schedule was made, changed or deleted: re-read the list (spec 2026-10-12-scheduled-tasks-design). */
