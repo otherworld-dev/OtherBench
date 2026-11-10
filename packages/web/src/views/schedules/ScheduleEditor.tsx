@@ -26,15 +26,27 @@ interface ScheduleEditorProps {
   schedule?: ScheduleView;
   /** A new schedule's fixed target, when opened from a chat's or a project's menu. */
   prefill?: ScheduleTarget;
+  /**
+   * The paired machine the schedule is on, when it isn't this one (it lets this machine manage its schedules): saved
+   * there, in its zone, and only its chats offered as a target, since a schedule runs on the machine that holds it.
+   */
+  machine?: ScheduleMachine;
   onSaved(view: ScheduleView): void;
   onCancel(): void;
+}
+
+/** A paired machine a schedule is made or edited on: its node id, its name and the zone it makes schedules in, if it said. */
+export interface ScheduleMachine {
+  nodeId: string;
+  name: string;
+  timezone: string | null;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])';
 const FIELD ='w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1';
 
 /** New or Edit schedule (spec 2026-10-12-scheduled-tasks-design §5). Esc or Cancel closes it unsaved. */
-export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: ScheduleEditorProps): JSX.Element {
+export function ScheduleEditor({ schedule, prefill, machine, onSaved, onCancel }: ScheduleEditorProps): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
   const profiles = useOtherBenchStore((s) => s.profiles);
@@ -64,7 +76,8 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     setDraft((d) => ({ ...d, [key]: value }));
     setEditedAt(Date.now());
   };
-  const timezone = schedule?.timezone ?? browserTimeZone();
+  // A new schedule is stored in its machine's zone: this browser's stands in for this machine's.
+  const timezone = schedule?.timezone ?? machine?.timezone ?? browserTimeZone();
   // The target is immutable once made (patchBody ignores it), so it is read-only when editing or opened with a prefill.
   const targetFixed = schedule !== undefined || prefill !== undefined;
   const profile = profiles.find((p) => p.id === draft.profileId);
@@ -74,7 +87,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   const warnings = profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, targetHasFolder(draft, chats, projects), draft.autoMode) : [];
   const preview = previewRuns(draft, timezone, editedAt);
   const profileChoices = profiles.filter((p) => p.archivedAt === null || p.id === draft.profileId);
-  const chatChoices = chats.filter((c) => c.archivedAt === null).sort((a, b) => b.createdAt - a.createdAt);
+  const chatChoices = chats.filter((c) => c.archivedAt === null && (machine === undefined || c.runsOn === machine.nodeId)).sort((a, b) => b.createdAt - a.createdAt);
   const targetText =
     draft.targetKind === 'chat'
       ? `Chat: ${chats.find((c) => c.id === draft.chatId)?.title ?? schedule?.targetName ?? ''}`
@@ -89,7 +102,12 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
     setSaving(true);
     setError(null);
     try {
-      onSaved(schedule ? await api.schedules.patch(schedule.id, patchBody(initial, draft)) : await api.schedules.create(createBody(draft)));
+      if (machine) {
+        const there = api.peers.machineSchedules;
+        onSaved(schedule ? await there.patch(machine.nodeId, schedule.id, patchBody(initial, draft)) : await there.create(machine.nodeId, createBody(draft)));
+      } else {
+        onSaved(schedule ? await api.schedules.patch(schedule.id, patchBody(initial, draft)) : await api.schedules.create(createBody(draft)));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -138,7 +156,13 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
       >
         <h2 id={`${id}-title`} className="text-base font-semibold">
           {schedule ? 'Edit schedule' : 'New schedule'}
+          {machine && ` on ${machine.name}`}
         </h2>
+        {machine && (
+          <p className="text-xs text-[var(--text-muted)]">
+            It runs on {machine.name}, with nobody there to approve anything, using {machine.name}&rsquo;s own tools and grants.
+          </p>
+        )}
 
         <div>
           <label htmlFor={`${id}-name`} className="block font-medium">

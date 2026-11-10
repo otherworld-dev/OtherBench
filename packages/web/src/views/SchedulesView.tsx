@@ -1,69 +1,18 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { formatInZone, type ScheduleTarget } from '@otherbench/core/domain/schedule.js';
-import type { ScheduleRun, ScheduleView } from '@otherbench/core/ports/store.js';
+import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
+import { SCHEDULE_PEER_CHANGE_TEXT } from '@otherbench/core/domain/schedule-peers.js';
+import type { ScheduleView } from '@otherbench/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { api, ApiError } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { PeerSchedulesSection } from './schedules/PeerSchedules.js';
 import { ScheduleEditor } from './schedules/ScheduleEditor.js';
+import { ScheduleHistory } from './schedules/ScheduleHistory.js';
 import { nextRunText, STATUS_LABEL, timeLimitSuffix } from './schedules/rowText.js';
 
 /** How often the open overlay re-reads the list, on top of every schedule event. */
 export const SCHEDULES_POLL_MS = 30_000;
-
-function triggerText(run: ScheduleRun, timezone: string): string {
-  if (run.trigger === 'manual') return 'By hand';
-  if (run.trigger === 'late' && run.dueAt !== null) return `Late (due ${formatInZone(run.dueAt, timezone, 'time')})`;
-  return 'On time';
-}
-
-function ScheduleHistory({ schedule, refreshKey, onOpen }: { schedule: ScheduleView; refreshKey: string; onOpen(chatId: string): void }): JSX.Element {
-  const [runs, setRuns] = useState<ScheduleRun[] | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.schedules
-      .runs(schedule.id)
-      .then((r) => {
-        if (!cancelled) setRuns(r);
-      })
-      .catch((err: unknown) => {
-        console.error('[otherbench-web] failed to load a schedule history:', err);
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [schedule.id, refreshKey]);
-
-  if (failed) return <p className="text-[var(--danger)]">Couldn&rsquo;t load the history.</p>;
-  if (!runs) return <p className="text-[var(--text-faint)]">Loading…</p>;
-  if (runs.length === 0) return <p className="text-[var(--text-faint)]">No runs yet.</p>;
-  return (
-    <ol data-testid={`schedule-history-${schedule.id}`} className="mt-2 space-y-1 border-t border-[var(--border)] pt-2">
-      {runs.map((r) => (
-        <li key={r.id} data-testid={`schedule-run-${r.id}`} className="flex flex-wrap items-center gap-x-2">
-          <span>{formatInZone(r.startedAt, schedule.timezone, 'long')}</span>
-          <span className="text-[var(--text-muted)]">{triggerText(r, schedule.timezone)}</span>
-          <span data-testid="run-status">{STATUS_LABEL[r.status]}</span>
-          {r.detail && <span className="text-[var(--text-muted)]">{r.detail}</span>}
-          {r.refusedCalls > 0 && (
-            <span className="text-[var(--text-muted)]">
-              {r.refusedCalls} tool call{r.refusedCalls === 1 ? '' : 's'} refused (needed approval)
-            </span>
-          )}
-          {r.chatId && (
-            <button type="button" onClick={() => onOpen(r.chatId!)} className="btn px-1.5 py-0.5 text-xs">
-              Open
-            </button>
-          )}
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 interface SchedulesViewProps {
   /** Opens the editor for a new schedule on this chat or project straight away. */
@@ -217,6 +166,11 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                       )}
                     </p>
                   )}
+                  {s.changedFrom && (
+                    <p data-testid="schedule-changed-from" className="text-[var(--text-muted)]">
+                      {SCHEDULE_PEER_CHANGE_TEXT[s.changedFrom.action]} from {s.changedFrom.machine}, {formatRelativeTime(s.changedFrom.at, now)}
+                    </p>
+                  )}
                   {runErrors[s.id] && (
                     <p role="alert" className="text-[var(--danger)]">
                       {runErrors[s.id]}
@@ -245,7 +199,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                       Delete…
                     </button>
                   </div>
-                  {historyFor === s.id && <ScheduleHistory schedule={s} refreshKey={`${version}:${now}`} onOpen={open} />}
+                  {historyFor === s.id && <ScheduleHistory schedule={s} load={api.schedules.runs} refreshKey={`${version}:${now}`} onOpen={open} />}
                 </li>
               ))}
             </ul>
