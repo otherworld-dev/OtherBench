@@ -24,6 +24,7 @@ setup have their own pages (see Where to look).
 
 - [v2: desktop app, machines and sync](features/v2-machines-and-sync.md)
 - [Updates](features/updates.md)
+- [Code signing (Authenticode)](features/code-signing.md)
 - [What works today](features/what-works-today.md)
 - [The model's browser (Deck #926)](features/browser.md)
 - [Computer use (Deck #927)](features/computer-use.md)
@@ -56,11 +57,14 @@ setup have their own pages (see Where to look).
   CI's `release` job (`.github/workflows/ci.yml`, not a separate
   `release.yml`) publishes a signed beta on every green push of `dev` and a
   full release on a `vX.Y.Z` tag, and installed apps update from them (see
-  [Updates](features/updates.md)). Still not built: Authenticode signing of
-  the installer (only the updater's signature exists, so Windows SmartScreen
-  still warns on a first install), the Explorer verbs (*Open folder in
-  OtherBench*, *Send to OtherBench*) and Linux packages (the bundle targets
-  only `nsis`). Task 40's Node SEA wasn't tried: see `docs/deviations.md`.
+  [Updates](features/updates.md)). Authenticode signing (Deck d778) is
+  wired into the `release` job but waits on a certificate: it stays off,
+  and builds publish unsigned so SmartScreen still warns on a first
+  install, until Adam sets up Azure Artifact Signing and adds its secrets
+  (see [Code signing](features/code-signing.md)). Still not built: the
+  Explorer verbs (*Open folder in OtherBench*, *Send to OtherBench*) and
+  Linux packages (the bundle targets only `nsis`). Task 40's Node SEA
+  wasn't tried: see `docs/deviations.md`.
 - **A folder browser for another machine's folders** (part of Task 53).
   The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
   is deliberately never mounted there (it lists directories anywhere on the

@@ -68,5 +68,7 @@ every installed build keeps itself current.
 - **Fix forward.** There's no rollback: a broken beta is fixed by pushing the
   next one. A fix to the updater itself that stops updates working has to be
   installed by hand, as did the first build that had the updater.
-- **Not done.** No Windows code signing (SmartScreen warns on a fresh install;
-  updates aren't affected). Windows only.
+- **Not done.** Authenticode signing is wired in but off until there is a
+  certificate (see [Code signing](code-signing.md)), so SmartScreen warns on
+  a fresh install; updates aren't affected. When it is on, the installer is
+  signed before its `.sig` is written. Windows only.
