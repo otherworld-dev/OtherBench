@@ -370,7 +370,7 @@ describe('SchedulesView', () => {
       };
     }
     function machine(over: Partial<PeerSchedules> = {}): PeerSchedules {
-      return { nodeId: 'node-pc', name: 'PC', status: 'reachable', shared: true, schedules: [peerRow()], ...over };
+      return { nodeId: 'node-pc', name: 'PC', status: 'reachable', shared: true, manage: false, timezone: 'Europe/London', schedules: [peerRow()], ...over };
     }
 
     it('shows them in their own section, marked as running there, with what a row shows and no way to change them', async () => {

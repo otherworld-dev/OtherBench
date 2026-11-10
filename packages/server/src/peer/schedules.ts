@@ -4,11 +4,22 @@ import type { Store } from '@otherbench/core/ports/store.js';
 import type { PeerScheduleRow, PeerScheduleSummary } from '@otherbench/core/types/peer.js';
 
 /**
- * Schedules across machines, read-only (docs/features/scheduled-tasks.md). A machine tells each paired machine
- * what its Schedules rows show on the `schedules` announcement of `/peer/events`, whole each time it changes; the
- * other keeps it per machine and its own UI reads it from `GET /api/peers/schedules`. There is no route on the peer
- * listener for schedules at all, so nothing a paired machine sends can run, change, pause or delete one here.
+ * Schedules across machines (docs/features/scheduled-tasks.md). A machine tells each paired machine what its
+ * Schedules rows show on the `schedules` announcement of `/peer/events`, whole each time it changes; the other keeps
+ * it per machine and its own UI reads it from `GET /api/peers/schedules`. The announcement only shows: running,
+ * changing, pausing or deleting one goes through the peer listener's schedule routes (`schedule-control.ts`), which
+ * refuse all of that unless the machine holding the schedules lets paired machines manage them.
  */
+
+/**
+ * Whether a paired machine's `schedules` announcement says it lets this machine manage its schedules, and the zone it
+ * makes them in. Anything but `true` is no (an older build never says), and a zone that isn't a bounded string is
+ * none.
+ */
+export function peerScheduleControlOf(said: unknown): { manage: boolean; timezone: string | null } {
+  const e = typeof said === 'object' && said !== null ? (said as Record<string, unknown>) : {};
+  return { manage: e['manage'] === true, timezone: boundedString(e['timezone'], MAX_ZONE) };
+}
 
 /** The longest id, rule wording and zone kept from a paired machine. */
 const MAX_ID = 200;

@@ -13,7 +13,7 @@ import {
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ComputerSessionSummary, ToolStateSection } from '@otherbench/core/types/events.js';
-import type { Peer, PeerInfo, PeerScheduleSummary, PublicPeer } from '@otherbench/core/types/peer.js';
+import type { Peer, PeerInfo, PeerScheduleSummary, PeerSchedulesAnnouncement, PublicPeer } from '@otherbench/core/types/peer.js';
 import { isIP } from 'node:net';
 import type { Hono } from 'hono';
 import type { AppEventBus } from '../stream/events.js';
@@ -22,7 +22,7 @@ import type { IdentityStore } from './identity.js';
 import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
 import { PairingSessions } from './pairing.js';
-import { peerSchedulesOf } from './schedules.js';
+import { peerScheduleControlOf, peerSchedulesOf } from './schedules.js';
 import type { Syncer } from './syncer.js';
 
 /** How long the machine entering a code waits for the other's answer: long enough to derive a key, too short to crack one. */
@@ -202,9 +202,14 @@ export class PeerService {
   private readonly computerByPeer = new Map<string, ComputerSessionSummary[]>();
   /** This machine's schedules as told to its peers (attached by the container), and the last list sent, to send only a change. */
   private schedulesHere: () => PeerScheduleSummary[] = () => [];
+  /** Whether this machine lets paired machines manage its schedules (its setting), and the zone it makes them in. */
+  private schedulesManaged: () => boolean = () => false;
+  private schedulesZone: () => string = () => 'UTC';
   private schedulesSent: string | null = null;
-  /** Each paired machine's schedules, as it last said; absent until it says (an older build never does). Read-only. */
+  /** Each paired machine's schedules, as it last said; absent until it says (an older build never does). */
   private readonly schedulesByPeer = new Map<string, PeerScheduleSummary[]>();
+  /** Whether each paired machine last said it lets this one manage its schedules, and the zone it makes them in. */
+  private readonly scheduleControlByPeer = new Map<string, { manage: boolean; timezone: string | null }>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -241,6 +246,7 @@ export class PeerService {
           const said = peerSchedulesOf(data);
           if (said !== null) {
             this.schedulesByPeer.set(nodeId, said);
+            this.scheduleControlByPeer.set(nodeId, peerScheduleControlOf(data));
             options.events?.emit({ type: 'peer-schedules', nodeId });
           }
         }
@@ -311,19 +317,26 @@ export class PeerService {
     };
   }
 
-  /** Where this machine's schedules come from, as its peers are told them (`ownSchedules`). */
-  attachSchedules(source: () => PeerScheduleSummary[]): void {
+  /**
+   * Where this machine's schedules come from, as its peers are told them (`ownSchedules`), and, told with them, whether
+   * it lets paired machines manage them (`peerScheduleControl`; off when not given) and the zone it makes them in.
+   */
+  attachSchedules(source: () => PeerScheduleSummary[], control: { manage?: () => boolean; timezone?: () => string } = {}): void {
     this.schedulesHere = source;
+    this.schedulesManaged = control.manage ?? (() => false);
+    this.schedulesZone = control.timezone ?? (() => 'UTC');
     this.schedulesSent = null;
   }
 
   /**
-   * What this machine tells its peers about its schedules, whole: what each row shows, never the prompt. Sent straight
-   * after a `/peer/events` stream's hello and again whenever it changes (`announceSchedulesIfChanged`), as its own
-   * event rather than in `activity`, which goes out on every reply and card.
+   * What this machine tells its peers about its schedules, whole: what each row shows, never the prompt, whether it
+   * lets them manage the schedules and the zone a new one is made in. Sent straight after a `/peer/events` stream's
+   * hello and again whenever it changes (`announceSchedulesIfChanged`), as its own event rather than in `activity`,
+   * which goes out on every reply and card. `manage` only decides whether the other machine's UI offers the buttons:
+   * every call they make is checked against the setting here (`peerScheduleRoutes`).
    */
-  schedulesAnnouncement(): { schedules: PeerScheduleSummary[] } {
-    return { schedules: this.schedulesHere() };
+  schedulesAnnouncement(): PeerSchedulesAnnouncement {
+    return { schedules: this.schedulesHere(), manage: this.schedulesManaged(), timezone: this.schedulesZone() };
   }
 
   /** Tells every peer this machine's schedules if they differ from what it last told them. Cheap to call often. */
@@ -341,6 +354,15 @@ export class PeerService {
    */
   schedules(nodeId: string): PeerScheduleSummary[] | null {
     return this.status(nodeId).status === 'reachable' ? (this.schedulesByPeer.get(nodeId) ?? null) : null;
+  }
+
+  /**
+   * Whether `nodeId` last said it lets this machine manage its schedules, and the zone it makes them in: not managed
+   * while it isn't reachable or before it says. For offering the buttons only; that machine decides every call.
+   */
+  scheduleControl(nodeId: string): { manage: boolean; timezone: string | null } {
+    const said = this.status(nodeId).status === 'reachable' ? this.scheduleControlByPeer.get(nodeId) : undefined;
+    return said ?? { manage: false, timezone: null };
   }
 
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
@@ -620,6 +642,7 @@ export class PeerService {
     this.loginByPeer.delete(peer.nodeId);
     this.computerByPeer.delete(peer.nodeId);
     this.schedulesByPeer.delete(peer.nodeId);
+    this.scheduleControlByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------

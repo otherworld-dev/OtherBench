@@ -5,12 +5,38 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { PeerScheduleSummary, PeerSchedules } from '@otherbench/core/types/peer.js';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
+import { peerScheduleRoute } from '../../src/peer/schedule-control.js';
 import { ownSchedules, peerSchedulesOf } from '../../src/peer/schedules.js';
 import { makeNode, pair, type TestNode } from './helpers.js';
 
 const summary = (over: Partial<PeerScheduleSummary> = {}): PeerScheduleSummary => ({
   id: 's1', name: 'Morning report', describe: 'Every day at 09:00', timezone: 'Europe/London', enabled: true, nextRunAt: 1_000, invalid: false,
   target: { kind: 'chat', chatId: 'c1' }, profileId: 'p1', autoMode: false, timeLimitMinutes: 30, running: false, lastRun: null, ...over,
+});
+
+describe('the schedule calls a paired machine may make', () => {
+  it('are the run history, and, to manage them, the list, create, edit, delete and Run now; nothing else', () => {
+    expect(peerScheduleRoute('GET', '/schedules/s1/runs')).toEqual({ kind: 'history' });
+    expect(peerScheduleRoute('GET', '/schedules')).toEqual({ kind: 'manage', scheduleId: null, action: 'list' });
+    expect(peerScheduleRoute('POST', '/schedules')).toEqual({ kind: 'manage', scheduleId: null, action: 'create' });
+    expect(peerScheduleRoute('PATCH', '/schedules/s%201')).toEqual({ kind: 'manage', scheduleId: 's 1', action: 'patch' });
+    expect(peerScheduleRoute('DELETE', '/schedules/s1')).toEqual({ kind: 'manage', scheduleId: 's1', action: 'delete' });
+    expect(peerScheduleRoute('POST', '/schedules/s1/run')).toEqual({ kind: 'manage', scheduleId: 's1', action: 'run' });
+    for (const [method, path] of [
+      ['GET', '/schedules/s1'],
+      ['PUT', '/schedules/s1'],
+      ['POST', '/schedules/s1/runs'],
+      ['GET', '/schedules/s1/run'],
+      ['DELETE', '/schedules'],
+      ['PATCH', '/schedules'],
+      ['POST', '/schedules/s1/attachments'],
+      ['GET', '/schedules/s1/runs/r1'],
+      ['PATCH', '/schedules/%E0%A4%A'],
+      ['HEAD', '/schedules/s1/runs'],
+    ] as const) {
+      expect(peerScheduleRoute(method, path), `${method} ${path}`).toBeNull();
+    }
+  });
 });
 
 describe('the schedules announcement between two peer services', () => {
@@ -90,6 +116,37 @@ describe('the schedules announcement between two peer services', () => {
     pc.service.announce('schedules', { schedules: 'nope' });
     pc.service.announce('schedules', { schedules: [summary({ id: 'later' })] });
     await expect.poll(() => laptop.service.schedules('node-PC')?.map((s) => s.id)).toEqual(['later']);
+  });
+
+  it('says whether it lets paired machines manage its schedules, and its zone; the other reads that as no while unreachable or unsaid', async () => {
+    let manage = false;
+    const pc = node('PC');
+    const laptop = node('Laptop');
+    pc.service.attachSchedules(() => [summary()], { manage: () => manage, timezone: () => 'Europe/London' });
+    await pair(pc, laptop);
+    laptop.service.startMonitoring();
+    await expect.poll(() => laptop.service.schedules('node-PC')).toHaveLength(1);
+    expect(laptop.service.scheduleControl('node-PC')).toEqual({ manage: false, timezone: 'Europe/London' });
+    expect(pc.service.schedulesAnnouncement()).toEqual({ schedules: [summary()], manage: false, timezone: 'Europe/London' });
+
+    // Only a change is sent again, and the setting is part of what is compared.
+    pc.service.announceSchedulesIfChanged();
+    manage = true;
+    pc.service.announceSchedulesIfChanged();
+    await expect.poll(() => laptop.service.scheduleControl('node-PC').manage).toBe(true);
+
+    // Anything but true is no; a garbled zone is none.
+    pc.service.announce('schedules', { schedules: [summary()], manage: 'yes', timezone: 'x'.repeat(500) });
+    await expect.poll(() => laptop.service.scheduleControl('node-PC')).toEqual({ manage: false, timezone: null });
+    // An older build says only the list.
+    pc.service.announce('schedules', { schedules: [summary()] });
+    await expect.poll(() => laptop.service.scheduleControl('node-PC')).toEqual({ manage: false, timezone: null });
+    pc.service.announce('schedules', { schedules: [summary()], manage: true, timezone: 'Europe/London' });
+    await expect.poll(() => laptop.service.scheduleControl('node-PC').manage).toBe(true);
+
+    await pc.service.listener.stop();
+    await expect.poll(() => laptop.service.status('node-PC').status).toBe('unreachable');
+    expect(laptop.service.scheduleControl('node-PC')).toEqual({ manage: false, timezone: null });
   });
 
   it("reads anything but a list as nothing said, and forgets a removed machine's", async () => {
@@ -216,8 +273,11 @@ describe('schedules across two real servers', () => {
     expect((await shown(laptop))[0]).toMatchObject({ shared: false, schedules: [] });
   }, 30_000);
 
-  it('nothing on the peer listener runs, changes or even reads a schedule: no schedule path is there', async () => {
+  it("while the PC doesn't let paired machines manage its schedules (the default), nothing on the peer listener runs, changes or lists one", async () => {
     const { pc, laptop, profileId, chatId, scheduleId } = await setup();
+    expect(pc.container.store.settings.get().peerScheduleControl).toBe(false);
+    await expect.poll(async () => (await shown(laptop))[0]?.schedules.length).toBe(1);
+    expect((await shown(laptop))[0]).toMatchObject({ manage: false });
     const peers = laptop.container.peers!;
     const calls: { method: string; path: string; body?: unknown }[] = [
       { method: 'GET', path: '/api/schedules' },
@@ -225,29 +285,153 @@ describe('schedules across two real servers', () => {
       { method: 'PATCH', path: `/api/schedules/${scheduleId}`, body: { enabled: false, prompt: 'changed' } },
       { method: 'DELETE', path: `/api/schedules/${scheduleId}` },
       { method: 'POST', path: `/api/schedules/${scheduleId}/run` },
-      { method: 'GET', path: `/api/schedules/${scheduleId}/runs` },
+      { method: 'PUT', path: `/api/schedules/${scheduleId}`, body: { prompt: 'changed' } },
+      { method: 'GET', path: `/api/schedules/${scheduleId}` },
       { method: 'GET', path: '/api/peers/schedules' },
       { method: 'GET', path: '/peer/schedules' },
       { method: 'POST', path: '/peer/schedules', body: { schedules: [] } },
       { method: 'POST', path: `/peer/schedules/${scheduleId}/run` },
+      // Nor can the setting be turned on from there: there is no settings route on the listener.
+      { method: 'PATCH', path: '/api/settings', body: { peerScheduleControl: true } },
+      { method: 'GET', path: '/api/settings' },
     ];
     for (const call of calls) {
       const res = await peers.call(pc.id, call);
-      // A read is a plain 404. A write under /api is refused before routing while paired machines can't drive
-      // computer use here (it names no chat this machine can tell, `PeerInfluence`), and would be a 404 after it.
-      if (call.method === 'GET' || call.path.startsWith('/peer/')) expect(res.status, `${call.method} ${call.path}`).toBe(404);
-      else expect([403, 404], `${call.method} ${call.path}`).toContain(res.status);
+      // A write that isn't to a schedule is refused before routing while paired machines can't drive computer use
+      // here (it names no chat this machine can tell, `PeerInfluence`), and would be a 404 after it.
+      if (call.path === '/api/settings' && call.method !== 'GET') expect([403, 404], `${call.method} ${call.path}`).toContain(res.status);
+      else expect(res.status, `${call.method} ${call.path}`).toBe(404);
     }
-    // With that switched on here, the writes get past that gate and still find no route.
+    const off = await peers.call(pc.id, calls[1]!);
+    expect(off.body).toMatchObject({ kind: 'peer_schedules_off' });
+    expect((off.body as { error: string }).error).toContain("PC doesn't let paired machines manage its schedules, so Laptop can't change them.");
+    // With computer control switched on here, the writes get past that gate and are still refused.
     pc.container.store.settings.update({ peerComputerControl: true });
     for (const call of calls.filter((c) => c.method !== 'GET')) {
       expect((await peers.call(pc.id, call)).status, `${call.method} ${call.path} (computer control on)`).toBe(404);
     }
-    // And nothing changed on the PC.
+    // The laptop's own routes for the PC's schedules come back refused the same way.
+    const own: [string, string, unknown?][] = [
+      ['GET', `/api/peers/${pc.id}/schedules`],
+      ['POST', `/api/peers/${pc.id}/schedules`, { name: 'Planted', prompt: 'x', profileId, target: { chatId }, rule: { cadence: 'daily', time: '09:00' } }],
+      ['PATCH', `/api/peers/${pc.id}/schedules/${scheduleId}`, { enabled: false }],
+      ['DELETE', `/api/peers/${pc.id}/schedules/${scheduleId}`],
+      ['POST', `/api/peers/${pc.id}/schedules/${scheduleId}/run`],
+    ];
+    for (const [method, path, body] of own) {
+      const res = await laptop.api(method, path, body);
+      expect(res.status, `${method} ${path}`).toBe(404);
+      expect(await res.json()).toMatchObject({ kind: 'peer_schedules_off' });
+    }
+    // And nothing changed on the PC, and nothing was recorded.
     const left = pc.container.store.schedules.list();
     expect(left.map((s) => [s.id, s.name, s.prompt, s.enabled])).toEqual([[scheduleId, 'Morning report', 'PROMPT-ONLY-ON-THE-PC', true]]);
     expect(pc.container.store.schedules.runs(scheduleId)).toEqual([]);
+    expect(pc.container.store.schedules.peerChanges()).toEqual([]);
+    expect(pc.container.store.settings.get().peerScheduleControl).toBe(false);
   }, 30_000);
+
+  it("the laptop reads a PC schedule's run history, the list the PC's own History shows, whether or not it may manage it", async () => {
+    const { pc, laptop, scheduleId } = await setup();
+    const history = async (): Promise<Response> => laptop.api('GET', `/api/peers/${pc.id}/schedules/${scheduleId}/runs`);
+    expect((await history()).status).toBe(200);
+    expect(await (await history()).json()).toEqual([]);
+    expect((await pc.api('POST', `/api/schedules/${scheduleId}/run`)).status).toBe(202);
+    await expect.poll(() => pc.container.store.schedules.lastRun(scheduleId)?.status, { timeout: 15_000 }).toBe('complete');
+    const here = (await (await pc.api('GET', `/api/schedules/${scheduleId}/runs`)).json()) as unknown[];
+    expect(here).toHaveLength(1);
+    expect(await (await history()).json()).toEqual(here);
+    // Over the peer listener itself, too; an unknown schedule or machine is a 404.
+    expect((await laptop.container.peers!.call(pc.id, { method: 'GET', path: `/api/schedules/${scheduleId}/runs` })).body).toEqual(here);
+    expect((await laptop.api('GET', `/api/peers/${pc.id}/schedules/nope/runs`)).status).toBe(404);
+    expect((await laptop.api('GET', `/api/peers/node-nobody/schedules/${scheduleId}/runs`)).status).toBe(404);
+    // Reading changed nothing and recorded nothing.
+    expect(pc.container.store.schedules.peerChanges()).toEqual([]);
+    expect(pc.container.store.schedules.runs(scheduleId)).toHaveLength(1);
+  }, 30_000);
+
+  it('once the PC lets paired machines manage its schedules, the laptop runs, pauses, resumes, edits, deletes and makes them, each recorded with the laptop', async () => {
+    const { pc, laptop, profileId, chatId, scheduleId } = await setup();
+    // Turned on on the PC, in its own Settings.
+    const on = await pc.api('PATCH', '/api/settings', { peerScheduleControl: true });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as { peerScheduleControl: boolean }).peerScheduleControl).toBe(true);
+    await expect.poll(async () => (await shown(laptop))[0]?.manage).toBe(true);
+    expect((await shown(laptop))[0]!.timezone).toBe(pc.container.store.schedules.get(scheduleId)!.timezone);
+    const at = (path = ''): string => `/api/peers/${pc.id}/schedules${path}`;
+
+    // The full list, prompt included, for editing.
+    const listed = (await (await laptop.api('GET', at())).json()) as { id: string; prompt: string }[];
+    expect(listed.map((s) => [s.id, s.prompt])).toEqual([[scheduleId, 'PROMPT-ONLY-ON-THE-PC']]);
+
+    // Pause, resume, edit.
+    expect((await laptop.api('PATCH', at(`/${scheduleId}`), { enabled: false })).status).toBe(200);
+    expect(pc.container.store.schedules.get(scheduleId)).toMatchObject({ enabled: false, nextRunAt: null });
+    await expect.poll(async () => (await shown(laptop))[0]?.schedules[0]?.enabled).toBe(false);
+    expect((await laptop.api('PATCH', at(`/${scheduleId}`), { enabled: true })).status).toBe(200);
+    expect(pc.container.store.schedules.get(scheduleId)!.nextRunAt).toBeGreaterThan(Date.now());
+    const edited = await laptop.api('PATCH', at(`/${scheduleId}`), { name: 'Evening report', prompt: 'NEW PROMPT', rule: { cadence: 'daily', time: '18:00' }, timeLimitMinutes: 60 });
+    expect(edited.status).toBe(200);
+    expect(pc.container.store.schedules.get(scheduleId)).toMatchObject({ name: 'Evening report', prompt: 'NEW PROMPT', rule: { cadence: 'daily', time: '18:00' }, timeLimitMinutes: 60 });
+
+    // The same checks as the PC's own API, with the same answers.
+    const badRule = { name: 'Bad', prompt: 'x', profileId, target: { chatId }, rule: { cadence: 'cron', cron: '61 * * * *' } };
+    const fromLaptop = await laptop.api('POST', at(), badRule);
+    const fromPc = await pc.api('POST', '/api/schedules', badRule);
+    expect(fromLaptop.status).toBe(400);
+    expect(fromPc.status).toBe(400);
+    expect(await fromLaptop.json()).toEqual(await fromPc.json());
+    expect((await laptop.api('PATCH', at(`/${scheduleId}`), { target: { chatId } })).status).toBe(400);
+    expect((await laptop.api('PATCH', at(`/${scheduleId}`), { timeLimitMinutes: 99_999 })).status).toBe(400);
+    // A chat that runs on the laptop can't be a PC schedule's target: the PC pulls it first, then says so.
+    const laptopChat = (await (await laptop.api('POST', '/api/chats', { profileId, title: 'Laptop chat' })).json()) as { id: string };
+    const elsewhere = await laptop.api('POST', at(), { ...badRule, rule: { cadence: 'daily', time: '09:00' }, target: { chatId: laptopChat.id } });
+    expect(elsewhere.status).toBe(400);
+    expect(((await elsewhere.json()) as { error: string }).error).toContain('This chat runs on Laptop.');
+
+    // Run now.
+    const ran = await laptop.api('POST', at(`/${scheduleId}/run`));
+    expect(ran.status).toBe(202);
+    const runId = ((await ran.json()) as { id: string }).id;
+    await expect.poll(() => pc.container.store.schedules.lastRun(scheduleId)?.status, { timeout: 15_000 }).toBe('complete');
+    expect(pc.container.store.schedules.lastRun(scheduleId)).toMatchObject({ id: runId, trigger: 'manual' });
+
+    // Make one in a project, then delete it.
+    const project = (await (await pc.api('POST', '/api/projects', { name: 'Alpha' })).json()) as { id: string };
+    await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+    const made = await laptop.api('POST', at(), { name: 'Weekly', prompt: 'Made on the laptop', profileId, target: { projectId: project.id }, rule: { cadence: 'weekly', time: '08:00', weekdays: [1] } });
+    expect(made.status).toBe(201);
+    const madeId = ((await made.json()) as { id: string }).id;
+    // In the PC's zone, never the laptop's or the body's.
+    expect(pc.container.store.schedules.get(madeId)).toMatchObject({ prompt: 'Made on the laptop', timezone: pc.container.store.schedules.get(scheduleId)!.timezone });
+    expect((await laptop.api('DELETE', at(`/${madeId}`))).status).toBe(204);
+    expect(pc.container.store.schedules.get(madeId)).toBeNull();
+    expect((await laptop.api('DELETE', at('/nope'))).status).toBe(404);
+
+    // Every change is recorded with the machine it came from; the refused ones aren't.
+    expect(pc.container.store.schedules.peerChanges().map((c) => [c.action, c.scheduleName, c.fromNode])).toEqual([
+      ['deleted', 'Weekly', laptop.id],
+      ['created', 'Weekly', laptop.id],
+      ['ran', 'Evening report', laptop.id],
+      ['edited', 'Evening report', laptop.id],
+      ['resumed', 'Morning report', laptop.id],
+      ['paused', 'Morning report', laptop.id],
+    ]);
+    expect(pc.container.store.schedules.peerChanges(scheduleId).find((c) => c.action === 'ran')!.runId).toBe(runId);
+    // The PC's own list says which machine last changed it.
+    const rows = (await (await pc.api('GET', '/api/schedules')).json()) as { id: string; changedFrom?: { nodeId: string; machine: string; action: string } }[];
+    expect(rows.find((r) => r.id === scheduleId)!.changedFrom).toMatchObject({ nodeId: laptop.id, machine: 'Laptop', action: 'ran' });
+
+    // Turned off again on the PC: the next call is refused, and the laptop is told.
+    expect((await pc.api('PATCH', '/api/settings', { peerScheduleControl: false })).status).toBe(200);
+    await expect.poll(async () => (await shown(laptop))[0]?.manage).toBe(false);
+    expect((await laptop.api('PATCH', at(`/${scheduleId}`), { enabled: false })).status).toBe(404);
+    expect((await laptop.api('POST', at(`/${scheduleId}/run`))).status).toBe(404);
+    expect(pc.container.store.schedules.get(scheduleId)!.enabled).toBe(true);
+    expect(pc.container.store.schedules.peerChanges()).toHaveLength(6);
+    // The history stays readable.
+    expect((await laptop.api('GET', at(`/${scheduleId}/runs`))).status).toBe(200);
+  }, 60_000);
 
   it('ownSchedules leaves out the prompt, the warnings and the run in progress', async () => {
     const { pc } = await setup();

@@ -21,6 +21,7 @@ import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
+import { SCHEDULE_PEER_CHANGES_KEPT } from '../domain/schedule-peers.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1194,6 +1195,14 @@ export function runStoreContract(
         expect(store.settings.update({ peerComputerControl: false }).peerComputerControl).toBe(false);
         store.settings.update({ githubEnabled: true });
       });
+      it("reads 'Let paired machines manage this machine's schedules' as off until it is set", () => {
+        expect(store.settings.get().peerScheduleControl).toBe(false);
+        store.settings.update({ githubEnabled: false, peerComputerControl: true });
+        expect(store.settings.get().peerScheduleControl).toBe(false);
+        expect(store.settings.update({ peerScheduleControl: true }).peerScheduleControl).toBe(true);
+        expect(store.settings.update({ peerScheduleControl: false }).peerScheduleControl).toBe(false);
+        store.settings.update({ githubEnabled: true, peerComputerControl: false });
+      });
       it('keeps machine-local values beside the settings, out of get(), and refuses a settings key', () => {
         expect(store.settings.getValue('sandbox')).toBeNull();
         store.settings.setValue('sandbox', { state: 'ready', packages: ['ffmpeg'] });
@@ -1878,6 +1887,33 @@ export function runStoreContract(
         expect(store.schedules.madeChat(made.id)).toBe(true);
         expect(store.schedules.madeChat(ids.chatId)).toBe(false);
         expect(store.schedules.madeChat('nope')).toBe(false);
+      });
+
+      it("records a paired machine's changes newest first, keeps them after the schedule is deleted, and prunes the oldest", () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1' }, ids));
+        const made = store.schedules.recordPeerChange({ id: 'c1', scheduleId: 's1', scheduleName: 'Weekly report', action: 'created', fromNode: 'node-laptop', runId: null, at: 10 });
+        expect(made).toEqual({ id: 'c1', scheduleId: 's1', scheduleName: 'Weekly report', action: 'created', fromNode: 'node-laptop', runId: null, at: 10 });
+        store.schedules.recordPeerChange({ id: 'c2', scheduleId: 's1', scheduleName: 'Weekly report', action: 'ran', fromNode: 'node-laptop', runId: 'r1', at: 20 });
+        store.schedules.recordPeerChange({ id: 'c3', scheduleId: 'other', scheduleName: 'Other', action: 'paused', fromNode: 'node-phone', runId: null, at: 15 });
+        expectRecentTimestamp(store.schedules.recordPeerChange({ id: 'c4', scheduleId: 's1', scheduleName: 'Weekly report', action: 'deleted', fromNode: 'node-laptop', runId: null }).at);
+        store.schedules.delete('s1');
+        expect(store.schedules.peerChanges('s1').map((c) => [c.id, c.action, c.runId])).toEqual([
+          ['c4', 'deleted', null],
+          ['c2', 'ran', 'r1'],
+          ['c1', 'created', null],
+        ]);
+        expect(store.schedules.peerChanges().map((c) => c.id)).toEqual(['c4', 'c2', 'c3', 'c1']);
+        expect(store.schedules.peerChanges('nope')).toEqual([]);
+
+        for (let i = 0; i < SCHEDULE_PEER_CHANGES_KEPT; i++) {
+          store.schedules.recordPeerChange({ id: `bulk-${i}`, scheduleId: 'bulk', scheduleName: 'Bulk', action: 'edited', fromNode: 'node-laptop', runId: null, at: 1_000 + i });
+        }
+        const kept = store.schedules.peerChanges();
+        expect(kept).toHaveLength(SCHEDULE_PEER_CHANGES_KEPT);
+        // c4 was stamped now, so it outlives the bulk rows; the older ones went.
+        expect(kept.map((c) => c.id)).toContain('c4');
+        expect(kept.map((c) => c.id)).not.toContain('c1');
       });
     });
 

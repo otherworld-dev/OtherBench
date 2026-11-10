@@ -86,6 +86,7 @@ import type {
   NewScheduleRun,
   Schedule,
   SchedulePatch,
+  SchedulePeerChange,
   ScheduleRepo,
   ScheduleRun,
   ScheduleRunPatch,
@@ -103,6 +104,7 @@ import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { DEFAULT_SCHEDULE_TIME_LIMIT_MINUTES, SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
+import { SCHEDULE_PEER_CHANGES_KEPT } from '../domain/schedule-peers.js';
 import { laterThrough } from '../domain/sync.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
@@ -1609,6 +1611,8 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   /** Every run with the order it was added, for ties on `startedAt` (SQLite: rowid). */
   private runRows: { run: ScheduleRun; seq: number }[] = [];
   private seq = 0;
+  /** Not tied to a schedule (no foreign key in SQLite): a deleted schedule's record stays. */
+  private peerChangeRows: { change: SchedulePeerChange; seq: number }[] = [];
 
   create(s: NewSchedule): Schedule {
     if (this.rows.has(s.id)) throw new Error(`Duplicate id: ${s.id}`);
@@ -1706,6 +1710,23 @@ class InMemoryScheduleRepo implements ScheduleRepo {
     if (!current) throw new Error(`schedule: not found: ${id}`);
     if (current.target.kind !== 'chat') throw new Error(`schedule: ${id} runs in a project, not a chat`);
     this.rows.set(id, { ...current, target: { kind: 'chat', chatId }, updatedAt: Date.now() });
+  }
+
+  recordPeerChange(c: Omit<SchedulePeerChange, 'at'> & { at?: number }): SchedulePeerChange {
+    const full: SchedulePeerChange = { ...c, at: c.at ?? Date.now() };
+    this.peerChangeRows.push({ change: full, seq: this.seq++ });
+    this.peerChangeRows = this.sortedPeerChanges().slice(0, SCHEDULE_PEER_CHANGES_KEPT);
+    return { ...full };
+  }
+
+  peerChanges(scheduleId?: string): SchedulePeerChange[] {
+    return this.sortedPeerChanges()
+      .filter((x) => scheduleId === undefined || x.change.scheduleId === scheduleId)
+      .map((x) => ({ ...x.change }));
+  }
+
+  private sortedPeerChanges(): { change: SchedulePeerChange; seq: number }[] {
+    return [...this.peerChangeRows].sort((a, b) => b.change.at - a.change.at || b.seq - a.seq);
   }
 
   /** Mirrors schedule.chat_id's ON DELETE CASCADE and schedule_run.chat_id's ON DELETE SET NULL. */

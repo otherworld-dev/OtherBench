@@ -16,6 +16,15 @@ export interface AppSettings {
    * reaches Settings. It never switches computer use itself on. Machine-local and never synced, like every setting.
    */
   peerComputerControl: boolean;
+  /**
+   * "Let paired machines manage this machine's schedules" (Settings, Machines), off by default. On: a paired machine
+   * may run, pause, resume, edit, delete and create this machine's schedules over the peer listener, through the same
+   * checks as `/api/schedules`, and read their prompts to edit them; each change is recorded with that machine
+   * (`ScheduleRepo.recordPeerChange`). Off: it only sees what a Schedules row shows and each schedule's run history.
+   * Machine-local and never synced, like every setting, and the peer listener has no settings route, so only this
+   * machine can turn it on.
+   */
+  peerScheduleControl: boolean;
   /** Offer a fresh chat when a Claude Code chat's calls read more than `handoverThresholdTokens` (spec 2026-11-06-fresh-chat-handover-design). */
   handoverEnabled: boolean;
   /** The context size per call, in tokens, from which the fresh chat card shows. */

@@ -21,6 +21,7 @@ interface SettingsBody {
   githubEnabled?: unknown;
   nextcloudEnabled?: unknown;
   peerComputerControl?: unknown;
+  peerScheduleControl?: unknown;
   handoverEnabled?: unknown;
   handoverThresholdTokens?: unknown;
   deckStartCommand?: unknown;
@@ -42,8 +43,8 @@ export function clearMemoryProfile(store: Store, profileId: string): void {
 
 /**
  * `GET/PATCH /api/settings`: app-wide settings (spec 2026-10-03-project-memory-design §4), GitHub and Nextcloud on or
- * off (`features.ts`), and whether paired machines may start and approve computer use here (`peerComputerControl`).
- * Not on the peer listener: only this machine's own UI changes them.
+ * off (`features.ts`), whether paired machines may start and approve computer use here (`peerComputerControl`), and
+ * whether they may manage this machine's schedules (`peerScheduleControl`). Not on the peer listener: only this machine's own UI changes them.
  *
  * `peerComputerControl` is turned on only with the OK of the person at this machine, in the desktop app's native
  * dialog (`container.hostConfirm`, over the shell's private channel, which no HTTP client can reach): no desktop app,
@@ -102,6 +103,13 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
       if (typeof body.peerComputerControl !== 'boolean') throw new HTTPException(400, { message: '"peerComputerControl" must be true or false.' });
       patch.peerComputerControl = body.peerComputerControl;
     }
+    // Whether paired machines may manage this machine's schedules (peer/schedule-control.ts reads it on every call).
+    // A plain switch, unlike the one above: it hands over no mouse or keyboard, and a run it makes is unattended, so
+    // anything that would need a card is refused. Not on the peer listener, so only this machine changes it.
+    if (body.peerScheduleControl !== undefined) {
+      if (typeof body.peerScheduleControl !== 'boolean') throw new HTTPException(400, { message: '"peerScheduleControl" must be true or false.' });
+      patch.peerScheduleControl = body.peerScheduleControl;
+    }
     const current = container.store.settings.get();
     if (patch.peerComputerControl !== undefined && peerComputerControlNeedsHostConfirm(current.peerComputerControl, patch.peerComputerControl)) {
       // The early refusal (forgeable, so not the boundary): it doesn't even claim to be the desktop app.
@@ -131,7 +139,8 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
     const after = container.store.settings.update(patch);
     const handoverChanged = before.handoverEnabled !== after.handoverEnabled || before.handoverThresholdTokens !== after.handoverThresholdTokens;
     const startCommandsChanged = START_COMMANDS.some((key) => before[key] !== after[key]);
-    if ((before.peerComputerControl !== after.peerComputerControl || handoverChanged || startCommandsChanged) &&!FEATURES.some((key) => before[key] !== after[key])) {
+    const peerControlChanged = before.peerComputerControl !== after.peerComputerControl || before.peerScheduleControl !== after.peerScheduleControl;
+    if ((peerControlChanged || handoverChanged || startCommandsChanged) && !FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });
     }
     if (FEATURES.some((key) => before[key] !== after[key])) {

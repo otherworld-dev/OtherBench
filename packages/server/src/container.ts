@@ -64,6 +64,7 @@ import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { ScheduleService } from './schedule/service.js';
 import { ownSchedules } from './peer/schedules.js';
+import { serverTimeZone } from './routes/schedules.js';
 import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
@@ -877,12 +878,19 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     emit: (e) => events.emit(e),
   });
-  // What paired machines are told of this machine's schedules (read-only there), told again whenever a row they
-  // show could have changed: a schedule made, edited, deleted or run, or its chat, project or profile deleted here
-  // (a synced change, seen by the syncer's change check) or by a paired machine (a sync applied).
-  peers.attachSchedules(() => ownSchedules(store, container.schedules));
+  // What paired machines are told of this machine's schedules, told again whenever a row they show could have
+  // changed: a schedule made, edited, deleted or run, or its chat, project or profile deleted here (a synced change,
+  // seen by the syncer's change check) or by a paired machine (a sync applied). With them, whether this machine lets
+  // paired machines manage its schedules (told again on a settings change) and the zone it makes schedules in.
+  peers.attachSchedules(() => ownSchedules(store, container.schedules), {
+    manage: () => store.settings.get().peerScheduleControl,
+    timezone: serverTimeZone,
+  });
   events.subscribe((e) => {
-    if (e.type === 'schedules-changed' || e.type === 'schedule-run-started' || e.type === 'schedule-run-finished' || e.type === 'chat-deleted' || e.type === 'sync-applied') {
+    if (
+      e.type === 'schedules-changed' || e.type === 'schedule-run-started' || e.type === 'schedule-run-finished' || e.type === 'chat-deleted' ||
+      e.type === 'sync-applied' || e.type === 'settings-changed'
+    ) {
       peers.announceSchedulesIfChanged();
     }
   });

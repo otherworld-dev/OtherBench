@@ -2,14 +2,16 @@ import type { AppSettings } from '../ports/store.js';
 
 /**
  * What `SettingsRepo.get()` returns for a key that was never set. `peerComputerControl` is off until the person at
- * this machine turns it on in its desktop app. Defaults are never written out (`update` stores only what it is
- * given), so a database that never set it reads it as off.
+ * this machine turns it on in its desktop app, and `peerScheduleControl` until it is turned on in Settings here.
+ * Defaults are never written out (`update` stores only what it is given), so a database that never set one reads it
+ * as off.
  */
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = {
   memoryProfileId: null,
   githubEnabled: true,
   nextcloudEnabled: true,
   peerComputerControl: false,
+  peerScheduleControl: false,
   handoverEnabled: true,
   handoverThresholdTokens: 300_000,
   deckStartCommand: '',

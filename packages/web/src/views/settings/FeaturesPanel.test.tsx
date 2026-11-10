@@ -13,7 +13,7 @@ import { FeaturesPanel } from './FeaturesPanel.js';
 
 const mockedGet = vi.mocked(api.settings.get);
 const mockedPatch = vi.mocked(api.settings.patch);
-const settings = (githubEnabled: boolean, nextcloudEnabled: boolean) => ({ memoryProfileId: null, githubEnabled, nextcloudEnabled, peerComputerControl: true, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
+const settings = (githubEnabled: boolean, nextcloudEnabled: boolean) => ({ memoryProfileId: null, githubEnabled, nextcloudEnabled, peerComputerControl: true, peerScheduleControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
 
 beforeEach(() => {
   window.localStorage.clear();
