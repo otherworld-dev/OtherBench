@@ -53,6 +53,13 @@ describe('startChatFromCard', () => {
     expect(api.notes.send).not.toHaveBeenCalled();
   });
 
+  it("with onList, opens the new chat's Deck view on the card's column", async () => {
+    await startChatFromCard(app, card, { onList: true });
+    const state = useOtherBenchStore.getState();
+    expect(state.activeChatId).toBe('c9');
+    expect(state.deckViews['c9']).toEqual({ stackId: 2, selected: null });
+  });
+
   it('a card with a blank description leaves just the number, title and URL', () => {
     expect(cardDraft({ ...card, description: '  \n' })).toBe('Deck #966 Terminal\nhttps://nc.example/index.php/apps/deck/board/7/card/966');
   });

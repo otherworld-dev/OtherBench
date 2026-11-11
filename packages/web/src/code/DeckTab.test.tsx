@@ -339,16 +339,18 @@ describe('DeckTab', () => {
     const a = app();
     render(<DeckTab app={a} owner="c1" />);
     await user.click(await screen.findByRole('button', { name: 'Start a chat on #966' }));
-    await waitFor(() => expect(startChatFromCard).toHaveBeenCalledWith(a, detail()));
+    await waitFor(() => expect(startChatFromCard).toHaveBeenCalledWith(a, detail(), { onList: true }));
     expect(api.nextcloud.card).toHaveBeenCalledWith(966, 7);
     expect(screen.queryByTestId('card-detail')).not.toBeInTheDocument();
   });
 
-  it('"Start a chat on this" starts a chat from the open card', async () => {
+  it('"Start a chat on this" starts a chat from the open card on the board, and goes back to the board', async () => {
     const a = app();
     const { user, view } = await openTerminal(a);
     await user.click(within(view).getByRole('button', { name: 'Start a chat on this' }));
-    expect(startChatFromCard).toHaveBeenCalledWith(a, detail());
+    expect(startChatFromCard).toHaveBeenCalledWith(a, detail(), { onList: true });
+    await waitFor(() => expect(screen.queryByTestId('card-detail')).not.toBeInTheDocument());
+    expect(useOtherBenchStore.getState().deckViews['c1']?.selected).toBeNull();
   });
 
   it('refreshes on window focus', async () => {

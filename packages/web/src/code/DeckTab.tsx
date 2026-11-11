@@ -177,7 +177,7 @@ function DeckList({
     setStarting(id);
     setStartError(null);
     try {
-      await startChatFromCard(app, await api.nextcloud.card(id, app.deckBoardId));
+      await startChatFromCard(app, await api.nextcloud.card(id, app.deckBoardId), { onList: true });
     } catch (err) {
       console.error(`[otherbench-web] failed to start a chat on Deck #${id}:`, err);
       setStartError(err);
@@ -415,7 +415,9 @@ function CardView({
     setBusy('chat');
     setActionError(null);
     try {
-      await startChatFromCard(app, card);
+      await startChatFromCard(app, card, { onList: true });
+      // Back to the board, so this view isn't left on a card that now has its own chat.
+      onBack();
     } catch (err) {
       console.error(`[otherbench-web] failed to start a chat on Deck #${cardId}:`, err);
       setActionError({ error: err, fallback: "Couldn't start the chat. Please try again." });

@@ -19,15 +19,17 @@ export function cardDraft(card: DeckCardDetail): string {
  * Settings (e.g. `/start {card}`) that command is sent at once, as `/start
  * d123`; without one the card goes in its composer, unsent. The chat is put in
  * the store before it is opened, and its Deck view opens on the card, in the
- * card's column, so the card is at hand while the chat works on it. A failed
- * create opens nothing and rejects; a failed send is `sendStartCommand`'s.
+ * card's column, so the card is at hand while the chat works on it, or with
+ * `onList` on that column (the Code panel's starts, which go back to the board
+ * once the chat is made). A failed create opens nothing and rejects; a failed
+ * send is `sendStartCommand`'s.
  */
-export async function startChatFromCard(app: App, card: DeckCardDetail): Promise<void> {
+export async function startChatFromCard(app: App, card: DeckCardDetail, { onList = false }: { onList?: boolean } = {}): Promise<void> {
   const chat = await api.chats.create({ appId: app.id, title: `d${card.id} ${card.title}` });
   const { upsertChat, prefillComposer, setActiveChatId, cacheDeckCard, setDeckView } = useOtherBenchStore.getState();
   upsertChat(chat);
   cacheDeckCard(card);
-  setDeckView(chat.id, { stackId: card.stackId, selected: card.id });
+  setDeckView(chat.id, { stackId: card.stackId, selected: onList ? null : card.id });
   const command = fillStartCommand(useFeatures.getState().deckStartCommand, '{card}', `d${card.id}`);
   if (command === null) prefillComposer(chat.id, cardDraft(card));
   setActiveChatId(chat.id);
