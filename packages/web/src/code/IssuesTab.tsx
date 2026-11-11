@@ -171,8 +171,23 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
                   className="flex min-w-0 flex-1 items-start gap-2 px-1.5 py-1 text-left text-sm"
                 >
                   <span className="shrink-0 tabular-nums text-[var(--text-faint)]">#{issue.number}</span>
+                  {/* Count, inbox flag and age sit under the title, not beside it: beside it they
+                      squeezed the title to one letter a line in a narrow pane. */}
                   <span className="min-w-0 flex-1">
-                    <span className="[overflow-wrap:anywhere]">{issue.title}</span>
+                    <span className="block [overflow-wrap:anywhere]">{issue.title}</span>
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-[var(--text-faint)]">
+                      {issue.comments > 0 && (
+                        <span aria-label={`${issue.comments} ${issue.comments === 1 ? 'comment' : 'comments'}`} className="tabular-nums">
+                          <span aria-hidden="true">💬 {issue.comments}</span>
+                        </span>
+                      )}
+                      {inbox.has(issue.number) && (
+                        <span data-testid={`issue-inbox-${issue.number}`} className="text-[var(--accent)]">
+                          in your inbox
+                        </span>
+                      )}
+                      <span>{age(issue.createdAt)}</span>
+                    </span>
                     {issue.labels.length > 0 && (
                       <span className="mt-0.5 flex flex-wrap gap-1">
                         {issue.labels.map((l) => (
@@ -183,17 +198,6 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
                       </span>
                     )}
                   </span>
-                  {issue.comments > 0 && (
-                    <span aria-label={`${issue.comments} ${issue.comments === 1 ? 'comment' : 'comments'}`} className="shrink-0 text-xs tabular-nums text-[var(--text-faint)]">
-                      <span aria-hidden="true">💬 {issue.comments}</span>
-                    </span>
-                  )}
-                  {inbox.has(issue.number) && (
-                    <span data-testid={`issue-inbox-${issue.number}`} className="shrink-0 text-xs text-[var(--accent)]">
-                      in your inbox
-                    </span>
-                  )}
-                  <span className="shrink-0 text-xs text-[var(--text-faint)]">{age(issue.createdAt)}</span>
                 </button>
                 {inbox.has(issue.number) && (
                   <button type="button" aria-label={`Done: #${issue.number}`} onClick={() => void doneNotification(inbox.get(issue.number)!)} className="btn my-1 mr-1 shrink-0 px-1.5 py-0 text-xs">
