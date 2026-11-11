@@ -131,14 +131,27 @@ describe('IssuesTab', () => {
     await waitFor(() => expect(api.apps.issues.reopen).toHaveBeenCalledWith('a1', 48));
   });
 
-  it('"Start a chat on this" starts a chat from the issue', async () => {
+  it('"Start a chat on this" starts a chat from the issue on the list, and goes back to the list', async () => {
     const user = userEvent.setup();
     const a = app();
     render(<IssuesTab app={a} owner="c1" />);
     await user.click(await screen.findByTestId('issue-row-48'));
     await screen.findByTestId('issue-detail');
     await user.click(screen.getByRole('button', { name: 'Start a chat on this' }));
-    expect(startChatFromIssue).toHaveBeenCalledWith(a, detail());
+    expect(startChatFromIssue).toHaveBeenCalledWith(a, detail(), { onList: true });
+    await waitFor(() => expect(screen.queryByTestId('issue-detail')).not.toBeInTheDocument());
+    expect(useOtherBenchStore.getState().issueViews['c1']?.selected).toBeNull();
+  });
+
+  it('"Start a chat on this" that fails stays on the issue', async () => {
+    vi.mocked(startChatFromIssue).mockRejectedValueOnce(new Error('nope'));
+    const user = userEvent.setup();
+    render(<IssuesTab app={app()} owner="c1" />);
+    await user.click(await screen.findByTestId('issue-row-48'));
+    await screen.findByTestId('issue-detail');
+    await user.click(screen.getByRole('button', { name: 'Start a chat on this' }));
+    expect(await screen.findByText(/Couldn't start the chat/)).toBeInTheDocument();
+    expect(screen.getByTestId('issue-detail')).toBeInTheDocument();
   });
 
   it("a row's Chat button starts a chat from that issue without opening it", async () => {
@@ -146,7 +159,7 @@ describe('IssuesTab', () => {
     const a = app();
     render(<IssuesTab app={a} owner="c1" />);
     await user.click(await screen.findByRole('button', { name: 'Start a chat on #48' }));
-    await waitFor(() => expect(startChatFromIssue).toHaveBeenCalledWith(a, detail()));
+    await waitFor(() => expect(startChatFromIssue).toHaveBeenCalledWith(a, detail(), { onList: true }));
     expect(api.apps.issues.get).toHaveBeenCalledWith('a1', 48);
     expect(screen.queryByTestId('issue-detail')).not.toBeInTheDocument();
   });

@@ -85,7 +85,7 @@ function IssueList({ app, state, onState, onOpen }: { app: App; state: IssueStat
     setStarting(n);
     setStartError(null);
     try {
-      await startChatFromIssue(app, await api.apps.issues.get(app.id, n));
+      await startChatFromIssue(app, await api.apps.issues.get(app.id, n), { onList: true });
     } catch (err) {
       console.error(`[otherbench-web] failed to start a chat on issue #${n}:`, err);
       setStartError(err);
@@ -282,7 +282,9 @@ function IssueView({ app, owner, number, onBack }: { app: App; owner: string; nu
     setBusy('chat');
     setActionError(null);
     try {
-      await startChatFromIssue(app, issue);
+      await startChatFromIssue(app, issue, { onList: true });
+      // Back to the list, so this view isn't left on an issue that now has its own chat.
+      onBack();
     } catch (err) {
       console.error(`[otherbench-web] failed to start a chat on issue #${number}:`, err);
       setActionError({ error: err, fallback: "Couldn't start the chat. Please try again." });
