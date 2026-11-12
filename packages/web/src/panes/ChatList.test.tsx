@@ -1499,25 +1499,28 @@ describe('ChatList reordering (#823)', () => {
     dropOnRow('a', 'pin', 'bottom', 'pinned-row-');
     expect(mockedPatch).toHaveBeenLastCalledWith('a', { sortOrder: 0, pinned: true });
     await waitFor(() => expect(rowIds('group-pinned')).toEqual(['pin', 'a']));
-    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['b', 'c', 'a']);
+    // Pinned now, so it leads its group.
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['a', 'b', 'c']);
   });
 
-  it("dropping a pinned chat among another group's rows files it there and keeps it pinned", async () => {
+  it("dropping a pinned chat among another group's rows files it there, leading it, and keeps it pinned", async () => {
     render(<ChatList />);
     dropOnRow('pin', 'b', 'top');
     expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 25, projectId: null });
-    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['a', 'pin', 'b', 'c']));
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['pin', 'a', 'b', 'c']));
     expect(rowIds('group-pinned')).toEqual(['pin']);
   });
 
-  it('a pinned chat reorders by its row in its group without being unpinned', async () => {
-    useOtherBenchStore.setState({ chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'k2', projectId: 'p-pin', sortOrder: 9 })] });
+  it("a pinned chat reorders among its group's pinned chats by its row there without being unpinned", async () => {
+    useOtherBenchStore.setState({
+      chats: [...useOtherBenchStore.getState().chats, makeChat({ id: 'k2', projectId: 'p-pin', pinned: true, sortOrder: 9 }), makeChat({ id: 'k3', projectId: 'p-pin', sortOrder: 20 })],
+    });
     render(<ChatList />);
-    expect(rowIds('group-p-pin')).toEqual(['k2', 'pin']);
+    expect(rowIds('group-p-pin')).toEqual(['k2', 'pin', 'k3']);
     dropOnRow('pin', 'k2', 'top');
     expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 10 });
-    await waitFor(() => expect(rowIds('group-p-pin')).toEqual(['pin', 'k2']));
-    expect(rowIds('group-pinned')).toEqual(['pin']);
+    await waitFor(() => expect(rowIds('group-p-pin')).toEqual(['pin', 'k2', 'k3']));
+    expect(rowIds('group-pinned')).toEqual(['pin', 'k2']);
   });
 
   it('Move up / Move down act on the section of the row the menu was opened from', async () => {
@@ -1861,6 +1864,19 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     expect(screen.getByTestId('group-count-p-d')).toHaveTextContent('2');
     // An empty sub-project shows its own "No chats yet", not its parent's.
     expect(within(screen.getByTestId('group-p-s')).getByText('No chats yet')).toBeInTheDocument();
+  });
+
+  it('shows pinned chats above the sub-projects: pinned in project, then pinned, then the sub-projects and the rest', () => {
+    useOtherBenchStore.setState({
+      chats: [
+        makeChat({ id: 'g1', projectId: 'p-g', sortOrder: 9 }),
+        makeChat({ id: 'gp', projectId: 'p-g', pinned: true, sortOrder: 1 }),
+        makeChat({ id: 'k', projectId: 'p-g', projectPinned: true }),
+        makeChat({ id: 'd1', projectId: 'p-d' }),
+      ],
+    });
+    render(<ChatList />);
+    expect(rowIds('group-p-g')).toEqual(['k', 'gp', 'd1', 'g1']);
   });
 
   it("says on a collapsed parent what its sub-projects' chats are doing", () => {

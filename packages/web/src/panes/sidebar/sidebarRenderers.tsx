@@ -102,17 +102,21 @@ export function sidebarRenderers({
   }
 
   /**
-   * One project's (or No project's) group: its pinned chats, its sub-projects' groups (spec
-   * 2026-10-15-sub-projects-design §4), then its other chats, capped and sorted as the group says.
+   * One project's (or No project's) group: its chats pinned in the project, then its globally pinned chats, its
+   * sub-projects' groups (spec 2026-10-15-sub-projects-design §4), then its other chats, capped and sorted as the
+   * group says. The globally pinned ones (the run that leads `group.chats`) reorder among themselves.
    */
   function renderGroup(group: SidebarGroup): JSX.Element {
     const project = group.project;
     const projectId = project?.id ?? null;
     const recent = group.sort === 'recent';
-    const rest: Section = { chats: group.chats, pinned: false, projectPinned: false, projectId, recent };
+    const pinned = group.chats.filter((c) => c.pinned);
+    const others = group.chats.filter((c) => !c.pinned);
+    const pinnedRun: Section = { chats: pinned, pinned: false, projectPinned: false, projectId, recent };
+    const rest: Section = { chats: others, pinned: false, projectPinned: false, projectId, recent };
     const expanded = searching || expandedGroups.has(group.key);
-    const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
-    const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
+    const { visible, hidden } = expanded ? { visible: others, hidden: 0 } : capRows(others, GROUP_ROW_CAP, activeChatId);
+    const firstHidden = hidden > 0 ? others.find((c) => !visible.includes(c)) : undefined;
     return (
       <ProjectGroup
         key={group.key}
@@ -135,6 +139,7 @@ export function sidebarRenderers({
             })}
       >
         {group.pinnedChats.map((c) => renderRow(c, { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId, recent }))}
+        {pinned.map((c) => renderRow(c, pinnedRun))}
         {group.children.map((child) => (
           <li key={`sub-${child.key}`} data-testid={`subgroup-${child.key}`}>
             {renderGroup(child)}
@@ -153,7 +158,7 @@ export function sidebarRenderers({
               ...run.chats.map((c) => renderRow(c, rest)),
             ])
           : visible.map((c) => renderRow(c, rest))}
-        {(hidden > 0 || (!searching && expandedGroups.has(group.key) && group.chats.length > GROUP_ROW_CAP)) && (
+        {(hidden > 0 || (!searching && expandedGroups.has(group.key) && others.length > GROUP_ROW_CAP)) && (
           // One key for both labels: React keeps the button, so focus stays on it when "Show fewer" folds the group.
           <li key="row-cap-toggle">
             <button

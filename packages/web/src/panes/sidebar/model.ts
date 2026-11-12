@@ -19,14 +19,15 @@ export interface SidebarGroup {
    */
   pinnedChats: Chat[];
   /**
-   * The group's other chats in sidebar order (`sortOrder`, highest first), globally pinned ones included (they show
-   * under Pinned as well, d961); only search matches while searching.
+   * The group's other chats in sidebar order (`sortOrder`, highest first, or by activity in a `recent` group), the
+   * globally pinned ones first: they lead the group above its sub-projects, and show under Pinned as well (d961).
+   * Only search matches while searching.
    */
   chats: Chat[];
   /** Every unarchived chat in the group and its sub-projects, each counted once (a pinned chat's row under Pinned is a copy). */
   total: number;
   /**
-   * Its sub-projects' groups, shown inside it after its pinned chats (spec 2026-10-15-sub-projects-design §4), in
+   * Its sub-projects' groups, shown inside it after its pinned chats of both kinds (spec 2026-10-15-sub-projects-design §4), in
    * `compareProjects` order; while searching, only those with a match. Always empty for a sub-project and No project.
    */
   children: SidebarGroup[];
@@ -79,7 +80,7 @@ export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder |
 const byRecent = (a: Chat, b: Chat): number => byActivity(a, b) || byId(a, b);
 
 
-/** How many of a group's (unpinned-in-project) chats show before its "Show N more". */
+/** How many of a group's unpinned chats (neither kind of pin) show before its "Show N more". */
 export const GROUP_ROW_CAP = 10;
 
 /**
@@ -184,7 +185,8 @@ export function buildSidebar(
       sort,
       total: members.length + children.reduce((sum, c) => sum + c.total, 0),
       pinnedChats: listed.filter(pinnedHere),
-      chats: listed.filter((c) => !pinnedHere(c)),
+      // Globally pinned chats lead the rest, so they show above the sub-projects.
+      chats: [...listed.filter((c) => !pinnedHere(c) && c.pinned), ...listed.filter((c) => !pinnedHere(c) && !c.pinned)],
       children: shownChildren,
     };
   };

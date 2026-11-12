@@ -291,10 +291,10 @@ describe('buildSidebar', () => {
     expect(model.groups[0]!.total).toBe(2);
   });
 
-  it('keeps a pinned chat with no project in No project as well as under Pinned', () => {
+  it('keeps a pinned chat with no project in No project as well as under Pinned, leading the group', () => {
     const model = buildSidebar([chat('loose-pin', { pinned: true, sortOrder: 1 }), chat('loose', { sortOrder: 2 })], [], null);
     expect(ids(model.pinned)).toEqual(['loose-pin']);
-    expect(ids(model.groups.at(-1)!.chats)).toEqual(['loose', 'loose-pin']);
+    expect(ids(model.groups.at(-1)!.chats)).toEqual(['loose-pin', 'loose']);
     expect(model.groups.at(-1)!.total).toBe(2);
   });
 
@@ -345,7 +345,7 @@ describe('buildSidebar', () => {
     expect(model.groups.find((g) => g.key === 'a')!.total).toBe(0);
   });
 
-  it('sorts groups and Pinned by sortOrder, highest first, whatever the activity', () => {
+  it('sorts groups (pinned chats first) and Pinned by sortOrder, highest first, whatever the activity', () => {
     const model = buildSidebar(
       [
         chat('low', { sortOrder: 1, updatedAt: 9 }),
@@ -357,7 +357,7 @@ describe('buildSidebar', () => {
       [],
       null
     );
-    expect(ids(model.groups[0]!.chats)).toEqual(['high', 'mid', 'p2', 'low', 'p1']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['p2', 'p1', 'high', 'mid', 'low']);
     expect(ids(model.pinned)).toEqual(['p2', 'p1']);
   });
 
@@ -374,7 +374,7 @@ describe('buildSidebar', () => {
     );
     expect(ids(model.pinned)).toEqual(['b2']);
     expect(model.groups.map((g) => g.key)).toEqual(['b']);
-    expect(ids(model.groups[0]!.chats)).toEqual(['b1', 'b2']);
+    expect(ids(model.groups[0]!.chats)).toEqual(['b2', 'b1']);
   });
 
   it('while searching, keeps the group of a match that is pinned, with the match in it', () => {
