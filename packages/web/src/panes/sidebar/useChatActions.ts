@@ -90,7 +90,7 @@ export function useChatActions({
   async function moveChat(chatId: string, projectId: string | null): Promise<void> {
     const chat = useOtherBenchStore.getState().chats.find((c) => c.id === chatId);
     if (!chat || chat.projectId === projectId) return;
-    const group = allGroups(sidebar).find((g) => g.key === (projectId ?? NO_PROJECT_KEY))?.chats ?? [];
+    const group = (allGroups(sidebar).find((g) => g.key === (projectId ?? NO_PROJECT_KEY))?.chats ?? []).filter((c) => !c.pinned);
     const top = chat.pinned ? [] : placeChatPatches(group, chat, group[0]?.id ?? null).filter((p) => p.id === chat.id);
     const body: ChatPatchBody = { projectId, ...(top[0] ? { sortOrder: top[0].sortOrder } : {}) };
     // An app chat moved to a project leaves its app (the server clears appId), so it changes mode too.
@@ -182,7 +182,8 @@ export function useChatActions({
       const projectId = group.project?.id ?? null;
       const recent = group.sort === 'recent';
       if (group.pinnedChats.some((c) => c.id === chat.id)) return { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId, recent };
-      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats, pinned: false, projectPinned: false, projectId, recent };
+      // A globally pinned chat leads its group, so it moves among the group's other pinned chats (as sidebarRenderers draws them).
+      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats.filter((c) => c.pinned === chat.pinned), pinned: false, projectPinned: false, projectId, recent };
     }
     return null;
   }
