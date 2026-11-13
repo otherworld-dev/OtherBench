@@ -17,6 +17,8 @@ interface Machine {
   id: string;
   container: Container;
   api: (method: string, path: string, body?: unknown) => Promise<Response>;
+  /** Uploads a file to a chat as the composer does (paste, drop or the picker). */
+  upload: (chatId: string, name: string, bytes: Uint8Array<ArrayBuffer>, type: string) => Promise<Response>;
 }
 
 const cleanup: (() => Promise<void> | void)[] = [];
@@ -46,6 +48,11 @@ async function machine(name: string, streamTimings?: StreamTimings, computer?: F
     container,
     api: async (method, path, body) =>
       app.request(path, { method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+    upload: async (chatId, name, bytes, type) => {
+      const form = new FormData();
+      form.append('file', new File([bytes], name, { type }));
+      return app.request(`/api/chats/${chatId}/attachments`, { method: 'POST', body: form });
+    },
   };
 }
 
@@ -480,6 +487,76 @@ describe('running a chat on the machine it runs on', () => {
     expect(events[0]).toMatchObject({ event: 'hello', data: { notes: [], noteOutcomes: [] } });
     expect(events.filter((e) => e.data.type === 'notes').map((e) => (e.data['notes'] as { id: string }[]).map((n) => n.id))).toEqual([[noteId], []]);
     expect(events.find((e) => e.data.type === 'note-resolved')!.data).toMatchObject({ chatId, noteId, outcome: 'removed', clientId: 'laptop-tab' });
+    expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
+  }, 20_000);
+
+  // A PNG's signature and a little more: what a pasted screenshot starts with.
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+  it("an image pasted on the laptop goes with a turn in the PC's chat, and comes back as sent", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const uploaded = await laptop.upload(chatId, 'shot.png', PNG, 'image/png');
+    expect(uploaded.status).toBe(201);
+    const { id: attachmentId } = (await uploaded.json()) as { id: string };
+
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, {
+      parentId: null,
+      parts: [{ type: 'text', text: 'what is this' }, { type: 'image', attachmentId, mime: 'image/png' }],
+      profileIds: [profileId],
+    });
+
+    expect(res.status).toBe(202);
+    const { userMessageId } = (await res.json()) as { userMessageId: string };
+    // The PC holds the file, sent with the message it ran.
+    const there = pc.container.store.attachments.get(attachmentId)!;
+    expect(there).toMatchObject({ chatId, messageId: userMessageId, filename: 'shot.png', mime: 'image/png', size: PNG.length });
+    expect(Buffer.from(await pc.container.blobStore.get(there.sha256)).equals(Buffer.from(PNG))).toBe(true);
+    // Once the laptop has the message, its own copy is the sent one, not a chip waiting in the box.
+    await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+    expect(laptop.container.store.attachments.get(attachmentId)!.messageId).toBe(userMessageId);
+  }, 20_000);
+
+  it("the PC takes a handed-over file once, as an unsent file of a chat it runs, and nothing else", async () => {
+    const { pc, laptop, chatId } = await setup();
+    const hand = (id: string, data: string, chat = chatId) =>
+      laptop.container.peers!.call(pc.id, { method: 'POST', path: `/api/chats/${chat}/attachments/incoming`, body: { id, filename: 'shot.png', mime: 'image/png', data } });
+    const png = Buffer.from(PNG).toString('base64');
+    const id = '0b9f3c1e-5d1a-4c55-9a43-1f0e2b7c8d90';
+
+    expect((await hand(id, png)).status).toBe(201);
+    expect(pc.container.store.attachments.get(id)).toMatchObject({ chatId, messageId: null, size: PNG.length });
+    // The same file again (a retried send) changes nothing; another file under that id is refused.
+    expect((await hand(id, png)).status).toBe(200);
+    expect((await hand(id, Buffer.from('other').toString('base64'))).status).toBe(409);
+    // Not base64, or an id OtherBench wouldn't make: refused, nothing stored.
+    expect((await hand('1c2d3e4f-0000-4000-8000-000000000001', 'not base64!')).status).toBe(400);
+    expect((await hand('../../etc', png)).status).toBe(400);
+    expect(pc.container.store.attachments.get('../../etc')).toBeNull();
+    // A chat the PC doesn't run is refused there, as a turn would be.
+    pc.container.store.chats.update(chatId, { runsOn: laptop.id });
+    expect((await hand('2c2d3e4f-0000-4000-8000-000000000002', png)).status).toBe(409);
+  });
+
+  it('an image on a message sent from the laptop while the PC replies is held there with it', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'take your time #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    const { id: attachmentId } = (await (await laptop.upload(chatId, 'shot.png', PNG, 'image/png')).json()) as { id: string };
+
+    let held: string[] | null = null;
+    await readStream(stream, async (e) => {
+      if (held === null && e.data.type === 'text-delta' && e.data.messageId === replyId) {
+        const sent = await laptop.api('POST', `/api/chats/${chatId}/notes`, { text: 'and this', attachments: [{ attachmentId }], parentId: replyId, profileIds: [profileId], clientId: 'laptop-tab' });
+        expect(sent.status).toBe(202);
+        held = pc.container.notes!.heldAttachmentIds(chatId);
+        return true;
+      }
+      return false;
+    });
+
+    expect(held).toEqual([attachmentId]);
+    expect(pc.container.store.attachments.get(attachmentId)).toMatchObject({ chatId, messageId: null, filename: 'shot.png' });
     expect((await laptop.api('POST', `/api/messages/${replyId}/cancel`)).status).toBe(204);
   }, 20_000);
 

@@ -72,7 +72,14 @@ desktop app and lets two machines share chats. Built so far:
   models it uses. Calls for a remote chat are forwarded over the peer
   listener and its stream relayed back; approvals are answered on the
   machine running the turn and audited with the machine they came from. If
-  that machine is unreachable, the chat offers to run here instead. Stop
+  that machine is unreachable, the chat offers to run here instead. Files
+  pasted, dropped or picked here are unsent, so sync doesn't carry them:
+  just before a turn or a held message is forwarded, each unsent file of
+  the chat it names is handed over under the same id
+  (`peer/attachment-handover.ts`, `POST /api/chats/:id/attachments/incoming`
+  on the peer listener, stored there as an upload would be). The row comes
+  back by sync bound to the message. A machine on an older build answers
+  501 `peer_outdated`. Stop
   stops the chat (`POST /api/chats/:id/stop`): its replies running here,
   on the machine it runs on, and on any paired machine that says it is
   still writing one in it (the chat was moved mid-reply); the peer
