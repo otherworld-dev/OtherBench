@@ -65,9 +65,11 @@ export function cutReply(text: string): string {
 }
 
 export const CHAT_SENDS_TOOL_DESCRIPTION =
-  'Send work to other OtherBench chats on this machine, for example the chat for another app whose code also needs changing. ' +
-  '"list" shows the chats and apps you can send to. "send" takes up to 4 messages, each to an existing chat (chatId) or to a new chat in an app (app, by name), with the text to send. ' +
-  'Each chat starts working on its message by itself, with its own folder and tools. After sending, end your turn: when every chat has finished, their replies arrive together as your next message and you carry on from there.';
+  'Send work to other OtherBench chats, on this machine or a paired one, for example the chat for another app whose code also needs changing. ' +
+  '"list" shows the chats you can send to and the apps you can start a new chat in, by their exact names, with the machine each runs on. ' +
+  '"send" takes up to 4 messages, each to an existing chat (chatId) or to a new chat in an app (app, by its exact name from list), with the text to send. ' +
+  'Each chat works on its message on its own machine, with its own folder and tools. After sending, end your turn: when every chat has finished, their replies arrive together as your next message and you carry on from there. ' +
+  'If a machine is off, the user is asked what to do; end your turn all the same.';
 
 export const CHAT_SENDS_TOOL_PARAMETERS = {
   type: 'object',
@@ -80,7 +82,7 @@ export const CHAT_SENDS_TOOL_PARAMETERS = {
         type: 'object',
         properties: {
           chatId: { type: 'string', description: 'An existing chat to send to (from list or recall).' },
-          app: { type: 'string', description: 'Or the name of an app to start a new chat in.' },
+          app: { type: 'string', description: 'Or the exact name of an app (from list) to start a new chat in.' },
           text: { type: 'string', description: 'What to ask that chat to do.' },
         },
         required: ['text'],

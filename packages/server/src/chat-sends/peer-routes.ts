@@ -22,7 +22,7 @@ export function parseHandover(raw: unknown): Handover | null {
   }
   return {
     id, chainId, depth: depth as number, chainBase: chainBase as number, fromChatId, fromMessageId, fromTitle,
-    fromAppName: (fromAppName as string | null) ?? null, toChatId, text, ...(app ? { createApp: app } : {}),
+    fromAppName: fromAppName ?? null, toChatId, text, ...(app ? { createApp: app } : {}),
   };
 }
 

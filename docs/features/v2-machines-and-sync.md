@@ -64,6 +64,9 @@ desktop app and lets two machines share chats. Built so far:
   chats, messages (once not streaming), sent attachments and their blobs,
   usage. Never synced: grants, MCP servers, the audit log, peers, settings,
   unsent attachments, connection health, project memory history.
+- **Chats messaging chats on another machine**: `message_chats` sends run on the
+  machine the target chat runs on, while that machine allows it
+  (`peerChatSends`). See `docs/features/chat-messages.md`, "Across machines".
 - **Running a chat on another machine** (`peer/forward.ts`): a chat's
   *Runs on* (Inspector) picks the machine whose folder, tools and local
   models it uses. Calls for a remote chat are forwarded over the peer

@@ -36,6 +36,13 @@ function fakeMessenger(): ChatMessenger & { sent: SendTarget[][] } {
 }
 
 describe('message_chats tool', () => {
+  it('tells the model it can reach paired machines, and to use exact app names from list', () => {
+    const tool = chatsTool(fakeMessenger());
+    expect(tool.description).toMatch(/on this machine or a paired one/);
+    expect(tool.description).toMatch(/exact name from list/);
+    expect(tool.description).toMatch(/If a machine is off, the user is asked what to do/);
+  });
+
   it('list returns chats and apps, as the messenger lists them', async () => {
     const tool = chatsTool(fakeMessenger());
     expect(await tool.execute({ command: 'list' }, ctx())).toEqual({
