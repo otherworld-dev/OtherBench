@@ -203,6 +203,11 @@ export class ChatSendService implements ChatMessenger {
   private stopRow(row: ChatSend, reason: string): void {
     if (row.status === 'queued') {
       this.settle(row.id, 'stopped', null, reason);
+      // Handed over once with no answer back: the other machine may be running it, so it is told too.
+      if (row.toNode !== null && row.handoverTried) {
+        this.store.chatSends.update(row.id, { stopPending: reason });
+        this.tellStop(row.id);
+      }
       return;
     }
     if (row.toNode !== null) {
@@ -446,6 +451,8 @@ export class ChatSendService implements ChatMessenger {
       return;
     }
     this.handing.add(id);
+    // From here on the other machine may have it even if its answer never comes back (`handoverTried`).
+    if (!row.handoverTried) this.store.chatSends.update(id, { handoverTried: true });
     let answer: HandoverAnswer;
     try {
       answer = await remote.handOver(row.toNode, this.handoverOf(row));
@@ -531,7 +538,11 @@ export class ChatSendService implements ChatMessenger {
       if (!app) return { refused: `The app it was for isn't on ${here}.`, final: true };
       const folder = this.deps.resolveWorkspace(app.workspace);
       if (folder.status === 'unresolved') return { refused: `The app "${app.name}" has no folder on ${here}: ${workspaceUnresolvedMessage(folder)}`, final: true };
-      chat = this.deps.createAppChat(app, h.createApp.title, h.toChatId);
+      try {
+        chat = this.deps.createAppChat(app, h.createApp.title, h.toChatId);
+      } catch (err) {
+        return { refused: `${here} couldn't start a chat in ${app.name}: ${err instanceof Error ? err.message : String(err)}`, final: true };
+      }
     }
     if (!chat) return { refused: `There is no chat ${h.toChatId} on ${here}.`, final: true };
     if (chat.archivedAt !== null) return { refused: `The chat "${chat.title}" is archived.`, final: true };
@@ -633,6 +644,11 @@ export class ChatSendService implements ChatMessenger {
     if (!row || row.toNode === null || row.status !== 'queued') return false;
     this.store.chatSends.update(sendId, { heldReason: null });
     this.settle(sendId, 'cancelled', null, CANCELLED_BY_USER);
+    // Handed over once with no answer back: the other machine may be running it, so it is told to stop.
+    if (row.handoverTried) {
+      this.store.chatSends.update(sendId, { stopPending: CANCELLED_BY_USER });
+      this.tellStop(sendId);
+    }
     this.maybeResume(row.fromMessageId);
     return true;
   }
@@ -648,7 +664,8 @@ export class ChatSendService implements ChatMessenger {
 
   /** Whether a send waiting for a paired machine could run on this one instead: no folder, or its folder is here. */
   canRunHere(row: ChatSend): boolean {
-    if (row.toNode === null) return false;
+    // Handed over once with no answer back: running it here too could run it twice.
+    if (row.toNode === null || row.handoverTried) return false;
     const chat = this.store.chats.get(row.toChatId);
     const app = !chat && row.toAppId !== null ? this.store.apps.get(row.toAppId) : null;
     if (!chat && !app) return false;
@@ -666,6 +683,10 @@ export class ChatSendService implements ChatMessenger {
     if (this.handing.has(sendId)) return { refused: 'It is being handed over right now. Try again in a moment.' };
     const chat = this.store.chats.get(row.toChatId);
     const app = row.toAppId !== null ? this.store.apps.get(row.toAppId) : null;
+    if (row.handoverTried) {
+      const machine = this.machineName(row.toNode);
+      return { refused: `${machine} may already have this message: its answer didn't arrive. Wait for ${machine}, or cancel it.` };
+    }
     if (!this.canRunHere(row)) return { refused: notHereReason(chat?.title ?? app?.name ?? 'That chat', this.machineName(row.toNode)) };
     if (chat) this.store.chats.update(chat.id, { runsOn: this.selfId() });
     else if (app) this.deps.createAppChat(app, titleFrom(row.text), row.toChatId);

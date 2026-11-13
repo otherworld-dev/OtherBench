@@ -21,6 +21,7 @@ ALTER TABLE chat_send ADD COLUMN stop_pending TEXT NULL;
 ALTER TABLE chat_send ADD COLUMN held_reason TEXT NULL;
 ALTER TABLE chat_send ADD COLUMN held_seen INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE chat_send ADD COLUMN chain_base INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chat_send ADD COLUMN handover_tried INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX idx_chat_send_to_node ON chat_send (to_node);
 `,
 };

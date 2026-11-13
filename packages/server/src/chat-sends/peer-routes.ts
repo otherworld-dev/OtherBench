@@ -53,9 +53,12 @@ export function chatSendsPeerRoutes(container: Container): Hono<ForwardedEnv> {
   app.post('/chats/:chatId/sends/incoming', async (c) => {
     const service = container.chatSends;
     if (!service) return notAvailable(c);
-    if (!container.store.settings.get().peerChatSends) return c.json({ error: sendsOffReason(container.store.nodes.self().name), kind: 'chat_sends_off' }, 403);
     const h = parseHandover(await c.req.json().catch(() => null));
     if (!h) return c.json({ error: 'That is not a message from another chat.' }, 400);
+    // Taken from that machine already (its answer was lost): still taken, even if the setting has gone off since,
+    // or that machine would call it failed while it runs here.
+    if (container.store.chatSends.get(h.id)?.fromNode === c.env.peerNodeId) return c.json({ accepted: true });
+    if (!container.store.settings.get().peerChatSends) return c.json({ error: sendsOffReason(container.store.nodes.self().name), kind: 'chat_sends_off' }, 403);
     if (h.toChatId !== c.req.param('chatId')) return c.json({ error: 'The chat in the path and the message do not match.' }, 400);
     const answer = await service.takeHandover(c.env.peerNodeId, h);
     if ('accepted' in answer) return c.json({ accepted: true });

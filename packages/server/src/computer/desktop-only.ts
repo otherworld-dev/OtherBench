@@ -17,6 +17,9 @@ const ALWAYS_ALLOWED: readonly RegExp[] = [
   /^(?:\/api)?\/chats\/[^/]+\/computer\/stop$/,
   /^(?:\/api)?\/messages\/[^/]+\/cancel$/,
   /^(?:\/api)?\/chats\/[^/]+\/stop$/,
+  // A send card's Stop, and a paired machine stopping a chat send it handed here (spec 2026-11-13-chat-sends-across-machines-design).
+  /^(?:\/api)?\/chats\/[^/]+\/sends\/stop$/,
+  /^(?:\/api)?\/chats\/[^/]+\/sends\/[^/]+\/remote-stop$/,
 ];
 
 const READS = new Set(['GET', 'HEAD', 'OPTIONS']);

@@ -68,6 +68,22 @@ describe('ChatSendService across machines: the target', () => {
     expect(marks).toEqual(['touch B node-A', 'release B running=true']);
   });
 
+  it("takeHandover refuses, finally, a new app chat it can't make, with the reason", async () => {
+    h.service.dispose();
+    h.build({
+      remote,
+      createAppChat: () => {
+        throw new Error('There is no profile to start a chat with. Create one in Settings first.');
+      },
+    });
+    h.service.start();
+    expect(await h.service.takeHandover('node-A', handover({ toChatId: 'new-chat', createApp: { appId: 'app-budget', title: 'x' } }))).toEqual({
+      refused: "PC couldn't start a chat in Nextcloud Budget: There is no profile to start a chat with. Create one in Settings first.",
+      final: true,
+    });
+    expect(h.store.chatSends.get('send-1')).toBeNull();
+  });
+
   it('takeHandover twice with the same id makes one row and one turn', async () => {
     await h.service.takeHandover('node-A', handover());
     expect(await h.service.takeHandover('node-A', handover())).toEqual({ accepted: true });

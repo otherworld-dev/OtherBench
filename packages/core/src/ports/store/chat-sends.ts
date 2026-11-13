@@ -52,15 +52,20 @@ export interface ChatSend {
   heldSeen: boolean;
   /** Target's side: how many sends the chain had on the sender's machine at handover, for the chain limit. */
   chainBase: number;
+  /**
+   * Sender's side: a handover was sent at least once. If its answer never came back, the target's machine may have
+   * the send anyway, so a Cancel or Stop is told to it, and Run here isn't offered.
+   */
+  handoverTried: boolean;
 }
 
 /** The fields a new row may leave out: they default to null, false and 0. */
-export type ChatSendRemoteFields = 'toNode' | 'fromNode' | 'toAppId' | 'fromTitle' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen' | 'chainBase';
+export type ChatSendRemoteFields = 'toNode' | 'fromNode' | 'toAppId' | 'fromTitle' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen' | 'chainBase' | 'handoverTried';
 
 export type NewChatSend = Omit<ChatSend, 'createdAt' | 'finishedAt' | ChatSendRemoteFields> & Partial<Pick<ChatSend, ChatSendRemoteFields>> & { createdAt?: number };
 
 export type ChatSendPatch = Partial<
-  Pick<ChatSend, 'status' | 'toReplyId' | 'replyText' | 'reason' | 'resumedAs' | 'finishedAt' | 'toChatId' | 'toNode' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen'>
+  Pick<ChatSend, 'status' | 'toReplyId' | 'replyText' | 'reason' | 'resumedAs' | 'finishedAt' | 'toChatId' | 'toNode' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen' | 'handoverTried'>
 >;
 
 /** A send as the send card reads it: the row, the machine its target runs on, and whether it could run here. */

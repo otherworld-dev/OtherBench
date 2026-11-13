@@ -23,7 +23,7 @@ function send(over: Partial<ChatSendView> = {}): ChatSendView {
   return {
     id: 's1', chainId: 'r1', depth: 1, fromChatId: 'A', fromMessageId: 'r1', toChatId: 'B', createdChat: false, text: 'x',
     status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: 1, finishedAt: null,
-    toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null, stopPending: null, heldReason: null, heldSeen: false, chainBase: 0, machine: null, canRunHere: false, ...over,
+    toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null, stopPending: null, heldReason: null, heldSeen: false, chainBase: 0, handoverTried: false, machine: null, canRunHere: false, ...over,
   };
 }
 
@@ -94,6 +94,14 @@ describe('ChatSendCard', () => {
     expect(api.chatSends.runHere).toHaveBeenCalledWith('A', 's1');
     // Wait was already chosen.
     expect(screen.queryByRole('button', { name: 'Wait' })).not.toBeInTheDocument();
+  });
+
+  it("says the other machine may already have a send whose handover got no answer, instead of offering Run here", async () => {
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [send({ status: 'queued', toNode: 'node-pc', machine: 'PC', heldReason: 'PC is off.', handoverTried: true })] });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    const row = await screen.findByTestId('chat-send-row');
+    expect(row).toHaveTextContent("PC may already have it: its answer didn't arrive.");
+    expect(screen.queryByRole('button', { name: 'Run here' })).not.toBeInTheDocument();
   });
 
   it('Wait marks the held send as seen', async () => {

@@ -137,6 +137,32 @@ describe('chat sends on the peer listener', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('while computer use may be in control here, a paired machine\'s Stops still pass, and a new send waits', async () => {
+    container.computer = { mayBeInControl: () => true, holder: () => 'chat-x' } as never;
+    store.settings.update({ peerChatSends: true });
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'X', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
+    store.chats.create({ id: 'A', title: 'Finance', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.messages.create({ id: 'rA', chatId: 'A', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    vi.spyOn(service, 'takeStop').mockReturnValue('taken');
+    expect((await post('/chats/B/sends/s1/remote-stop', { reason: 'x' })).status).toBe(200);
+    expect((await post('/chats/A/sends/stop', { fromMessageId: 'rA' })).status).toBe(200);
+    const incoming = await post('/chats/B/sends/incoming', { ...H, id: 's2' });
+    expect(incoming.status).toBe(403);
+    expect(await incoming.json()).toMatchObject({ kind: 'desktop_only' });
+  });
+
+  it('a send already taken from that machine is answered accepted even after the setting went off, so it is not failed there', async () => {
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'A', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
+    store.chatSends.create({ id: 's9', chainId: 'r', depth: 1, fromChatId: 'A', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-other' });
+    const take = vi.spyOn(service, 'takeHandover');
+    const res = await post('/chats/B/sends/incoming', H);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: true });
+    // Only for the machine that sent it: another machine's id is refused by the setting as usual.
+    expect((await post('/chats/B/sends/incoming', { ...H, id: 's9' })).status).toBe(403);
+    expect(take).not.toHaveBeenCalled();
+  });
+
   it('remote-stop passes the chat marking without peerComputerControl, and reaches takeStop', async () => {
     store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'X', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
     const take = vi.spyOn(service, 'takeStop').mockReturnValue('taken');

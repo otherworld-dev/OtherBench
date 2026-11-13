@@ -108,7 +108,11 @@ export function ChatSendCard({ chatId, fromMessageId }: { chatId: string; fromMe
                       Run here
                     </button>
                   ) : (
-                    <span className="text-[var(--text-muted)]">{`${chat?.title ?? app ?? 'Its chat'}'s folder is only on ${s.machine ?? 'that machine'}.`}</span>
+                    <span className="text-[var(--text-muted)]">
+                      {s.handoverTried
+                        ? `${s.machine ?? 'That machine'} may already have it: its answer didn't arrive.`
+                        : `${chat?.title ?? app ?? 'Its chat'}'s folder is only on ${s.machine ?? 'that machine'}.`}
+                    </span>
                   )}
                   {!s.heldSeen && (
                     <button type="button" disabled={busy} onClick={() => act(() => api.chatSends.wait(chatId, s.id))} className="btn px-2 py-0.5">

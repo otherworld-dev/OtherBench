@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { PeerRequest, PeerResponse } from '../../src/peer/client.js';
 import { PeerError } from '../../src/peer/service.js';
@@ -72,12 +72,39 @@ describe('peerChatSendRemote', () => {
     expect(await remoteWith(link(() => res(409, { error: 'The chat "B" is archived.', kind: 'refused' }))).handOver('node-P', H)).toEqual({ refused: 'The chat "B" is archived.', final: true });
   });
 
-  it('handOver: unreachable, at the pull or the post, or a server error there, waits', async () => {
+  it('handOver: unreachable, at the pull or the post, waits', async () => {
     const waits = { refused: "PC isn't reachable. The message goes when it is back.", final: false };
     expect(await remoteWith(link(down)).handOver('node-P', H)).toEqual(waits);
     const l = link(() => res(200), { call: async () => down() });
     expect(await remoteWith(l).handOver('node-P', H)).toEqual(waits);
-    expect(await remoteWith(link(() => res(500, { error: 'boom' }))).handOver('node-P', H)).toEqual(waits);
+  });
+
+  it('handOver: a server error there waits, saying so rather than that it is off', async () => {
+    expect(await remoteWith(link(() => res(500, { error: 'boom' }))).handOver('node-P', H)).toEqual({ refused: 'PC hit an error taking it (boom). It is tried again.', final: false });
+  });
+
+  it('handOver: a machine no longer paired is final', async () => {
+    const gone = (): never => {
+      throw new PeerError('No paired machine "node-P".', 404);
+    };
+    expect(await remoteWith(link(gone)).handOver('node-P', H)).toEqual({ refused: "PC isn't paired with this machine any more.", final: true });
+  });
+
+  it('report and stop give up on an answer that will never change, and log a failure once per send', async () => {
+    const o = { status: 'replied' as const, replyText: 'Done.', reason: null };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // The chat moved, or the machine was unpaired: telling again can't help.
+    expect(await remoteWith(link(() => res(409, { error: 'not here', kind: 'not_here' }))).report('node-P', 's1', 'A', o)).toBe('taken');
+    const gone = (): never => {
+      throw new PeerError('No paired machine "node-P".', 404);
+    };
+    expect(await remoteWith(link(gone)).stop('node-P', 's1', 'B', 'x')).toBe('taken');
+    warn.mockClear();
+    const flaky = remoteWith(link(() => res(500, { error: 'boom' })));
+    expect(await flaky.report('node-P', 's2', 'A', o)).toBe('retry');
+    expect(await flaky.report('node-P', 's2', 'A', o)).toBe('retry');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it('report posts to the sending chat there; 200 and 404 are taken, anything else is tried again', async () => {

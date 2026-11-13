@@ -259,6 +259,49 @@ describe('ChatSendService across machines: the sender', () => {
     expect(marks).toEqual(['touch A node-B', `release A latest=${resumed}`]);
   });
 
+  it("a Cancel after a handover whose answer was lost is told to the other machine, which may have it", async () => {
+    remote.handOverAnswers.push({ refused: UNREACHABLE, final: false });
+    const r = await h.reply('A');
+    await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);
+    expect(only(r)).toMatchObject({ status: 'queued', handoverTried: true });
+    expect(h.service.cancel(only(r).id)).toBe(true);
+    await flush();
+    await h.service.idle();
+    expect(only(r)).toMatchObject({ status: 'cancelled', stopPending: null });
+    expect(remote.stops).toEqual([{ nodeId: 'node-B', sendId: only(r).id, toChatId: 'B', reason: 'Cancelled by the user.' }]);
+  });
+
+  it('Stop on the card of a held send whose handover was tried is told to the other machine too', async () => {
+    remote.handOverAnswers.push({ refused: UNREACHABLE, final: false });
+    const r = await h.reply('A');
+    await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);
+    h.service.stop(r);
+    await flush();
+    await h.service.idle();
+    expect(only(r).status).toBe('stopped');
+    expect(remote.stops.map((s) => s.reason)).toEqual([STOPPED_FROM_CARD]);
+  });
+
+  it('a held send never handed over is cancelled without telling anyone', async () => {
+    remote.states.set('node-B', 'unreachable');
+    const r = await h.reply('A');
+    await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);
+    expect(only(r).handoverTried).toBe(false);
+    h.service.cancel(only(r).id);
+    await flush();
+    await h.service.idle();
+    expect(remote.stops).toEqual([]);
+  });
+
+  it('Run here is not offered once a handover was tried: the other machine may already have it', async () => {
+    remote.handOverAnswers.push({ refused: UNREACHABLE, final: false });
+    const r = await h.reply('A');
+    await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);
+    expect(h.service.views('A')[0]).toMatchObject({ canRunHere: false, handoverTried: true });
+    expect(await h.service.runHere(only(r).id)).toEqual({ refused: "PC may already have this message: its answer didn't arrive. Wait for PC, or cancel it." });
+    expect(h.store.chats.get('B')!.runsOn).toBe('node-B');
+  });
+
   it('waitingChatIds counts a remote row sender', async () => {
     const r = await h.reply('A');
     await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);

@@ -954,6 +954,7 @@ class InMemoryChatSendRepo implements ChatSendRepo {
       heldReason: rest.heldReason ?? null,
       heldSeen: rest.heldSeen ?? false,
       chainBase: rest.chainBase ?? 0,
+      handoverTried: rest.handoverTried ?? false,
       createdAt: createdAt ?? Date.now(),
       finishedAt: null,
     };

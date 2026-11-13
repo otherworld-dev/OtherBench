@@ -29,6 +29,7 @@ function toSend(row: Record<string, unknown>): ChatSend {
     heldReason: (row.held_reason as string | null) ?? null,
     heldSeen: row.held_seen === 1,
     chainBase: (row.chain_base as number | null) ?? 0,
+    handoverTried: row.handover_tried === 1,
   };
 }
 
@@ -46,6 +47,7 @@ const COLUMNS: Record<keyof ChatSendPatch, string> = {
   stopPending: 'stop_pending',
   heldReason: 'held_reason',
   heldSeen: 'held_seen',
+  handoverTried: 'handover_tried',
 };
 
 /** Chat-to-chat sends (migration 044). Local: the table has no sync triggers. */
@@ -57,13 +59,13 @@ export class SqliteChatSendRepo implements ChatSendRepo {
     this.db
       .prepare(
         `INSERT INTO chat_send (id, chain_id, depth, from_chat_id, from_message_id, to_chat_id, created_chat, text, status, to_reply_id, reply_text, reason, resumed_as, created_at, finished_at,
-           to_node, from_node, to_app_id, from_title, handed_at, reported_at, stop_pending, held_reason, held_seen, chain_base)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           to_node, from_node, to_app_id, from_title, handed_at, reported_at, stop_pending, held_reason, held_seen, chain_base, handover_tried)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         s.id, s.chainId, s.depth, s.fromChatId, s.fromMessageId, s.toChatId, s.createdChat ? 1 : 0, s.text, s.status, s.toReplyId, s.replyText, s.reason, s.resumedAs, createdAt,
         s.toNode ?? null, s.fromNode ?? null, s.toAppId ?? null, s.fromTitle ?? null, s.handedAt ?? null, s.reportedAt ?? null, s.stopPending ?? null, s.heldReason ?? null,
-        s.heldSeen === true ? 1 : 0, s.chainBase ?? 0
+        s.heldSeen === true ? 1 : 0, s.chainBase ?? 0, s.handoverTried === true ? 1 : 0
       );
     return this.get(s.id)!;
   }

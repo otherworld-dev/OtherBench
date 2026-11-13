@@ -482,7 +482,7 @@ export function runStoreContract(
 
       const REMOTE_DEFAULTS = {
         toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null,
-        stopPending: null, heldReason: null, heldSeen: false, chainBase: 0,
+        stopPending: null, heldReason: null, heldSeen: false, chainBase: 0, handoverTried: false,
       };
 
       it('create and get round-trip every field', () => {
@@ -495,7 +495,7 @@ export function runStoreContract(
       it('round-trips the remote fields', () => {
         const remote = {
           toNode: 'nB', fromNode: 'nA', toAppId: 'app1', fromTitle: 'Finance', handedAt: 5, reportedAt: 6,
-          stopPending: 'Stop.', heldReason: 'B is off.', heldSeen: true, chainBase: 3,
+          stopPending: 'Stop.', heldReason: 'B is off.', heldSeen: true, chainBase: 3, handoverTried: true,
         };
         const made = store.chatSends.create({ ...row(), ...remote, createdAt: 1000 });
         expect(made).toEqual({ ...row(), ...remote, createdAt: 1000, finishedAt: null });
@@ -508,8 +508,8 @@ export function runStoreContract(
 
       it('update sets toChatId, the remote fields and heldSeen', () => {
         store.chatSends.create(row());
-        const updated = store.chatSends.update('s1', { toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true });
-        expect(updated).toMatchObject({ toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true });
+        const updated = store.chatSends.update('s1', { toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true, handoverTried: true });
+        expect(updated).toMatchObject({ toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true, handoverTried: true });
         expect(store.chatSends.update('s1', { toNode: null, stopPending: null, heldReason: null, heldSeen: false })).toMatchObject({ toNode: null, stopPending: null, heldReason: null, heldSeen: false });
       });
 
