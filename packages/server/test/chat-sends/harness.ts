@@ -7,6 +7,7 @@ import type { ChatEngine, EngineEvent, EngineRequest } from '@otherbench/core/po
 import type { ToolContext } from '@otherbench/core/ports/tool-provider.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
+import type { ChatSendRemote, Handover, HandoverAnswer, Outcome, PeerSendState } from '../../src/chat-sends/remote-port.js';
 import { ChatSendService, type ChatSendDeps } from '../../src/chat-sends/service.js';
 import { collectMessageTree, createAppChat } from '../../src/routes/chats.js';
 import { AppEventBus } from '../../src/stream/events.js';
@@ -165,3 +166,39 @@ export class Harness {
 }
 
 export const refusal = (out: SendOutcome): string => ('refused' in out ? out.refused : '');
+
+/** A paired machine as the sender's service sees it: scripted answers, every call recorded. */
+export class FakeRemote implements ChatSendRemote {
+  readonly states = new Map<string, PeerSendState>();
+  readonly active = new Map<string, string[]>();
+  readonly handOvers: { nodeId: string; h: Handover }[] = [];
+  readonly handOverAnswers: HandoverAnswer[] = [];
+  readonly reports: { nodeId: string; sendId: string; toChatId: string; o: Outcome }[] = [];
+  readonly stops: { nodeId: string; sendId: string; toChatId: string; reason: string }[] = [];
+  readonly stopAnswers: ('taken' | 'retry')[] = [];
+  readonly reportAnswers: ('taken' | 'retry')[] = [];
+  self(): { id: string; name: string } {
+    return { id: 'node-A', name: 'Laptop' };
+  }
+  machineName(nodeId: string): string {
+    return nodeId === 'node-B' ? 'PC' : nodeId;
+  }
+  state(nodeId: string): PeerSendState {
+    return this.states.get(nodeId) ?? 'ok';
+  }
+  activeChats(nodeId: string): string[] {
+    return this.active.get(nodeId) ?? [];
+  }
+  async handOver(nodeId: string, h: Handover): Promise<HandoverAnswer> {
+    this.handOvers.push({ nodeId, h });
+    return this.handOverAnswers.shift() ?? { accepted: true };
+  }
+  async report(nodeId: string, sendId: string, toChatId: string, o: Outcome): Promise<'taken' | 'retry'> {
+    this.reports.push({ nodeId, sendId, toChatId, o });
+    return this.reportAnswers.shift() ?? 'taken';
+  }
+  async stop(nodeId: string, sendId: string, toChatId: string, reason: string): Promise<'taken' | 'retry'> {
+    this.stops.push({ nodeId, sendId, toChatId, reason });
+    return this.stopAnswers.shift() ?? 'taken';
+  }
+}

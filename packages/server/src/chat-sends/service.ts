@@ -297,7 +297,7 @@ export class ChatSendService implements ChatMessenger {
 
   private machineName(nodeId: string): string {
     if (nodeId === this.selfId()) return this.store.nodes.self().name;
-    return this.deps.remote?.machineName(nodeId) ?? this.store.peers.get(nodeId)?.name ?? 'another machine';
+    return this.store.peers.get(nodeId)?.name ?? this.deps.remote?.machineName(nodeId) ?? 'another machine';
   }
 
   /** Whether `nodeId` takes sends from here: false it said no, null it hasn't said or can't be reached now. */
@@ -505,7 +505,89 @@ export class ChatSendService implements ChatMessenger {
     for (const row of this.store.chatSends.remoteWork()) {
       if (row.toNode !== null && row.status === 'queued') this.track(this.handOverRow(row.id));
       else if (row.stopPending !== null) this.tellStop(row.id);
+      else if (row.fromNode !== null) this.report(row.id);
     }
+  }
+
+  /**
+   * A send a paired machine (`fromNode`) hands to a chat here. Kept under the same id, so handing it over twice
+   * (its answer was lost) takes it once. The chat must run here; a new app chat is made here first. It is then
+   * delivered like a send from a chat on this machine, and its outcome goes back instead of resuming anything here.
+   * Whether this machine takes such sends at all is the route's to check (`peerChatSends`).
+   */
+  async takeHandover(fromNode: string, h: Handover): Promise<HandoverAnswer> {
+    const here = this.store.nodes.self().name;
+    const existing = this.store.chatSends.get(h.id);
+    if (existing) return existing.fromNode === fromNode ? { accepted: true } : { refused: 'A different message with that id is already here.', final: true };
+    let chat = this.store.chats.get(h.toChatId);
+    if (!chat && h.createApp) {
+      const app = this.store.apps.get(h.createApp.appId);
+      if (!app) return { refused: `The app it was for isn't on ${here}.`, final: true };
+      const folder = this.deps.resolveWorkspace(app.workspace);
+      if (folder.status === 'unresolved') return { refused: `The app "${app.name}" has no folder on ${here}: ${workspaceUnresolvedMessage(folder)}`, final: true };
+      chat = this.deps.createAppChat(app, h.createApp.title, h.toChatId);
+    }
+    if (!chat) return { refused: `There is no chat ${h.toChatId} on ${here}.`, final: true };
+    if (chat.archivedAt !== null) return { refused: `The chat "${chat.title}" is archived.`, final: true };
+    if (chat.runsOn !== this.selfId()) return { refused: `The chat "${chat.title}" runs on ${this.machineName(chat.runsOn)}, not ${here}.`, final: true };
+    this.store.chatSends.create({
+      id: h.id,
+      chainId: h.chainId,
+      depth: h.depth,
+      fromChatId: h.fromChatId,
+      fromMessageId: h.fromMessageId,
+      toChatId: chat.id,
+      createdChat: h.createApp !== undefined,
+      text: h.text,
+      status: 'queued',
+      toReplyId: null,
+      replyText: null,
+      reason: null,
+      resumedAs: null,
+      createdAt: this.now(),
+      fromNode,
+      fromTitle: h.fromTitle,
+      chainBase: Math.max(0, h.chainBase),
+    });
+    this.changed([chat.id]);
+    this.drain(chat.id);
+    return { accepted: true };
+  }
+
+  /**
+   * Stop, from the machine that handed a send here: it stops as Stop on a send card does here, and the outcome
+   * ("stopped") goes back. Only that machine can stop it.
+   */
+  takeStop(fromNode: string, sendId: string, reason: string): 'taken' | 'unknown' {
+    const row = this.store.chatSends.get(sendId);
+    if (!row || row.fromNode !== fromNode) return 'unknown';
+    if (!isSettled(row.status)) {
+      this.stopRow(row, reason);
+      // A running one is reported when its reply ends; one that settled now is reported now.
+      this.report(row.id);
+    }
+    return 'taken';
+  }
+
+  /** Tells the machine a send came from how it ended, once at a time, until it takes it (`reportedAt`). */
+  private report(id: string): void {
+    const remote = this.deps.remote;
+    const row = this.store.chatSends.get(id);
+    if (!remote || !row || row.fromNode === null || !isSettled(row.status) || row.reportedAt !== null || this.telling.has(id)) return;
+    this.telling.add(id);
+    const fromNode = row.fromNode;
+    // `cancelled` is the sender's own status: it never happens here.
+    const status: Outcome['status'] = row.status === 'replied' || row.status === 'failed' || row.status === 'dropped' ? row.status : 'stopped';
+    const outcome: Outcome = { status, replyText: row.replyText, reason: row.reason };
+    this.track(
+      (async () => {
+        try {
+          if ((await remote.report(fromNode, id, row.toChatId, outcome)) === 'taken') this.store.chatSends.update(id, { reportedAt: this.now() });
+        } finally {
+          this.telling.delete(id);
+        }
+      })()
+    );
   }
 
   /** Tells the target's machine to stop a send, once at a time; a send it took keeps `stopPending` until it does. */
@@ -666,7 +748,7 @@ export class ChatSendService implements ChatMessenger {
     let replyId: string;
     try {
       const from = this.store.chats.get(row.fromChatId);
-      const fromTitle = from?.title ?? 'a chat that has since been deleted';
+      const fromTitle = from?.title ?? row.fromTitle ?? 'a chat that has since been deleted';
       const appName = from?.appId ? (this.store.apps.get(from.appId)?.name ?? null) : null;
       const folder = this.deps.resolveWorkspace(chat.workspace);
       if (folder.status === 'unresolved') throw new Error(workspaceUnresolvedMessage(folder));
@@ -757,6 +839,11 @@ export class ChatSendService implements ChatMessenger {
    */
   private maybeResume(fromMessageId: string): void {
     const group = this.store.chatSends.byFromMessage(fromMessageId);
+    // Sent from a paired machine: the sender is there, so each settled row is reported back instead.
+    if (group[0]?.fromNode != null) {
+      for (const row of group) this.report(row.id);
+      return;
+    }
     if (group.length === 0 || group.some((r) => !isSettled(r.status) || r.resumedAs !== null)) return;
     // The sending reply itself must have ended first: its chat isn't free until then anyway.
     if (this.store.messages.get(fromMessageId)?.status === 'streaming') return;

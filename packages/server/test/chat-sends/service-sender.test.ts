@@ -1,43 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatSend } from '@otherbench/core/ports/store.js';
-import type { ChatSendRemote, Handover, HandoverAnswer, Outcome, PeerSendState } from '../../src/chat-sends/remote-port.js';
 import { STOPPED_FROM_CARD } from '../../src/chat-sends/service.js';
-import { flush, Harness, refusal } from './harness.js';
-
-/** A paired machine as the sender's service sees it: scripted answers, every call recorded. */
-class FakeRemote implements ChatSendRemote {
-  readonly states = new Map<string, PeerSendState>();
-  readonly active = new Map<string, string[]>();
-  readonly handOvers: { nodeId: string; h: Handover }[] = [];
-  readonly handOverAnswers: HandoverAnswer[] = [];
-  readonly reports: { nodeId: string; sendId: string; toChatId: string; o: Outcome }[] = [];
-  readonly stops: { nodeId: string; sendId: string; toChatId: string; reason: string }[] = [];
-  readonly stopAnswers: ('taken' | 'retry')[] = [];
-  self(): { id: string; name: string } {
-    return { id: 'node-A', name: 'Laptop' };
-  }
-  machineName(nodeId: string): string {
-    return nodeId === 'node-B' ? 'PC' : nodeId;
-  }
-  state(nodeId: string): PeerSendState {
-    return this.states.get(nodeId) ?? 'ok';
-  }
-  activeChats(nodeId: string): string[] {
-    return this.active.get(nodeId) ?? [];
-  }
-  async handOver(nodeId: string, h: Handover): Promise<HandoverAnswer> {
-    this.handOvers.push({ nodeId, h });
-    return this.handOverAnswers.shift() ?? { accepted: true };
-  }
-  async report(nodeId: string, sendId: string, toChatId: string, o: Outcome): Promise<'taken' | 'retry'> {
-    this.reports.push({ nodeId, sendId, toChatId, o });
-    return 'taken';
-  }
-  async stop(nodeId: string, sendId: string, toChatId: string, reason: string): Promise<'taken' | 'retry'> {
-    this.stops.push({ nodeId, sendId, toChatId, reason });
-    return this.stopAnswers.shift() ?? 'taken';
-  }
-}
+import { FakeRemote, flush, Harness, refusal } from './harness.js';
 
 const UNREACHABLE = "PC isn't reachable. The message goes when it is back.";
 const BUSY = 'PC is being used by computer use. The message goes when that ends.';
