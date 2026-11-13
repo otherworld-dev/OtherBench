@@ -200,6 +200,23 @@ describe('Composer', () => {
     expect(textbox.style.height).toBe('120px');
   });
 
+  it('a click on the box around the message field, off its controls, puts the cursor in the field', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    const textbox = screen.getByRole('textbox', { name: /message/i });
+    const attach = screen.getByRole('button', { name: 'Attach files' });
+    // The toolbar row under the field: mostly empty space between its controls.
+    await user.click(attach.parentElement!);
+    expect(textbox).toHaveFocus();
+    // So what's typed next goes in.
+    await user.keyboard('hi');
+    expect(textbox).toHaveValue('hi');
+    // The controls still take their own clicks.
+    textbox.blur();
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(textbox).not.toHaveFocus();
+  });
+
   it('sends /compact to the one profile the server ran, with one reply stub', async () => {
     const p2 = makeProfile({ id: 'p2', name: 'Other' });
     useOtherBenchStore.getState().setProfiles([makeProfile(), p2]);
