@@ -692,13 +692,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   peers.attachActivity(
     () => ownChats(events.runningTurns().map((t) => t.chatId)),
     () => ownChats(events.backgroundChats().map((c) => c.chatId)),
-    () => ownChats(events.pendingApprovals().map((p) => p.chatId)),
+    // A send held for a machine that is off waits on the user too (Run here, Wait or Cancel on its card).
+    () => ownChats([...events.pendingApprovals().map((p) => p.chatId), ...(chatSends?.heldChatIds() ?? [])]),
     () => {
       // Since its first card still waiting: when the chat came to need the user (the Needs you order).
       const pending = events.pendingApprovals();
       const own = new Set(ownChats(pending.map((p) => p.chatId)));
       const since: Record<string, number> = {};
       for (const p of pending) if (own.has(p.chatId) && p.at !== undefined) since[p.chatId] = Math.min(since[p.chatId] ?? p.at, p.at);
+      for (const [chatId, at] of Object.entries(chatSends?.heldSince() ?? {})) if (ownChats([chatId]).length > 0) since[chatId] = Math.min(since[chatId] ?? at, at);
       return since;
     },
     // Every session controlling this computer, whichever machine its chat runs on now (a chat moved away keeps its
@@ -708,7 +710,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   events.subscribe((e) => {
     if (
       e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' ||
-      e.type === 'approval-resolved' || e.type === 'computer-session'
+      e.type === 'approval-resolved' || e.type === 'computer-session' || e.type === 'chat-sends-changed'
     ) peers.announceActivity();
     // A paired machine's Inspector showing a chat that runs here re-reads that section (`chatToolStateRoutes`).
     if (e.type === 'mcp-changed') peers.announce('tool-state', { section: 'mcp', chatId: null });

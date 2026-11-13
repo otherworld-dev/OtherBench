@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
-import type { ChatSend } from '@otherbench/core/ports/store.js';
+import type { ChatSend, ChatSendView } from '@otherbench/core/ports/store.js';
 import { createApp } from '../../src/app.js';
 import { ChatSendService } from '../../src/chat-sends/service.js';
 import type { Container } from '../../src/container.js';
@@ -21,8 +21,10 @@ function row(id: string, over: Partial<ChatSend> = {}): void {
   store.chatSends.create({ id, chainId: 'r1', depth: 1, fromChatId: 'A', fromMessageId: 'r1', toChatId: 'B', createdChat: false, text: 'x', status: 'replied', toReplyId: null, replyText: null, reason: null, resumedAs: null, ...over });
 }
 
-function call(path: string, method = 'GET'): Promise<Response> {
-  return Promise.resolve(createApp(container).request(path, { method }));
+function call(path: string, method = 'GET', body?: unknown): Promise<Response> {
+  return Promise.resolve(
+    createApp(container).request(path, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) })
+  );
 }
 
 beforeEach(() => {
@@ -84,8 +86,46 @@ describe('chat-to-chat routes', () => {
     expect((await call('/api/chat-sends/nope/stop', 'POST')).status).toBe(404);
   });
 
-  it('GET /api/chat-sends/waiting names the chats with sends still out', async () => {
+  it('GET /api/chat-sends/waiting names the chats with sends still out, and those held for a machine that is off', async () => {
     row('s1', { status: 'running', toReplyId: 'elsewhere' });
-    expect(await (await call('/api/chat-sends/waiting')).json()).toEqual({ chatIds: ['A'] });
+    expect(await (await call('/api/chat-sends/waiting')).json()).toEqual({ chatIds: ['A'], heldChatIds: [] });
+    row('s2', { fromChatId: 'B', fromMessageId: 'rb', status: 'queued', toNode: 'node-pc', heldReason: "PC isn't reachable." });
+    expect(await (await call('/api/chat-sends/waiting')).json()).toEqual({ chatIds: ['A', 'B'], heldChatIds: ['B'] });
+  });
+
+  it('GET /api/chats/:id/sends gives each send its machine and whether it could run here', async () => {
+    store.peers.create({ nodeId: 'node-pc', name: 'PC', fingerprint: 'f'.repeat(64), addresses: [], issuedTokenHash: 'h', heldTokenRef: 'r', platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1 });
+    row('s1', { status: 'queued', toNode: 'node-pc', heldReason: "PC isn't reachable." });
+    const body = (await (await call('/api/chats/A/sends')).json()) as { sends: ChatSendView[] };
+    expect(body.sends).toMatchObject([{ id: 's1', machine: 'PC', canRunHere: true, heldReason: "PC isn't reachable." }]);
+  });
+
+  it('POST /api/chats/:id/sends/stop stops the sends of the reply it names', async () => {
+    row('s1', { status: 'queued' });
+    const res = await call('/api/chats/A/sends/stop', 'POST', { fromMessageId: 'r1' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { sends: ChatSendView[] }).sends).toMatchObject([{ id: 's1', status: 'stopped' }]);
+    expect((await call('/api/chats/A/sends/stop', 'POST', { fromMessageId: 'nope' })).status).toBe(404);
+    expect((await call('/api/chats/A/sends/stop', 'POST', {})).status).toBe(400);
+  });
+
+  it('POST wait marks a held send as seen; cancel settles it as cancelled; both return the chat\'s sends', async () => {
+    row('s1', { status: 'queued', toNode: 'node-pc', heldReason: "PC isn't reachable." });
+    const waited = await call('/api/chats/A/sends/s1/wait', 'POST');
+    expect(waited.status).toBe(200);
+    expect(((await waited.json()) as { sends: ChatSendView[] }).sends).toMatchObject([{ id: 's1', heldSeen: true }]);
+    const cancelled = await call('/api/chats/A/sends/s1/cancel', 'POST');
+    expect(cancelled.status).toBe(200);
+    expect(((await cancelled.json()) as { sends: ChatSendView[] }).sends).toMatchObject([{ id: 's1', status: 'cancelled', reason: 'Cancelled by the user.' }]);
+    expect((await call('/api/chats/A/sends/s1/cancel', 'POST')).status).toBe(409);
+  });
+
+  it('POST on a send that is not from that chat, or unknown, is a 404; run-here on one not waiting is a 409', async () => {
+    row('s1', { status: 'running', toNode: 'node-pc' });
+    expect((await call('/api/chats/B/sends/s1/wait', 'POST')).status).toBe(404);
+    expect((await call('/api/chats/A/sends/nope/cancel', 'POST')).status).toBe(404);
+    const res = await call('/api/chats/A/sends/s1/run-here', 'POST');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "That message isn't waiting for another machine." });
   });
 });

@@ -19,6 +19,7 @@ import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { listLocationDirs } from './location-dirs.js';
 import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
+import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
 
 /**
@@ -594,6 +595,17 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
+  // A chat's send card (spec 2026-11-13-chat-sends-across-machines-design): its sends live where the chat runs.
+  app.get('/chats/:id/sends', chatRoute('sends'));
+  app.post('/chats/:id/sends/stop', chatRoute('sends/stop'));
+  for (const action of ['wait', 'cancel', 'run-here']) {
+    app.post(`/chats/:id/sends/:sendId/${action}`, async (c, next) => {
+      const chatId = c.req.param('id');
+      const nodeId = remoteNode(chatId);
+      if (!nodeId) return next();
+      return forward(container, c, nodeId, `/chats/${chatId}/sends/${encodeURIComponent(c.req.param('sendId'))}/${action}`);
+    });
+  }
   // A message sent while a reply runs is held where the reply runs. Its attachments were uploaded here: that machine pulls them first.
   app.post('/chats/:id/notes', chatRoute('notes', { syncFirst: true }));
   app.delete('/chats/:id/notes/:noteId', async (c, next) => {
@@ -939,6 +951,8 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // Chat sends between machines (spec 2026-11-13-chat-sends-across-machines-design): a paired machine hands a send to
   // a chat here (only while `peerChatSends` is on here), reports how one this machine handed it ended, or stops one.
   app.route('/', chatSendsPeerRoutes(container));
+  // The send card of a chat that runs here, for a paired machine's UI: the same routes this machine's own UI uses.
+  app.route('/', chatSendsRoutes(container));
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));
