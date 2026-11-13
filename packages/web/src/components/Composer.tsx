@@ -24,6 +24,9 @@ import { useComposerSend } from './useComposerSend.js';
 
 export { isClaudeCodeProfile };
 
+/** What in the composer box takes a click itself; a click anywhere else in the box goes to the message field. */
+const BOX_CONTROLS = 'textarea, input, select, button, a, label, [contenteditable], [role="menu"], [role="listbox"], [role="dialog"], [role="option"], [role="menuitem"]';
+
 export interface ComposerProps {
   chat: Chat;
   /**
@@ -310,6 +313,13 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         data-composer-box=""
         // A container, so the toolbar can tighten up by the box's own width (a narrow pane, not just a narrow window).
         className="@container rounded border border-[var(--border-strong)] bg-[var(--bg)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]"
+        // The whole box reads as the place to type: a click on its empty parts (the toolbar row between its
+        // controls, the edges) puts the cursor in the message field, rather than on the thread around it.
+        onMouseDown={(e) => {
+          if (e.button !== 0 || !(e.target instanceof Element) || e.target.closest(BOX_CONTROLS)) return;
+          e.preventDefault();
+          textareaRef.current?.focus();
+        }}
       >
         {attachments.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
