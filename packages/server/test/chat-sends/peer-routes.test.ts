@@ -102,6 +102,7 @@ describe('chat sends on the peer listener', () => {
   });
 
   it('outcome is taken while the setting is off: it only settles a send this machine made', async () => {
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'A', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, toNode: 'node-laptop' });
     const take = vi.spyOn(service, 'takeOutcome').mockReturnValue('taken');
     const o = { status: 'replied', replyText: 'Done.', reason: null };
     const res = await post('/chats/A/sends/s1/outcome', o);
@@ -112,7 +113,22 @@ describe('chat sends on the peer listener', () => {
     expect((await post('/chats/A/sends/s1/outcome', { ...o, status: 'cancelled' })).status).toBe(400);
   });
 
+  it('outcome and remote-stop refuse a chat in the path that is not the send\'s own, so the chat marked is the chat it reaches', async () => {
+    const base = { chainId: 'r', depth: 1, fromMessageId: 'r', createdChat: false, text: 'x', status: 'running' as const, toReplyId: null, replyText: null, reason: null, resumedAs: null };
+    store.chatSends.create({ ...base, id: 'mine', fromChatId: 'A', toChatId: 'B', toNode: 'node-laptop' });
+    store.chatSends.create({ ...base, id: 'theirs', fromChatId: 'X', toChatId: 'B', fromNode: 'node-laptop' });
+    const outcome = vi.spyOn(service, 'takeOutcome');
+    const stop = vi.spyOn(service, 'takeStop');
+    expect((await post('/chats/Z/sends/mine/outcome', { status: 'replied', replyText: 'x', reason: null })).status).toBe(404);
+    expect((await post('/chats/Z/sends/theirs/remote-stop', { reason: 'x' })).status).toBe(404);
+    expect(outcome).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect((await post('/chats/A/sends/mine/outcome', { status: 'replied', replyText: 'x', reason: null })).status).toBe(200);
+    expect((await post('/chats/B/sends/theirs/remote-stop', { reason: 'x' })).status).toBe(200);
+  });
+
   it('remote-stop passes the chat marking without peerComputerControl, and reaches takeStop', async () => {
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'X', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
     const take = vi.spyOn(service, 'takeStop').mockReturnValue('taken');
     const res = await post('/chats/B/sends/s1/remote-stop', { reason: 'Stopped from the send card.' });
     expect(res.status).toBe(200);

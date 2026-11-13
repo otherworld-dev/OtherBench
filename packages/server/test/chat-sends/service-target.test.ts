@@ -52,6 +52,22 @@ describe('ChatSendService across machines: the target', () => {
     expect(askedText(replyId)).toContain('Add a runway card.');
   });
 
+  it("the delivered turn is marked as the sending machine's while it starts, and released once it has", async () => {
+    const marks: string[] = [];
+    h.service.dispose();
+    h.build({
+      remote,
+      markPeerTurn: (chatId, nodeId) => {
+        marks.push(`touch ${chatId} ${nodeId}`);
+        return () => marks.push(`release ${chatId} running=${h.bus.runningTurns().some((t) => t.chatId === chatId)}`);
+      },
+    });
+    h.service.start();
+    await h.service.takeHandover('node-A', handover());
+    await settleDown();
+    expect(marks).toEqual(['touch B node-A', 'release B running=true']);
+  });
+
   it('takeHandover twice with the same id makes one row and one turn', async () => {
     await h.service.takeHandover('node-A', handover());
     expect(await h.service.takeHandover('node-A', handover())).toEqual({ accepted: true });

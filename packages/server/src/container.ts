@@ -861,6 +861,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     emit: (e) => events.emit(e),
     // Chats on paired machines (spec 2026-11-13-chat-sends-across-machines-design), over the peer listener.
     remote: peerChatSendRemote(store, peers),
+    markPeerTurn: (chatId, nodeId) => peerInfluence.touch(chatId, nodeId),
   });
   container.chatSends = chatSends;
   try {

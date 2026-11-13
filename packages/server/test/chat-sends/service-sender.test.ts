@@ -235,6 +235,30 @@ describe('ChatSendService across machines: the sender', () => {
     again.dispose();
   });
 
+  it("the sender's resumed turn, carrying a paired machine's reply, is marked as that machine's while it starts", async () => {
+    const marks: string[] = [];
+    h.service.dispose();
+    h.build({
+      remote,
+      markPeerTurn: (chatId, nodeId) => {
+        marks.push(`touch ${chatId} ${nodeId}`);
+        return () => marks.push(`release ${chatId} latest=${h.latestReply(chatId)}`);
+      },
+    });
+    h.service.start();
+    const r = await h.reply('A');
+    await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);
+    await h.finish(r, 'Sent.');
+    expect(marks).toEqual([]);
+    h.service.takeOutcome('node-B', only(r).id, { status: 'replied', replyText: 'Done.', reason: null });
+    await flush();
+    await h.service.idle();
+    const resumed = h.latestReply('A')!;
+    expect(resumed).not.toBe(r);
+    // Released only once the resumed reply exists, so the mark saw it start.
+    expect(marks).toEqual(['touch A node-B', `release A latest=${resumed}`]);
+  });
+
   it('waitingChatIds counts a remote row sender', async () => {
     const r = await h.reply('A');
     await h.send('A', r, [{ chatId: 'B', text: 'do it' }]);

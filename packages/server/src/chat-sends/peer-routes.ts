@@ -67,6 +67,8 @@ export function chatSendsPeerRoutes(container: Container): Hono<ForwardedEnv> {
     if (!service) return notAvailable(c);
     const o = parseOutcome(await c.req.json().catch(() => null));
     if (!o) return c.json({ error: 'That is not how a message ended.' }, 400);
+    // The chat in the path is the one the listener marked as the caller's: it must be the chat the outcome reaches.
+    if (container.store.chatSends.get(c.req.param('sendId'))?.fromChatId !== c.req.param('chatId')) return c.json({ error: 'No such message was sent from that chat.' }, 404);
     if (service.takeOutcome(c.env.peerNodeId, c.req.param('sendId'), o) === 'unknown') return c.json({ error: 'No such message was sent to that machine.' }, 404);
     return c.json({ taken: true });
   });
@@ -76,6 +78,7 @@ export function chatSendsPeerRoutes(container: Container): Hono<ForwardedEnv> {
     if (!service) return notAvailable(c);
     const body = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
     const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason : 'Stopped from the machine that sent it.';
+    if (container.store.chatSends.get(c.req.param('sendId'))?.toChatId !== c.req.param('chatId')) return c.json({ error: 'No such message came to that chat.' }, 404);
     if (service.takeStop(c.env.peerNodeId, c.req.param('sendId'), reason) === 'unknown') return c.json({ error: 'No such message came from that machine.' }, 404);
     return c.json({ stopped: true });
   });

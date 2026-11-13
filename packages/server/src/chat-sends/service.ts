@@ -38,6 +38,12 @@ export interface ChatSendDeps {
    * over and their outcomes come back. Absent, only chats on this machine can be sent to.
    */
   remote?: ChatSendRemote;
+  /**
+   * Holds a paired machine's mark on a chat (peer/forward.ts `PeerInfluence.touch`) while a turn its input caused is
+   * started: a send it handed here, or a sender's resume carrying its reply. The handover's own request has ended by
+   * then, so without this the turn would start unmarked and computer use would read it as this machine's own input.
+   */
+  markPeerTurn?: (chatId: string, nodeId: string) => () => void;
   emit: (e: AppEvent) => void;
   now?: () => number;
   generateId?: () => string;
@@ -760,16 +766,21 @@ export class ChatSendService implements ChatMessenger {
       // The user started something there meanwhile: it stays queued and goes when that ends.
       if (this.isBusy(now.id)) return;
       const parentId = chatTip(this.store, now.id, now.headMessageId);
-      const result = await this.deps.startTurn({
-        chatId: now.id,
-        parentId,
-        userParts: [
-          { type: 'chat-link', kind: 'from', chats: [{ chatId: row.fromChatId, title: fromTitle }], sendIds: [row.id] },
-          { type: 'text', text: deliveredText({ title: fromTitle, chatId: row.fromChatId, appName }, row.text) },
-        ],
-        profiles: [profile],
-      });
-      replyId = result.assistantMessageIds[0]!;
+      const release = row.fromNode !== null ? this.deps.markPeerTurn?.(now.id, row.fromNode) : undefined;
+      try {
+        const result = await this.deps.startTurn({
+          chatId: now.id,
+          parentId,
+          userParts: [
+            { type: 'chat-link', kind: 'from', chats: [{ chatId: row.fromChatId, title: fromTitle }], sendIds: [row.id] },
+            { type: 'text', text: deliveredText({ title: fromTitle, chatId: row.fromChatId, appName }, row.text) },
+          ],
+          profiles: [profile],
+        });
+        replyId = result.assistantMessageIds[0]!;
+      } finally {
+        release?.();
+      }
     } catch (err) {
       this.settle(row.id, 'failed', null, err instanceof Error ? err.message : String(err));
       return;
@@ -910,16 +921,23 @@ export class ChatSendService implements ChatMessenger {
         parentId = fromMessageId;
       }
       const rows = group.map((r) => ({ row: r, title: this.targetTitle(r) }));
-      const result = await this.deps.startTurn({
-        chatId: chat.id,
-        parentId,
-        userParts: [
-          { type: 'chat-link', kind: 'replies', chats: rows.map(({ row, title }) => ({ chatId: row.toChatId, title, status: row.status })), sendIds: group.map((r) => r.id) },
-          { type: 'text', text: repliesText(rows.map(({ row, title }) => ({ title, chatId: row.toChatId, status: row.status, text: row.replyText, reason: row.reason }))) },
-        ],
-        profiles: [profile],
-      });
-      replyId = result.assistantMessageIds[0]!;
+      // Replies written on a paired machine are that machine's input to this chat.
+      const from = group.find((r) => r.toNode !== null)?.toNode;
+      const release = from ? this.deps.markPeerTurn?.(chat.id, from) : undefined;
+      try {
+        const result = await this.deps.startTurn({
+          chatId: chat.id,
+          parentId,
+          userParts: [
+            { type: 'chat-link', kind: 'replies', chats: rows.map(({ row, title }) => ({ chatId: row.toChatId, title, status: row.status })), sendIds: group.map((r) => r.id) },
+            { type: 'text', text: repliesText(rows.map(({ row, title }) => ({ title, chatId: row.toChatId, status: row.status, text: row.replyText, reason: row.reason }))) },
+          ],
+          profiles: [profile],
+        });
+        replyId = result.assistantMessageIds[0]!;
+      } finally {
+        release?.();
+      }
     } catch (err) {
       this.close(fromMessageId, 'failed', `The chat it was sent to couldn't carry on: ${err instanceof Error ? err.message : String(err)}`);
       return;
