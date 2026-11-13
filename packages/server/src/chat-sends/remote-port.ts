@@ -45,8 +45,12 @@ export interface ChatSendRemote {
   /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
   activeChats(nodeId: string): string[];
   handOver(nodeId: string, h: Handover): Promise<HandoverAnswer>;
-  /** `taken` also when the other machine doesn't know the send: there is nothing more to tell it. */
-  report(nodeId: string, sendId: string, toChatId: string, o: Outcome): Promise<'taken' | 'retry'>;
+  /**
+   * How a send `nodeId` handed here ended; `fromChatId` is the chat that sent it, there. `taken` also when that
+   * machine doesn't know the send: there is nothing more to tell it.
+   */
+  report(nodeId: string, sendId: string, fromChatId: string, o: Outcome): Promise<'taken' | 'retry'>;
+  /** Stop a send handed to `nodeId`, to its chat `toChatId` there. */
   stop(nodeId: string, sendId: string, toChatId: string, reason: string): Promise<'taken' | 'retry'>;
 }
 

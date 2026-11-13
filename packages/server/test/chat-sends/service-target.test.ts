@@ -84,7 +84,7 @@ describe('ChatSendService across machines: the target', () => {
     const turnsBefore = h.engine.requests.length;
     await h.finish(row().toReplyId!, 'Added the card.');
     expect(row()).toMatchObject({ status: 'replied', replyText: 'Added the card.', reportedAt: null });
-    expect(remote.reports).toEqual([{ nodeId: 'node-A', sendId: 'send-1', toChatId: 'B', o: { status: 'replied', replyText: 'Added the card.', reason: null } }]);
+    expect(remote.reports).toEqual([{ nodeId: 'node-A', sendId: 'send-1', fromChatId: 'A', o: { status: 'replied', replyText: 'Added the card.', reason: null } }]);
     // Nothing resumes here: the sender is on the laptop.
     expect(h.engine.requests).toHaveLength(turnsBefore);
     h.service.tick();

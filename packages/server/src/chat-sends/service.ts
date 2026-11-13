@@ -582,7 +582,7 @@ export class ChatSendService implements ChatMessenger {
     this.track(
       (async () => {
         try {
-          if ((await remote.report(fromNode, id, row.toChatId, outcome)) === 'taken') this.store.chatSends.update(id, { reportedAt: this.now() });
+          if ((await remote.report(fromNode, id, row.fromChatId, outcome)) === 'taken') this.store.chatSends.update(id, { reportedAt: this.now() });
         } finally {
           this.telling.delete(id);
         }

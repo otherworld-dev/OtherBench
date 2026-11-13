@@ -70,6 +70,7 @@ import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
 import { ChatSendService } from './chat-sends/service.js';
+import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import { NotesService } from './notes/service.js';
@@ -853,11 +854,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     turnRunner,
     startTurn: (input) => startTurn(container, input),
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
-    resolveWorkspace: (ws) => workspaceResolver(container)(ws),
+    resolveWorkspace: (ws, on) => workspaceResolver(container)(ws, on),
     isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
-    createAppChat: (app, title) => createAppChat(container, app, title),
+    createAppChat: (app, title, id) => createAppChat(container, app, title, id),
     emit: (e) => events.emit(e),
+    // Chats on paired machines (spec 2026-11-13-chat-sends-across-machines-design), over the peer listener.
+    remote: peerChatSendRemote(store, peers),
   });
   container.chatSends = chatSends;
   try {

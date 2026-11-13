@@ -173,7 +173,7 @@ export class FakeRemote implements ChatSendRemote {
   readonly active = new Map<string, string[]>();
   readonly handOvers: { nodeId: string; h: Handover }[] = [];
   readonly handOverAnswers: HandoverAnswer[] = [];
-  readonly reports: { nodeId: string; sendId: string; toChatId: string; o: Outcome }[] = [];
+  readonly reports: { nodeId: string; sendId: string; fromChatId: string; o: Outcome }[] = [];
   readonly stops: { nodeId: string; sendId: string; toChatId: string; reason: string }[] = [];
   readonly stopAnswers: ('taken' | 'retry')[] = [];
   readonly reportAnswers: ('taken' | 'retry')[] = [];
@@ -193,8 +193,8 @@ export class FakeRemote implements ChatSendRemote {
     this.handOvers.push({ nodeId, h });
     return this.handOverAnswers.shift() ?? { accepted: true };
   }
-  async report(nodeId: string, sendId: string, toChatId: string, o: Outcome): Promise<'taken' | 'retry'> {
-    this.reports.push({ nodeId, sendId, toChatId, o });
+  async report(nodeId: string, sendId: string, fromChatId: string, o: Outcome): Promise<'taken' | 'retry'> {
+    this.reports.push({ nodeId, sendId, fromChatId, o });
     return this.reportAnswers.shift() ?? 'taken';
   }
   async stop(nodeId: string, sendId: string, toChatId: string, reason: string): Promise<'taken' | 'retry'> {

@@ -18,6 +18,7 @@ import { peerScheduleRoutes } from './schedule-control.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { listLocationDirs } from './location-dirs.js';
+import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
 import { PeerError } from './service.js';
 
 /**
@@ -168,6 +169,9 @@ export class PeerInfluence {
  */
 const PEER_NO_INPUT: readonly RegExp[] = [
   /^\/chats\/[^/]+\/stop$/,
+  // Stopping a chat send this machine was handed (chat-sends/peer-routes.ts), or one from a send card: starts nothing.
+  /^\/chats\/[^/]+\/sends\/[^/]+\/remote-stop$/,
+  /^\/chats\/[^/]+\/sends\/stop$/,
   /^\/chats\/[^/]+\/computer\/stop$/,
   /^\/messages\/[^/]+\/cancel$/,
   /^\/chats\/[^/]+\/helpers\/[^/]+\/stop$/,
@@ -931,6 +935,10 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     if ('status' in listing) return c.json({ error: listing.error, kind: listing.kind }, listing.status);
     return c.json(listing);
   });
+
+  // Chat sends between machines (spec 2026-11-13-chat-sends-across-machines-design): a paired machine hands a send to
+  // a chat here (only while `peerChatSends` is on here), reports how one this machine handed it ended, or stops one.
+  app.route('/', chatSendsPeerRoutes(container));
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));
