@@ -687,6 +687,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     const self = store.nodes.self().id;
     return [...new Set(ids)].filter((id) => store.chats.get(id)?.runsOn === self);
   };
+  peers.setAcceptsChatSends(() => store.settings.get().peerChatSends);
   peers.attachActivity(
     () => ownChats(events.runningTurns().map((t) => t.chatId)),
     () => ownChats(events.backgroundChats().map((c) => c.chatId)),
