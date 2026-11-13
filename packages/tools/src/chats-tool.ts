@@ -3,6 +3,9 @@ import type { ChatMessenger, SendTarget } from '@otherbench/core/ports/chat-mess
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 
 const SENT_NOTE = 'Sent. End your turn now: when every chat has finished, their replies arrive together as your next message.';
+/** Added when a target's machine is off or busy (spec 2026-11-13-chat-sends-across-machines-design). */
+const HELD_NOTE =
+  " Some of them run on a machine that is off or busy right now (each one's machine is in sent): those messages wait, and the user has been asked whether to wait, cancel them or run them on this machine. End your turn all the same.";
 
 function toolError(message: string): { error: true; code: 'invalid_arguments'; message: string } {
   return { error: true, code: 'invalid_arguments', message };
@@ -42,13 +45,13 @@ export function chatsTool(messenger: ChatMessenger): ToolSpec {
     describeCall: async (args) => ({ args: typeof args === 'object' && args !== null && !Array.isArray(args) ? { ...(args as Record<string, unknown>) } : {}, risk: 'execute' }),
     execute: async (args, ctx) => {
       const a = typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
-      if (a['command'] === 'list') return { chats: messenger.list(ctx) };
+      if (a['command'] === 'list') return await messenger.list(ctx);
       if (a['command'] !== 'send') return toolError('command must be "list" or "send".');
       const targets = targetsOf(a['messages']);
       if (typeof targets === 'string') return toolError(targets);
       const outcome = await messenger.send(ctx, targets);
       if ('refused' in outcome) return { error: true, code: 'refused', message: outcome.refused };
-      return { sent: outcome.sent, note: SENT_NOTE };
+      return { sent: outcome.sent, note: outcome.sent.some((s) => s.held) ? SENT_NOTE + HELD_NOTE : SENT_NOTE };
     },
   };
 }

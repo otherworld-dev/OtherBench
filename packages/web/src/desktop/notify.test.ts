@@ -27,6 +27,31 @@ const finished = (messageId: string, status: 'complete' | 'error' | 'cancelled' 
   ({ type: 'turn-finished', chatId: 'c1', messageId, status }) as const;
 const approval = (requestId: string) => ({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId, toolName: 'write_file' }) as const;
 
+describe('Notifier: chat sends held for a machine', () => {
+  const held = (sendId: string) => ({ type: 'chat-send-held', chatId: 'c1', sendId, machine: 'PC', reason: "PC isn't reachable. The message goes when it is back." }) as const;
+
+  it('says why a send waits, once per send, titled with the chat', async () => {
+    const { notifier, show } = setup();
+    await notifier.handle(held('s1'));
+    await notifier.handle(held('s1'));
+    await notifier.handle(held('s2'));
+    expect(show.mock.calls).toEqual([
+      ['Trip plans', "PC isn't reachable. The message goes when it is back.", 'c1'],
+      ['Trip plans', "PC isn't reachable. The message goes when it is back.", 'c1'],
+    ]);
+  });
+
+  it('respects the approvals switch and the focused window', async () => {
+    const { notifier, show, setFocused } = setup({ prefs: { ...DEFAULT_NOTIFY_PREFS, approvals: false } });
+    await notifier.handle(held('s1'));
+    expect(show).not.toHaveBeenCalled();
+    const focused = setup({ focused: true });
+    await focused.notifier.handle(held('s2'));
+    expect(focused.show).not.toHaveBeenCalled();
+    setFocused(false);
+  });
+});
+
 describe('Notifier', () => {
   it('notifies a finished or failed reply and a pending approval, titled with the chat', async () => {
     const { notifier, show } = setup();

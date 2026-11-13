@@ -18,6 +18,8 @@ import { peerScheduleRoutes } from './schedule-control.js';
 import { chatStop, stopChatReplies, turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { listLocationDirs } from './location-dirs.js';
+import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
+import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
 
 /**
@@ -168,6 +170,9 @@ export class PeerInfluence {
  */
 const PEER_NO_INPUT: readonly RegExp[] = [
   /^\/chats\/[^/]+\/stop$/,
+  // Stopping a chat send this machine was handed (chat-sends/peer-routes.ts), or one from a send card: starts nothing.
+  /^\/chats\/[^/]+\/sends\/[^/]+\/remote-stop$/,
+  /^\/chats\/[^/]+\/sends\/stop$/,
   /^\/chats\/[^/]+\/computer\/stop$/,
   /^\/messages\/[^/]+\/cancel$/,
   /^\/chats\/[^/]+\/helpers\/[^/]+\/stop$/,
@@ -590,6 +595,17 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
+  // A chat's send card (spec 2026-11-13-chat-sends-across-machines-design): its sends live where the chat runs.
+  app.get('/chats/:id/sends', chatRoute('sends'));
+  app.post('/chats/:id/sends/stop', chatRoute('sends/stop'));
+  for (const action of ['wait', 'cancel', 'run-here']) {
+    app.post(`/chats/:id/sends/:sendId/${action}`, async (c, next) => {
+      const chatId = c.req.param('id');
+      const nodeId = remoteNode(chatId);
+      if (!nodeId) return next();
+      return forward(container, c, nodeId, `/chats/${chatId}/sends/${encodeURIComponent(c.req.param('sendId'))}/${action}`);
+    });
+  }
   // A message sent while a reply runs is held where the reply runs. Its attachments were uploaded here: that machine pulls them first.
   app.post('/chats/:id/notes', chatRoute('notes', { syncFirst: true }));
   app.delete('/chats/:id/notes/:noteId', async (c, next) => {
@@ -931,6 +947,17 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     if ('status' in listing) return c.json({ error: listing.error, kind: listing.kind }, listing.status);
     return c.json(listing);
   });
+
+  // Chat sends between machines (spec 2026-11-13-chat-sends-across-machines-design): a paired machine hands a send to
+  // a chat here (only while `peerChatSends` is on here), reports how one this machine handed it ended, or stops one.
+  app.route('/', chatSendsPeerRoutes(container));
+  // The send card of a chat that runs here, for a paired machine's UI: the same routes this machine's own UI uses,
+  // except Run here. That starts a turn in the chat the send went to, which the call doesn't name, so the chat
+  // marking above would mark the wrong chat; and a paired machine that can't reach the target can't help anyway.
+  app.post('/chats/:id/sends/:sendId/run-here', (c) =>
+    c.json({ error: 'Run here only works on the machine this chat runs on.', kind: 'run_here_local_only' }, 403)
+  );
+  app.route('/', chatSendsRoutes(container));
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));

@@ -419,6 +419,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
         case 'schedule-run-finished':
           return { schedulesVersion: state.schedulesVersion + 1 };
         case 'chat-sends-changed':
+        // A paired machine's sends change there: its activity is the only word of it here (spec 2026-11-13).
+        case 'peer-activity':
           return { chatSendsVersion: state.chatSendsVersion + 1 };
         case 'peer-schedules':
         case 'peer-status':
@@ -895,6 +897,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   chatSendsVersion: 0,
   waitingOnChats: [],
   setWaitingOnChats: (chatIds) => set({ waitingOnChats: chatIds }),
+  heldChats: [],
+  setHeldChats: (chatIds) => set({ heldChats: chatIds }),
   peerSchedulesVersion: 0,
 }));
 

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatSend } from '@otherbench/core/ports/store.js';
+import type { ChatSendView } from '@otherbench/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -9,7 +9,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      chatSends: { forChat: vi.fn(), waiting: vi.fn(), stop: vi.fn() },
+      chatSends: { forChat: vi.fn(), waiting: vi.fn(), stop: vi.fn(), stopIn: vi.fn(), wait: vi.fn(), cancel: vi.fn(), runHere: vi.fn() },
     },
   };
 });
@@ -19,10 +19,11 @@ import { useOtherBenchStore } from '../state/store.js';
 import { ChatSendCard } from './ChatSendCard.js';
 import { ChatLinkBadge } from './ChatLinkBadge.js';
 
-function send(over: Partial<ChatSend> = {}): ChatSend {
+function send(over: Partial<ChatSendView> = {}): ChatSendView {
   return {
     id: 's1', chainId: 'r1', depth: 1, fromChatId: 'A', fromMessageId: 'r1', toChatId: 'B', createdChat: false, text: 'x',
-    status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: 1, finishedAt: null, ...over,
+    status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: 1, finishedAt: null,
+    toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null, stopPending: null, heldReason: null, heldSeen: false, chainBase: 0, handoverTried: false, machine: null, canRunHere: false, ...over,
   };
 }
 
@@ -46,7 +47,7 @@ describe('ChatSendCard', () => {
     vi.mocked(api.chatSends.forChat).mockResolvedValue({
       sends: [send(), send({ id: 's2', toChatId: 'C', status: 'failed', reason: 'No folder here.' }), send({ id: 'other', fromMessageId: 'r9' })],
     });
-    vi.mocked(api.chatSends.stop).mockResolvedValue({ sends: [] });
+    vi.mocked(api.chatSends.stopIn).mockResolvedValue({ sends: [] });
     render(<ChatSendCard chatId="A" fromMessageId="r1" />);
     await waitFor(() => expect(screen.getAllByTestId('chat-send-row')).toHaveLength(2));
     const [b, c] = screen.getAllByTestId('chat-send-row');
@@ -55,7 +56,62 @@ describe('ChatSendCard', () => {
     expect(b).toHaveTextContent('Working');
     expect(c).toHaveTextContent('Failed: No folder here.');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Stop' }));
-    expect(api.chatSends.stop).toHaveBeenCalledWith('r1');
+    expect(api.chatSends.stopIn).toHaveBeenCalledWith('A', 'r1');
+  });
+
+  it('names the machine a send went to, and the app of a new chat not here yet', async () => {
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({
+      sends: [send({ toNode: 'node-pc', machine: 'PC' }), send({ id: 's2', toChatId: 'not-synced', toAppId: 'app1', createdChat: true, toNode: 'node-pc', machine: 'PC' })],
+    });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    await waitFor(() => expect(screen.getAllByTestId('chat-send-row')).toHaveLength(2));
+    const [b, made] = screen.getAllByTestId('chat-send-row');
+    expect(b).toHaveTextContent('Web work');
+    expect(b).toHaveTextContent('PC');
+    expect(made).toHaveTextContent('A new chat in Web');
+    expect(made).toHaveTextContent('PC');
+  });
+
+  it('shows why a held send waits, with Wait and Cancel, and Run here only when it can run here', async () => {
+    const held = send({ status: 'queued', toNode: 'node-pc', machine: 'PC', heldReason: "PC isn't reachable. The message goes when it is back." });
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [held] });
+    vi.mocked(api.chatSends.cancel).mockResolvedValue({ sends: [{ ...held, status: 'cancelled', heldReason: null }] });
+    const { unmount } = render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    const row = await screen.findByTestId('chat-send-row');
+    expect(row).toHaveTextContent("PC isn't reachable. The message goes when it is back.");
+    expect(screen.getByRole('button', { name: 'Wait' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run here' })).not.toBeInTheDocument();
+    expect(row).toHaveTextContent("Web work's folder is only on PC.");
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.chatSends.cancel).toHaveBeenCalledWith('A', 's1');
+    await waitFor(() => expect(screen.getByTestId('chat-send-row')).toHaveTextContent('Cancelled'));
+    unmount();
+
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [{ ...held, canRunHere: true, heldSeen: true }] });
+    vi.mocked(api.chatSends.runHere).mockResolvedValue({ sends: [{ ...held, toNode: null, machine: null, heldReason: null, status: 'running' }] });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Run here' }));
+    expect(api.chatSends.runHere).toHaveBeenCalledWith('A', 's1');
+    // Wait was already chosen.
+    expect(screen.queryByRole('button', { name: 'Wait' })).not.toBeInTheDocument();
+  });
+
+  it("says the other machine may already have a send whose handover got no answer, instead of offering Run here", async () => {
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [send({ status: 'queued', toNode: 'node-pc', machine: 'PC', heldReason: 'PC is off.', handoverTried: true })] });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    const row = await screen.findByTestId('chat-send-row');
+    expect(row).toHaveTextContent("PC may already have it: its answer didn't arrive.");
+    expect(screen.queryByRole('button', { name: 'Run here' })).not.toBeInTheDocument();
+  });
+
+  it('Wait marks the held send as seen', async () => {
+    const held = send({ status: 'queued', toNode: 'node-pc', machine: 'PC', heldReason: 'PC is off.' });
+    vi.mocked(api.chatSends.forChat).mockResolvedValue({ sends: [held] });
+    vi.mocked(api.chatSends.wait).mockResolvedValue({ sends: [{ ...held, heldSeen: true }] });
+    render(<ChatSendCard chatId="A" fromMessageId="r1" />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Wait' }));
+    expect(api.chatSends.wait).toHaveBeenCalledWith('A', 's1');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Wait' })).not.toBeInTheDocument());
   });
 
   it('has no Stop once every send has settled', async () => {

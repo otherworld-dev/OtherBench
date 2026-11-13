@@ -74,6 +74,7 @@ import type {
   ChatSend,
   ChatSendPatch,
   ChatSendRepo,
+  NewChatSend,
   RemoteSession,
   RemoteSessionRepo,
   SettingsRepo,
@@ -939,9 +940,24 @@ class InMemoryChatSendRepo implements ChatSendRepo {
   private readonly rows = new Map<string, ChatSend>();
   private order = 0;
   private readonly seq = new Map<string, number>();
-  create(s: Omit<ChatSend, 'createdAt' | 'finishedAt'> & { createdAt?: number }): ChatSend {
+  create(s: NewChatSend): ChatSend {
     const { createdAt, ...rest } = s;
-    const row: ChatSend = { ...rest, createdAt: createdAt ?? Date.now(), finishedAt: null };
+    const row: ChatSend = {
+      ...rest,
+      toNode: rest.toNode ?? null,
+      fromNode: rest.fromNode ?? null,
+      toAppId: rest.toAppId ?? null,
+      fromTitle: rest.fromTitle ?? null,
+      handedAt: rest.handedAt ?? null,
+      reportedAt: rest.reportedAt ?? null,
+      stopPending: rest.stopPending ?? null,
+      heldReason: rest.heldReason ?? null,
+      heldSeen: rest.heldSeen ?? false,
+      chainBase: rest.chainBase ?? 0,
+      handoverTried: rest.handoverTried ?? false,
+      createdAt: createdAt ?? Date.now(),
+      finishedAt: null,
+    };
     this.rows.set(row.id, row);
     this.seq.set(row.id, this.order++);
     return { ...row };
@@ -987,6 +1003,10 @@ class InMemoryChatSendRepo implements ChatSendRepo {
   }
   unresumed(): ChatSend[] {
     return this.where((s) => s.resumedAs === null && s.status !== 'queued' && s.status !== 'running');
+  }
+  remoteWork(): ChatSend[] {
+    const settled = (s: ChatSend): boolean => s.status !== 'queued' && s.status !== 'running';
+    return this.where((s) => (s.toNode !== null && s.status === 'queued') || s.stopPending !== null || (s.fromNode !== null && settled(s) && s.reportedAt === null));
   }
 }
 

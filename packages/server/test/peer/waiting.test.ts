@@ -40,6 +40,20 @@ describe('activity: waiting chats and gh login', () => {
     expect(laptop.service.githubLogin('node-PC')).toBeNull();
   });
 
+  it('tells a peer whether it accepts chat sends; an older peer, which does not say, reads as unknown (null)', async () => {
+    const { pc, laptop } = await connected();
+    let accepts = true;
+    pc.service.setAcceptsChatSends(() => accepts);
+    expect(pc.service.activity().acceptsChatSends).toBe(true);
+    pc.service.announceActivity();
+    await expect.poll(() => laptop.service.acceptsChatSends('node-PC')).toBe(true);
+    accepts = false;
+    pc.service.announceActivity();
+    await expect.poll(() => laptop.service.acceptsChatSends('node-PC')).toBe(false);
+    pc.service.announce('activity', { chatIds: [] });
+    await expect.poll(() => laptop.service.acceptsChatSends('node-PC')).toBeNull();
+  });
+
   it('tells a peer when each of those chats started waiting, so its Needs you list orders them as this one does', async () => {
     const { pc, laptop } = await connected();
     let waiting: Record<string, number> = { c1: 100, c2: 200 };
@@ -141,14 +155,14 @@ describe('activity: waiting chats and gh login', () => {
     expect(laptop.service.computerSessions('node-PC')).toEqual([]);
   });
 
-  it('says only ids, times, a login and the action line: the whole of what a paired machine hears live', () => {
+  it('says only ids, times, a login, the action line and whether it takes chat sends: the whole of what a paired machine hears live', () => {
     const pc = node('PC');
     // A computer-use session is told as its chat and last action only (d1109): not which machine started it, and
     // nothing of the screen or the app, which the session here doesn't carry either.
     pc.service.attachActivity(() => ['r'], () => ['b'], () => ['w'], () => ({ w: 1 }), () => [{ chatId: 'c', lastAction: 'take a screenshot', startedFrom: 'Laptop' }]);
     expect(pc.service.activity()).toEqual({
       chatIds: ['r'], backgroundChatIds: ['b'], waitingChatIds: ['w'], waitingSince: { w: 1 }, githubLogin: null,
-      computerSessions: [{ chatId: 'c', lastAction: 'take a screenshot' }],
+      computerSessions: [{ chatId: 'c', lastAction: 'take a screenshot' }], acceptsChatSends: false,
     });
   });
 

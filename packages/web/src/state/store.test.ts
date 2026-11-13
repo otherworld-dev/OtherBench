@@ -518,6 +518,14 @@ describe('app-wide events (Task 34)', () => {
     expect(selectPendingApprovalCount(s())).toBe(0);
   });
 
+  it("bumps the chat sends version on a send event here, and on a paired machine's activity, whose send cards may have changed", () => {
+    const s = () => useOtherBenchStore.getState();
+    const before = s().chatSendsVersion;
+    s().applyAppEvent({ type: 'chat-sends-changed', chatIds: ['c'] });
+    s().applyAppEvent({ type: 'peer-activity', nodeId: 'node-pc' });
+    expect(s().chatSendsVersion).toBe(before + 2);
+  });
+
   it('bumps the schedules version on each schedule event, and opens and closes the Scheduled overlay', () => {
     const s = () => useOtherBenchStore.getState();
     expect(s().schedulesVersion).toBe(0);

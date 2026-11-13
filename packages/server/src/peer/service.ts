@@ -200,6 +200,8 @@ export class PeerService {
   private computerHere: () => ComputerSessionSummary[] = () => [];
   /** This machine's `gh` login, as told to its peers; the overview service supplies it. */
   private githubLoginHere: () => string | null = () => null;
+  /** Whether this machine accepts chat sends from paired machines (`peerChatSends`); off until set. */
+  private acceptsChatSendsHere: () => boolean = () => false;
   /** Each peer's chats with a reply running there, as it last said. */
   private readonly activityByPeer = new Map<string, string[]>();
   /** The chats each paired machine last said have background tasks running there. */
@@ -210,6 +212,8 @@ export class PeerService {
   private readonly waitingSinceByPeer = new Map<string, Record<string, number>>();
   /** Each paired machine's `gh` login, as it last said. */
   private readonly loginByPeer = new Map<string, string | null>();
+  /** What each peer last said about accepting chat sends; absent when it never said (an older build). */
+  private readonly chatSendsByPeer = new Map<string, boolean>();
   /** The chats controlling each paired machine (computer use), as it last said. */
   private readonly computerByPeer = new Map<string, ComputerSessionSummary[]>();
   /** This machine's schedules as told to its peers (attached by the container), and the last list sent, to send only a change. */
@@ -242,7 +246,7 @@ export class PeerService {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
         if (event === 'activity') {
-          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; waitingSince?: unknown; githubLogin?: unknown; computerSessions?: unknown } | null;
+          const said = data as { chatIds?: unknown; backgroundChatIds?: unknown; waitingChatIds?: unknown; waitingSince?: unknown; githubLogin?: unknown; computerSessions?: unknown; acceptsChatSends?: unknown } | null;
           this.activityByPeer.set(nodeId, chatIdsOf(said?.chatIds));
           // An older machine doesn't say: none in the background, as far as we know.
           this.backgroundByPeer.set(nodeId, chatIdsOf(said?.backgroundChatIds));
@@ -251,6 +255,9 @@ export class PeerService {
           this.waitingSinceByPeer.set(nodeId, waitingSinceOf(said?.waitingSince, waiting));
           this.loginByPeer.set(nodeId, typeof said?.githubLogin === 'string' ? said.githubLogin : null);
           this.computerByPeer.set(nodeId, computerSessionsOf(said?.computerSessions));
+          // An older machine doesn't say: unknown, so a send is tried and its answer tells.
+          if (typeof said?.acceptsChatSends === 'boolean') this.chatSendsByPeer.set(nodeId, said.acceptsChatSends);
+          else this.chatSendsByPeer.delete(nodeId);
           options.events?.emit({ type: 'peer-activity', nodeId });
         }
         if (event === 'schedules') {
@@ -306,6 +313,11 @@ export class PeerService {
     this.githubLoginHere = source;
   }
 
+  /** Where this machine's "accepts chat sends from paired machines" comes from (`peerChatSends`); until set, it doesn't. */
+  setAcceptsChatSends(source: () => boolean): void {
+    this.acceptsChatSendsHere = source;
+  }
+
   /** Tells every peer this machine's activity now; call it when something it reports changes. */
   announceActivity(): void {
     this.announce('activity', this.activity());
@@ -326,11 +338,13 @@ export class PeerService {
     waitingSince: Record<string, number>;
     githubLogin: string | null;
     computerSessions: ComputerSessionSummary[];
+    acceptsChatSends: boolean;
   } {
     return {
       chatIds: this.runningHere(), backgroundChatIds: this.backgroundHere(), waitingChatIds: this.waitingHere(),
       waitingSince: this.waitingSinceHere(), githubLogin: this.githubLoginHere(),
       computerSessions: this.computerHere().map((s) => (s.lastAction === undefined ? { chatId: s.chatId } : { chatId: s.chatId, lastAction: s.lastAction })),
+      acceptsChatSends: this.acceptsChatSendsHere(),
     };
   }
 
@@ -411,6 +425,14 @@ export class PeerService {
    */
   computerSessions(nodeId: string): ComputerSessionSummary[] {
     return this.status(nodeId).status === 'reachable' ? (this.computerByPeer.get(nodeId) ?? []) : [];
+  }
+
+  /**
+   * Whether `nodeId` accepts chat sends from this machine, as it last said; null while it isn't reachable or if it
+   * never said (an older build). For listing and deciding when to try; that machine decides every handover.
+   */
+  acceptsChatSends(nodeId: string): boolean | null {
+    return this.status(nodeId).status === 'reachable' ? (this.chatSendsByPeer.get(nodeId) ?? null) : null;
   }
 
   /** The `gh` login `nodeId` last said it has; null if none, unknown, or while it isn't reachable. */
@@ -666,6 +688,7 @@ export class PeerService {
     this.waitingByPeer.delete(peer.nodeId);
     this.waitingSinceByPeer.delete(peer.nodeId);
     this.loginByPeer.delete(peer.nodeId);
+    this.chatSendsByPeer.delete(peer.nodeId);
     this.computerByPeer.delete(peer.nodeId);
     this.schedulesByPeer.delete(peer.nodeId);
     this.scheduleControlByPeer.delete(peer.nodeId);

@@ -1,6 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { ChatSendStatus } from '@otherbench/core/domain/chat-sends.js';
-import type { ChatSend, ChatSendPatch, ChatSendRepo } from '@otherbench/core/ports/store.js';
+import type { ChatSend, ChatSendPatch, ChatSendRepo, NewChatSend } from '@otherbench/core/ports/store.js';
 
 function toSend(row: Record<string, unknown>): ChatSend {
   return {
@@ -19,6 +19,17 @@ function toSend(row: Record<string, unknown>): ChatSend {
     resumedAs: (row.resumed_as as string | null) ?? null,
     createdAt: row.created_at as number,
     finishedAt: (row.finished_at as number | null) ?? null,
+    toNode: (row.to_node as string | null) ?? null,
+    fromNode: (row.from_node as string | null) ?? null,
+    toAppId: (row.to_app_id as string | null) ?? null,
+    fromTitle: (row.from_title as string | null) ?? null,
+    handedAt: (row.handed_at as number | null) ?? null,
+    reportedAt: (row.reported_at as number | null) ?? null,
+    stopPending: (row.stop_pending as string | null) ?? null,
+    heldReason: (row.held_reason as string | null) ?? null,
+    heldSeen: row.held_seen === 1,
+    chainBase: (row.chain_base as number | null) ?? 0,
+    handoverTried: row.handover_tried === 1,
   };
 }
 
@@ -29,20 +40,33 @@ const COLUMNS: Record<keyof ChatSendPatch, string> = {
   reason: 'reason',
   resumedAs: 'resumed_as',
   finishedAt: 'finished_at',
+  toChatId: 'to_chat_id',
+  toNode: 'to_node',
+  handedAt: 'handed_at',
+  reportedAt: 'reported_at',
+  stopPending: 'stop_pending',
+  heldReason: 'held_reason',
+  heldSeen: 'held_seen',
+  handoverTried: 'handover_tried',
 };
 
 /** Chat-to-chat sends (migration 044). Local: the table has no sync triggers. */
 export class SqliteChatSendRepo implements ChatSendRepo {
   constructor(private readonly db: DatabaseSync) {}
 
-  create(s: Omit<ChatSend, 'createdAt' | 'finishedAt'> & { createdAt?: number }): ChatSend {
+  create(s: NewChatSend): ChatSend {
     const createdAt = s.createdAt ?? Date.now();
     this.db
       .prepare(
-        `INSERT INTO chat_send (id, chain_id, depth, from_chat_id, from_message_id, to_chat_id, created_chat, text, status, to_reply_id, reply_text, reason, resumed_as, created_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+        `INSERT INTO chat_send (id, chain_id, depth, from_chat_id, from_message_id, to_chat_id, created_chat, text, status, to_reply_id, reply_text, reason, resumed_as, created_at, finished_at,
+           to_node, from_node, to_app_id, from_title, handed_at, reported_at, stop_pending, held_reason, held_seen, chain_base, handover_tried)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(s.id, s.chainId, s.depth, s.fromChatId, s.fromMessageId, s.toChatId, s.createdChat ? 1 : 0, s.text, s.status, s.toReplyId, s.replyText, s.reason, s.resumedAs, createdAt);
+      .run(
+        s.id, s.chainId, s.depth, s.fromChatId, s.fromMessageId, s.toChatId, s.createdChat ? 1 : 0, s.text, s.status, s.toReplyId, s.replyText, s.reason, s.resumedAs, createdAt,
+        s.toNode ?? null, s.fromNode ?? null, s.toAppId ?? null, s.fromTitle ?? null, s.handedAt ?? null, s.reportedAt ?? null, s.stopPending ?? null, s.heldReason ?? null,
+        s.heldSeen === true ? 1 : 0, s.chainBase ?? 0, s.handoverTried === true ? 1 : 0
+      );
     return this.get(s.id)!;
   }
 
@@ -58,7 +82,7 @@ export class SqliteChatSendRepo implements ChatSendRepo {
       const value = patch[key];
       if (value === undefined) continue;
       sets.push(`${column} = ?`);
-      values.push(value);
+      values.push(typeof value === 'boolean' ? (value ? 1 : 0) : value);
     }
     if (sets.length > 0) this.db.prepare(`UPDATE chat_send SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
     const row = this.get(id);
@@ -97,6 +121,19 @@ export class SqliteChatSendRepo implements ChatSendRepo {
 
   unresumed(): ChatSend[] {
     const rows = this.db.prepare("SELECT * FROM chat_send WHERE resumed_as IS NULL AND status NOT IN ('queued', 'running') ORDER BY created_at ASC, rowid ASC").all() as Record<string, unknown>[];
+    return rows.map(toSend);
+  }
+
+  remoteWork(): ChatSend[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM chat_send
+         WHERE (to_node IS NOT NULL AND status = 'queued')
+            OR stop_pending IS NOT NULL
+            OR (from_node IS NOT NULL AND status NOT IN ('queued', 'running') AND reported_at IS NULL)
+         ORDER BY created_at ASC, rowid ASC`
+      )
+      .all() as Record<string, unknown>[];
     return rows.map(toSend);
   }
 

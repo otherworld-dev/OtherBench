@@ -31,13 +31,54 @@ export interface ChatSend {
   resumedAs: string | null;
   createdAt: number;
   finishedAt: number | null;
+  // --- across machines (spec 2026-11-13-chat-sends-across-machines-design, migration 049) ---
+  /** Sender's side: the paired machine this send was handed to; null when the target runs here. */
+  toNode: string | null;
+  /** Target's side: the paired machine the send came from; null when it was sent here. */
+  fromNode: string | null;
+  /** The app a new chat is made in, for a send that makes one (the chat may not exist anywhere yet). */
+  toAppId: string | null;
+  /** Target's side: the sender chat's title as its machine gave it (that chat may not have synced here yet). */
+  fromTitle: string | null;
+  /** Sender's side: when the target's machine took it. */
+  handedAt: number | null;
+  /** Target's side: when the sender's machine took the outcome. */
+  reportedAt: number | null;
+  /** Sender's side: a stop the target's machine hasn't been told yet. */
+  stopPending: string | null;
+  /** Sender's side: why a handover is waiting (the machine is off or busy); null while it isn't. */
+  heldReason: string | null;
+  /** The user chose Wait for the held send: it no longer needs them. */
+  heldSeen: boolean;
+  /** Target's side: how many sends the chain had on the sender's machine at handover, for the chain limit. */
+  chainBase: number;
+  /**
+   * Sender's side: a handover was sent at least once. If its answer never came back, the target's machine may have
+   * the send anyway, so a Cancel or Stop is told to it, and Run here isn't offered.
+   */
+  handoverTried: boolean;
 }
 
-export type ChatSendPatch = Partial<Pick<ChatSend, 'status' | 'toReplyId' | 'replyText' | 'reason' | 'resumedAs' | 'finishedAt'>>;
+/** The fields a new row may leave out: they default to null, false and 0. */
+export type ChatSendRemoteFields = 'toNode' | 'fromNode' | 'toAppId' | 'fromTitle' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen' | 'chainBase' | 'handoverTried';
+
+export type NewChatSend = Omit<ChatSend, 'createdAt' | 'finishedAt' | ChatSendRemoteFields> & Partial<Pick<ChatSend, ChatSendRemoteFields>> & { createdAt?: number };
+
+export type ChatSendPatch = Partial<
+  Pick<ChatSend, 'status' | 'toReplyId' | 'replyText' | 'reason' | 'resumedAs' | 'finishedAt' | 'toChatId' | 'toNode' | 'handedAt' | 'reportedAt' | 'stopPending' | 'heldReason' | 'heldSeen' | 'handoverTried'>
+>;
+
+/** A send as the send card reads it: the row, the machine its target runs on, and whether it could run here. */
+export type ChatSendView = ChatSend & {
+  /** The paired machine's name, or null when the target runs here. */
+  machine: string | null;
+  /** A held send's target could run on this machine (no folder, or its folder is here). */
+  canRunHere: boolean;
+};
 
 /** Every list is oldest first. */
 export interface ChatSendRepo {
-  create(s: Omit<ChatSend, 'createdAt' | 'finishedAt'> & { createdAt?: number }): ChatSend;
+  create(s: NewChatSend): ChatSend;
   get(id: string): ChatSend | null;
   /** Throws for an unknown id. */
   update(id: string, patch: ChatSendPatch): ChatSend;
@@ -51,4 +92,9 @@ export interface ChatSendRepo {
   unsettled(): ChatSend[];
   /** Settled rows whose group hasn't gone back to its sender (`resumedAs` null): what a restart must pick up. */
   unresumed(): ChatSend[];
+  /**
+   * Rows that still owe a paired machine something: handed-to rows still queued (not handed over yet), rows with a
+   * stop not yet told, and mirror rows settled but not yet reported back.
+   */
+  remoteWork(): ChatSend[];
 }

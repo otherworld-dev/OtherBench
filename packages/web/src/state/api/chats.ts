@@ -1,5 +1,5 @@
 /** Chat, turn, reply note, chat-to-chat send and search calls and shapes. */
-import type { Chat, ChatSend } from '@otherbench/core/ports/store.js';
+import type { Chat, ChatSend, ChatSendView } from '@otherbench/core/ports/store.js';
 import type { CommandRow } from '@otherbench/core/domain/context-lines.js';
 import type { ClaudeEffort } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -160,14 +160,25 @@ export const search = (q: string, limit?: number) =>
 /** The chats with a message matching `q`, each once, best match first (the sidebar's search). */
 export const searchChats = (q: string) => request<{ chatId: string }[]>(`/search?scope=chats&q=${encodeURIComponent(q)}`);
 
-/** Chats that message each other (spec 2026-11-06-chat-to-chat-design): local to the server machine. */
+/**
+ * Chats that message each other (spec 2026-11-06-chat-to-chat-design). The chat-scoped calls are answered by the
+ * machine the chat runs on (spec 2026-11-13-chat-sends-across-machines-design), so the card works from either one.
+ */
 export const chatSendsApi = {
-  /** Every send from or to the chat, newest first. */
-  forChat: (chatId: string) => request<{ sends: ChatSend[] }>(`/chats/${encodeURIComponent(chatId)}/sends`),
-  /** The chats with sends of theirs still out. */
-  waiting: () => request<{ chatIds: string[] }>('/chat-sends/waiting'),
+  /** Every send from or to the chat, newest first, each with its machine and whether it could run here. */
+  forChat: (chatId: string) => request<{ sends: ChatSendView[] }>(`/chats/${encodeURIComponent(chatId)}/sends`),
+  /** The chats with sends of theirs still out, and those with a send held for a machine that is off. */
+  waiting: () => request<{ chatIds: string[]; heldChatIds?: string[] }>('/chat-sends/waiting'),
   /** The send card's Stop: everything that reply sent stops, and it doesn't carry on. */
   stop: (fromMessageId: string) => post<{ sends: ChatSend[] }>(`/chat-sends/${encodeURIComponent(fromMessageId)}/stop`),
+  /** The same Stop, scoped to its chat so it reaches the machine the chat runs on. */
+  stopIn: (chatId: string, fromMessageId: string) => post<{ sends: ChatSendView[] }>(`/chats/${encodeURIComponent(chatId)}/sends/stop`, { fromMessageId }),
+  /** A held send: go when its machine is back, and stop asking. */
+  wait: (chatId: string, sendId: string) => post<{ sends: ChatSendView[] }>(`/chats/${encodeURIComponent(chatId)}/sends/${encodeURIComponent(sendId)}/wait`),
+  /** A held send: don't send it; the chat carries on without it. */
+  cancel: (chatId: string, sendId: string) => post<{ sends: ChatSendView[] }>(`/chats/${encodeURIComponent(chatId)}/sends/${encodeURIComponent(sendId)}/cancel`),
+  /** A held send: run its chat on this machine instead. */
+  runHere: (chatId: string, sendId: string) => post<{ sends: ChatSendView[] }>(`/chats/${encodeURIComponent(chatId)}/sends/${encodeURIComponent(sendId)}/run-here`),
 };
 
 export const turnsApi = {

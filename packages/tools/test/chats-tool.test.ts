@@ -22,18 +22,41 @@ function fakeMessenger(): ChatMessenger & { sent: SendTarget[][] } {
   const sent: SendTarget[][] = [];
   return {
     sent,
-    list: () => [{ chatId: 'chat-2', title: 'Web', app: 'Web', busy: false }],
+    list: async () => ({
+      chats: [{ chatId: 'chat-2', title: 'Web', app: 'Web', busy: false, machine: 'PC', acceptsSends: true }],
+      apps: [{ name: 'Nextcloud Budget', machine: 'PC', acceptsSends: true }],
+    }),
     send: async (_ctx, targets) => {
       sent.push(targets);
-      return { sent: targets.map((t, i) => ({ sendId: `s${i}`, chatId: t.chatId ?? `new-${i}`, title: 'T', app: t.app ?? null, createdChat: t.chatId === undefined, queued: false })) };
+      return {
+        sent: targets.map((t, i) => ({ sendId: `s${i}`, chatId: t.chatId ?? `new-${i}`, title: 'T', app: t.app ?? null, createdChat: t.chatId === undefined, queued: false, machine: 'PC', held: t.text === 'held' })),
+      };
     },
   };
 }
 
 describe('message_chats tool', () => {
-  it('list hands back what the messenger lists', async () => {
+  it('tells the model it can reach paired machines, and to use exact app names from list', () => {
     const tool = chatsTool(fakeMessenger());
-    expect(await tool.execute({ command: 'list' }, ctx())).toEqual({ chats: [{ chatId: 'chat-2', title: 'Web', app: 'Web', busy: false }] });
+    expect(tool.description).toMatch(/on this machine or a paired one/);
+    expect(tool.description).toMatch(/exact name from list/);
+    expect(tool.description).toMatch(/If a machine is off, the user is asked what to do/);
+  });
+
+  it('list returns chats and apps, as the messenger lists them', async () => {
+    const tool = chatsTool(fakeMessenger());
+    expect(await tool.execute({ command: 'list' }, ctx())).toEqual({
+      chats: [{ chatId: 'chat-2', title: 'Web', app: 'Web', busy: false, machine: 'PC', acceptsSends: true }],
+      apps: [{ name: 'Nextcloud Budget', machine: 'PC', acceptsSends: true }],
+    });
+  });
+
+  it('tells the model when a machine is off that the user has been asked, and to end its turn all the same', async () => {
+    const out = await chatsTool(fakeMessenger()).execute({ command: 'send', messages: [{ chatId: 'chat-2', text: 'held' }] }, ctx());
+    expect(out).toMatchObject({ note: expect.stringMatching(/End your turn now/) });
+    expect((out as { note: string }).note).toMatch(/the user has been asked/);
+    const fine = await chatsTool(fakeMessenger()).execute({ command: 'send', messages: [{ chatId: 'chat-2', text: 'go' }] }, ctx());
+    expect((fine as { note: string }).note).not.toMatch(/the user has been asked/);
   });
 
   it('refuses more than 4 messages before reaching the messenger', async () => {
@@ -61,7 +84,7 @@ describe('message_chats tool', () => {
   });
 
   it('turns a refusal from the messenger into a tool error', async () => {
-    const messenger: ChatMessenger = { list: () => [], send: async () => ({ refused: 'Compare turns cannot message other chats.' }) };
+    const messenger: ChatMessenger = { list: async () => ({ chats: [], apps: [] }), send: async () => ({ refused: 'Compare turns cannot message other chats.' }) };
     expect(await chatsTool(messenger).execute({ command: 'send', messages: [{ chatId: 'c', text: 'x' }] }, ctx())).toMatchObject({ error: true, message: 'Compare turns cannot message other chats.' });
   });
 

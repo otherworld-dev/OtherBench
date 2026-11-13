@@ -70,6 +70,7 @@ import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
 import { ChatSendService } from './chat-sends/service.js';
+import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import { NotesService } from './notes/service.js';
@@ -553,7 +554,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // The service is built once the container exists (it starts turns); until then the tool has nothing to send with.
   let chatSends: ChatSendService | null = null;
   const chats: ChatMessenger = {
-    list: (ctx) => chatSends?.list(ctx) ?? [],
+    list: async (ctx) => (chatSends ? chatSends.list(ctx) : { chats: [], apps: [] }),
     send: async (ctx, targets) => (chatSends ? chatSends.send(ctx, targets) : { refused: 'OtherBench is still starting. Try again in a moment.' }),
   };
   const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, chats, ...(computer ? { computer } : {}) });
@@ -687,16 +688,19 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     const self = store.nodes.self().id;
     return [...new Set(ids)].filter((id) => store.chats.get(id)?.runsOn === self);
   };
+  peers.setAcceptsChatSends(() => store.settings.get().peerChatSends);
   peers.attachActivity(
     () => ownChats(events.runningTurns().map((t) => t.chatId)),
     () => ownChats(events.backgroundChats().map((c) => c.chatId)),
-    () => ownChats(events.pendingApprovals().map((p) => p.chatId)),
+    // A send held for a machine that is off waits on the user too (Run here, Wait or Cancel on its card).
+    () => ownChats([...events.pendingApprovals().map((p) => p.chatId), ...(chatSends?.heldChatIds() ?? [])]),
     () => {
       // Since its first card still waiting: when the chat came to need the user (the Needs you order).
       const pending = events.pendingApprovals();
       const own = new Set(ownChats(pending.map((p) => p.chatId)));
       const since: Record<string, number> = {};
       for (const p of pending) if (own.has(p.chatId) && p.at !== undefined) since[p.chatId] = Math.min(since[p.chatId] ?? p.at, p.at);
+      for (const [chatId, at] of Object.entries(chatSends?.heldSince() ?? {})) if (ownChats([chatId]).length > 0) since[chatId] = Math.min(since[chatId] ?? at, at);
       return since;
     },
     // Every session controlling this computer, whichever machine its chat runs on now (a chat moved away keeps its
@@ -706,7 +710,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   events.subscribe((e) => {
     if (
       e.type === 'turn-started' || e.type === 'turn-finished' || e.type === 'background-tasks' || e.type === 'approval-requested' ||
-      e.type === 'approval-resolved' || e.type === 'computer-session'
+      e.type === 'approval-resolved' || e.type === 'computer-session' || e.type === 'chat-sends-changed'
     ) peers.announceActivity();
     // A paired machine's Inspector showing a chat that runs here re-reads that section (`chatToolStateRoutes`).
     if (e.type === 'mcp-changed') peers.announce('tool-state', { section: 'mcp', chatId: null });
@@ -852,11 +856,14 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     turnRunner,
     startTurn: (input) => startTurn(container, input),
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
-    resolveWorkspace: (ws) => workspaceResolver(container)(ws),
+    resolveWorkspace: (ws, on) => workspaceResolver(container)(ws, on),
     isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
-    createAppChat: (app, title) => createAppChat(container, app, title),
+    createAppChat: (app, title, id) => createAppChat(container, app, title, id),
     emit: (e) => events.emit(e),
+    // Chats on paired machines (spec 2026-11-13-chat-sends-across-machines-design), over the peer listener.
+    remote: peerChatSendRemote(store, peers),
+    markPeerTurn: (chatId, nodeId) => peerInfluence.touch(chatId, nodeId),
   });
   container.chatSends = chatSends;
   try {

@@ -12,6 +12,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = {
   nextcloudEnabled: true,
   peerComputerControl: false,
   peerScheduleControl: false,
+  peerChatSends: false,
   handoverEnabled: true,
   handoverThresholdTokens: 300_000,
   deckStartCommand: '',

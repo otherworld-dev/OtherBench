@@ -22,6 +22,7 @@ interface SettingsBody {
   nextcloudEnabled?: unknown;
   peerComputerControl?: unknown;
   peerScheduleControl?: unknown;
+  peerChatSends?: unknown;
   handoverEnabled?: unknown;
   handoverThresholdTokens?: unknown;
   deckStartCommand?: unknown;
@@ -110,6 +111,12 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
       if (typeof body.peerScheduleControl !== 'boolean') throw new HTTPException(400, { message: '"peerScheduleControl" must be true or false.' });
       patch.peerScheduleControl = body.peerScheduleControl;
     }
+    // Whether chats on paired machines may send work to chats here (chat-sends/peer-routes.ts reads it on every
+    // handover). A plain switch like the one above: only this machine reaches it.
+    if (body.peerChatSends !== undefined) {
+      if (typeof body.peerChatSends !== 'boolean') throw new HTTPException(400, { message: '"peerChatSends" must be true or false.' });
+      patch.peerChatSends = body.peerChatSends;
+    }
     const current = container.store.settings.get();
     if (patch.peerComputerControl !== undefined && peerComputerControlNeedsHostConfirm(current.peerComputerControl, patch.peerComputerControl)) {
       // The early refusal (forgeable, so not the boundary): it doesn't even claim to be the desktop app.
@@ -139,7 +146,10 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
     const after = container.store.settings.update(patch);
     const handoverChanged = before.handoverEnabled !== after.handoverEnabled || before.handoverThresholdTokens !== after.handoverThresholdTokens;
     const startCommandsChanged = START_COMMANDS.some((key) => before[key] !== after[key]);
-    const peerControlChanged = before.peerComputerControl !== after.peerComputerControl || before.peerScheduleControl !== after.peerScheduleControl;
+    const peerControlChanged =
+      before.peerComputerControl !== after.peerComputerControl || before.peerScheduleControl !== after.peerScheduleControl || before.peerChatSends !== after.peerChatSends;
+    // Paired machines are told whether they may send here (PeerService.activity), so their list says so.
+    if (before.peerChatSends !== after.peerChatSends) container.peers?.announceActivity();
     if ((peerControlChanged || handoverChanged || startCommandsChanged) && !FEATURES.some((key) => before[key] !== after[key])) {
       container.events?.emit({ type: 'settings-changed' });
     }

@@ -25,6 +25,13 @@ export interface AppSettings {
    * machine can turn it on.
    */
   peerScheduleControl: boolean;
+  /**
+   * "Let chats on paired machines send work to chats here" (Settings, Machines), off by default (spec
+   * 2026-11-13-chat-sends-across-machines-design). On: a chat on a paired machine may hand `message_chats` work to a
+   * chat or app here, which starts on it by itself. Read on every handover. Machine-local and never synced, and the
+   * peer listener has no settings route, so only this machine can turn it on.
+   */
+  peerChatSends: boolean;
   /** Offer a fresh chat when a Claude Code chat's calls read more than `handoverThresholdTokens` (spec 2026-11-06-fresh-chat-handover-design). */
   handoverEnabled: boolean;
   /** The context size per call, in tokens, from which the fresh chat card shows. */

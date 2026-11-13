@@ -4,6 +4,7 @@ import { formatRelativeTime } from '../../lib/relativeTime.js';
 import { ApiError, api, type PairingView, type PeerView, type PeersOverview } from '../../state/api.js';
 import { PeerComputerControl } from './PeerComputerControl.js';
 import { PeerScheduleControl } from './PeerScheduleControl.js';
+import { PeerChatSends } from './PeerChatSends.js';
 
 export const FIREWALL_NOTE =
   'The first time OtherBench listens for other machines, Windows asks whether to allow it: allow it on Private networks only.';
@@ -289,6 +290,7 @@ export function MachinesPanel(): JSX.Element {
 
       <PeerComputerControl />
       <PeerScheduleControl />
+      <PeerChatSends />
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2 rounded border border-dashed border-[var(--border)] p-3">

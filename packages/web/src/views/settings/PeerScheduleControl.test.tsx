@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../../state/api.js';
 import { PeerScheduleControl } from './PeerScheduleControl.js';
 
-const settings = (peerScheduleControl: boolean) => ({ memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: false, peerScheduleControl, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
+const settings = (peerScheduleControl: boolean) => ({ memoryProfileId: null, githubEnabled: true, nextcloudEnabled: true, peerComputerControl: false, peerScheduleControl, peerChatSends: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
 
 describe('PeerScheduleControl', () => {
   beforeEach(() => {

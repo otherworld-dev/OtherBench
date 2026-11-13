@@ -138,7 +138,7 @@ describe('/api/settings', () => {
     container.events!.subscribe((e) => seen.push(e.type));
     const res = await send('PATCH', '/api/settings', { githubEnabled: false, nextcloudEnabled: false });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false, peerScheduleControl: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
+    expect(await res.json()).toEqual({ memoryProfileId: null, githubEnabled: false, nextcloudEnabled: false, peerComputerControl: false, peerScheduleControl: false, peerChatSends: false, handoverEnabled: true, handoverThresholdTokens: 300_000, deckStartCommand: '', issueStartCommand: '' });
     expect(seen).toEqual(['settings-changed']);
     await send('PATCH', '/api/settings', { githubEnabled: false });
     expect(seen).toEqual(['settings-changed']);
@@ -245,6 +245,20 @@ describe('/api/settings', () => {
     expect((await send('PATCH', '/api/settings', { peerScheduleControl: false })).status).toBe(200);
     expect(seen).toEqual(['settings-changed', 'settings-changed']);
     expect(container.store.settings.get().peerScheduleControl).toBe(false);
+  });
+
+  it("doesn't accept chat sends from paired machines by default; a plain PATCH turns it on and off, and every window is told", async () => {
+    expect(container.store.settings.get().peerChatSends).toBe(false);
+    const seen: string[] = [];
+    container.events!.subscribe((e) => seen.push(e.type));
+    for (const value of ['yes', null, 1]) expect((await send('PATCH', '/api/settings', { peerChatSends: value })).status).toBe(400);
+    expect(container.store.settings.get().peerChatSends).toBe(false);
+    const on = await send('PATCH', '/api/settings', { peerChatSends: true });
+    expect(on.status).toBe(200);
+    expect(await on.json()).toMatchObject({ peerChatSends: true, peerComputerControl: false });
+    expect(seen).toEqual(['settings-changed']);
+    expect((await send('PATCH', '/api/settings', { peerChatSends: false })).status).toBe(200);
+    expect(container.store.settings.get().peerChatSends).toBe(false);
   });
 
   it('PATCH refuses a feature switch that is not true or false, writing nothing', async () => {
