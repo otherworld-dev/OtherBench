@@ -21,6 +21,7 @@ import { listLocationDirs } from './location-dirs.js';
 import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
 import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
+import { attachmentHandoverRoutes, handOverAttachments } from './attachment-handover.js';
 
 /**
  * Running a chat on the machine it runs on (v2 plan, Task 52; spec §5).
@@ -567,12 +568,17 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
   /** The replies a started turn is writing, with what was asked: `request` is what this machine sent, `answer` what came back. */
   type NoteReplies = (chatId: string, request: Record<string, unknown>, answer: Record<string, unknown>) => { id: string; reply: RemoteReply }[];
 
-  const chatRoute = (suffix: string, opts: { syncFirst?: boolean; noteReplies?: NoteReplies } = {}) =>
+  const chatRoute = (suffix: string, opts: { syncFirst?: boolean; noteReplies?: NoteReplies; handOver?: boolean } = {}) =>
     async (c: Context, next: Next): Promise<Response | void> => {
       const chatId = c.req.param('id')!;
       const nodeId = remoteNode(chatId);
       if (!nodeId) return next();
       const body = c.req.method === 'GET' ? undefined : await c.req.json().catch(() => undefined);
+      // Files attached here (pasted, dropped, picked) are unsent, so sync doesn't carry them: they go first.
+      if (opts.handOver) {
+        const failed = await handOverAttachments(container, nodeId, chatId, body);
+        if (failed) return c.json(failed.body, failed.status as 400);
+      }
       const res = await forward(container, c, nodeId, `/chats/${chatId}/${suffix}`, { ...opts, body });
       if (res.status === 202 && opts.noteReplies) {
         const replies = opts.noteReplies(chatId, (body ?? {}) as Record<string, unknown>, (await res.clone().json()) as Record<string, unknown>);
@@ -592,7 +598,7 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     return [{ id, reply: { chatId, parentId: target?.parentId ?? null, profileId, at: Date.now() } }];
   };
 
-  app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies }));
+  app.post('/chats/:id/turns', chatRoute('turns', { syncFirst: true, noteReplies: turnReplies, handOver: true }));
   app.post('/chats/:id/regenerate', chatRoute('regenerate', { syncFirst: true, noteReplies: regenerateReplies }));
   app.post('/chats/:id/head', chatRoute('head'));
   // A chat's send card (spec 2026-11-13-chat-sends-across-machines-design): its sends live where the chat runs.
@@ -606,8 +612,8 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
       return forward(container, c, nodeId, `/chats/${chatId}/sends/${encodeURIComponent(c.req.param('sendId'))}/${action}`);
     });
   }
-  // A message sent while a reply runs is held where the reply runs. Its attachments were uploaded here: that machine pulls them first.
-  app.post('/chats/:id/notes', chatRoute('notes', { syncFirst: true }));
+  // A message sent while a reply runs is held where the reply runs. Its attachments were uploaded here: they are handed over first.
+  app.post('/chats/:id/notes', chatRoute('notes', { syncFirst: true, handOver: true }));
   app.delete('/chats/:id/notes/:noteId', async (c, next) => {
     const chatId = c.req.param('id');
     const nodeId = remoteNode(chatId);
@@ -793,7 +799,8 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
  * sub-folders of a folder inside one of this machine's own locations (`/locations/dirs`). Reading a schedule's run
  * history, and, while this machine lets it (`peerScheduleControl`, off until turned on in Settings here), managing
  * its schedules (`peerScheduleRoutes`). Nothing else -- no settings (so the setting can't be turned on from there),
- * no folder browsing anywhere else (`/fs/dirs` is never mounted here), no attaching files by path. The approving
+ * no folder browsing anywhere else (`/fs/dirs` is never mounted here), no attaching files by path (a file the paired
+ * machine's UI attached comes as its bytes, with the turn or message that sends it: attachment-handover.ts). The approving
  * machine is the caller's authenticated
  * identity, never a header.
  */
@@ -959,6 +966,8 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   );
   app.route('/', chatSendsRoutes(container));
 
+  // Files a paired machine's UI attached to a turn or message it is about to send here (attachment-handover.ts).
+  app.route('/', attachmentHandoverRoutes(container));
   // Running, steering and watching the chat: the same routes this machine's own UI uses.
   app.route('/', turnsRoutes(container));
   app.route('/', notesRoutes(container));
