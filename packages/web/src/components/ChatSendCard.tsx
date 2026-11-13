@@ -11,6 +11,7 @@ const STATUS_WORDS: Record<ChatSendStatus, string> = {
   failed: 'Failed',
   stopped: 'Stopped',
   dropped: 'Dropped',
+  cancelled: 'Cancelled',
 };
 
 function statusLine(send: ChatSend): string {

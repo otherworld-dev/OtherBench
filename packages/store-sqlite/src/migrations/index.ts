@@ -47,6 +47,7 @@ import { MIGRATION_045_SCHEDULE_PEER_CHANGES } from './045-schedule-peer-changes
 import { MIGRATION_046_LOCATION_PATH_SET_HERE } from './046-location-path-set-here.js';
 import { MIGRATION_047_SCHEDULE_ATTACHMENTS } from './047-schedule-attachments.js';
 import { MIGRATION_048_MODEL_FIRST_SEEN } from './048-model-first-seen.js';
+import { MIGRATION_049_CHAT_SEND_REMOTE } from './049-chat-send-remote.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -100,6 +101,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_046_LOCATION_PATH_SET_HERE,
   MIGRATION_047_SCHEDULE_ATTACHMENTS,
   MIGRATION_048_MODEL_FIRST_SEEN,
+  MIGRATION_049_CHAT_SEND_REMOTE,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

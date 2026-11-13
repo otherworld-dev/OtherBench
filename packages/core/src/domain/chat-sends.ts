@@ -23,9 +23,10 @@ export const SUBAGENT_CHATS_REFUSAL = "A sub-agent can't message other chats.";
  * `running`: the target chat is working on it. The rest are settled:
  * `replied` (it finished), `failed` (it couldn't run, or its reply ended in an
  * error), `stopped` (someone pressed Stop), `dropped` (the sender can't take
- * the reply any more: deleted, or a /clear after it sent).
+ * the reply any more: deleted, or a /clear after it sent), `cancelled` (the user
+ * chose not to send it while the target's machine was off).
  */
-export type ChatSendStatus = 'queued' | 'running' | 'replied' | 'failed' | 'stopped' | 'dropped';
+export type ChatSendStatus = 'queued' | 'running' | 'replied' | 'failed' | 'stopped' | 'dropped' | 'cancelled';
 
 export function isSettled(status: ChatSendStatus): boolean {
   return status !== 'queued' && status !== 'running';

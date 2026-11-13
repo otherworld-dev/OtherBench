@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-25).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments', '048-model-first-seen']);
+    expect(MIGRATIONS.slice(-26).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments', '048-model-first-seen', '049-chat-send-remote']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(48);
+      expect(SCHEMA_VERSION).toBe(49);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch', 'context_tokens', 'handover_ask_at', 'handover_suggest']));
     } finally {

@@ -22,7 +22,8 @@ import { ChatLinkBadge } from './ChatLinkBadge.js';
 function send(over: Partial<ChatSend> = {}): ChatSend {
   return {
     id: 's1', chainId: 'r1', depth: 1, fromChatId: 'A', fromMessageId: 'r1', toChatId: 'B', createdChat: false, text: 'x',
-    status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: 1, finishedAt: null, ...over,
+    status: 'running', toReplyId: 'rb', replyText: null, reason: null, resumedAs: null, createdAt: 1, finishedAt: null,
+    toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null, stopPending: null, heldReason: null, heldSeen: false, chainBase: 0, ...over,
   };
 }
 

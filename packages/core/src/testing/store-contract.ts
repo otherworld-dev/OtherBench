@@ -480,11 +480,47 @@ export function runStoreContract(
         text: 'do it', status: 'queued' as const, toReplyId: null, replyText: null, reason: null, resumedAs: null, ...over,
       });
 
+      const REMOTE_DEFAULTS = {
+        toNode: null, fromNode: null, toAppId: null, fromTitle: null, handedAt: null, reportedAt: null,
+        stopPending: null, heldReason: null, heldSeen: false, chainBase: 0,
+      };
+
       it('create and get round-trip every field', () => {
         const made = store.chatSends.create({ ...row({ createdChat: true }), createdAt: 1000 });
-        expect(made).toEqual({ ...row({ createdChat: true }), createdAt: 1000, finishedAt: null });
+        expect(made).toEqual({ ...row({ createdChat: true }), ...REMOTE_DEFAULTS, createdAt: 1000, finishedAt: null });
         expect(store.chatSends.get('s1')).toEqual(made);
         expect(store.chatSends.get('nope')).toBeNull();
+      });
+
+      it('round-trips the remote fields', () => {
+        const remote = {
+          toNode: 'nB', fromNode: 'nA', toAppId: 'app1', fromTitle: 'Finance', handedAt: 5, reportedAt: 6,
+          stopPending: 'Stop.', heldReason: 'B is off.', heldSeen: true, chainBase: 3,
+        };
+        const made = store.chatSends.create({ ...row(), ...remote, createdAt: 1000 });
+        expect(made).toEqual({ ...row(), ...remote, createdAt: 1000, finishedAt: null });
+        expect(store.chatSends.get('s1')).toEqual(made);
+      });
+
+      it('defaults the remote fields', () => {
+        expect(store.chatSends.create(row())).toMatchObject(REMOTE_DEFAULTS);
+      });
+
+      it('update sets toChatId, the remote fields and heldSeen', () => {
+        store.chatSends.create(row());
+        const updated = store.chatSends.update('s1', { toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true });
+        expect(updated).toMatchObject({ toChatId: 'C', toNode: 'nB', handedAt: 7, reportedAt: 8, stopPending: 'x', heldReason: 'off', heldSeen: true });
+        expect(store.chatSends.update('s1', { toNode: null, stopPending: null, heldReason: null, heldSeen: false })).toMatchObject({ toNode: null, stopPending: null, heldReason: null, heldSeen: false });
+      });
+
+      it('remoteWork lists only rows that owe the other machine something, oldest first', () => {
+        store.chatSends.create({ ...row({ id: 'r1' }), createdAt: 1 });
+        store.chatSends.create({ ...row({ id: 'r2', toNode: 'nB' }), createdAt: 2 });
+        store.chatSends.create({ ...row({ id: 'r3', toNode: 'nB', status: 'stopped', stopPending: 'Stop.' }), createdAt: 3 });
+        store.chatSends.create({ ...row({ id: 'r4', fromNode: 'nA', status: 'replied' }), createdAt: 4 });
+        store.chatSends.create({ ...row({ id: 'r5', fromNode: 'nA', status: 'replied', reportedAt: 9 }), createdAt: 5 });
+        store.chatSends.create({ ...row({ id: 'r6', toNode: 'nB', status: 'running' }), createdAt: 6 });
+        expect(store.chatSends.remoteWork().map((s) => s.id)).toEqual(['r2', 'r3', 'r4']);
       });
 
       it('update sets only the fields it is given', () => {
