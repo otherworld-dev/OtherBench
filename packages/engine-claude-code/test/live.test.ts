@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { BackgroundTasks } from '../src/background.js';
-import { LivePool, LiveProcess, NOTE_PICKED, PromptQueue, lifecycleOf, liveKey } from '../src/live.js';
+import { LivePool, LiveProcess, NOTE_PICKED, PromptQueue, SELF_START_WAIT_MS, lifecycleOf, liveKey } from '../src/live.js';
 
 /** A fake Claude Code output the test pushes messages into. */
 function output() {
@@ -157,6 +157,28 @@ describe('LivePool.takeWhenFree', () => {
     await tick();
     expect(taken).toBe(live);
   });
+
+  it('waits for the turn a just-finished background task is starting before handing the process out', async () => {
+    const pool = new LivePool(60_000, 3);
+    const { live, out } = process();
+    live.sessionId = 's1';
+    live.background = new BackgroundTasks('chat-s1', () => {});
+    live.background.handle({ type: 'system', subtype: 'task_started', task_id: 'k1', description: 'go test', task_type: 'local_bash', is_backgrounded: true });
+    pool.release(live);
+    out.emit({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: '', output_file: '' });
+    await tick();
+    let taken: LiveProcess | null | undefined;
+    void pool.takeWhenFree('s1', 'key').then((p) => (taken = p));
+    await tick();
+    expect(taken).toBeUndefined();
+    out.emit(text('Reading the test output'));
+    await tick();
+    void take(live.attach('self-started'));
+    out.emit(result(['self-started']));
+    await tick();
+    await tick();
+    expect(taken).toBe(live);
+  });
 });
 
 describe('LivePool.makeRoom', () => {
@@ -204,6 +226,70 @@ describe('LivePool.makeRoom', () => {
     pool.makeRoom();
     expect(live.isClosed).toBe(false);
     live.background!.handle({ type: 'system', subtype: 'task_notification', task_id: 'k1', status: 'completed', summary: '', output_file: '' });
+    pool.makeRoom();
+    expect(live.isClosed).toBe(true);
+  });
+
+  const finished = (taskId: string) => ({ type: 'system', subtype: 'task_notification', task_id: taskId, status: 'completed', summary: '', output_file: '' });
+
+  it("keeps a process whose background task just finished until the turn Claude Code starts for it has ended", async () => {
+    // d730, 2026-11-13: a finished `go test` started a turn whose first frame took 13s on a
+    // 642k-token context; another chat's reply ending meanwhile closed the "idle" process.
+    const pool = new LivePool(60_000, 1);
+    const { live, out } = working(pool, 's1', 'k1', 0);
+    out.emit(finished('k1'));
+    await tick();
+    const other = process();
+    other.live.sessionId = 's2';
+    pool.release(other.live);
+    expect(live.isClosed).toBe(false);
+    // The turn's first frame: the engine attaches it as a self-start, and it runs to its result.
+    out.emit(text('Reading the test output'));
+    await tick();
+    void take(live.attach('self-started'));
+    pool.makeRoom();
+    expect(live.isClosed).toBe(false);
+    out.emit(result(['self-started']));
+    await tick();
+    pool.makeRoom();
+    expect(live.isClosed).toBe(true);
+  });
+
+  it('stops keeping a process for a turn that never begins after SELF_START_WAIT_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new LivePool(10 * SELF_START_WAIT_MS, 1);
+      const { live, out } = working(pool, 's1', 'k1', 0);
+      out.emit(finished('k1'));
+      await vi.advanceTimersByTimeAsync(0);
+      pool.makeRoom();
+      expect(live.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(SELF_START_WAIT_MS);
+      pool.makeRoom();
+      expect(live.isClosed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't keep a process for a notification no turn follows (skip_transcript, ambient)", async () => {
+    for (const quiet of [{ skip_transcript: true }, { ambient: true }]) {
+      const pool = new LivePool(60_000, 1);
+      const { live, out } = working(pool, 's1', 'k1', 0);
+      out.emit({ ...finished('k1'), ...quiet });
+      await tick();
+      pool.makeRoom();
+      expect(live.isClosed).toBe(true);
+    }
+  });
+
+  it("doesn't keep a process for a task that finished inside a reply's turn", async () => {
+    const pool = new LivePool(60_000, 1);
+    const { live, out } = working(pool, 's1', 'k1', 0);
+    void take(live.attach('reply'));
+    out.emit(finished('k1'));
+    out.emit(result(['reply']));
+    await tick();
     pool.makeRoom();
     expect(live.isClosed).toBe(true);
   });
