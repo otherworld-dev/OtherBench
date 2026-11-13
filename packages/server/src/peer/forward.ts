@@ -951,7 +951,12 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   // Chat sends between machines (spec 2026-11-13-chat-sends-across-machines-design): a paired machine hands a send to
   // a chat here (only while `peerChatSends` is on here), reports how one this machine handed it ended, or stops one.
   app.route('/', chatSendsPeerRoutes(container));
-  // The send card of a chat that runs here, for a paired machine's UI: the same routes this machine's own UI uses.
+  // The send card of a chat that runs here, for a paired machine's UI: the same routes this machine's own UI uses,
+  // except Run here. That starts a turn in the chat the send went to, which the call doesn't name, so the chat
+  // marking above would mark the wrong chat; and a paired machine that can't reach the target can't help anyway.
+  app.post('/chats/:id/sends/:sendId/run-here', (c) =>
+    c.json({ error: 'Run here only works on the machine this chat runs on.', kind: 'run_here_local_only' }, 403)
+  );
   app.route('/', chatSendsRoutes(container));
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.

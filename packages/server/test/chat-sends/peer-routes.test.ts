@@ -127,6 +127,16 @@ describe('chat sends on the peer listener', () => {
     expect((await post('/chats/B/sends/theirs/remote-stop', { reason: 'x' })).status).toBe(200);
   });
 
+  it("Run here is refused from a paired machine: it would start a turn in a chat the call doesn't name", async () => {
+    store.chats.create({ id: 'A', title: 'Finance', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'A', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'queued', toReplyId: null, replyText: null, reason: null, resumedAs: null, toNode: 'node-x', heldReason: 'X is off.' });
+    const run = vi.spyOn(service, 'runHere');
+    const res = await post('/chats/A/sends/s1/run-here', {});
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'Run here only works on the machine this chat runs on.', kind: 'run_here_local_only' });
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('remote-stop passes the chat marking without peerComputerControl, and reaches takeStop', async () => {
     store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'X', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
     const take = vi.spyOn(service, 'takeStop').mockReturnValue('taken');
