@@ -14,6 +14,14 @@ export const LIVE_IDLE_MS = 30 * 60_000;
 /** At most this many live processes; starting another closes the longest-idle one with no work running. Each runs its own MCP servers. */
 export const MAX_LIVE = 3;
 
+/**
+ * How long a process whose background task finished between replies counts
+ * as in a turn while Claude Code starts the turn that carries on after it.
+ * That turn's first frame can take a while on a big context (13s at 642k
+ * tokens); one that hasn't begun by then isn't waited for any longer.
+ */
+export const SELF_START_WAIT_MS = 2 * 60_000;
+
 /** An input stream that stays open: each message pushed is the next user turn of the same process. */
 export class PromptQueue implements AsyncIterable<SDKUserMessage> {
   private readonly queued: SDKUserMessage[] = [];
@@ -115,6 +123,16 @@ export function lifecycleOf(message: SDKMessage): { uuid: string; state: string 
   const m = message as unknown as { type?: unknown; command_uuid?: unknown; state?: unknown };
   if (m.type !== 'command_lifecycle' || typeof m.command_uuid !== 'string' || typeof m.state !== 'string') return null;
   return { uuid: m.command_uuid, state: m.state };
+}
+
+/**
+ * Whether a frame says a background task (a helper, a backgrounded shell)
+ * finished in a way Claude Code carries on after. One kept out of the
+ * transcript, or ambient (a watcher), starts no turn.
+ */
+function isTaskFinished(message: SDKMessage): boolean {
+  const m = message as unknown as { type?: unknown; subtype?: unknown; skip_transcript?: unknown; ambient?: unknown };
+  return m.type === 'system' && m.subtype === 'task_notification' && m.skip_transcript !== true && m.ambient !== true;
 }
 
 /** What one reply binds a live process's hooks to while it runs. */
@@ -243,6 +261,8 @@ export class LiveProcess {
   private attached: { uuid: string; feed: TurnFeed } | null = null;
   private freeWaiters: (() => void)[] = [];
   private outputEnded = false;
+  /** Set while a turn is due: a background task finished with no reply attached, and Claude Code's turn after it hasn't begun or ended yet. */
+  private turnDue: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly key: string,
@@ -263,6 +283,10 @@ export class LiveProcess {
         this.background?.handle(next.value);
         this.noteMode(next.value);
         const turn = this.attached;
+        // Claude Code carries on by itself after a task that finished between replies; until that turn's
+        // first frame attaches it (or its result), the process is in a turn, so the pool keeps it.
+        if (!turn && isTaskFinished(next.value)) this.expectTurn();
+        else if (!turn && (next.value as { type?: unknown }).type === 'result') this.clearTurnDue();
         const life = lifecycleOf(next.value);
         if (life && this.notes.has(life.uuid)) {
           if (life.state === 'started') {
@@ -299,6 +323,7 @@ export class LiveProcess {
     } finally {
       this.outputEnded = true;
       this.detach();
+      this.clearTurnDue();
       // Its tasks ended with its output, and the pool never closes a process still running one.
       try {
         this.background?.closeAll();
@@ -388,16 +413,32 @@ export class LiveProcess {
     }
     this.attached?.feed.end();
     this.attached = { uuid, feed };
+    this.clearTurnDue();
     return feed;
   }
 
   /**
    * Whether a turn is running in this process or about to: one is attached,
-   * or Claude Code started a note whose turn hasn't begun (its frames would
-   * reach any reply that attached meanwhile).
+   * Claude Code started a note whose turn hasn't begun (its frames would
+   * reach any reply that attached meanwhile), or a background task finished
+   * between replies and the turn Claude Code carries on with hasn't begun.
    */
   get inTurn(): boolean {
-    return this.attached !== null || this.starting.length > 0;
+    return this.attached !== null || this.starting.length > 0 || this.turnDue !== null;
+  }
+
+  /** A turn is due (see `turnDue`), for at most SELF_START_WAIT_MS. */
+  private expectTurn(): void {
+    if (this.turnDue !== null) clearTimeout(this.turnDue);
+    this.turnDue = setTimeout(() => this.clearTurnDue(), SELF_START_WAIT_MS);
+    this.turnDue.unref?.();
+  }
+
+  private clearTurnDue(): void {
+    if (this.turnDue === null) return;
+    clearTimeout(this.turnDue);
+    this.turnDue = null;
+    this.wakeIfFree();
   }
 
   /** Resolves once no turn is running or about to (see `inTurn`). */
@@ -430,6 +471,7 @@ export class LiveProcess {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.idleTimer);
+    this.clearTurnDue();
     this.binding = null;
     // Whatever was reading this process's turn learns it's over, and its background tasks end with it.
     this.detach();
