@@ -14,6 +14,8 @@ export type HoldSource = 'event' | 'reading';
 
 /** The machine-local `app_setting` value the account list is kept in. Never synced: each machine has its own logins. */
 const ACCOUNTS_KEY = 'claudeAccounts';
+/** The machine-local `app_setting` value naming the account a Default chat runs on (absent or null: main). Never synced either. */
+const DEFAULT_KEY = 'defaultClaudeAccount';
 const COLOUR = /^#[0-9a-f]{6}$/i;
 
 /** A request to add or change an account that can't be met as asked; routes answer it with 400. */
@@ -108,6 +110,18 @@ export class ClaudeAccountService {
     return this.refs().find((r) => r.slug === slug) ?? null;
   }
 
+  /** The account a chat naming none runs on first: the one set as default, or main when none is (or it has gone). */
+  defaultSlug(): string {
+    const value = this.deps.store.settings.getValue(DEFAULT_KEY);
+    return typeof value === 'string' && this.list().some((a) => a.slug === value) ? value : MAIN_ACCOUNT_SLUG;
+  }
+
+  /** Makes `slug` the account Default chats run on, from each one's next message; main puts it back as it was. */
+  setDefault(slug: string): void {
+    if (!this.ref(slug)) throw new AccountInputError(`No Claude account named "${slug}" on this machine.`);
+    this.deps.store.settings.setValue(DEFAULT_KEY, slug === MAIN_ACCOUNT_SLUG ? null : slug);
+  }
+
   /** Adds an account. Its folder defaults to `~/.claude-<slug>`; it must be absolute, nobody else's, and not main's. */
   add(input: { name: string; colour: string; configDir?: string }): ClaudeAccount {
     const name = input.name.trim();
@@ -147,6 +161,7 @@ export class ClaudeAccountService {
   remove(slug: string): void {
     if (slug === MAIN_ACCOUNT_SLUG) throw new AccountInputError("The machine's own Claude login (main) can't be removed.");
     this.save(this.list().filter((a) => a.slug !== slug));
+    if (this.deps.store.settings.getValue(DEFAULT_KEY) === slug) this.deps.store.settings.setValue(DEFAULT_KEY, null);
     this.limits.delete(slug);
     this.usageCaches.delete(slug);
   }
@@ -199,7 +214,8 @@ export class ClaudeAccountService {
 
   /**
    * The account chat `chatId`'s next turn runs on. A chat that names one runs
-   * on it; one that names none runs on main, or, while main is limited, on
+   * on it; one that names none runs on the default (`defaultSlug`: main unless
+   * another is set), or, while that is limited, on
    * the first account with room not known to be signed out, and is pinned to it (with a
    * `claude-account-switched` event). Throws ClaudeAccountUnavailableError
    * when the chat names an account this machine doesn't have: it never falls
@@ -210,29 +226,31 @@ export class ClaudeAccountService {
     const pick = this.pick(chat?.claudeAccount ?? null);
     if (pick.kind === 'missing') throw new ClaudeAccountUnavailableError(pick.slug);
     if (pick.pin && chat) {
+      const from = this.ref(this.defaultSlug()) ?? MAIN_ACCOUNT;
       this.deps.store.chats.update(chatId, { claudeAccount: pick.account.slug });
       this.deps.events.emit({
         type: 'claude-account-switched',
         chatId,
-        from: MAIN_ACCOUNT.name,
+        from: from.name,
         to: pick.account.name,
-        resetsAt: this.limitedUntil(MAIN_ACCOUNT_SLUG),
+        resetsAt: this.limitedUntil(from.slug),
         midReply: false,
       });
     }
     return pick.account;
   }
 
-  /** The account a turn with no chat to pin (a title, a memory summary) runs on: main, or one with room while main is limited. */
+  /** The account a turn with no chat to pin (a title, a memory summary) runs on: the default, or one with room while it is limited. */
   defaultRef(): ClaudeAccountRef {
     const pick = this.pick(null);
     return pick.kind === 'ok' ? pick.account : MAIN_ACCOUNT;
   }
 
-  /** Main and an explicit choice are always offered; another account known to be signed out is never overflowed onto. */
+  /** Main, the default and an explicit choice are always offered; another account known to be signed out is never overflowed onto. */
   private pick(chosen: string | null): ReturnType<typeof pickClaudeAccount> {
-    const accounts = this.refs().filter((r) => r.slug === MAIN_ACCOUNT_SLUG || r.slug === chosen || this.deps.signedIn?.(r.slug) !== false);
-    return pickClaudeAccount({ chosen, accounts, limitedUntil: (slug) => this.limitedUntil(slug), now: this.now() });
+    const preferred = this.defaultSlug();
+    const accounts = this.refs().filter((r) => r.slug === MAIN_ACCOUNT_SLUG || r.slug === preferred || r.slug === chosen || this.deps.signedIn?.(r.slug) !== false);
+    return pickClaudeAccount({ chosen, accounts, limitedUntil: (slug) => this.limitedUntil(slug), now: this.now(), preferred });
   }
 
   /** Main's folder as Claude Code sees it: the inherited CLAUDE_CONFIG_DIR, or `~/.claude`. */

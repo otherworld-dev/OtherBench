@@ -15,7 +15,7 @@ import { api } from '../state/api.js';
 import { Message } from './Message.js';
 
 const view = (slug: string, name: string): AccountView => ({
-  slug, name, colour: null, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false,
+  slug, name, colour: null, configDir: null, main: slug === 'main', default: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false,
 });
 const cutOff = (extra: Partial<CanonMessage> = {}): CanonMessage => ({
   id: 'm1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts: [], status: 'error',

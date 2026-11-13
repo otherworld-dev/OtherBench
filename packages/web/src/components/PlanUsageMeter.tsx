@@ -48,8 +48,8 @@ export function PlanUsageMeter({ busy, account }: { busy: boolean; account: stri
   const usage = reading?.usage ?? null;
   const accountName = useClaudeAccounts((s) => {
     if (account) return s.accounts.find((a) => a.slug === account)?.name ?? account;
-    // A Default chat runs on main: named once there is another account it could be confused with.
-    return s.accounts.some((a) => !a.main) ? (s.accounts.find((a) => a.main)?.name ?? MAIN_ACCOUNT.name) : null;
+    // A Default chat runs on the default account (main unless another is set): named once there is another it could be confused with.
+    return s.accounts.some((a) => !a.main) ? (s.accounts.find((a) => a.default)?.name ?? s.accounts.find((a) => a.main)?.name ?? MAIN_ACCOUNT.name) : null;
   });
   const wasBusy = useRef(busy);
   // The account on screen, for a reading that lands after the chat has moved on.

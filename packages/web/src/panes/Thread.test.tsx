@@ -123,7 +123,7 @@ describe('Thread', () => {
   afterEach(cleanup);
 
   it('tints a chat pinned to another Claude account and badges its name; a main or default chat has no tint', () => {
-    const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
+    const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', default: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
     useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('vh', 'VH', '#e0a030')] });
     useOtherBenchStore.setState({ chats: [makeChat({ claudeAccount: 'vh' })] });
     const { unmount } = render(<ThreadForChat chatId="chat-1" />);

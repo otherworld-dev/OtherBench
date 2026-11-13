@@ -148,7 +148,7 @@ describe('ClaudeCodeSection', () => {
 });
 
 const acct = (slug: string, name: string, extra: Partial<AccountView> = {}): AccountView => ({
-  slug, name, colour: null, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false, ...extra,
+  slug, name, colour: null, configDir: null, main: slug === 'main', default: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false, ...extra,
 });
 const MAIN = acct('main', 'Main');
 const VH = acct('vh', 'VH', { colour: '#e0a030', configDir: 'C:\\acc\\vh' });

@@ -50,6 +50,14 @@ describe('pickClaudeAccount', () => {
   it('reports a chosen account that no longer exists', () => {
     expect(pickClaudeAccount({ chosen: 'gone', accounts, limitedUntil: free, now })).toEqual({ kind: 'missing', slug: 'gone' });
   });
+  it('runs on the preferred default instead of main, and overflows from it onto main', () => {
+    expect(pickClaudeAccount({ chosen: null, accounts, limitedUntil: free, now, preferred: 'vh' })).toEqual({ kind: 'ok', account: VH, pin: false });
+    expect(pickClaudeAccount({ chosen: null, accounts, limitedUntil: limited({ vh: now + 1000 }), now, preferred: 'vh' })).toEqual({ kind: 'ok', account: MAIN, pin: true });
+    expect(pickClaudeAccount({ chosen: null, accounts, limitedUntil: limited({ main: now + 1000, vh: now + 1000 }), now, preferred: 'vh' })).toEqual({ kind: 'ok', account: VH, pin: false });
+  });
+  it('falls back to main when the preferred default is not among the accounts', () => {
+    expect(pickClaudeAccount({ chosen: null, accounts, limitedUntil: free, now, preferred: 'gone' })).toEqual({ kind: 'ok', account: MAIN, pin: false });
+  });
 });
 
 describe('pickOtherAccount', () => {

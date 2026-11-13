@@ -14,7 +14,7 @@ const planUsage = vi.mocked(api.claude.planUsage);
 const at = (h: number, m: number) => new Date(2026, 9, 28, h, m).getTime();
 
 const account = (over: Partial<AccountView>): AccountView => ({
-  slug: 'main', name: 'Main', colour: null, configDir: null, main: true, limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false, ...over,
+  slug: 'main', name: 'Main', colour: null, configDir: null, main: true, default: true, limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false, ...over,
 });
 const reading = (five: number, week: number): PlanUsage => ({
   fetchedAt: at(13, 0),
@@ -44,7 +44,7 @@ describe('ClaudeAccountsStrip', () => {
     vi.setSystemTime(now);
     const limitedUntil = at(15, 10);
     useClaudeAccounts.setState({
-      accounts: [account({}), account({ slug: 'vh', name: 'VH', colour: '#ff0000', main: false, configDir: '/x', limitedUntil })],
+      accounts: [account({}), account({ slug: 'vh', name: 'VH', colour: '#ff0000', main: false, default: false, configDir: '/x', limitedUntil })],
     });
     planUsage.mockImplementation(async (_r, slug) => ({ usage: slug === 'vh' ? reading(100, 10) : reading(42, 81) }));
     render(<ClaudeAccountsStrip refreshKey={0} />);
@@ -69,7 +69,7 @@ describe('ClaudeAccountsStrip', () => {
 
   it('shows a dash for an account whose read fails and still shows the others', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    useClaudeAccounts.setState({ accounts: [account({}), account({ slug: 'vh', name: 'VH', main: false, configDir: '/x' })] });
+    useClaudeAccounts.setState({ accounts: [account({}), account({ slug: 'vh', name: 'VH', main: false, default: false, configDir: '/x' })] });
     planUsage.mockImplementation(async (_r, slug) => {
       if (slug === 'vh') throw new Error('boom');
       return { usage: reading(1, 2) };
@@ -110,7 +110,7 @@ describe('ClaudeAccountsStrip', () => {
   });
 
   it('colours the dot: main muted, a colourless non-main account accent', async () => {
-    useClaudeAccounts.setState({ accounts: [account({}), account({ slug: 'vh', name: 'VH', main: false, configDir: '/x', colour: null })] });
+    useClaudeAccounts.setState({ accounts: [account({}), account({ slug: 'vh', name: 'VH', main: false, default: false, configDir: '/x', colour: null })] });
     planUsage.mockResolvedValue({ usage: reading(1, 2) });
     render(<ClaudeAccountsStrip refreshKey={0} />);
     await settle();

@@ -11,10 +11,11 @@ import { PlanUsageCache, readPlanUsage } from '../plan-usage.js';
  * this machine: never forwarded to a peer.
  *
  * `GET/POST /api/claude/accounts`, `PATCH/DELETE /api/claude/accounts/:slug`,
+ * `PUT /api/claude/accounts/default` (`{ slug }`: the account Default chats run on),
  * and `GET /api/claude/plan-usage` (Deck #825): how much of a Claude
  * subscription's 5-hour and weekly limits is used, as `{ usage }` (null when
  * there's no Claude login to ask, or it has no plan limits). `?account=<slug>`
- * picks the account (main without it); `?refresh=1` asks for a fresher
+ * picks the account (the default account without it); `?refresh=1` asks for a fresher
  * reading, as a composer does after a Claude Code reply.
  */
 export function claudeRoutes(container: Container, cache = new PlanUsageCache(() => readPlanUsage(container, MAIN_ACCOUNT))): Hono {
@@ -47,6 +48,7 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
     colour: a?.colour ?? null,
     configDir: a?.configDir ?? null,
     main: a === null,
+    default: (a?.slug ?? MAIN_ACCOUNT_SLUG) === svc.defaultSlug(),
     limitedUntil: svc.limitedUntil(a?.slug ?? MAIN_ACCOUNT_SLUG),
     signedIn: status?.signedIn ?? null,
     email: status?.email ?? null,
@@ -88,6 +90,15 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
     const configDir = body['configDir'] === undefined || body['configDir'] === null ? undefined : text(body['configDir'], 'configDir');
     const account = guard(() => svc.add({ name: text(body['name'], 'name'), colour: text(body['colour'], 'colour'), ...(configDir !== undefined ? { configDir } : {}) }));
     return c.json({ account: view(svc, account) }, 201);
+  });
+
+  app.put('/accounts/default', async (c) => {
+    const svc = accounts();
+    const body = await bodyOf(c);
+    const slug = text(body['slug'], 'slug');
+    refOf(svc, slug);
+    guard(() => svc.setDefault(slug));
+    return c.body(null, 204);
   });
 
   app.patch('/accounts/:slug', async (c) => {
@@ -148,7 +159,7 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
 
   app.get('/plan-usage', async (c) => {
     const refresh = c.req.query('refresh') === '1';
-    const slug = c.req.query('account') || MAIN_ACCOUNT_SLUG;
+    const slug = c.req.query('account') || container.claudeAccounts?.defaultSlug() || MAIN_ACCOUNT_SLUG;
     if (container.claudeAccounts) {
       if (!container.claudeAccounts.ref(slug)) throw new HTTPException(404, { message: `No Claude account named "${slug}" on this machine.` });
       return c.json({ usage: await container.claudeAccounts.usage(slug, refresh) });

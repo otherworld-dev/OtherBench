@@ -44,6 +44,8 @@ export const claudeApi = {
     add: (body: { name: string; colour: string; configDir?: string }) => post<{ account: AccountView }>('/claude/accounts', body),
     update: (slug: string, body: { colour: string }) => patch<{ account: AccountView }>(`/claude/accounts/${encodeURIComponent(slug)}`, body),
     remove: (slug: string) => del(`/claude/accounts/${encodeURIComponent(slug)}`),
+    /** Makes `slug` the account Default chats run on (main puts it back). */
+    setDefault: (slug: string) => put<void>('/claude/accounts/default', { slug }),
     /** Starts the CLI's sign-in (202); `url` is the page to open, null if none came. */
     signIn: (slug: string) => post<{ url: string | null }>(`/claude/accounts/${encodeURIComponent(slug)}/sign-in`),
     /** The code the sign-in page shows, for a CLI that can't be reached by its callback. */

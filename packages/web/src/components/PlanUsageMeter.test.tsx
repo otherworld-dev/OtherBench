@@ -103,7 +103,7 @@ describe('PlanUsageMeter', () => {
 });
 
 describe('PlanUsageMeter account', () => {
-  const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
+  const view = (slug: string, name: string, colour: string | null) => ({ slug, name, colour, configDir: null, main: slug === 'main', default: slug === 'main', limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false });
   beforeEach(() => {
     planUsage.mockReset().mockResolvedValue({ usage: reading(7, 80) });
     useClaudeAccounts.setState({ accounts: [view('main', 'Main', null), view('vh', 'VH', '#e0a030')] });

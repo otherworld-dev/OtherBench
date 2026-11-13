@@ -9,7 +9,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       claude: {
-        accounts: { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn(), signIn: vi.fn(), submitCode: vi.fn(), cancelSignIn: vi.fn(), signOut: vi.fn() },
+        accounts: { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn(), signIn: vi.fn(), submitCode: vi.fn(), cancelSignIn: vi.fn(), signOut: vi.fn(), setDefault: vi.fn() },
       },
     },
   };
@@ -23,10 +23,10 @@ import { ClaudeAccountsPanel, SIGN_IN_POLL_MS } from './ClaudeAccountsPanel.js';
 const accounts = vi.mocked(api.claude.accounts);
 
 function account(over: Partial<AccountView> = {}): AccountView {
-  return { slug: 'main', name: 'Main', colour: null, configDir: null, main: true, limitedUntil: null, signedIn: true, email: 'me@example.com', subscriptionType: 'max', signingIn: false, ...over };
+  return { slug: 'main', name: 'Main', colour: null, configDir: null, main: true, default: true, limitedUntil: null, signedIn: true, email: 'me@example.com', subscriptionType: 'max', signingIn: false, ...over };
 }
 const VH = (over: Partial<AccountView> = {}) =>
-  account({ slug: 'vh', name: 'VH', colour: '#ff8800', configDir: 'C:\\claude\\vh', main: false, signedIn: false, email: null, subscriptionType: null, ...over });
+  account({ slug: 'vh', name: 'VH', colour: '#ff8800', configDir: 'C:\\claude\\vh', main: false, default: false, signedIn: false, email: null, subscriptionType: null, ...over });
 
 function card(slug: string): HTMLElement {
   return screen.getByTestId(`claude-account-${slug}`);
@@ -54,6 +54,19 @@ describe('ClaudeAccountsPanel', () => {
     expect(card('vh')).toHaveTextContent('Signed out');
     expect(card('vh')).toHaveTextContent('C:\\claude\\vh');
     expect(within(card('vh')).getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
+  it('marks the default account, and makes another the default', async () => {
+    accounts.list.mockResolvedValueOnce({ accounts: [account(), VH()] }).mockResolvedValue({ accounts: [account({ default: false }), VH({ default: true })] });
+    accounts.setDefault.mockResolvedValue(undefined);
+    render(<ClaudeAccountsPanel />);
+    await screen.findByTestId('claude-account-main');
+    expect(card('main')).toHaveTextContent('Default');
+    expect(within(card('main')).queryByRole('button', { name: 'Make default' })).toBeNull();
+    await userEvent.click(within(card('vh')).getByRole('button', { name: 'Make default' }));
+    expect(accounts.setDefault).toHaveBeenCalledWith('vh');
+    await waitFor(() => expect(within(card('main')).getByRole('button', { name: 'Make default' })).toBeInTheDocument());
+    expect(within(card('vh')).queryByRole('button', { name: 'Make default' })).toBeNull();
   });
 
   it('asks before signing main out, and says it also signs out Claude Code in the terminal', async () => {

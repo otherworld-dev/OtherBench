@@ -44,6 +44,8 @@ export interface AccountView {
   colour: string | null;
   configDir: string | null;
   main: boolean;
+  /** The account a Default chat (one naming no account) runs on: main unless another is set in Settings → Claude accounts. */
+  default: boolean;
   limitedUntil: number | null;
   signedIn: boolean | null;
   email: string | null;

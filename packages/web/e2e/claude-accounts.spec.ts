@@ -11,7 +11,7 @@ import { openInspectorSection } from './inspector.js';
  * The chat PATCH goes to the real e2e server.
  */
 
-const MAIN: AccountView = { slug: 'main', name: 'Main', colour: null, configDir: null, main: true, limitedUntil: null, signedIn: true, email: 'main@example.invalid', subscriptionType: 'max', signingIn: false };
+const MAIN: AccountView = { slug: 'main', name: 'Main', colour: null, configDir: null, main: true, default: true, limitedUntil: null, signedIn: true, email: 'main@example.invalid', subscriptionType: 'max', signingIn: false };
 
 /** Stubs the Claude account routes with a list the page can add to. */
 async function stubClaude(page: Page): Promise<AccountView[]> {
@@ -26,7 +26,7 @@ async function stubClaude(page: Page): Promise<AccountView[]> {
         name: body.name,
         colour: body.colour,
         configDir: body.configDir ?? `/e2e/accounts/${body.name}`,
-        main: false,
+        main: false, default: false,
         limitedUntil: null,
         signedIn: true,
         email: 'spare@example.invalid',
