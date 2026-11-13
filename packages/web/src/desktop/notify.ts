@@ -121,6 +121,16 @@ export class Notifier {
       await this.deps.show(e.scheduleName, scheduledRunBody(e.status, e.detail), e.chatId);
       return;
     }
+    if (e.type === 'chat-send-held') {
+      // A send waits for a machine that is off: its card asks Run here, Wait or Cancel.
+      if (!this.deps.prefs().approvals) return;
+      const key = `chat-send:${e.sendId}`;
+      if (this.sent.has(key) || (await this.deps.isFocused(e.chatId)) || this.sent.has(key)) return;
+      this.sent.add(key);
+      this.lastChatId = e.chatId;
+      await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'OtherBench', e.reason, e.chatId);
+      return;
+    }
     if (e.type === 'turn-finished' && this.scheduledMessages.has(e.messageId)) return;
     let key: string;
     let body: string;

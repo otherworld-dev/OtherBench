@@ -31,6 +31,15 @@ const finished = (over: Partial<Chat> = {}): Pick<Chat, 'id' | 'archivedAt' | 'd
   id: 'c', archivedAt: null, dealtWithAt: null, head: { chatId: 'c', role: 'assistant', status: 'complete', createdAt: NOW - 60_000 }, ...over,
 });
 
+describe('chatStatus: a send held for a machine that is off', () => {
+  it('needs the user, worded before a reply running, and only a card says so first', () => {
+    const held = activity({ held: new Set(['c']), working: new Set(['c']) });
+    expect(chatStatus(finished(), held, NOW)).toBe('held');
+    expect(isNeedsYou('held')).toBe(true);
+    expect(chatStatus(finished(), activity({ held: new Set(['c']), waiting: new Map([['c', 'approve']]) }), NOW)).toBe('approve');
+  });
+});
+
 describe('chatStatus: waiting on other chats', () => {
   it('says a chat whose sends are still out is waiting on chats, which is neither needs-you nor live', () => {
     const waiting = activity({ waitingChats: new Set(['c']) });

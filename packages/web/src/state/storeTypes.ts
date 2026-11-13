@@ -458,6 +458,9 @@ export interface OtherBenchState {
   /** The chats with sends of theirs still out: the "Waiting on chats" status. Read on connect and on every send event. */
   waitingOnChats: string[];
   setWaitingOnChats(chatIds: string[]): void;
+  /** The chats with a send held for a machine that is off, the user not yet having chosen Wait: Needs you. */
+  heldChats: string[];
+  setHeldChats(chatIds: string[]): void;
   /**
    * Bumped whenever a paired machine's schedules may read differently: it said what they are, it became reachable
    * or unreachable, a machine was paired or removed, or the app stream reconnected. The overlay's section for them re-reads.

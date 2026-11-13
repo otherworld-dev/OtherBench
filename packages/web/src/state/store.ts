@@ -895,6 +895,8 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   chatSendsVersion: 0,
   waitingOnChats: [],
   setWaitingOnChats: (chatIds) => set({ waitingOnChats: chatIds }),
+  heldChats: [],
+  setHeldChats: (chatIds) => set({ heldChats: chatIds }),
   peerSchedulesVersion: 0,
 }));
 

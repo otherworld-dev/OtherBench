@@ -46,7 +46,10 @@ export function refreshAfterSync(): void {
 function refreshWaitingOnChats(): void {
   api.chatSends
     .waiting()
-    .then(({ chatIds }) => useOtherBenchStore.getState().setWaitingOnChats(chatIds))
+    .then(({ chatIds, heldChatIds }) => {
+      useOtherBenchStore.getState().setWaitingOnChats(chatIds);
+      useOtherBenchStore.getState().setHeldChats(heldChatIds ?? []);
+    })
     .catch((err: unknown) => console.error('[otherbench-web] failed to read the chats waiting on others:', err));
 }
 

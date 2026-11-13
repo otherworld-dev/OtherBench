@@ -15,7 +15,7 @@ export type CardStatus = 'approve' | 'answer' | 'plan' | 'generate' | 'browser' 
  * or `failed`) hasn't been answered or ticked off, a reply is being written, it sent work to other chats and waits
  * for their replies (`waiting-chats`), or only background tasks are running.
  */
-export type ChatStatus = CardStatus | 'failed' | 'your-turn' | 'working' | 'waiting-chats' | 'background';
+export type ChatStatus = CardStatus | 'held' | 'failed' | 'your-turn' | 'working' | 'waiting-chats' | 'background';
 
 /** The chats with a card pending (and what it asks), with a reply running, and with background tasks running. */
 export interface ChatActivity {
@@ -24,6 +24,8 @@ export interface ChatActivity {
   background: ReadonlySet<string>;
   /** The chats waiting on work they sent to other chats (spec 2026-11-06-chat-to-chat-design). */
   waitingChats?: ReadonlySet<string>;
+  /** The chats with a send held for a machine that is off (spec 2026-11-13-chat-sends-across-machines-design). */
+  held?: ReadonlySet<string>;
   /** Since when each chat in `waiting` has waited on its first card, where known: the Needs you order. */
   since?: ReadonlyMap<string, number>;
 }
@@ -42,6 +44,8 @@ export function shownChatIds(state: PaneState, narrow: boolean): string[] {
 export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' | 'head'>, activity: ChatActivity, now: number): ChatStatus | null {
   const card = activity.waiting.get(chat.id);
   if (card) return card;
+  // Held until the user says Run here, Wait or Cancel on its send card.
+  if (activity.held?.has(chat.id)) return 'held';
   if (activity.working.has(chat.id)) return 'working';
   // Its replies come back by themselves, so it isn't the user's turn yet.
   if (activity.waitingChats?.has(chat.id)) return 'waiting-chats';
@@ -106,6 +110,8 @@ export function useChatActivity(): ChatActivity {
   const backgroundChats = useOtherBenchStore((s) => s.appBackgroundChats);
   const waitingOnChats = useOtherBenchStore((s) => s.waitingOnChats);
   const waitingChats = useMemo(() => new Set(waitingOnChats), [waitingOnChats]);
+  const heldChats = useOtherBenchStore((s) => s.heldChats);
+  const held = useMemo(() => new Set(heldChats), [heldChats]);
   const waiting = useMemo(() => {
     const cards = new Map<string, CardStatus>();
     for (const id of chatsWaitingElsewhere(machines)) cards.set(id, 'waiting');
@@ -119,7 +125,7 @@ export function useChatActivity(): ChatActivity {
     for (const p of Object.values(pending)) if (p.at !== undefined) first.set(p.chatId, Math.min(first.get(p.chatId) ?? p.at, p.at));
     return first;
   }, [pending, machines]);
-  return useMemo(() => ({ waiting, working, background, waitingChats, since }), [waiting, working, background, waitingChats, since]);
+  return useMemo(() => ({ waiting, working, background, waitingChats, held, since }), [waiting, working, background, waitingChats, held, since]);
 }
 
 const CARD_STATUS: Record<NonNullable<PendingApprovalSummary['kind']> | 'tool', CardStatus> = {
