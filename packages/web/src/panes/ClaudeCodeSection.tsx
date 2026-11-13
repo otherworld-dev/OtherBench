@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type JSX } from 'react';
 import type { EngineMeta } from '@otherbench/core/types/messages.js';
 import { api } from '../state/api.js';
-import { isClaudeLoginChat, showsAccountPicker, useClaudeAccounts } from '../state/claudeAccounts.js';
+import { defaultAccountName, isClaudeLoginChat, showsAccountPicker, useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useSectionSummary } from './InspectorSection.js';
 
@@ -118,7 +118,7 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
           onChange={(e) => void save({ claudeAccount: e.target.value === '' ? null : e.target.value })}
           className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-1 py-0.5"
         >
-          <option value="">Default (Main, overflow to others)</option>
+          <option value="">{`Default (${defaultAccountName(accounts)}, overflow to others)`}</option>
           {chat.claudeAccount && !accounts.some((a) => a.slug === chat.claudeAccount) && <option value={chat.claudeAccount}>{chat.claudeAccount} (missing)</option>}
           {accounts.map((a) => <option key={a.slug} value={a.slug}>{a.name}</option>)}
         </select>

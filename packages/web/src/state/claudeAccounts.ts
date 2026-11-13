@@ -59,6 +59,11 @@ export function reloadOnAccountEvent(event: AppEvent): void {
   useClaudeAccounts.getState().load().catch((err: unknown) => console.error('[otherbench-web] failed to load the Claude accounts:', err));
 }
 
+/** The name of the account a chat on the default account runs on: the one marked default, else main. */
+export function defaultAccountName(accounts: AccountView[]): string {
+  return (accounts.find((a) => a.default) ?? accounts.find((a) => a.main))?.name ?? 'Main';
+}
+
 /** Whether a chat gets an account picker: with an account besides main to pick, or still naming one (a removed account, say) to be put back. */
 export function showsAccountPicker(accounts: AccountView[], chosen: string | null | undefined): boolean {
   return accounts.length > 1 || (accounts.length > 0 && !!chosen);

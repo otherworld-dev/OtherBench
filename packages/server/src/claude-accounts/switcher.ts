@@ -72,10 +72,10 @@ function isLiveTip(store: Store, chat: Chat, message: CanonMessage): boolean {
   return true;
 }
 
-/** The slug of the account that wrote the reply; one that failed before its session started is taken to have run on the chat's. */
-function producingAccount(chat: Chat, message: CanonMessage): string {
+/** The slug of the account that wrote the reply; one that failed before its session started ran on the chat's (the default for a Default chat). */
+function producingAccount(container: Container, chat: Chat, message: CanonMessage): string {
   if (message.engineMeta) return message.engineMeta.account ?? MAIN_ACCOUNT_SLUG;
-  return chat.claudeAccount ?? MAIN_ACCOUNT_SLUG;
+  return chat.claudeAccount ?? container.claudeAccounts?.defaultSlug() ?? MAIN_ACCOUNT_SLUG;
 }
 
 function detailOf(error: SerializedError | null): Record<string, unknown> {
@@ -128,7 +128,7 @@ export async function continueOnAccount(
   if (!cutOffByLimit(message) || !message.producedBy || !ranOnClaudeLogin(store, message)) {
     throw new HTTPException(409, { message: "That message isn't a Claude reply cut off by a usage limit." });
   }
-  const fromSlug = producingAccount(chat, message);
+  const fromSlug = producingAccount(container, chat, message);
   if (fromSlug === to.slug) throw new HTTPException(409, { message: `That reply was written on "${to.name}": choose another account.` });
   const done = continued(container);
   if (done.has(message.id)) throw new HTTPException(409, { message: 'That reply has been continued already.' });
@@ -202,7 +202,7 @@ function onCutOff(container: Container, messageId: string): Promise<unknown> | n
   // A reply run on a paired machine is that machine's to handle: its accounts are its own.
   if (!chat || chat.runsOn !== store.nodes.self().id) return null;
 
-  const from = producingAccount(chat, message);
+  const from = producingAccount(container, chat, message);
   const now = accounts.now();
   // A fallback (or an earlier reset) never shortens a longer hold the account already has.
   const until = resetsAtOf(message.error) ?? now + UNKNOWN_RESET_HOLD_MS;

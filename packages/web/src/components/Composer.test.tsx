@@ -969,7 +969,7 @@ describe('Composer auto mode toggle', () => {
 
   describe('Claude account', () => {
     const view = (slug: string, name: string, main = false): AccountView => ({
-      slug, name, colour: main ? null : '#336699', configDir: main ? null : `/home/me/.claude-${slug}`, main, limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false,
+      slug, name, colour: main ? null : '#336699', configDir: main ? null : `/home/me/.claude-${slug}`, main, default: main, limitedUntil: null, signedIn: true, email: null, subscriptionType: null, signingIn: false,
     });
     const MAIN = view('main', 'Main', true);
     const VH = view('vh', 'VH');

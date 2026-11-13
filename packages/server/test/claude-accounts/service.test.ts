@@ -159,6 +159,44 @@ describe('ClaudeAccountService.resolveForTurn', () => {
     expect(accounts.candidates().map((r) => r.slug)).toEqual(['main']);
   });
 
+  it('runs a chat with no account on the account set as default, overflowing from it onto main', () => {
+    const accounts = service();
+    const vh = accounts.add({ name: 'VH', colour: '#e0a030' });
+    const vhRef = { slug: 'vh', name: 'VH', configDir: vh.configDir };
+    expect(accounts.defaultSlug()).toBe('main');
+    accounts.setDefault('vh');
+    expect(accounts.defaultSlug()).toBe('vh');
+    expect(store.settings.getValue('defaultClaudeAccount')).toBe('vh');
+    chat('c1', null);
+    expect(accounts.resolveForTurn('c1')).toEqual(vhRef);
+    expect(store.chats.get('c1')!.claudeAccount).toBeNull();
+    expect(accounts.defaultRef()).toEqual(vhRef);
+    // A chat that names main stays on main.
+    chat('c2', 'main');
+    expect(accounts.resolveForTurn('c2')).toEqual(MAIN_ACCOUNT);
+    // The default at its limit: the chat moves to main, and the toast names VH as the one that ran out.
+    accounts.markLimited('vh', T0 + 60_000);
+    expect(accounts.resolveForTurn('c1')).toEqual(MAIN_ACCOUNT);
+    expect(store.chats.get('c1')!.claudeAccount).toBe('main');
+    expect(events.filter((e) => e.type === 'claude-account-switched')).toEqual([
+      { type: 'claude-account-switched', chatId: 'c1', from: 'VH', to: 'Main', midReply: false, resetsAt: T0 + 60_000 },
+    ]);
+  });
+
+  it('puts the default back to main when set to main or when the default account is removed, and refuses an unknown one', () => {
+    const accounts = service();
+    accounts.add({ name: 'VH', colour: '#e0a030' });
+    accounts.setDefault('vh');
+    accounts.setDefault('main');
+    expect(accounts.defaultSlug()).toBe('main');
+    expect(store.settings.getValue('defaultClaudeAccount')).toBeNull();
+    accounts.setDefault('vh');
+    accounts.remove('vh');
+    expect(accounts.defaultSlug()).toBe('main');
+    expect(store.settings.getValue('defaultClaudeAccount')).toBeNull();
+    expect(() => accounts.setDefault('gone')).toThrow(AccountInputError);
+  });
+
   it('gives the default pick without pinning anything', () => {
     const accounts = service();
     accounts.add({ name: 'VH', colour: '#e0a030' });

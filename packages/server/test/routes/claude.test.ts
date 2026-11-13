@@ -110,6 +110,19 @@ describe('Claude account routes', () => {
     expect(container.claudeAccounts!.ref('vh')).toBeNull();
   });
 
+  it('sets the default account, says which it is, and 404s an unknown slug', async () => {
+    const app = withAccounts();
+    await send(app, 'POST', '/api/claude/accounts', vh);
+    const defaults = async () => ((await (await app.request('/api/claude/accounts')).json()) as { accounts: AccountView[] }).accounts.map((a) => [a.slug, a.default]);
+    expect(await defaults()).toEqual([['main', true], ['vh', false]]);
+    expect((await send(app, 'PUT', '/api/claude/accounts/default', { slug: 'vh' })).status).toBe(204);
+    expect(await defaults()).toEqual([['main', false], ['vh', true]]);
+    expect((await send(app, 'PUT', '/api/claude/accounts/default', { slug: 'nope' })).status).toBe(404);
+    expect((await send(app, 'PUT', '/api/claude/accounts/default', {})).status).toBe(400);
+    expect((await send(app, 'PUT', '/api/claude/accounts/default', { slug: 'main' })).status).toBe(204);
+    expect(await defaults()).toEqual([['main', true], ['vh', false]]);
+  });
+
   it('keeps a chat pinned to a deleted account', async () => {
     const app = withAccounts();
     await send(app, 'POST', '/api/claude/accounts', vh);

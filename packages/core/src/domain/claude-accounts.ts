@@ -19,20 +19,21 @@ function hasRoom(limitedUntil: LimitedUntil, slug: string, now: number): boolean
 
 /**
  * Which account a new chat turn runs on. An explicit choice is used as is (never second-guessed); no choice means
- * main, unless main is limited, in which case the first account with room, and `pin` says to remember that choice.
- * When every account is limited the turn runs on main and fails with the normal limit error.
+ * the default account (`preferred`; main when it isn't given or isn't among `accounts`), unless that is limited, in
+ * which case the first account with room, and `pin` says to remember that choice. When every account is limited the
+ * turn runs on the default and fails with the normal limit error.
  */
-export function pickClaudeAccount(input: { chosen: string | null; accounts: ClaudeAccountRef[]; limitedUntil: LimitedUntil; now: number }): AccountPick {
-  const { chosen, accounts, limitedUntil, now } = input;
+export function pickClaudeAccount(input: { chosen: string | null; accounts: ClaudeAccountRef[]; limitedUntil: LimitedUntil; now: number; preferred?: string }): AccountPick {
+  const { chosen, accounts, limitedUntil, now, preferred } = input;
   if (chosen !== null) {
     const account = accounts.find((a) => a.slug === chosen);
     return account ? { kind: 'ok', account, pin: false } : { kind: 'missing', slug: chosen };
   }
-  const main = accounts.find((a) => a.slug === MAIN_ACCOUNT_SLUG) ?? accounts[0];
-  if (!main) return { kind: 'missing', slug: MAIN_ACCOUNT_SLUG };
-  if (hasRoom(limitedUntil, main.slug, now)) return { kind: 'ok', account: main, pin: false };
-  const other = accounts.find((a) => a.slug !== main.slug && hasRoom(limitedUntil, a.slug, now));
-  return other ? { kind: 'ok', account: other, pin: true } : { kind: 'ok', account: main, pin: false };
+  const first = (preferred !== undefined ? accounts.find((a) => a.slug === preferred) : undefined) ?? accounts.find((a) => a.slug === MAIN_ACCOUNT_SLUG) ?? accounts[0];
+  if (!first) return { kind: 'missing', slug: MAIN_ACCOUNT_SLUG };
+  if (hasRoom(limitedUntil, first.slug, now)) return { kind: 'ok', account: first, pin: false };
+  const other = accounts.find((a) => a.slug !== first.slug && hasRoom(limitedUntil, a.slug, now));
+  return other ? { kind: 'ok', account: other, pin: true } : { kind: 'ok', account: first, pin: false };
 }
 
 /** The first account other than `current` that has room, or null. */

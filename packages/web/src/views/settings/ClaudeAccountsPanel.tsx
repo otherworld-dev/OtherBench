@@ -79,7 +79,8 @@ export function ClaudeAccountsPanel(): JSX.Element {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <p className="text-sm text-[var(--text-muted)]">
-        A Claude Code chat can run on any of these logins. When one hits its usage limit, OtherBench moves the chat to the next. Each account keeps its own folder of Claude Code settings and sign-in.
+        A Claude Code chat can run on any of these logins. When one hits its usage limit, OtherBench moves the chat to the next. Each account keeps its own folder of Claude Code settings and sign-in. A chat
+        left on the default account runs on the one marked Default.
       </p>
       {loadError && (
         <p role="alert" className="text-sm text-[var(--danger)]">
@@ -104,6 +105,7 @@ export function ClaudeAccountsPanel(): JSX.Element {
             onColour={(colour) => void act(() => api.claude.accounts.update(a.slug, { colour }))}
             onCode={(code) => act(() => api.claude.accounts.submitCode(a.slug, code))}
             onCancel={() => void act(() => api.claude.accounts.cancelSignIn(a.slug))}
+            onMakeDefault={() => void act(() => api.claude.accounts.setDefault(a.slug))}
           />
         ))}
       </ul>
@@ -126,9 +128,11 @@ interface CardProps {
   onCode(code: string): Promise<boolean>;
   /** Gives up on the running sign-in, for a link already used or a code mistyped. */
   onCancel(): void;
+  /** Makes this the account chats on the default account run on. */
+  onMakeDefault(): void;
 }
 
-function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode, onCancel }: CardProps): JSX.Element {
+function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove, onColour, onCode, onCancel, onMakeDefault }: CardProps): JSX.Element {
   const [code, setCode] = useState('');
   // A code is with Claude Code, which can take a few seconds to say what it made of it.
   const [checking, setChecking] = useState(false);
@@ -146,6 +150,7 @@ function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove,
           />
         ) : null}
         <span className="font-medium">{a.name}</span>
+        {a.default && <span className="chip chip-on px-1.5 py-0 text-xs">Default</span>}
         {a.subscriptionType && <span className="text-xs text-[var(--text-muted)]">{a.subscriptionType}</span>}
         {limited && <span className="text-xs text-[var(--warn)]">At its limit</span>}
         <span className="ml-auto text-sm text-[var(--text-muted)]">{a.signedIn === true ? (a.email ?? 'Signed in') : a.signedIn === false ? 'Signed out' : 'Checking…'}</span>
@@ -198,6 +203,11 @@ function AccountCard({ account: a, loadedAt, url, onSignIn, onSignOut, onRemove,
           ) : (
             <button type="button" className="btn btn-primary px-2 py-1" onClick={onSignIn}>
               Sign in
+            </button>
+          )}
+          {!a.default && (
+            <button type="button" className="btn px-2 py-1" onClick={onMakeDefault} title={`Run chats left on the default account on ${a.name}, from their next message`}>
+              Make default
             </button>
           )}
           {!a.main && (
