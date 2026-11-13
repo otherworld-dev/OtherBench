@@ -170,11 +170,11 @@ function openApp(container: Pick<Container, 'store'>, app: App): void {
  * usual default), Auto on, and the app opened in the Code sidebar. For a chat another chat's agent starts (spec
  * 2026-11-06-chat-to-chat-design). Throws when there is no profile at all.
  */
-export function createAppChat(container: Pick<Container, 'store'>, app: App, title: string): Chat {
+export function createAppChat(container: Pick<Container, 'store'>, app: App, title: string, id: string = randomUUID()): Chat {
   const profileId = usableProfileId(container, app.defaultProfileId) ?? appDefaultProfileId(container.store);
   if (!profileId) throw new Error('There is no profile to start a chat with. Create one in Settings first.');
   const created = container.store.chats.create({
-    id: randomUUID(),
+    id,
     title: title.length > 0 ? title : DEFAULT_TITLE,
     profileId,
     headMessageId: null,

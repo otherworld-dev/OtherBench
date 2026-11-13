@@ -39,6 +39,11 @@ export type AppEvent =
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
   /** A chat-to-chat send from or to these chats changed (spec 2026-11-06-chat-to-chat-design): re-read their sends. */
   | { type: 'chat-sends-changed'; chatIds: string[] }
+  /**
+   * A send from `chatId` waits because the machine its target runs on is off or busy (spec
+   * 2026-11-13-chat-sends-across-machines-design): the send card offers Run here, Wait and Cancel. Once per hold.
+   */
+  | { type: 'chat-send-held'; chatId: string; sendId: string; machine: string; reason: string }
   /** `at`: when the card started waiting (ms), stamped by the server's event bus if the emitter didn't. */
   | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string; kind?: 'question' | 'plan' | 'generation' | 'browser'; at?: number }
   | { type: 'approval-resolved'; chatId: string; requestId: string }

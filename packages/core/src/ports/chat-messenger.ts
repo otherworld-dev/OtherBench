@@ -12,6 +12,17 @@ export interface ChatTargetInfo {
   app: string | null;
   /** A reply is being written there now, so a message waits for it. */
   busy: boolean;
+  /** The machine the chat runs on, by name (spec 2026-11-13-chat-sends-across-machines-design). */
+  machine: string;
+  /** Whether that machine takes sends from this one: false it said no, null it hasn't said (or is off). */
+  acceptsSends: boolean | null;
+}
+
+/** An app a new chat can be started in, by its exact name, and the machine that chat would run on. */
+export interface AppTargetInfo {
+  name: string;
+  machine: string;
+  acceptsSends: boolean | null;
 }
 
 /** One message: to an existing chat (`chatId`) or a new chat in an app (`app`, by name), never both. */
@@ -22,11 +33,24 @@ export interface SendTarget {
 }
 
 export type SendOutcome =
-  | { sent: { sendId: string; chatId: string; title: string; app: string | null; createdChat: boolean; queued: boolean }[] }
+  | {
+      sent: {
+        sendId: string;
+        chatId: string;
+        title: string;
+        app: string | null;
+        createdChat: boolean;
+        queued: boolean;
+        /** The machine the target runs on, by name. */
+        machine: string;
+        /** That machine is off or busy: the send waits, and the user has been asked what to do. */
+        held: boolean;
+      }[];
+    }
   /** Nothing was sent; the sentence says why, for the model. */
   | { refused: string };
 
 export interface ChatMessenger {
-  list(ctx: ToolContext): ChatTargetInfo[];
+  list(ctx: ToolContext): Promise<{ chats: ChatTargetInfo[]; apps: AppTargetInfo[] }>;
   send(ctx: ToolContext, targets: SendTarget[]): Promise<SendOutcome>;
 }

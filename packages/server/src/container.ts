@@ -553,7 +553,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // The service is built once the container exists (it starts turns); until then the tool has nothing to send with.
   let chatSends: ChatSendService | null = null;
   const chats: ChatMessenger = {
-    list: (ctx) => chatSends?.list(ctx) ?? [],
+    list: async (ctx) => (chatSends ? chatSends.list(ctx) : { chats: [], apps: [] }),
     send: async (ctx, targets) => (chatSends ? chatSends.send(ctx, targets) : { refused: 'OtherBench is still starting. Try again in a moment.' }),
   };
   const toolProvider = new OtherBenchToolProvider(store, broker, mcpManager, { sandbox, browser, media, chats, ...(computer ? { computer } : {}) });
