@@ -22,7 +22,7 @@ test('exports a chat as Markdown and as JSON from its menu', async ({ page }) =>
   await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from OtherBench/)).toBeVisible();
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 
-  // The open chat's row in its group; once its reply lands it's under Needs you as well.
+  // The open chat's row in its group.
   const row = page.locator('[data-testid^="chat-row-"]').filter({ has: page.locator('[aria-current="true"]') });
   async function exportAs(item: string) {
     await row.hover();

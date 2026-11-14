@@ -42,7 +42,7 @@ export interface SidebarRenderContext {
 
 /**
  * The list's groups and rows, called while rendering: a Chat mode project's (or No project's) group, a Code mode
- * app's group, and one chat's row in any of them, under Pinned, or in Needs you. Each group shows its first
+ * app's group, and one chat's row in any of them or under Pinned. Each group shows its first
  * `GROUP_ROW_CAP` chats until "Show N more".
  */
 export function sidebarRenderers({
@@ -73,7 +73,7 @@ export function sidebarRenderers({
 }: SidebarRenderContext): {
   renderGroup: (group: SidebarGroup) => JSX.Element;
   renderAppGroup: (group: CodeSidebarGroup) => JSX.Element;
-  renderRow: (chat: Chat, section: Section | null, muted?: boolean, listed?: boolean) => JSX.Element;
+  renderRow: (chat: Chat, section: Section | null, muted?: boolean) => JSX.Element;
 } {
   /** Opens a capped group in full (focus goes to the first chat it revealed), or caps it again. */
   function setGroupExpanded(key: string, expanded: boolean, firstRevealedId?: string): void {
@@ -237,16 +237,10 @@ export function sidebarRenderers({
     );
   }
 
-  /** What a row in the Needs you list is filed under: its project, or its app. */
-  function homeName(chat: Chat): string | undefined {
-    if (chat.appId !== null) return apps.find((a) => a.id === chat.appId)?.name;
-    return chat.projectId ? pinnedProjectName(chat.projectId) : undefined;
-  }
-
   /** `muted`: dimmed, as archived rows are; by default every row outside a section is one (Chat mode's archived list). */
-  function renderRow(chat: Chat, section: Section | null, muted = section === null, listed = false): JSX.Element {
-    const kind: RowKind = listed ? 'list' : section?.pinned ? 'pinned' : 'group';
-    // A chat can have up to three rows; its open menu and rename show on the one they came from.
+  function renderRow(chat: Chat, section: Section | null, muted = section === null): JSX.Element {
+    const kind: RowKind = section?.pinned ? 'pinned' : 'group';
+    // A chat can have two rows; its open menu and rename show on the one they came from.
     const current = kind === rowKindOf(chat.id);
     return (
       <ChatRow
@@ -282,8 +276,7 @@ export function sidebarRenderers({
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true, kind) : undefined}
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
-        projectName={listed ? homeName(chat) : section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
-        needsYou={listed}
+        projectName={section?.pinned && chat.projectId ? pinnedProjectName(chat.projectId) : undefined}
         pinnedCopy={kind === 'pinned'}
         onTick={queuedIds.has(chat.id) && !isOnCard(statusOf(chat)) ? () => tickOff(chat) : undefined}
         now={now}

@@ -60,20 +60,15 @@ export interface ChatRowProps {
   showPinMarker?: boolean;
   /** Shows an outline pin before the title: the chat is pinned at the top of its project. */
   projectPinMarker?: boolean;
-  /** Shown faint after the title (under it in Needs you): the chat's project or app, for rows outside their own group. */
+  /** Shown faint after the title: the chat's project, for rows outside their own group. */
   projectName?: string;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
   /** The word at the end of the row, in place of the age. */
   status?: ChatStatus | null;
   /**
-   * A row in the Needs you list, a second row for a chat still in its group: tinted, bold and not draggable, since its
-   * place there isn't the user's to choose. Its test ids differ, so `chat-row-<id>` always means the row in the group.
-   */
-  needsYou?: boolean;
-  /**
    * The row under Pinned, a second row for a chat that stays in its group too (Deck d961). Its test ids differ
-   * (`pinned-row-<id>`) for the same reason as `needsYou`'s.
+   * (`pinned-row-<id>`), so `chat-row-<id>` always means the row in the group.
    */
   pinnedCopy?: boolean;
   /** Shows the hover tick: there is nothing to do here. Absent while a card waits, which only answering clears. */
@@ -91,8 +86,8 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, needsYou = false, pinnedCopy = false, onTick, now } = props;
-  const idPrefix = needsYou ? 'needs-you' : pinnedCopy ? 'pinned' : 'chat';
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, pinnedCopy = false, onTick, now } = props;
+  const idPrefix = pinnedCopy ? 'pinned' : 'chat';
   const rowId = `${idPrefix}-row-${chat.id}`;
   if (renaming && onRename && onRenameCancel) {
     return (
@@ -137,7 +132,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             }
           : undefined
       }
-      className={`group relative flex items-center rounded ${needsYou ? 'bg-[var(--warn)]/10' : ''} ${
+      className={`group relative flex items-center rounded ${
         reorder?.indicator === 'before'
           ? 'shadow-[inset_0_2px_0_var(--accent)]'
           : reorder?.indicator === 'after'
@@ -148,7 +143,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
       <button
         type="button"
         data-row-main=""
-        draggable={!muted && !needsYou}
+        draggable={!muted}
         onDragStart={(e) => {
           e.dataTransfer.setData(CHAT_DRAG_MIME, chat.id);
           e.dataTransfer.effectAllowed = 'move';
@@ -191,25 +186,11 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             <PinIcon className="h-3 w-3" />
           </span>
         )}
-        {needsYou ? (
-          // In the Needs you list the home goes on its own line under the title, so neither crowds the other out.
-          <span className="flex min-w-0 flex-col">
-            <span className="min-w-0 truncate font-medium">{chat.title}</span>
-            {projectName && (
-              <span data-testid="row-project-name" title={projectName} className="min-w-0 truncate text-[11px] leading-tight text-[var(--text-faint)]">
-                <span className="sr-only">, in</span> {projectName}
-              </span>
-            )}
+        <span className="min-w-0 truncate">{chat.title}</span>
+        {projectName && (
+          <span data-testid="row-project-name" title={projectName} className="ml-auto max-w-[45%] shrink-0 truncate pl-2 text-xs text-[var(--text-faint)]">
+            <span className="sr-only">, in</span> {projectName}
           </span>
-        ) : (
-          <>
-            <span className="min-w-0 truncate">{chat.title}</span>
-            {projectName && (
-              <span data-testid="row-project-name" title={projectName} className="ml-auto max-w-[45%] shrink-0 truncate pl-2 text-xs text-[var(--text-faint)]">
-                <span className="sr-only">, in</span> {projectName}
-              </span>
-            )}
-          </>
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}

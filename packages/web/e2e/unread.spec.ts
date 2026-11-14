@@ -3,11 +3,11 @@ import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
- * A reply that finishes in a chat the user isn't looking at lists it under
- * Needs you. Opening the chat reads it, here and on the server, but it stays
- * listed until they answer or tick it off.
+ * A reply that finishes in a chat the user isn't looking at marks its row
+ * "Your turn". Opening the chat reads it, here and on the server, but the mark
+ * stays until they answer or tick it off.
  */
-test('a reply finished in another chat stays under Needs you after it is opened', async ({ page, request }) => {
+test('a reply finished in another chat stays marked after it is opened', async ({ page, request }) => {
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: 'Mock', kind: 'mock' } });
   const { id: connectionId } = await conn.json();
   const profile = (await (await request.post(`${BASE_URL}/api/profiles`, { data: { name: 'Mock Profile', connectionId, modelId: 'mock-standard' } })).json()) as { id: string };
@@ -27,7 +27,6 @@ test('a reply finished in another chat stays under Needs you after it is opened'
 
   const word = nav.getByTestId(`chat-status-${other.id}`);
   await expect(word).toHaveText('Your turn');
-  await expect(nav.getByTestId('group-needs-you').getByTestId(`needs-you-row-${other.id}`)).toBeVisible();
   await expect(nav.getByTestId(`chat-status-${open.id}`)).toHaveCount(0);
 
   // Opening it reads it, but it still needs an answer. By the row, not its title: auto-title renames the chat after its first reply.

@@ -8,7 +8,7 @@ import { useOtherBenchStore } from './store.js';
  * focused): when it's opened, when a reply finishes while it's showing, and
  * when the window comes back to the front. Here first, before the browser
  * paints; then on the server, which tells the other windows. Read isn't the
- * same as dealt with: the sidebar's Needs you list goes by `chatNeedsYou`. A failed PATCH is only logged: the server still has the
+ * same as dealt with: the sidebar's status words go by `chatNeedsYou`. A failed PATCH is only logged: the server still has the
  * chat unread, and says so the next time the chat changes.
  */
 export function useMarkRead(narrow: boolean): void {
