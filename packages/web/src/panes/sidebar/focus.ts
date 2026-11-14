@@ -16,12 +16,12 @@ export function focusLater(selector: string, fallback?: string, options?: FocusO
 export const LIST_SELECTOR = '[data-chat-list]';
 
 /**
- * Which of a chat's rows: the one in its group, its copy under Pinned (a pinned chat stays in its group too, Deck
- * d961), or its copy in the Needs you list. Each has its own test id prefix, so a selector finds the one meant.
+ * Which of a chat's rows: the one in its group, or its copy under Pinned (a pinned chat stays in its group too, Deck
+ * d961). Each has its own test id prefix, so a selector finds the one meant.
  */
-export type RowKind = 'group' | 'pinned' | 'list';
+export type RowKind = 'group' | 'pinned';
 
-export const ROW_PREFIX: Record<RowKind, string> = { group: 'chat-row-', pinned: 'pinned-row-', list: 'needs-you-row-' };
+export const ROW_PREFIX: Record<RowKind, string> = { group: 'chat-row-', pinned: 'pinned-row-' };
 
 export function rowSelector(chatId: string, kind: RowKind): string {
   return `[data-testid="${ROW_PREFIX[kind]}${chatId}"] [data-row-main]`;

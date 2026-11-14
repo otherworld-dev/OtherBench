@@ -27,26 +27,13 @@ of work landed after that plan closed out:
   by recent activity, under Today / Previous 7 days / Previous 30 days /
   Older headings (its menu's sort item; No project starts that way), where
   rows don't reorder. Each group shows 10 chats, then "Show N more"; every
-  row shows its age ("3h", "2w"), or a word for what it's doing. Chats stopped
-  on the user sit in a Needs you list at the top, for the mode showing only, by
-  the Overview's `chatNeedsYou` rule: opening one leaves it there, and replying
-  or ticking it off clears it. The list is a queue: a chat that stops joins the
-  bottom, cards included. It's sorted by when each chat came to need the user
-  (`needsYouSince`), which the server records, so a reload, a restart or
-  another window gives the same order: a reply by when it stopped
-  (`message.finished_at`, migration 036, set by `updateStatus` as it leaves
-  streaming; it syncs with the message row, so a paired machine sorts the
-  same), a card by when it was requested (`at`, stamped by `AppEventBus` and
-  sent in the hello; a peer says it in its activity as `waitingSince`).
-  Messages from before 036 have no finish time and go by when they started; a
-  card on an older peer goes by its chat's last message. The chat stays in its
-  group too, so it has two rows. The list leads with this machine's chats;
-  each paired machine with chats waiting gets its own heading under them,
-  with its name and count, closed until opened (`splitByMachine`; chats on a
-  machine no longer paired share one heading at the end). Which are open is
-  kept per device, in the collapsed-groups store under `needs-you-open:<node
-  id>`. Background
-  tasks keep a chat out of the list unless its reply asks the user something
+  row shows its age ("3h", "2w"), or a word for what it's doing. A chat stopped
+  on the user gets a warn-coloured word ("Your turn", "Answer", ...) on its row
+  in its group, by the Overview's `chatNeedsYou` rule, and a hover ✓ unless a
+  card waits: opening it leaves the word there, and replying or ticking it off
+  clears it. There is no separate Needs you list any more (Adam dropped it
+  2026-11-14; the marks on the rows were enough). Background
+  tasks show "Background" rather than a needs-you word unless its reply asks the user something
   (`asksUser`, a `?` in its last two paragraphs): a server left running never
   finishes, and that reply has stopped on them. Search matches titles and
   message text (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
@@ -568,8 +555,8 @@ of work landed after that plan closed out:
     Settings; 16 px inputs (iOS zooms the page on a smaller one); Settings'
     tabs scroll sideways in their strip and its list-and-editor panels stack;
     safe-area insets. `web/e2e/phone.spec.ts` runs at 390x844 with touch:
-    open a chat from the drawer, answer an approval card, find the chat in
-    Needs you, open Settings, checking at each step that the page can't
+    open a chat from the drawer, answer an approval card, see the chat marked
+    "Your turn" in the drawer, open Settings, checking at each step that the page can't
     scroll sideways, that no element runs past the edge outside a sideways
     scroller, and that a full-page screenshot is 390 px wide.
 

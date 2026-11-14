@@ -347,8 +347,8 @@ function MainApp(): JSX.Element {
 
 /**
  * The top of the screen on a phone: the button that opens the sidebar drawer, what is showing, and how many things
- * need the user (the Overview's count, as on the mode switch), which opens the drawer too, as the Needs you list
- * heads it.
+ * need the user (the Overview's count, as on the mode switch), which opens the drawer too, where those chats carry
+ * their status words.
  */
 function PhoneBar({ onOpenDrawer }: { onOpenDrawer: () => void }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);

@@ -8,7 +8,7 @@ import { BASE_URL } from '../playwright.config.js';
 /**
  * The phone layout (App.tsx's data-phone, below 640px) at an iPhone's
  * 390x844: the sidebar as a drawer, a chat full width, an approval card
- * answered with a tap, the Needs you list, and Settings. At each step nothing
+ * answered with a tap, the chat's status word in the drawer, and Settings. At each step nothing
  * may stick out sideways: the page can't scroll sideways and no element runs
  * past the screen's edge unless it sits in a box that scrolls sideways by
  * itself (a code block, the Settings tabs). A full-page screenshot backs that
@@ -78,7 +78,7 @@ async function expectNoSidewaysOverflow(page: Page, step: string): Promise<void>
   expect(png.readUInt32BE(16), `${step}: screenshot width`).toBe(390);
 }
 
-test('a phone: open a chat from the drawer, answer its approval card, find it in Needs you, reach Settings', async ({ page, request }) => {
+test('a phone: open a chat from the drawer, answer its approval card, see it marked in the drawer, reach Settings', async ({ page, request }) => {
   const chatTitle = `Phone layout ${randomUUID().slice(0, 8)}`;
   await seed(request, chatTitle);
 
@@ -117,13 +117,13 @@ test('a phone: open a chat from the drawer, answer its approval card, find it in
   await expect(page.getByLabel('streaming')).toHaveCount(0);
   await expectNoSidewaysOverflow(page, 'reply');
 
-  // The finished reply waits on the user in the Needs you list, at the top of the drawer.
+  // The finished reply waits on the user: its row in the drawer says so.
   await page.getByRole('button', { name: 'Open the sidebar' }).tap();
-  const needsYou = drawer.getByTestId('group-needs-you');
-  await expect(needsYou.getByRole('button', { name: chatTitle })).toBeVisible();
-  expect((await needsYou.getByRole('button', { name: chatTitle }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await expectNoSidewaysOverflow(page, 'needs you');
-  await needsYou.getByRole('button', { name: chatTitle }).tap();
+  const row = drawer.locator('[data-testid^="chat-row-"]').filter({ has: page.getByRole('button', { name: chatTitle }) });
+  await expect(row.locator('[data-testid^="chat-status-"]')).toHaveText('Your turn');
+  expect((await row.getByRole('button', { name: chatTitle }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expectNoSidewaysOverflow(page, 'marked chat');
+  await row.getByRole('button', { name: chatTitle }).tap();
   await expect(drawer).toBeHidden();
 
   // Settings, from the drawer's footer; its tabs scroll sideways inside their own strip.

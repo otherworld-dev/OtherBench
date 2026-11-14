@@ -85,16 +85,14 @@ describe('ChatRow', () => {
     }
   });
 
-  it('a row needing you is bold, can be ticked off, and stays put when dragged', async () => {
+  it('a row needing you can be ticked off', async () => {
     const onTick = vi.fn();
-    renderRow({ status: 'your-turn', needsYou: true, onTick });
-    expect(screen.getByText('Notes')).toHaveClass('font-medium');
-    expect(screen.getByRole('button', { name: 'Notes' })).toHaveAttribute('draggable', 'false');
+    renderRow({ status: 'your-turn', onTick });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Nothing to do here' }));
     expect(onTick).toHaveBeenCalled();
     cleanup();
 
-    renderRow({ status: 'approve', needsYou: true });
+    renderRow({ status: 'approve' });
     expect(screen.queryByRole('button', { name: 'Nothing to do here' })).toBeNull();
   });
 

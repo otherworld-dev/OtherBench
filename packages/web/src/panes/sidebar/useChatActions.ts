@@ -37,7 +37,6 @@ export function useChatActions({
   sidebar,
   codeMode,
   searching,
-  needsYouIds,
   chatMenu,
   setChatMenu,
   setProjectMenu,
@@ -49,7 +48,6 @@ export function useChatActions({
   sidebar: SidebarModel;
   codeMode: boolean;
   searching: boolean;
-  needsYouIds: ReadonlySet<string>;
   chatMenu: ChatMenuAt | null;
   setChatMenu: Dispatch<SetStateAction<ChatMenuAt | null>>;
   setProjectMenu: Dispatch<SetStateAction<{ projectId: string; position: { x: number; y: number } } | null>>;
@@ -62,7 +60,7 @@ export function useChatActions({
   const upsertProject = useOtherBenchStore((s) => s.upsertProject);
   const removeChat = useOtherBenchStore((s) => s.removeChat);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
-  // Which row the chat menu was opened from, for a chat with a row under Pinned or in Needs you as well as in its group.
+  // Which row the chat menu was opened from, for a chat with a row under Pinned as well as in its group.
   const [menuRow, setMenuRow] = useState<RowKind>('group');
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const deletingChat = deletingChatId ? (chats.find((c) => c.id === deletingChatId) ?? null) : null;
@@ -220,7 +218,6 @@ export function useChatActions({
    * shown, else the one in its group.
    */
   function rowKindOf(chatId: string): RowKind {
-    if (menuRow === 'list' && needsYouIds.has(chatId)) return 'list';
     if (menuRow === 'pinned' && !codeMode && sidebar.pinned.some((c) => c.id === chatId)) return 'pinned';
     return 'group';
   }
@@ -235,8 +232,8 @@ export function useChatActions({
   }
 
   /**
-   * The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. Within Needs you
-   * or Pinned when the user was there, as a row in a group further down would scroll the sidebar away from where they were.
+   * The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. Within Pinned
+   * when the user was there, as a row in a group further down would scroll the sidebar away from where they were.
    */
   function neighbourSelector(chatId: string): string {
     const kind = rowKindOf(chatId);

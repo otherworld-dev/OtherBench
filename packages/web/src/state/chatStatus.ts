@@ -74,7 +74,7 @@ export function isLive(status: ChatStatus | null): LiveReason | null {
 }
 
 /**
- * The Needs you list: the chats needing the user, as a queue, so working down it reaches every chat. Oldest first by
+ * The chats needing the user (their sidebar rows get the tick), as a queue, so working down it reaches every chat. Oldest first by
  * when each came to need them (`needsYouSince`): when its reply stopped or its card started waiting, so one that stops
  * joins the bottom rather than jumping ahead of those still waiting, and one that leaves (answered, working) joins it
  * again at the bottom. Those times are recorded by the server (the message's `finishedAt`, the card's `at`), so the
