@@ -573,6 +573,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       artifactTool: async (ctx, args) =>
         runArtifactCommand(store, { chatId: ctx.chatId, messageId: ctx.messageId, liveTools: () => liveToolRisks(toolProvider.relayMcpTools(ctx.mcpServerIds)) }, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
+      // set_chat_status (spec 2026-11-15-chat-done-status-design), as the API engines get it from the thread tools.
+      chatStatusTool: true,
       // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through OtherBench's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (policy) => toolProvider.relayTools(policy),

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ARTIFACT_KINDS, ARTIFACT_TOOL, ARTIFACT_TOOL_DESCRIPTION } from '@otherbench/core/domain/artifacts.js';
 import { RECALL_TOOL, RECALL_TOOL_DESCRIPTION } from '@otherbench/core/domain/recall.js';
 import { PLAN_TOOL, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_PARAMETERS } from '@otherbench/core/domain/thread-tools.js';
+import { STATUS_TOOL, STATUS_TOOL_DESCRIPTION, STATUS_TOOL_PARAMETERS } from '@otherbench/core/domain/chat-status-tool.js';
 
 const SHAPE = {
   command: z.enum(['create', 'update', 'rewrite', 'view']),
@@ -131,6 +132,17 @@ export function otherBenchPlanTool(current: Current): OtherBenchServerTool {
     inputSchema: PLAN_TOOL_PARAMETERS,
     alwaysLoad: true,
     call: (args) => answerText(current, args, 'Plan mode is off for this reply, or no OtherBench reply is running.'),
+  };
+}
+
+/** `set_chat_status` as Claude Code sees it, on OtherBench's server (spec 2026-11-15-chat-done-status-design). */
+export function otherBenchStatusTool(current: Current): OtherBenchServerTool {
+  return {
+    name: STATUS_TOOL,
+    description: STATUS_TOOL_DESCRIPTION,
+    inputSchema: STATUS_TOOL_PARAMETERS,
+    alwaysLoad: true,
+    call: (args) => answerText(current, args, 'No OtherBench reply is running.'),
   };
 }
 

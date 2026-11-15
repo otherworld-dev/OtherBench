@@ -1504,6 +1504,34 @@ describe('ClaudeCodeChatEngine plan mode', () => {
     e.dispose();
   });
 
+  it('offers set_chat_status when the engine has it, approves it as source thread and reports it by its own name', async () => {
+    let tools: { name: string; call: (args: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
+    let answered: unknown = null;
+    let decision: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = serverOf(options);
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${name}__set_chat_status`, tool_input: { done: true }, tool_use_id: 't1' } as never, 't1', sig());
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__set_chat_status`, input: { done: true } }] } } as unknown as SDKMessage;
+      answered = await tools.find((t) => t.name === 'set_chat_status')!.call({ done: true });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer, chatStatusTool: true });
+    const events = await collect(e.stream(req()));
+    expect(tools.map((t) => t.name)).toEqual(['set_chat_status']);
+    expect((a.requestApproval.mock.calls[0]![0] as { name: string; source: string })).toMatchObject({ name: 'set_chat_status', source: 'thread' });
+    expect(JSON.stringify(decision)).not.toContain('"deny"');
+    expect(JSON.stringify(answered)).toContain('Status set: done.');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'set_chat_status' }));
+    e.dispose();
+  });
+
   it("refuses a planning reply's Bash with the plan refusal", async () => {
     const provider = new FakeToolProvider();
     let decision: unknown = null;

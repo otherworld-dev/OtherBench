@@ -146,6 +146,8 @@ export interface TurnBinding {
   recall?: (args: unknown) => Promise<unknown>;
   /** Runs a propose_plan call for this reply (spec 2026-10-12-thread-cards-design); absent when the reply isn't planning. */
   plan?: (args: unknown) => Promise<unknown>;
+  /** Runs a set_chat_status call for this reply; absent when the engine has no status tool. */
+  status?: (args: unknown) => Promise<unknown>;
   /** Runs a relayed MCP tool's (already approved) call for this reply, with the reply's tool context. */
   relay?: (spec: ToolSpec, args: unknown, call?: RelayedCall) => Promise<unknown>;
   /** This reply's approval tickets for relayed calls with `describeCall` (tickets.ts); cleared when the reply ends. */
@@ -168,6 +170,8 @@ export interface OtherBenchServerSwitches {
   recall: boolean;
   /** propose_plan, for a reply in Plan mode. */
   plan: boolean;
+  /** set_chat_status (spec 2026-11-15-chat-done-status-design): on whenever the engine has it. */
+  status: boolean;
   /** `buildRelay(...).hash` of the relayed MCP tools; '' for none (relay.ts). */
   relay: string;
 }
@@ -195,6 +199,8 @@ export class LiveProcess {
   recallTool: string | null = null;
   /** Claude Code's name for this process's plan tool, or null when its server has none. */
   planTool: string | null = null;
+  /** Claude Code's name for this process's set_chat_status tool, or null when its OtherBench server has none. */
+  statusTool: string | null = null;
   /** Claude Code's name for each relayed MCP tool on this process's OtherBench server -> the API model's name for it. */
   relayNames = new Map<string, string>();
   readonly stderr: string[] = [];

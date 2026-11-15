@@ -1,6 +1,7 @@
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
+import { runStatusCommand, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import type { EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
@@ -53,6 +54,7 @@ export async function prepareReply(
     artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
     recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
     plan: req.plan !== undefined && askUser !== undefined,
+    status: deps.chatStatusTool === true,
     relay: relay.hash,
   };
   const tickets = new ApprovalTickets();
@@ -87,6 +89,7 @@ export async function prepareReply(
     ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
     ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
     ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
+    ...(own.status ? { status: async (args: unknown) => runStatusCommand(args) } : {}),
     // The current reply's spec for that tool, not the one the process started
     // with (an edit to the sandbox allowlist or the browser's blocked sites
     // applies without a new process), and only if it is the kind of tool the
@@ -117,6 +120,7 @@ export function replyMapper(live: LiveProcess, req: EngineRequest, helpers: Help
   if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
   if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
   if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
+  if (live.statusTool) renames.set(live.statusTool, STATUS_TOOL);
   for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
   const relayedResult = (id: string): unknown => {
     const held = results.get(id);
