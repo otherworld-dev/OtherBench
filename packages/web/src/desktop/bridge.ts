@@ -247,6 +247,8 @@ export interface UpdateStatus {
   state: 'dev-build' | 'idle' | 'checking' | 'up-to-date' | 'ahead' | 'no-releases' | 'downloading' | 'ready' | 'ask' | 'installing' | 'failed' | 'error';
   available: string | null;
   newestFull: string | null;
+  /** While `ahead`: the newest version on the feeds checked, which this build is past. Absent from older shells. */
+  newest?: string | null;
   lastCheckedAt: number | null;
   /** What a ready update waits for before it installs. */
   waitingFor: string[];

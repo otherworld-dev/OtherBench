@@ -15,6 +15,16 @@ every installed build keeps itself current.
     set `desktop/package.json` to the next version you mean to ship (betas
     move to the next patch by themselves if you don't).
   - Each release holds the installer, its `.sig` and `latest.json`.
+  - A hand-built installer (`npm run app:installer` in `desktop/`) is
+    `X.Y.Z-alpha.local.<YYYYMMDDHHmm>` (`desktop/scripts/local-version.mjs`
+    writes it into the gitignored `src-tauri/tauri.local.conf.json`). `alpha`
+    sorts below `beta`, so a machine installed from one is moved on by the
+    next beta, even when that beta is older than the local work (push it to
+    keep it). Before 2026-11-15 a hand build was plain `X.Y.Z`, which outranks
+    every `X.Y.Z-beta.N`, so it never updated again: a machine still on one
+    needs the newest beta installed by hand once (choose Uninstall when the
+    installer says a newer version is installed, and keep the application
+    data).
   - Re-running the job (a flaky test held it up, or it died half way) is
     safe: the GitHub steps (`desktop/scripts/release/github.mjs`) make a new
     release as a draft and publish it once its files are up, and reuse a
@@ -41,7 +51,12 @@ every installed build keeps itself current.
   a day of waiting it asks instead ("Restart and update now"). It stops the
   server, then runs the installer passively; the installer relaunches the app,
   which comes back hidden if it was (`update-relaunch.json`). Turning betas
-  off never downgrades. Dev runs never update.
+  off never downgrades. Dev runs never update. Settings always shows the
+  build's full version ("This build: 0.2.0-beta.118"), and a build past
+  everything on the feeds it checks says so, naming the newest (`ahead`,
+  `newest`), betas on or off, instead of "Up to date". With betas on that can
+  only be an old plain hand build, so Settings also says how to get back on
+  the betas.
 - **Failures back off.** A build that fails to download or install is held
   back: tried again after 4 hours, then 8, 16, 32, then every 2 days, while
   it's still the one on offer (a new version starts afresh). The count is kept
