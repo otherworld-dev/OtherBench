@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Copy of desktop/app-icon.svg, the full OtherBench icon, for large slots (home screen, installed web app). -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="65%">
+      <stop offset="0" stop-color="#33373C"/>
+      <stop offset="1" stop-color="#1E2124"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- portal ring -->
+  <circle cx="256" cy="256" r="212" fill="none" stroke="#D89B3E" stroke-width="24"/>
+  <g transform="translate(256 256) scale(1.45) translate(-256 -256)">
+    <!-- glyph: workbench -->
+    <g stroke="#F4F0E8" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <line x1="166" y1="236" x2="346" y2="236"/>
+      <line x1="196" y1="240" x2="184" y2="324"/>
+      <line x1="316" y1="240" x2="328" y2="324"/>
+      <line x1="190" y1="290" x2="322" y2="290"/>
+    </g>
+    <rect x="222" y="186" width="56" height="34" rx="6" fill="#D89B3E"/>
+  </g>
+</svg>

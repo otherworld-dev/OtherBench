@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1024" height="1024">
-  <!-- Copy of desktop/app-icon.svg, the OtherBench icon. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- The bold small variant of the OtherBench icon (brand Icons/small/otherbench-small.svg), for anything drawn at 48px or below: the tab icon and the wordmark. -->
   <defs>
     <radialGradient id="bg" cx="50%" cy="42%" r="65%">
       <stop offset="0" stop-color="#33373C"/>
@@ -8,10 +8,10 @@
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <!-- portal ring -->
-  <circle cx="256" cy="256" r="212" fill="none" stroke="#D89B3E" stroke-width="24"/>
-  <g transform="translate(256 256) scale(1.45) translate(-256 -256)">
+  <circle cx="256" cy="256" r="224" fill="none" stroke="#D89B3E" stroke-width="48"/>
+  <g transform="translate(256 256) scale(1.72) translate(-256 -256)">
     <!-- glyph: workbench -->
-    <g stroke="#F4F0E8" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <g stroke="#F4F0E8" stroke-width="32.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
       <line x1="166" y1="236" x2="346" y2="236"/>
       <line x1="196" y1="240" x2="184" y2="324"/>
       <line x1="316" y1="240" x2="328" y2="324"/>
