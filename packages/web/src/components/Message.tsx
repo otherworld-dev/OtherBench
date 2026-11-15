@@ -940,7 +940,8 @@ export function Message({
     ? message.parts.filter((p): p is Extract<Part, { type: 'image' | 'file' }> => p.type === 'image' || p.type === 'file')
     : [];
   const todos = isUser ? null : latestTodos(message.parts);
-  const agentStatus = isUser ? null : agentStatusOf(message.parts);
+  // Not on a reply that failed or was stopped: its row says so, and the card would say Done.
+  const agentStatus = isUser || (message.status !== 'complete' && message.status !== 'streaming') ? null : agentStatusOf(message.parts);
 
   return (
     <article

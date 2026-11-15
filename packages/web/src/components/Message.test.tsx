@@ -721,6 +721,14 @@ describe('Message thread cards', () => {
     expect(screen.getByTestId('chat-status-card')).toHaveTextContent('Done: nothing left in this chat');
   });
 
+  it('shows no status card on a reply that failed, which its row calls Failed', () => {
+    render(<Message message={base({ status: 'error', parts: [
+      { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } },
+      { type: 'tool-result', id: 's1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+    ] })} />);
+    expect(screen.queryByTestId('chat-status-card')).toBeNull();
+  });
+
   it('shows an answered question and a decided plan as records, and nothing for one still waiting', () => {
     render(<Message message={base({ parts: [
       { type: 'tool-call', id: 'q1', name: 'ask_user', args: { questions: [{ question: 'Which colour?', header: 'C', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] } },

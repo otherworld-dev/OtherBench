@@ -62,6 +62,11 @@ describe('agentStatusOf', () => {
     expect(agentStatusOf([call('a', { done: true }), failed('a')])).toBeNull();
   });
 
+  it('ignores a call the API engine refused, whose result is a tool error with isError false', () => {
+    const refused: Part = { type: 'tool-result', id: 'a', name: STATUS_TOOL, result: { error: true, code: 'permission_denied', message: 'no' }, isError: false };
+    expect(agentStatusOf([call('a', { done: true }), refused])).toBeNull();
+  });
+
   it('ignores a call with no result yet', () => {
     expect(agentStatusOf([call('a', { done: true })])).toBeNull();
   });

@@ -73,7 +73,9 @@ export function runStatusCommand(args: unknown): string | ThreadToolError {
  */
 export function agentStatusOf(parts: readonly Part[]): AgentStatus | null {
   const ok = new Set<string>();
-  for (const p of parts) if (p.type === 'tool-result' && p.name === STATUS_TOOL && !p.isError) ok.add(p.id);
+  // The API engines store every result with isError false and say a refusal in the result itself ({ error: true }).
+  const failed = (result: unknown): boolean => typeof result === 'object' && result !== null && (result as { error?: unknown }).error === true;
+  for (const p of parts) if (p.type === 'tool-result' && p.name === STATUS_TOOL && !p.isError && !failed(p.result)) ok.add(p.id);
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     if (p?.type !== 'tool-call' || p.name !== STATUS_TOOL || !ok.has(p.id)) continue;

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CHAT_NEED_WINDOW_MS, chatNeedsYou, needsYouSince } from '@otherbench/core/domain/overview.js';
+import { chatNeedsYou, needsYouSince, needWindowStart } from '@otherbench/core/domain/overview.js';
 import { chatsInBackgroundElsewhere, chatsWaitingElsewhere, chatsWorkingElsewhere, waitingSinceElsewhere } from './peerActivity.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { PendingApprovalSummary } from '@otherbench/core/types/events.js';
@@ -50,11 +50,9 @@ export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' 
   // Its replies come back by themselves, so it isn't the user's turn yet.
   if (activity.waitingChats?.has(chat.id)) return 'waiting-chats';
   const background = activity.background.has(chat.id);
-  // A reply that said the chat is done, or what's left, stays on its row past the window: a chat marked Done and
-  // never archived is the one the user wants to find (spec 2026-11-15-chat-done-status-design).
+  // A reply that said the chat is done, or what's left, stays on its row past the window (`needWindowStart`).
   const agentStatus = chat.head?.agentStatus;
-  const since = agentStatus ? -Infinity : now - CHAT_NEED_WINDOW_MS;
-  if (!chatNeedsYou(chat, chat.head ?? null, false, since, background)) return background ? 'background' : null;
+  if (!chatNeedsYou(chat, chat.head ?? null, false, needWindowStart(chat.head ?? null, now), background)) return background ? 'background' : null;
   if (chat.head?.status === 'error') return 'failed';
   if (agentStatus) return agentStatus.done ? 'done' : 'left';
   return 'your-turn';
