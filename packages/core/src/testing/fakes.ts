@@ -96,6 +96,7 @@ import type {
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
 import { asksUser, QUESTION_TAIL } from '../domain/overview.js';
+import { agentStatusOf } from '../domain/chat-status-tool.js';
 import { UserAsks } from '../domain/user-asks.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
@@ -1431,9 +1432,10 @@ class InMemoryMessageRepo implements MessageRepo {
       const text = tip.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
       const asks = tip.role === 'assistant' && tip.status === 'complete' && asksUser(text.slice(-QUESTION_TAIL));
       const finishedAt = this.finishedAt.get(tip.id);
+      const agentStatus = tip.role === 'assistant' && tip.status === 'complete' ? agentStatusOf(tip.parts) : null;
       heads.push({
         chatId: c.id, role: tip.role, status: tip.status, createdAt: tip.createdAt,
-        ...(finishedAt !== undefined ? { finishedAt } : {}), ...(asks ? { asks } : {}),
+        ...(finishedAt !== undefined ? { finishedAt } : {}), ...(asks ? { asks } : {}), ...(agentStatus ? { agentStatus } : {}),
       });
     }
     return heads;

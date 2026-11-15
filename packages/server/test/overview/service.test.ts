@@ -382,4 +382,21 @@ describe('OverviewService inbox actions', () => {
     expect(gh.calls.filter((c) => c.startsWith('done'))).toEqual([]);
     expect(events).toEqual([{ type: 'overview-changed' }]);
   });
+
+  it('tickOlder ticks off a chat the agent marked done long ago, which the sidebar still marks', () => {
+    const old = NOW - 10 * DAY;
+    store.messages.create({
+      id: 'c-done-m', chatId: 'c-done', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null, createdAt: old,
+      parts: [
+        { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } },
+        { type: 'tool-result', id: 's1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+      ],
+    });
+    store.chats.create({ id: 'c-done', title: 'c-done', profileId: 'p', headMessageId: 'c-done-m', workspaceRoot: null, pinned: false, archivedAt: null, appId: 'a1' });
+    chat('c-stale', 'a1', 'assistant', old);
+    const svc = service();
+    expect(svc.tickOlder(NOW)).toEqual({ chats: 1 });
+    expect(store.chats.get('c-done')?.dealtWithAt).toBe(NOW);
+    expect(store.chats.get('c-stale')?.dealtWithAt ?? null).toBeNull();
+  });
 });

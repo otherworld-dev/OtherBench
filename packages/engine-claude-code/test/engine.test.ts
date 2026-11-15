@@ -437,7 +437,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
   });
 
   it('starts a new process when only the built-in tools differ', () => {
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     const connection = { backend: 'claude', token: null };
     expect(liveKey({ cwd: 'x', tools: ['WebSearch', 'WebFetch'] }, connection, own)).not.toBe(liveKey({ cwd: 'x', tools: [] }, connection, own));
   });
@@ -1215,7 +1215,7 @@ describe('ClaudeCodeChatEngine relayed MCP tools', () => {
 
   it('starts a new process when the relayed tools change', () => {
     const connection = { backend: 'claude', token: null };
-    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'b' }));
+    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: 'b' }));
   });
 });
 
@@ -1450,8 +1450,8 @@ describe('ClaudeCodeChatEngine and the sandboxed shell', () => {
     const sandboxPolicy: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
     const hostPolicy: ToolPolicy = { ...sandboxPolicy, shellRuns: 'host' };
     const relayHash = buildRelay([runCommandSpec(async () => ({}))]).hash;
-    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: relayHash })).not.toBe(
-      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: '' })
+    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: relayHash })).not.toBe(
+      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: '' })
     );
   });
 });
@@ -1501,6 +1501,34 @@ describe('ClaudeCodeChatEngine plan mode', () => {
     expect(gate.approved).toBe(true);
     expect(JSON.stringify(answered)).toContain('The user approved the plan.');
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'propose_plan' }));
+    e.dispose();
+  });
+
+  it('offers set_chat_status when the engine has it, approves it as source thread and reports it by its own name', async () => {
+    let tools: { name: string; call: (args: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
+    let answered: unknown = null;
+    let decision: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = serverOf(options);
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${name}__set_chat_status`, tool_input: { done: true }, tool_use_id: 't1' } as never, 't1', sig());
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__set_chat_status`, input: { done: true } }] } } as unknown as SDKMessage;
+      answered = await tools.find((t) => t.name === 'set_chat_status')!.call({ done: true });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer, chatStatusTool: true });
+    const events = await collect(e.stream(req()));
+    expect(tools.map((t) => t.name)).toEqual(['set_chat_status']);
+    expect((a.requestApproval.mock.calls[0]![0] as { name: string; source: string })).toMatchObject({ name: 'set_chat_status', source: 'thread' });
+    expect(JSON.stringify(decision)).not.toContain('"deny"');
+    expect(JSON.stringify(answered)).toContain('Status set: done.');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'set_chat_status' }));
     e.dispose();
   });
 
@@ -3841,7 +3869,7 @@ describe('ClaudeCodeChatEngine on a Claude account', () => {
     expect(starts[1]!.options).toMatchObject({ resume: 'sess-1' });
     expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
     const options = starts[1]!.options;
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     expect(liveKey(options, { backend: 'claude:vh', token: null }, own)).not.toBe(liveKey(options, { backend: 'claude', token: null }, own));
     e.dispose();
   });
@@ -3856,7 +3884,7 @@ describe('ClaudeCodeChatEngine on a Claude account', () => {
     expect(starts).toHaveLength(2);
     expect(starts[0]!.prompts).toHaveLength(1);
     expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(moved.configDir);
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     expect(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: VH.configDir }, own)).not.toBe(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: moved.configDir }, own));
     e.dispose();
   });

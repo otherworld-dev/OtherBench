@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { agentStatusOf, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { asksUser, QUESTION_TAIL } from '@otherbench/core/domain/overview.js';
 import type { MessageOutline, MessageRepo } from '@otherbench/core/ports/store.js';
 import type { ChatHead } from '@otherbench/core/types/overview.js';
@@ -281,16 +282,22 @@ export class SqliteMessageRepo implements MessageRepo {
          ),
          ranked AS (
            SELECT b.chat_id, m.role, m.status, m.created_at, m.finished_at, substr(m.search_text, -?2) AS tail,
+                  -- Only a reply that mentions the status tool brings its parts, so the list doesn't read every reply's.
+                  CASE WHEN instr(m.parts, ?3) > 0 THEN m.parts END AS status_parts,
                   ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
              FROM below b JOIN message m ON m.id = b.id
          )
-         SELECT chat_id, role, status, created_at, finished_at, tail FROM ranked WHERE rn = 1`
+         SELECT chat_id, role, status, created_at, finished_at, tail, status_parts FROM ranked WHERE rn = 1`
       )
-      .all(chatId ?? null, QUESTION_TAIL) as Record<string, unknown>[];
+      .all(chatId ?? null, QUESTION_TAIL, STATUS_TOOL) as Record<string, unknown>[];
     return rows.map((r) => {
       const head: ChatHead = { chatId: r.chat_id as string, role: r.role as Role, status: r.status as MessageStatus, createdAt: r.created_at as number };
       if (r.finished_at != null) head.finishedAt = r.finished_at as number;
-      return head.role === 'assistant' && head.status === 'complete' && asksUser(r.tail as string) ? { ...head, asks: true } : head;
+      if (head.role !== 'assistant' || head.status !== 'complete') return head;
+      if (asksUser(r.tail as string)) head.asks = true;
+      const agentStatus = typeof r.status_parts === 'string' ? agentStatusOf(fromJson<Part[]>(r.status_parts)) : null;
+      if (agentStatus) head.agentStatus = agentStatus;
+      return head;
     });
   }
 

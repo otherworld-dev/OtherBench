@@ -279,6 +279,28 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#status trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it('#status left calls the offered set_chat_status with the items, then says some are left', async () => {
+      const execute = vi.fn(async () => 'Status set: 2 left.');
+      const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#status left push|docs', { tools: [tool] })));
+      expect(execute).toHaveBeenCalledWith({ done: false, left: ['push', 'docs'] }, expect.objectContaining({ chatId: 'chat-1' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'set_chat_status', args: { done: false, left: ['push', 'docs'] } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'set_chat_status', isError: false }));
+      expect(text(events)).toBe('Some left.');
+    });
+
+    it('#status done calls it with done: true, then says all finished', async () => {
+      const execute = vi.fn(async () => 'Status set: done.');
+      const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#status done', { tools: [tool] })));
+      expect(execute).toHaveBeenCalledWith({ done: true }, expect.anything());
+      expect(text(events)).toBe('All finished.');
+    });
+  });
+
   describe('#run trigger', () => {
     const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
 

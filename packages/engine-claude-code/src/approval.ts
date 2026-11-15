@@ -7,6 +7,7 @@ import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import { desktopTextForResult, screenContentError } from '@otherbench/core/domain/computer-apps.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
+import { STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { containPath, containPathIn, type ContainedIn } from '@otherbench/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 import type { ToolPolicy, ToolSource } from '@otherbench/core/types/config.js';
@@ -53,12 +54,13 @@ export type Gate = (
 ) => Promise<GateDecision>;
 
 /** OtherBench's own tools on its per-process server, as the broker knows them. */
-export type OtherBenchTool = 'artifact' | 'recall' | 'plan';
+export type OtherBenchTool = 'artifact' | 'recall' | 'plan' | 'status';
 
 const OWN_TOOLS: Record<OtherBenchTool, { name: string; description: string; source: ToolSource }> = {
   artifact: { name: ARTIFACT_TOOL, description: 'OtherBench artifact tool', source: 'artifact' },
   recall: { name: RECALL_TOOL, description: 'OtherBench recall tool', source: 'recall' },
   plan: { name: PLAN_TOOL, description: 'OtherBench plan tool', source: 'thread' },
+  status: { name: STATUS_TOOL, description: 'OtherBench chat status tool', source: 'thread' },
 };
 
 /** A helper's call no registry can name yet: its card says only that a helper asked. */

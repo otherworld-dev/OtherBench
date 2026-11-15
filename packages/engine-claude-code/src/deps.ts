@@ -52,6 +52,8 @@ export interface ClaudeCodeEngineDeps {
   artifactTool?: (ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => Promise<unknown>;
   /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
   recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
+  /** Offers `set_chat_status` on OtherBench's server (spec 2026-11-15-chat-done-status-design). Without it, Claude Code gets no status tool. */
+  chatStatusTool?: boolean;
   /**
    * Where a chat with no folder runs (a clean chat, spec
    * 2026-10-11-claude-code-clean-chat-and-mcp-design §1): each such chat gets

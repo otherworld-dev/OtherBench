@@ -147,7 +147,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>
                 {/* Beside the button, not in it, so a screen reader reads the status (as in ChatRow). */}
-                {status && <StatusWord status={status} testId={`home-chat-status-${c.id}`} className="mx-2" />}
+                {status && <StatusWord status={status} left={c.head?.agentStatus?.left} testId={`home-chat-status-${c.id}`} className="mx-2" />}
               </li>
             );
           })}
