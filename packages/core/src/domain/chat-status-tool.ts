@@ -46,7 +46,8 @@ export function parseChatStatus(args: unknown): AgentStatus | Invalid {
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return invalid('Send { done, left }.');
   const { done, left } = args as Record<string, unknown>;
   if (typeof done !== 'boolean') return invalid('"done" must be true or false.');
-  const list = left === undefined ? [] : left;
+  // Some providers send null for an optional field they leave unset.
+  const list = left === undefined || left === null ? [] : left;
   if (!Array.isArray(list)) return invalid('"left" must be a list of short lines.');
   if (list.length > STATUS_MAX_ITEMS) return invalid(`"left" can have at most ${STATUS_MAX_ITEMS} items.`);
   const items: string[] = [];

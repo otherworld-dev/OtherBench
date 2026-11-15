@@ -18,6 +18,11 @@ describe('parseChatStatus', () => {
     expect(parseChatStatus({ done: true, left: [] })).toEqual({ done: true, left: [] });
   });
 
+  it('takes a null list as no list, as some providers send unset fields', () => {
+    expect(parseChatStatus({ done: true, left: null })).toEqual({ done: true, left: [] });
+    expect('invalid' in parseChatStatus({ done: false, left: null })).toBe(true);
+  });
+
   it('takes what is left, trimmed', () => {
     expect(parseChatStatus({ done: false, left: ['  push  ', 'docs'] })).toEqual({ done: false, left: ['push', 'docs'] });
   });
