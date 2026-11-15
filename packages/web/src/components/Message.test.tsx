@@ -721,6 +721,22 @@ describe('Message thread cards', () => {
     expect(screen.getByTestId('chat-status-card')).toHaveTextContent('Done: nothing left in this chat');
   });
 
+  it('shows a status call that was refused or bad as a tool, so the row not changing has a reason', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } },
+      { type: 'tool-result', id: 's1', name: 'set_chat_status', result: 'Refused', isError: true },
+      { type: 'tool-call', id: 's2', name: 'set_chat_status', args: { done: false } },
+      { type: 'tool-result', id: 's2', name: 'set_chat_status', result: { error: true, code: 'invalid_input', message: 'list what is left' }, isError: false },
+    ] })} />);
+    expect(screen.queryByTestId('chat-status-card')).toBeNull();
+    expect(screen.getByText(/Used 2 tools: set_chat_status/)).toBeInTheDocument();
+  });
+
+  it('keeps a status call still waiting on its result out of the thread', () => {
+    render(<Message message={base({ status: 'streaming', parts: [{ type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } }] })} />);
+    expect(screen.queryByText(/set_chat_status/)).toBeNull();
+  });
+
   it('shows no status card on a reply that failed, which its row calls Failed', () => {
     render(<Message message={base({ status: 'error', parts: [
       { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } },

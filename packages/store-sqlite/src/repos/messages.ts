@@ -281,13 +281,17 @@ export class SqliteMessageRepo implements MessageRepo {
            SELECT b.chat_id, m.id FROM message m JOIN below b ON m.parent_id = b.id
          ),
          ranked AS (
-           SELECT b.chat_id, m.role, m.status, m.created_at, m.finished_at, substr(m.search_text, -?2) AS tail,
-                  -- Only a reply that mentions the status tool brings its parts, so the list doesn't read every reply's.
-                  CASE WHEN instr(m.parts, ?3) > 0 THEN m.parts END AS status_parts,
+           SELECT b.chat_id, m.id,
                   ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
              FROM below b JOIN message m ON m.id = b.id
          )
-         SELECT chat_id, role, status, created_at, finished_at, tail, status_parts FROM ranked WHERE rn = 1`
+         -- Only each chat's tip is read past its id: the text's tail, and of a finished reply's parts only its own
+         -- set_chat_status calls and results (top level, so a helper's never come), so the list parses next to nothing.
+         SELECT r.chat_id, m.role, m.status, m.created_at, m.finished_at, substr(m.search_text, -?2) AS tail,
+                CASE WHEN m.role = 'assistant' AND m.status = 'complete' AND instr(m.parts, ?3) > 0
+                  THEN (SELECT json_group_array(json(j.value)) FROM json_each(m.parts) j WHERE json_extract(j.value, '$.name') = ?3)
+                END AS status_parts
+           FROM ranked r JOIN message m ON m.id = r.id WHERE r.rn = 1`
       )
       .all(chatId ?? null, QUESTION_TAIL, STATUS_TOOL) as Record<string, unknown>[];
     return rows.map((r) => {

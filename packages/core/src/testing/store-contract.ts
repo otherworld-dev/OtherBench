@@ -924,6 +924,29 @@ export function runStoreContract(
         expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 40 }]);
       });
 
+      it("gives no agent status from a helper's call inside its subagent part, and takes the reply's own last call", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId }));
+        const helperParts: Part[] = [
+          { type: 'tool-call', id: 'h1', name: 'set_chat_status', args: { done: true } },
+          { type: 'tool-result', id: 'h1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+        ];
+        const helper: Part = { type: 'subagent', callId: 'sa', label: 'helper', prompt: 'p', profileId, profileName: 'P', modelId: 'm', status: 'complete', parts: helperParts };
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'assistant', status: 'complete', parts: [helper, { type: 'text', text: 'ok' }], createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'assistant', status: 'complete', createdAt: 20, parts: [
+          { type: 'tool-call', id: 't1', name: 'set_chat_status', args: { done: false, left: ['a'] } },
+          { type: 'tool-result', id: 't1', name: 'set_chat_status', result: 'Status set: 1 left.', isError: false },
+          { type: 'text', text: 'and then' },
+          { type: 'tool-call', id: 't2', name: 'set_chat_status', args: { done: true } },
+          { type: 'tool-result', id: 't2', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+        ] }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        expect(store.messages.heads('chat-a')[0]).not.toHaveProperty('agentStatus');
+        expect(store.messages.heads('chat-b')[0]?.agentStatus).toEqual({ done: true, left: [] });
+      });
+
       it('gives no agent status for a reply that failed or is still being written', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

@@ -46,7 +46,8 @@ export function parseChatStatus(args: unknown): AgentStatus | Invalid {
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return invalid('Send { done, left }.');
   const { done, left } = args as Record<string, unknown>;
   if (typeof done !== 'boolean') return invalid('"done" must be true or false.');
-  const list = left === undefined ? [] : left;
+  // Some providers send null for an optional field they leave unset.
+  const list = left === undefined || left === null ? [] : left;
   if (!Array.isArray(list)) return invalid('"left" must be a list of short lines.');
   if (list.length > STATUS_MAX_ITEMS) return invalid(`"left" can have at most ${STATUS_MAX_ITEMS} items.`);
   const items: string[] = [];
@@ -66,16 +67,42 @@ export function runStatusCommand(args: unknown): string | ThreadToolError {
   return status.done ? 'Status set: done.' : `Status set: ${status.left.length} left.`;
 }
 
+/** A result that is a refusal or an input error: Claude Code sets `isError`; the API engines store `{ error: true }` with isError false. */
+function isFailedResult(p: Extract<Part, { type: 'tool-result' }>): boolean {
+  return p.isError || (typeof p.result === 'object' && p.result !== null && (p.result as { error?: unknown }).error === true);
+}
+
+/** The ids of these parts' `set_chat_status` calls whose result came back without an error. */
+function okResults(parts: readonly Part[]): Set<string> {
+  const ok = new Set<string>();
+  for (const p of parts) if (p.type === 'tool-result' && p.name === STATUS_TOOL && !isFailedResult(p)) ok.add(p.id);
+  return ok;
+}
+
+/**
+ * The ids of these parts' `set_chat_status` calls that didn't take: the result was an error, or the arguments don't
+ * parse. The thread shows those as tool calls, so a row that didn't change has a reason; the rest (taken, or still
+ * waiting on their result) stay out of it.
+ */
+export function failedStatusCalls(parts: readonly Part[]): Set<string> {
+  const results = new Map<string, Extract<Part, { type: 'tool-result' }>>();
+  for (const p of parts) if (p.type === 'tool-result' && p.name === STATUS_TOOL) results.set(p.id, p);
+  const failed = new Set<string>();
+  for (const p of parts) {
+    if (p.type !== 'tool-call' || p.name !== STATUS_TOOL) continue;
+    const result = results.get(p.id);
+    if (result && (isFailedResult(result) || 'invalid' in parseChatStatus(p.args))) failed.add(p.id);
+  }
+  return failed;
+}
+
 /**
  * The reply's status: its last top-level `set_chat_status` call whose result came back without an error and whose
  * arguments parse. A helper's calls sit inside its `subagent` part, so they never count; a refused call has an error
  * result, so it doesn't either. Null when there is none.
  */
 export function agentStatusOf(parts: readonly Part[]): AgentStatus | null {
-  const ok = new Set<string>();
-  // The API engines store every result with isError false and say a refusal in the result itself ({ error: true }).
-  const failed = (result: unknown): boolean => typeof result === 'object' && result !== null && (result as { error?: unknown }).error === true;
-  for (const p of parts) if (p.type === 'tool-result' && p.name === STATUS_TOOL && !p.isError && !failed(p.result)) ok.add(p.id);
+  const ok = okResults(parts);
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     if (p?.type !== 'tool-call' || p.name !== STATUS_TOOL || !ok.has(p.id)) continue;
