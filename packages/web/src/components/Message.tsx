@@ -1,6 +1,8 @@
 import { useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
+import { agentStatusOf, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
+import { ChatStatusCard } from './ChatStatusCard.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import type { MediaProgress } from '@otherbench/core/ports/media.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
@@ -618,7 +620,8 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
       return;
     }
     if (p.type === 'tool-call' || p.type === 'tool-result') {
-      if (isTodoTool(p.name)) return;
+      // The checklist and the chat's status have cards of their own, under the reply.
+      if (isTodoTool(p.name) || p.name === STATUS_TOOL) return;
       if (recorded.has(p.id)) {
         const result = p.type === 'tool-call' ? results.get(p.id) : undefined;
         if (p.type === 'tool-call' && result) addCard(<ThreadRecord key={i} call={p} result={result} />);
@@ -937,6 +940,7 @@ export function Message({
     ? message.parts.filter((p): p is Extract<Part, { type: 'image' | 'file' }> => p.type === 'image' || p.type === 'file')
     : [];
   const todos = isUser ? null : latestTodos(message.parts);
+  const agentStatus = isUser ? null : agentStatusOf(message.parts);
 
   return (
     <article
@@ -1002,6 +1006,8 @@ export function Message({
       {message.status === 'streaming' && thinkingSince !== undefined && <ThinkingClock since={thinkingSince} {...(thinkingTokens !== undefined ? { tokens: thinkingTokens } : {})} />}
 
       {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
+
+      {agentStatus && <ChatStatusCard status={agentStatus} />}
 
       {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">
