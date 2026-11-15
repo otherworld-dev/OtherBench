@@ -1,4 +1,5 @@
 /** Shapes of the Overview: what needs the user across apps (chats, the GitHub inbox, Deck cards). */
+import type { AgentStatus } from '../domain/chat-status-tool.js';
 import type { MessageStatus, Role } from './messages.js';
 
 /** What a GitHub notification is about, from its subject type (domain/github-inbox.ts). */
@@ -33,6 +34,11 @@ export interface ChatHead {
   finishedAt?: number;
   /** A finished reply that asks the user something (`asksUser`). */
   asks?: true;
+  /**
+   * What the agent said about the chat's work in this reply (`set_chat_status`, read back by `agentStatusOf`):
+   * done, or what's left. Only on a complete assistant reply that set it; a new reply starts without one.
+   */
+  agentStatus?: AgentStatus;
 }
 
 export interface OverviewChat { chatId: string; title: string; waiting: boolean; at: number; projectId: string | null; projectName: string | null }
