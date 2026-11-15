@@ -1,7 +1,7 @@
 import { useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
-import { agentStatusOf, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
+import { agentStatusOf, failedStatusCalls, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { ChatStatusCard } from './ChatStatusCard.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import type { MediaProgress } from '@otherbench/core/ports/media.js';
@@ -598,6 +598,8 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
   // A finished generation shows as its media outside the fold; a failed one folds with the other tools, so its error stays visible.
   const generated = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isGenerationTool(p.name) && !p.isError && hasGeneratedMedia(p.result) ? [p.id] : [])));
   const recorded = new Set(parts.flatMap((p) => (p.type === 'tool-call' && (isAskTool(p.name) || isPlanTool(p.name)) ? [p.id] : [])));
+  // A status call that didn't take shows as a tool, so the row not changing has a reason; the rest are the card's.
+  const statusFailed = failedStatusCalls(parts);
   // A sub-agent shows as its card; the parent's own call and result that
   // started it (the API `subagent` tool, or Claude Code's Task or Agent) are
   // hidden. A subagent call with no card (refused before it started) stays in
@@ -621,7 +623,7 @@ function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
     }
     if (p.type === 'tool-call' || p.type === 'tool-result') {
       // The checklist and the chat's status have cards of their own, under the reply.
-      if (isTodoTool(p.name) || p.name === STATUS_TOOL) return;
+      if (isTodoTool(p.name) || (p.name === STATUS_TOOL && !statusFailed.has(p.id))) return;
       if (recorded.has(p.id)) {
         const result = p.type === 'tool-call' ? results.get(p.id) : undefined;
         if (p.type === 'tool-call' && result) addCard(<ThreadRecord key={i} call={p} result={result} />);

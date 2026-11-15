@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentStatusOf, parseChatStatus, runStatusCommand, STATUS_TOOL, SUBAGENT_STATUS_REFUSAL } from '../src/domain/chat-status-tool.js';
+import { agentStatusOf, failedStatusCalls, parseChatStatus, runStatusCommand, STATUS_TOOL, SUBAGENT_STATUS_REFUSAL } from '../src/domain/chat-status-tool.js';
 import { PermissionBroker } from '../src/domain/permissions.js';
 import { SUBAGENT_THREAD_REFUSAL } from '../src/domain/permissions/sources.js';
 import { PLAN_TOOL } from '../src/domain/thread-tools.js';
@@ -120,5 +120,19 @@ describe('the broker and set_chat_status', () => {
 
   it("leaves a helper's propose_plan as it was", () => {
     expect(broker.decide(PLAN, { plan: 'x' }, policy, ctx({ shownSubagent: tag }))).toMatchObject({ kind: 'allow' });
+  });
+});
+
+describe('failedStatusCalls', () => {
+  it('names the calls that were refused or bad, not the ones that took or still wait', () => {
+    const apiRefused: Part = { type: 'tool-result', id: 'c', name: STATUS_TOOL, result: { error: true, code: 'invalid_input', message: 'x' }, isError: false };
+    const parts: Part[] = [
+      call('a', { done: true }), ok('a'),
+      call('b', { done: true }), failed('b'),
+      call('c', { done: false }), apiRefused,
+      call('d', { done: 'yes' }), ok('d'),
+      call('e', { done: true }),
+    ];
+    expect([...failedStatusCalls(parts)].sort()).toEqual(['b', 'c', 'd']);
   });
 });
