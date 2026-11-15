@@ -21,9 +21,9 @@ function placeholderHtml(webDistDir: string): string {
 <meta charset="utf-8">
 <title>OtherBench</title>
 <style>
-  body { font: 14px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #1a1d21; }
-  code { background: #eef0f2; padding: 0.1em 0.4em; border-radius: 3px; }
-  @media (prefers-color-scheme: dark) { body { color: #e7e8ea; background: #17181b; } code { background: #2c2f34; } }
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #23262b; background: #f4f0e8; }
+  code { background: #ece6db; padding: 0.1em 0.4em; border-radius: 3px; }
+  @media (prefers-color-scheme: dark) { body { color: #f4f0e8; background: #23262b; } code { background: #1c1e22; } }
 </style>
 </head>
 <body>

@@ -315,7 +315,7 @@ function MainApp(): JSX.Element {
               type="button"
               aria-label="Close inspector overlay"
               onClick={() => setNarrowOverlayOpen(false)}
-              className="absolute inset-0 z-10 bg-black/30"
+              className="absolute inset-0 z-10 bg-[#1e2124]/40"
             />
             <div className={`absolute inset-y-0 right-0 z-20 shadow-lg ${mode === 'code' ? 'w-96 max-w-full' : 'w-80'}`}>
               {mode === 'code' ? (

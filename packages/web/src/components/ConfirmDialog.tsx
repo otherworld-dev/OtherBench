@@ -48,7 +48,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1e2124]/40"
       onKeyDown={onKeyDown}
       onMouseDown={(e) => {
         // A press on the backdrop or text must not move focus to <body>, or Esc/Tab stop reaching us.

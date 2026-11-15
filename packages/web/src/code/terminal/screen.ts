@@ -23,12 +23,12 @@ export function openTerminalLink(uri: string): void {
 export function terminalTheme(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
   const css = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string): string => css.getPropertyValue(name).trim() || fallback;
-  const text = token('--text', '#e6e6e6');
+  const text = token('--text', '#f4f0e8');
   return {
-    background: token('--bg', '#101114'),
+    background: token('--bg', '#23262b'),
     foreground: text,
     cursor: text,
-    selectionBackground: 'rgba(120, 160, 255, 0.35)',
+    selectionBackground: 'rgba(216, 155, 62, 0.35)',
   };
 }
 
