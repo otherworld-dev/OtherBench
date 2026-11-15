@@ -3,7 +3,7 @@ import { projectDisplayName, type ProjectLookup } from '@otherbench/core/domain/
 import type { App, Chat } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
 import { chatStatus, groupStatusSummary, isOnCard, type ChatActivity, type ChatStatus } from '../../state/chatStatus.js';
-import { setGroupCollapsed } from '../../state/sidebarGroups.js';
+import { expandGroupAlone, setGroupCollapsed } from '../../state/sidebarGroups.js';
 import { ChatRow, type DropPosition } from './ChatRow.js';
 import { focusLater, LIST_SELECTOR, rowSelector, type RowKind } from './focus.js';
 import { AGE_BUCKET_LABELS, bucketRuns, capRows, GROUP_ROW_CAP, type CodeSidebarGroup, type SidebarGroup } from './model.js';
@@ -23,6 +23,10 @@ export interface SidebarRenderContext {
   activeChatId: string | null;
   setActiveChatId: (id: string | null) => void;
   collapsedGroups: ReadonlySet<string>;
+  /** Every top-level Chat mode group's key (each parent project, and No project), shown or not. */
+  topLevelGroupKeys: readonly string[];
+  /** Opening a top-level group folds the others (Settings → Appearance). */
+  oneProjectOpen: boolean;
   expandedGroups: ReadonlySet<string>;
   setExpandedGroups: Dispatch<SetStateAction<ReadonlySet<string>>>;
   dropTarget: string | null;
@@ -55,6 +59,8 @@ export function sidebarRenderers({
   activeChatId,
   setActiveChatId,
   collapsedGroups,
+  topLevelGroupKeys,
+  oneProjectOpen,
   expandedGroups,
   setExpandedGroups,
   dropTarget,
@@ -84,6 +90,13 @@ export function sidebarRenderers({
       return next;
     });
     if (firstRevealedId) focusLater(rowSelector(firstRevealedId, 'group'));
+  }
+
+  /** A Chat mode group's arrow: opening a parent project folds the other parents when the setting is on. */
+  function toggleGroup(key: string): void {
+    const opening = collapsedGroups.has(key);
+    if (opening && oneProjectOpen && topLevelGroupKeys.includes(key)) expandGroupAlone(key, topLevelGroupKeys);
+    else setGroupCollapsed(key, !opening);
   }
 
   function statusOf(chat: Chat): ChatStatus | null {
@@ -127,7 +140,7 @@ export function sidebarRenderers({
         collapsed={!searching && collapsedGroups.has(group.key)}
         statusSummary={groupStatusSummary(groupChats(group).map(statusOf))}
         dropActive={dropTarget === group.key}
-        onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
+        onToggle={() => toggleGroup(group.key)}
         onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}
         onDropChat={(chatId) => void moveChat(chatId, projectId)}
         {...(project
