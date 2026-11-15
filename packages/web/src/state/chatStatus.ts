@@ -15,7 +15,7 @@ export type CardStatus = 'approve' | 'answer' | 'plan' | 'generate' | 'browser' 
  * or `failed`) hasn't been answered or ticked off, a reply is being written, it sent work to other chats and waits
  * for their replies (`waiting-chats`), or only background tasks are running.
  */
-export type ChatStatus = CardStatus | 'held' | 'failed' | 'your-turn' | 'working' | 'waiting-chats' | 'background';
+export type ChatStatus = CardStatus | 'held' | 'failed' | 'your-turn' | 'done' | 'left' | 'working' | 'waiting-chats' | 'background';
 
 /** The chats with a card pending (and what it asks), with a reply running, and with background tasks running. */
 export interface ChatActivity {
@@ -50,8 +50,14 @@ export function chatStatus(chat: Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' 
   // Its replies come back by themselves, so it isn't the user's turn yet.
   if (activity.waitingChats?.has(chat.id)) return 'waiting-chats';
   const background = activity.background.has(chat.id);
-  if (!chatNeedsYou(chat, chat.head ?? null, false, now - CHAT_NEED_WINDOW_MS, background)) return background ? 'background' : null;
-  return chat.head?.status === 'error' ? 'failed' : 'your-turn';
+  // A reply that said the chat is done, or what's left, stays on its row past the window: a chat marked Done and
+  // never archived is the one the user wants to find (spec 2026-11-15-chat-done-status-design).
+  const agentStatus = chat.head?.agentStatus;
+  const since = agentStatus ? -Infinity : now - CHAT_NEED_WINDOW_MS;
+  if (!chatNeedsYou(chat, chat.head ?? null, false, since, background)) return background ? 'background' : null;
+  if (chat.head?.status === 'error') return 'failed';
+  if (agentStatus) return agentStatus.done ? 'done' : 'left';
+  return 'your-turn';
 }
 
 /** Whether a status means the chat has stopped until the user acts. */
@@ -61,7 +67,7 @@ export function isNeedsYou(status: ChatStatus | null): boolean {
 
 /** A chat stopped on a card: only answering it clears it, so it has no tick (the reply it holds up would land after the tick). */
 export function isOnCard(status: ChatStatus | null): boolean {
-  return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn';
+  return isNeedsYou(status) && status !== 'failed' && status !== 'your-turn' && status !== 'done' && status !== 'left';
 }
 
 /** Why an app counts as live: a chat stopped on a card, or one still running (working, or on a paired machine). */

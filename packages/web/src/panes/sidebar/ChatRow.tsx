@@ -194,7 +194,7 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
-      {status ? <StatusWord status={status} testId={`${idPrefix}-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
+      {status ? <StatusWord status={status} left={chat.head?.agentStatus?.left} testId={`${idPrefix}-status-${chat.id}`} className="mx-1" /> : now !== undefined && (
         <span
           data-testid="row-age"
           title={`Last active ${new Date(chat.updatedAt).toLocaleString()}`}
