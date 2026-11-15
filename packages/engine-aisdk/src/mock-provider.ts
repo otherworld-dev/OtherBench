@@ -255,7 +255,8 @@ function firstHeading(snapshot: string): string | null {
  * then "I made the file.". `#echo-user` -> the latest user message's text
  * parts as the request carries them (an attached file's text included).
  * `#todos` -> three `update_todos` calls through the real tool when offered (a two-step
- * checklist, 1.5 s apart), then "All done.". `#ask` -> one `ask_user` question
+ * checklist, 1.5 s apart), then "All done.". `#status done` / `#status left a|b` ->
+ * one `set_chat_status` call through the real tool when offered. `#ask` -> one `ask_user` question
  * ("Which colour?") through the real tool, then the answer back. `#plan` -> a
  * `write_file` that plan mode refuses, then `propose_plan` rounds until
  * approved, then the write again. `#live-artifact <tool>` -> a live html
@@ -353,6 +354,12 @@ export class MockChatEngine implements ChatEngine {
 
     if (prompt.includes('#artifact')) {
       yield* this.streamArtifactTurn(req, tokensIn);
+      return;
+    }
+
+    const status = /#status[ \t]+(done|left[ \t]+([^\r\n]+))/.exec(prompt);
+    if (status) {
+      yield* this.streamStatusTurn(req, status[2] === undefined ? null : status[2].split('|').map((s) => s.trim()), tokensIn);
       return;
     }
 
@@ -631,6 +638,25 @@ export class MockChatEngine implements ChatEngine {
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'message_chats', result: JSON.stringify(result), isError };
     const answer = isError ? `Sending didn't work: ${JSON.stringify(result)}` : 'Sent.';
+    yield { type: 'text-delta', text: answer };
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /**
+   * `#status done` / `#status left <a>|<b>` (spec 2026-11-15-chat-done-status-design): one `set_chat_status` call
+   * through the real tool when offered, then "All finished." or "Some left.".
+   */
+  private async *streamStatusTurn(req: EngineRequest, left: string[] | null, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-status-${randomUUID()}`;
+    const args = left === null ? { done: true } : { done: false, left };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'set_chat_status', args };
+    const tool = req.tools.find((t) => t.name === 'set_chat_status');
+    const result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: 'No set_chat_status tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'set_chat_status', result: typeof result === 'string' ? result : JSON.stringify(result), isError };
+    const answer = left === null ? 'All finished.' : 'Some left.';
     yield { type: 'text-delta', text: answer };
     yield finishEvent(tokensIn, estimateTokens(answer));
   }
