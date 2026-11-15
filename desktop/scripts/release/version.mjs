@@ -2,6 +2,25 @@
 import { compareSemver, formatSemver, parseSemver } from './semver.mjs';
 
 /**
+ * The version a hand-built installer (`npm run app:installer`) carries:
+ * `X.Y.Z-alpha.local.<YYYYMMDDHHmm>`, local time. `alpha` sorts below `beta`,
+ * so it ranks under every beta of the package version (and under the next
+ * patch's), and the updater moves a machine on to the next beta. A plain
+ * `X.Y.Z` outranked every `X.Y.Z-beta.N`, so a hand install never updated
+ * again (2026-11-02, 2026-11-15).
+ *
+ * @param {{ packageVersion: string, now: Date }} input
+ * @returns {string}
+ */
+export function localVersion({ packageVersion, now }) {
+  const pkg = parseSemver(packageVersion);
+  if (!pkg || pkg.pre.length) throw new Error(`desktop/package.json's version ${packageVersion} must be X.Y.Z`);
+  const two = (n) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}${two(now.getHours())}${two(now.getMinutes())}`;
+  return `${formatSemver(pkg)}-alpha.local.${stamp}`;
+}
+
+/**
  * A `vX.Y.Z` tag releases exactly `X.Y.Z`. A push to `dev` releases a beta of
  * the next full version: `desktop/package.json`'s version while that is ahead
  * of every full release, else the newest full release with its patch bumped.
