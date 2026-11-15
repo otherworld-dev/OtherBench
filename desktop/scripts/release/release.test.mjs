@@ -1,7 +1,31 @@
 import { describe, expect, test } from 'vitest';
 import { compareSemver, parseSemver } from './semver.mjs';
-import { releaseVersion } from './version.mjs';
+import { localVersion, releaseVersion } from './version.mjs';
 import { shouldReplaceFeed, updaterManifest } from './manifest.mjs';
+
+describe('localVersion', () => {
+  const at = new Date(2026, 10, 15, 9, 5);
+
+  test('stamps a hand-built installer as a local pre-release of the package version, with the local time', () => {
+    expect(localVersion({ packageVersion: '0.2.0', now: at })).toBe('0.2.0-alpha.local.202611150905');
+  });
+
+  test('ranks below every beta of that version, and below the next patch, so the updater moves it on', () => {
+    const local = localVersion({ packageVersion: '0.2.0', now: at });
+    expect(compareSemver(local, '0.2.0-beta.1')).toBe(-1);
+    expect(compareSemver(local, '0.2.0-beta.118')).toBe(-1);
+    expect(compareSemver(local, '0.2.1-beta.5')).toBe(-1);
+    expect(compareSemver(local, '0.2.0')).toBe(-1);
+  });
+
+  test('a later local build ranks above an earlier one', () => {
+    expect(compareSemver(localVersion({ packageVersion: '0.2.0', now: at }), localVersion({ packageVersion: '0.2.0', now: new Date(2026, 10, 15, 9, 6) }))).toBe(-1);
+  });
+
+  test('refuses a package version that is already a pre-release', () => {
+    expect(() => localVersion({ packageVersion: '0.2.0-beta.3', now: at })).toThrow(/X\.Y\.Z/);
+  });
+});
 
 describe('releaseVersion', () => {
   test('a tag push releases exactly the tag', () => {

@@ -11,6 +11,8 @@ target/
 # The bundled server, and what the desktop installer stages (desktop/scripts/stage.mjs)
 dist-bundle/
 desktop/src-tauri/bundle-resources/
+# A hand-built installer's version (desktop/scripts/local-version.mjs).
+desktop/src-tauri/tauri.local.conf.json
 
 # Test / coverage
 coverage/

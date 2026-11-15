@@ -37,7 +37,11 @@ afterEach(() => {
 describe('updateStatusText', () => {
   it('says where the updater is', () => {
     expect(updateStatusText(status())).toBe('Up to date (0.2.0-beta.7)');
-    expect(updateStatusText(status({ state: 'ahead', newestFull: '0.1.0' }))).toBe("You're on a newer build than the current release (0.1.0)");
+    expect(updateStatusText(status({ state: 'ahead', newestFull: '0.1.0', newest: '0.1.0' }))).toBe(
+      "This build (0.2.0-beta.7) is newer than the newest release (0.1.0), so it doesn't update until a release passes it"
+    );
+    // An older shell that doesn't send `newest` falls back to the newest full release.
+    expect(updateStatusText(status({ state: 'ahead', newestFull: '0.1.0' }))).toMatch(/newest release \(0\.1\.0\)/);
     expect(updateStatusText(status({ state: 'ready', available: '0.2.0-beta.8', waitingFor: ['1 reply being written'] }))).toBe(
       "0.2.0-beta.8 is ready. It installs when nothing is running and you're away (waiting for: 1 reply being written)"
     );
@@ -65,6 +69,19 @@ describe('UpdatesSection', () => {
     expect(await screen.findByTestId('update-status')).toHaveTextContent('Up to date (0.2.0-beta.7)');
     await userEvent.click(screen.getByRole('checkbox', { name: /get beta releases early/i }));
     expect(setBetaUpdates).toHaveBeenCalledWith(true);
+  });
+
+  it('always shows the full version of this build, beta number included', async () => {
+    vi.mocked(updateStatus).mockResolvedValue(status({ current: '0.2.0-beta.118', state: 'checking' }));
+    render(<UpdatesSection />);
+    expect(await screen.findByTestId('update-version')).toHaveTextContent('This build: 0.2.0-beta.118');
+  });
+
+  it('says an old hand-built version that outranks the betas is stuck, and how to get back on them', async () => {
+    vi.mocked(updateStatus).mockResolvedValue(status({ current: '0.2.0', beta: true, state: 'ahead', newest: '0.2.0-beta.118' }));
+    render(<UpdatesSection />);
+    expect(await screen.findByTestId('update-status')).toHaveTextContent('This build (0.2.0) is newer than the newest release (0.2.0-beta.118)');
+    expect(screen.getByTestId('update-stranded')).toHaveTextContent(/install 0\.2\.0-beta\.118 by hand/);
   });
 
   it('checks now, and says when it last checked', async () => {
