@@ -1,0 +1,17 @@
+# Keeps the Claude Agent SDK current. Its bundled Claude Code runtime is what
+# lists the models a claude_code connection can use, so an old pin hides new
+# models (Fable 5.2 was missing on 0.3.287). Dependabot opens one PR per new
+# release against dev; CI runs the full check set on it before it's merged.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
+    versioning-strategy: increase
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: chore(deps)
