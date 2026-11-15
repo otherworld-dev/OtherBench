@@ -437,7 +437,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
   });
 
   it('starts a new process when only the built-in tools differ', () => {
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     const connection = { backend: 'claude', token: null };
     expect(liveKey({ cwd: 'x', tools: ['WebSearch', 'WebFetch'] }, connection, own)).not.toBe(liveKey({ cwd: 'x', tools: [] }, connection, own));
   });
@@ -1215,7 +1215,7 @@ describe('ClaudeCodeChatEngine relayed MCP tools', () => {
 
   it('starts a new process when the relayed tools change', () => {
     const connection = { backend: 'claude', token: null };
-    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'b' }));
+    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: 'b' }));
   });
 });
 
@@ -1450,8 +1450,8 @@ describe('ClaudeCodeChatEngine and the sandboxed shell', () => {
     const sandboxPolicy: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
     const hostPolicy: ToolPolicy = { ...sandboxPolicy, shellRuns: 'host' };
     const relayHash = buildRelay([runCommandSpec(async () => ({}))]).hash;
-    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: relayHash })).not.toBe(
-      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, plan: false, relay: '' })
+    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: relayHash })).not.toBe(
+      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, plan: false, status: false, relay: '' })
     );
   });
 });
@@ -3869,7 +3869,7 @@ describe('ClaudeCodeChatEngine on a Claude account', () => {
     expect(starts[1]!.options).toMatchObject({ resume: 'sess-1' });
     expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(VH.configDir);
     const options = starts[1]!.options;
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     expect(liveKey(options, { backend: 'claude:vh', token: null }, own)).not.toBe(liveKey(options, { backend: 'claude', token: null }, own));
     e.dispose();
   });
@@ -3884,7 +3884,7 @@ describe('ClaudeCodeChatEngine on a Claude account', () => {
     expect(starts).toHaveLength(2);
     expect(starts[0]!.prompts).toHaveLength(1);
     expect(starts[1]!.options.env?.['CLAUDE_CONFIG_DIR']).toBe(moved.configDir);
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     expect(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: VH.configDir }, own)).not.toBe(liveKey({ cwd: 'x' }, { backend: 'claude:vh', token: null, configDir: moved.configDir }, own));
     e.dispose();
   });

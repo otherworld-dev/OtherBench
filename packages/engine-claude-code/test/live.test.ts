@@ -135,7 +135,7 @@ describe('LiveProcess and its permission mode', () => {
   });
 
   it("leaves the mode out of the process key: it's switched on a live process, not a reason for a new one", () => {
-    const own = { artifacts: false, recall: false, plan: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, status: false, relay: '' };
     const connection = { backend: 'claude', token: null };
     expect(liveKey({ cwd: 'x', permissionMode: 'auto' }, connection, own)).toBe(liveKey({ cwd: 'x', permissionMode: 'default' }, connection, own));
   });
