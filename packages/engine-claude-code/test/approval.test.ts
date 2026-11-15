@@ -8,6 +8,9 @@ import type { AskInput, AskOutcome, ToolContext, ToolSpec } from '@otherbench/co
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import { canUseToolFor, createGate, denialText, isDriveLetterPosixPath, normaliseAgentArgs, permissionDeniedHook, preToolUseHook } from '../src/approval.js';
 import { HelperRegistry } from '../src/helpers.js';
+import { PermissionBroker } from '@otherbench/core/domain/permissions.js';
+import { SUBAGENT_STATUS_REFUSAL } from '@otherbench/core/domain/chat-status-tool.js';
+import { InMemoryStore } from '@otherbench/core/testing/fakes.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'otherbench-cc-')); mkdirSync(join(ws, 'src')); });
@@ -797,6 +800,17 @@ describe('createGate and the helpers of a reply', () => {
       { callId: 'agent-7', label: 'a helper', parentProfileId: 'p' },
       { callId: 'task-1', label: 'Find the bug', parentProfileId: 'p' },
     ]);
+  });
+
+  it("refuses a helper's set_chat_status through the real broker, and allows the reply's own", async () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const requestApproval = vi.fn(async (spec: ToolSpec, args: unknown, p: ToolPolicy, c: ToolContext) => {
+      const d = broker.decide(spec, args, p, c);
+      return d.kind === 'allow' ? { allowed: true as const, grantedBy: d.grantedBy } : { allowed: false as const, reason: d.kind === 'deny' ? d.reason : 'asked' };
+    });
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), helpers: new HelperRegistry() });
+    expect(await gate('mcp__otherbench_x__set_chat_status', { done: true }, undefined, { own: 'status', toolUseId: 't1', agentId: 'agent-7' })).toEqual({ allow: false, reason: SUBAGENT_STATUS_REFUSAL });
+    expect(await gate('mcp__otherbench_x__set_chat_status', { done: true }, undefined, { own: 'status', toolUseId: 't2' })).toEqual({ allow: true });
   });
 
   it("asks the process's background tasks who made a call: waiting for a generation with no word from Claude Code, at once for one it says is a helper's, never otherwise", async () => {

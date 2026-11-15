@@ -83,6 +83,26 @@ describe('AllAppsPage', () => {
     expect(within(card).getByText('In sidebar')).toBeTruthy();
   });
 
+  it("counts the chats the agent marked done, and those with work left as one Work left, whatever each has left", () => {
+    const head = (agentStatus: { done: boolean; left: string[] }) => ({ chatId: 'x', role: 'assistant' as const, status: 'complete' as const, createdAt: NOW - 60_000, agentStatus });
+    setup(
+      [app('alpha')],
+      [
+        chat('c1', 'alpha', { head: { ...head({ done: true, left: [] }), chatId: 'c1' } }),
+        chat('c2', 'alpha', { head: { ...head({ done: true, left: [] }), chatId: 'c2' } }),
+        chat('c3', 'alpha', { head: { ...head({ done: false, left: ['a'] }), chatId: 'c3' } }),
+        chat('c4', 'alpha', { head: { ...head({ done: false, left: ['a', 'b', 'c'] }), chatId: 'c4' } }),
+      ]
+    );
+    render(<AllAppsPage />);
+    const done = screen.getByTestId('all-apps-status-alpha-done');
+    const left = screen.getByTestId('all-apps-status-alpha-left');
+    expect(done.textContent).toBe('Done');
+    expect(left.textContent).toBe('Work left');
+    expect(done.parentElement!.textContent).toBe('2Done');
+    expect(left.parentElement!.textContent).toBe('2Work left');
+  });
+
   it('shows a last use older than a day as a short date and time, not the full locale one', () => {
     const at = NOW - 3 * 24 * 3_600_000;
     setup([app('alpha')], [chat('c1', 'alpha', { updatedAt: at })]);
