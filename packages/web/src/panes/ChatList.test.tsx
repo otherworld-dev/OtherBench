@@ -40,6 +40,7 @@ import { headingSelector } from './sidebar/focus.js';
 import { ApiError, api } from '../state/api.js';
 import { appTabId } from '../state/appTab.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { resetOneProjectOpenForTests, setOneProjectOpen } from '../state/oneProjectOpen.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed, UNKNOWN_APP_KEY } from '../state/sidebarGroups.js';
 import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -144,6 +145,7 @@ beforeEach(() => {
   desktopListeners.clear();
   window.localStorage.clear();
   resetSidebarGroupsForTests();
+  resetOneProjectOpenForTests();
   resetGroupSortsForTests();
   mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'linux' });
   // Like the server: PATCH returns the stored row with the body applied.
@@ -1712,6 +1714,38 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     setGroupCollapsed('p-g', true);
     render(<ChatList />);
     expect(screen.getByTestId('group-status-p-g')).toHaveTextContent('1 replying');
+  });
+
+  it('opening a parent project folds the other parents and No project, but leaves its own sub-projects open', async () => {
+    const user = userEvent.setup();
+    setGroupCollapsed('p-g', true);
+    render(<ChatList />);
+    await user.click(screen.getByRole('button', { name: 'Expand OtherBench' }));
+    expect(screen.getByRole('button', { name: 'Collapse OtherBench' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Expand PhD' })).toHaveAttribute('aria-expanded', 'false');
+    // No project's heading is its toggle (no separate arrow): read the saved set for it.
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toEqual(expect.arrayContaining(['p-x', NO_PROJECT_KEY]));
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).not.toContain('p-g');
+    expect(rowIds('group-p-d')).toEqual(['d1', 'd2']);
+  });
+
+  it('opening a sub-project leaves its siblings and the other parents as they were', async () => {
+    const user = userEvent.setup();
+    setGroupCollapsed('p-d', true);
+    render(<ChatList />);
+    await user.click(screen.getByRole('button', { name: 'Expand Desktop' }));
+    expect(screen.getByRole('button', { name: 'Collapse Sync' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse PhD' })).toBeInTheDocument();
+  });
+
+  it('with One project open at a time switched off, opening a parent leaves the others open', async () => {
+    const user = userEvent.setup();
+    setOneProjectOpen(false);
+    setGroupCollapsed('p-g', true);
+    render(<ChatList />);
+    await user.click(screen.getByRole('button', { name: 'Expand OtherBench' }));
+    expect(screen.getByRole('button', { name: 'Collapse PhD' })).toHaveAttribute('aria-expanded', 'true');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toEqual([]);
   });
 
   it('collapsing the parent hides its sub-projects too', async () => {

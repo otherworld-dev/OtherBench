@@ -49,6 +49,18 @@ export function setGroupCollapsed(key: string, value: boolean): void {
   const next = new Set(current);
   if (value) next.add(key);
   else next.delete(key);
+  save(next);
+}
+
+/** Expands one group and collapses `others` in the same save (the sidebar's one-project-open setting). */
+export function expandGroupAlone(key: string, others: Iterable<string>): void {
+  const next = new Set(getSnapshot());
+  next.delete(key);
+  for (const other of others) if (other !== key) next.add(other);
+  save(next);
+}
+
+function save(next: ReadonlySet<string>): void {
   collapsed = next;
   try {
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify([...next]));
