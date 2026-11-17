@@ -982,3 +982,124 @@ describe('AiSdkChatEngine.listModels (Ollama capability seeding from /api/tags)'
     expect(models).toEqual([{ modelId: 'some-model', displayName: 'some-model', contextWindow: null, supportsVision: null, supportsTools: null }]);
   });
 });
+
+describe('AiSdkChatEngine.listModels -- LM Studio capability seeding', () => {
+  function engineWithFetch(fetchImpl: typeof fetch) {
+    const resolver: ProviderResolver = { resolve: () => ({ kind: 'aisdk', provider: (() => null) as never }) };
+    return new AiSdkChatEngine(resolver, { fetchImpl });
+  }
+
+  /** LM Studio 0.4+'s native `GET /api/v1/models`. */
+  const V1_PAYLOAD = {
+    models: [
+      {
+        type: 'llm',
+        publisher: 'qwen',
+        key: 'qwen/qwen3.6-27b',
+        display_name: 'Qwen3.6 27B',
+        max_context_length: 262144,
+        capabilities: { vision: true, trained_for_tool_use: true },
+      },
+      {
+        type: 'llm',
+        publisher: 'google',
+        key: 'google/gemma-4-12b',
+        display_name: 'Gemma 4 12B',
+        max_context_length: 131072,
+        capabilities: { vision: false, trained_for_tool_use: false },
+      },
+      { type: 'embedding', key: 'text-embedding-nomic-embed-text-v1.5', display_name: 'Nomic Embed', max_context_length: 2048 },
+    ],
+  };
+  const OPENAI_LISTING = { data: [{ id: 'qwen/qwen3.6-27b' }, { id: 'google/gemma-4-12b' }, { id: 'text-embedding-nomic-embed-text-v1.5' }] };
+
+  function lmStudioFetch(routes: Record<string, () => Response | Promise<Response>>) {
+    return vi.fn(async (url: string | URL) => {
+      const route = routes[String(url)];
+      if (!route) return new Response('not found', { status: 404 });
+      return route();
+    });
+  }
+
+  it('reads capabilities, context and names from /api/v1/models, defaulting to port 1234, and drops embedding models', async () => {
+    const fetchImpl = lmStudioFetch({
+      'http://127.0.0.1:1234/v1/models': () => new Response(JSON.stringify(OPENAI_LISTING)),
+      'http://127.0.0.1:1234/api/v1/models': () => new Response(JSON.stringify(V1_PAYLOAD)),
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'lmstudio', baseUrl: null }), null);
+
+    expect(models).toEqual([
+      { modelId: 'qwen/qwen3.6-27b', displayName: 'Qwen3.6 27B', contextWindow: 262144, supportsVision: true, supportsTools: true },
+      { modelId: 'google/gemma-4-12b', displayName: 'Gemma 4 12B', contextWindow: 131072, supportsVision: false, supportsTools: false },
+    ]);
+  });
+
+  it('falls back to /api/v0/models on an older LM Studio: vlm means vision, tool_use in the list means tools', async () => {
+    const fetchImpl = lmStudioFetch({
+      'http://127.0.0.1:1234/v1/models': () => new Response(JSON.stringify({ data: [{ id: 'qwen2-vl-7b-instruct' }, { id: 'llama-3.1-8b' }, { id: 'old-model' }, { id: 'nomic-embed' }] })),
+      'http://127.0.0.1:1234/api/v0/models': () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: 'qwen2-vl-7b-instruct', type: 'vlm', max_context_length: 32768, capabilities: [] },
+              { id: 'llama-3.1-8b', type: 'llm', max_context_length: 131072, capabilities: ['tool_use'] },
+              // Releases before capabilities were reported: tools is unknown, not "no".
+              { id: 'old-model', type: 'llm', max_context_length: 4096 },
+              { id: 'nomic-embed', type: 'embeddings', max_context_length: 2048 },
+            ],
+          })
+        ),
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'lmstudio', baseUrl: null }), null);
+
+    expect(models).toEqual([
+      { modelId: 'qwen2-vl-7b-instruct', displayName: 'qwen2-vl-7b-instruct', contextWindow: 32768, supportsVision: true, supportsTools: false },
+      { modelId: 'llama-3.1-8b', displayName: 'llama-3.1-8b', contextWindow: 131072, supportsVision: false, supportsTools: true },
+      { modelId: 'old-model', displayName: 'old-model', contextWindow: 4096, supportsVision: false, supportsTools: null },
+    ]);
+  });
+
+  it('accepts a base URL without /v1 (another machine on the network) and finds both APIs from it', async () => {
+    const fetchImpl = lmStudioFetch({
+      'http://192.168.1.20:1234/v1/models': () => new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-27b' }] })),
+      'http://192.168.1.20:1234/api/v1/models': () => new Response(JSON.stringify(V1_PAYLOAD)),
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'lmstudio', baseUrl: 'http://192.168.1.20:1234/' }), null);
+
+    expect(models).toEqual([{ modelId: 'qwen/qwen3.6-27b', displayName: 'Qwen3.6 27B', contextWindow: 262144, supportsVision: true, supportsTools: true }]);
+  });
+
+  it('keeps the bare listing, unknown capabilities and all, when neither native API answers', async () => {
+    const fetchImpl = lmStudioFetch({
+      'http://127.0.0.1:1234/v1/models': () => new Response(JSON.stringify({ data: [{ id: 'some-model' }] })),
+      'http://127.0.0.1:1234/api/v1/models': () => {
+        throw new Error('ECONNRESET');
+      },
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'lmstudio', baseUrl: null }), null);
+
+    expect(models).toEqual([{ modelId: 'some-model', displayName: 'some-model', contextWindow: null, supportsVision: null, supportsTools: null }]);
+  });
+
+  it('sends the API key to the native API too, for an LM Studio with auth turned on', async () => {
+    const fetchImpl = lmStudioFetch({
+      'http://127.0.0.1:1234/v1/models': () => new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-27b' }] })),
+      'http://127.0.0.1:1234/api/v1/models': () => new Response(JSON.stringify(V1_PAYLOAD)),
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    await engine.listModels(makeConnection({ kind: 'lmstudio', baseUrl: null }), 'lm-token');
+
+    for (const call of fetchImpl.mock.calls as unknown as [string, RequestInit][]) {
+      expect((call[1].headers as Record<string, string>)['Authorization']).toBe('Bearer lm-token');
+    }
+  });
+});

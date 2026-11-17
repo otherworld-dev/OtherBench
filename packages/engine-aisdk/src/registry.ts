@@ -8,6 +8,24 @@ import type { Connection } from '@otherbench/core/types/config.js';
 /** The default base URL Ollama serves its OpenAI-compatible surface on. */
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1';
 
+/** LM Studio's server root (Developer tab → Start server, or `lms server start`). */
+export const DEFAULT_LMSTUDIO_ROOT = 'http://127.0.0.1:1234';
+
+/**
+ * The OpenAI-compatible base for an LM Studio connection. Its native API
+ * (`/api/v1/models`) sits beside `/v1` at the root, so people paste either
+ * form; both end up at `<root>/v1`.
+ */
+export function lmStudioOpenAiBase(baseUrl: string | null): string {
+  return `${lmStudioRoot(baseUrl)}/v1`;
+}
+
+/** LM Studio's server root, from a base URL given with or without `/v1`. */
+export function lmStudioRoot(baseUrl: string | null): string {
+  const trimmed = (baseUrl ?? DEFAULT_LMSTUDIO_ROOT).trim().replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -'/v1'.length) : trimmed;
+}
+
 /** Thrown when a `Connection` is missing configuration the chosen kind requires. */
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -58,7 +76,7 @@ interface CacheEntry {
  *    back an instance built from the WRONG SDK for the new kind.
  *  - `baseUrl`, `apiKey`, `extraHeaders` -- baked directly into every
  *    factory call.
- *  - `name` -- for `openai_compatible` and `ollama`, `buildProvider` passes
+ *  - `name` -- for `openai_compatible`, `ollama` and `lmstudio`, `buildProvider` passes
  *    `connection.name` as the `name` option to `createOpenAICompatible`,
  *    which the AI SDK bakes into the model's `provider` string and derives
  *    `providerOptionsName` from (the namespace it reads per-call
@@ -148,6 +166,19 @@ function buildProvider(connection: Connection, apiKey: string | null): ProviderH
         provider: createOpenAICompatible({
           name: connection.name,
           baseURL: connection.baseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+          apiKey: resolvedApiKey,
+          headers,
+        }),
+      };
+
+    case 'lmstudio':
+      // Same chat surface as Ollama; what differs is discovery, which reads
+      // LM Studio's native model list (AiSdkChatEngine.seedLmStudioCapabilities).
+      return {
+        kind: 'aisdk',
+        provider: createOpenAICompatible({
+          name: connection.name,
+          baseURL: lmStudioOpenAiBase(connection.baseUrl),
           apiKey: resolvedApiKey,
           headers,
         }),

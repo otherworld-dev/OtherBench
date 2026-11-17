@@ -1,7 +1,16 @@
 export type ConnectionKind =
-  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'claude_code' | 'mock'
+  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'lmstudio' | 'claude_code' | 'mock'
   // Generation connections (images and video): never a chat model, see domain/media.ts.
   | 'comfyui' | 'a1111' | 'openai_images';
+
+/**
+ * Kinds whose model discovery reads real per-model capabilities (vision,
+ * tools, context) from the server's own API. For every other kind those are
+ * declared by hand, so a `false` there means "not set", not "can't".
+ */
+export function reportsCapabilities(kind: ConnectionKind): boolean {
+  return kind === 'ollama' || kind === 'lmstudio';
+}
 
 export interface Connection {
   id: string;

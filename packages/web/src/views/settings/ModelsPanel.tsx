@@ -53,9 +53,10 @@ interface ModelEditorProps {
  * driven from the Connections panel's "Discover models" button) declares
  * capability flags conservatively (`false`/unknown) for most connection
  * kinds -- OtherBench has no reliable handshake for "do you accept images"
- * against an arbitrary endpoint. Ollama is the one exception: its native
- * API genuinely reports per-model capabilities, so discovery seeds real
- * `true`/`false` values for it (`AiSdkChatEngine.seedOllamaCapabilities`,
+ * against an arbitrary endpoint. Ollama and LM Studio are the exceptions:
+ * their native APIs genuinely report per-model capabilities, so discovery
+ * seeds real `true`/`false` values for them (`AiSdkChatEngine.seedOllamaCapabilities`
+ * and `seedLmStudioCapabilities`,
  * packages/engine-aisdk/src/engine.ts). Either way, saving an edit here
  * (`PATCH /models/:id`) marks the row `source: 'manual'` server-side, so a
  * later re-discovery can never silently overwrite what a human just
@@ -290,7 +291,7 @@ export function ModelsPanel(): JSX.Element {
     <div className="mx-auto max-w-3xl">
       <p className="mb-3 text-xs text-[var(--text-muted)]">
         Capabilities are declared, not probed, for most connections -- a custom endpoint can claim to be anything, and there is no reliable
-        handshake to check what it actually accepts. Ollama is the one exception: its native API reports real per-model capabilities, so
+        handshake to check what it actually accepts. Ollama and LM Studio are the exceptions: their native APIs report real per-model capabilities, so
         discovery seeds genuine values there. Either way, saving an edit below marks that row as manually managed, so a later &ldquo;Discover
         models&rdquo; run can never silently overwrite what you just set. Leave &ldquo;Vision&rdquo; off and an attached image silently
         degrades to text for any profile using this model; leave &ldquo;Tools&rdquo; off and tool calls are never offered to it. A blank price
