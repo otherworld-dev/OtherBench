@@ -6,7 +6,7 @@ panel under `packages/web/src/views/settings/`:
 
 - **Connections** (`ConnectionsPanel.tsx`) — add/edit/delete a connection for
   any provider kind (`anthropic`, `openai`, `openai_compatible`, `google`,
-  `ollama`, `mock`), **Test** it, and **Discover models** on it
+  `ollama`, `lmstudio`, `mock`), **Test** it, and **Discover models** on it
   (`POST /connections/:id/discover-models`). The API key field is
   write-only: the server never returns a stored key, only a `secretRef`, and
   the form never pre-fills it — you either type a new one or tick "Clear."
@@ -49,6 +49,24 @@ OpenAI-compatible shape: `AiSdkChatEngine` hits Ollama's native `GET
 `supportsVision`/`supportsTools`/`contextWindow` — richer than a generic
 `openai_compatible` endpoint can offer, since that protocol has no
 equivalent metadata.
+
+**LM Studio (`lmstudio`) works the same way.** Chat goes through LM Studio's
+OpenAI-compatible `/v1` (default `http://127.0.0.1:1234`; a base URL is
+accepted with or without `/v1`, `lmStudioOpenAiBase` in
+`packages/engine-aisdk/src/registry.ts`). Discovery lists `/v1/models`, then
+reads LM Studio's native model list for capabilities
+(`seedLmStudioCapabilities` in `engine.ts`): `GET /api/v1/models` on 0.4 and
+later (`capabilities.vision`, `capabilities.trained_for_tool_use`,
+`max_context_length`, `display_name`), falling back to `GET /api/v0/models`
+on 0.3 (`type: 'vlm'` for vision, `'tool_use'` in `capabilities` for tools).
+Embedding models are left out. Any failure there, within the same 3 s budget
+as Ollama's, keeps the bare listing with capabilities unknown. Like Ollama, a
+new LM Studio connection with no base URL is bound to this machine
+(`availability.ts`), and Generation's "can't use tools" warning covers it
+(`reportsCapabilities` in `core/src/types/config.ts`). Not done: unloading an
+LM Studio model before a generation on the same card, which is Ollama only.
+The shapes were written from LM Studio's docs; the server wouldn't start on
+2026-11-17 to check them against a live one.
 
 **The tool runtime is now reachable end to end.** The Inspector
 (`packages/web/src/panes/Inspector.tsx`) has a Workspace section: type in a

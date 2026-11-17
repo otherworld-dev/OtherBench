@@ -164,6 +164,20 @@ describe('ConnectionsPanel', () => {
     expect(screen.queryByTestId('workflows-section')).toBeNull();
   });
 
+  it('offers LM Studio as a chat kind with its default address and setup hint, and saves it with no base URL', async () => {
+    mockedCreate.mockResolvedValue(makeConnection({ id: 'new-conn', name: 'LM Studio', kind: 'lmstudio' }));
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    expect(screen.getByRole('option', { name: 'LM Studio' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Connection name'), 'LM Studio');
+    await user.selectOptions(screen.getByLabelText('Connection kind'), 'lmstudio');
+    expect(screen.getByLabelText('Base URL')).toHaveAttribute('placeholder', 'Defaults to http://127.0.0.1:1234');
+    expect(screen.getByText(/Start LM Studio.s server first/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'LM Studio', kind: 'lmstudio', baseUrl: null })));
+  });
+
   it('lists ComfyUI first among the generation kinds', async () => {
     const user = userEvent.setup();
     render(<ConnectionsPanel />);

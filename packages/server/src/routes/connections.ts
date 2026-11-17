@@ -17,7 +17,7 @@ import type { Container } from '../container.js';
 import { backendOf, mediaConnectionOf } from '../media.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'lmstudio', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
 
 interface ConnectionBody {
   name?: unknown;

@@ -7,7 +7,7 @@ import type { Connection, ConnectionKind } from '../types/config.js';
  */
 
 /** Where a kind with no base URL connects by default. */
-const DEFAULT_LOCAL_KINDS: ReadonlySet<ConnectionKind> = new Set(['ollama']);
+const DEFAULT_LOCAL_KINDS: ReadonlySet<ConnectionKind> = new Set(['ollama', 'lmstudio']);
 
 /** True for a URL whose host is this machine: `localhost`, `127.x.x.x` or `[::1]`. */
 export function isLoopbackUrl(url: string): boolean {

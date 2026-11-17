@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Connection, ConnectionKind } from '@otherbench/core/types/config.js';
-import { ProviderRegistry, ConfigError } from '../src/registry.js';
+import { ProviderRegistry, ConfigError, lmStudioOpenAiBase } from '../src/registry.js';
 
 let counter = 0;
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
@@ -54,6 +54,21 @@ describe('ProviderRegistry', () => {
     const registry = new ProviderRegistry();
     const connection = makeConnection({ kind: 'ollama', baseUrl: null });
     expect(() => registry.resolve(connection, null)).not.toThrow();
+  });
+
+  it('constructs an lmstudio provider with no base URL or key (defaults to the local server)', () => {
+    const registry = new ProviderRegistry();
+    const handle = registry.resolve(makeConnection({ kind: 'lmstudio', baseUrl: null }), null);
+    expect(handle.kind).toBe('aisdk');
+  });
+
+  it.each([
+    [null, 'http://127.0.0.1:1234/v1'],
+    ['http://192.168.1.20:1234', 'http://192.168.1.20:1234/v1'],
+    ['http://192.168.1.20:1234/', 'http://192.168.1.20:1234/v1'],
+    ['http://192.168.1.20:1234/v1/', 'http://192.168.1.20:1234/v1'],
+  ])('lmStudioOpenAiBase(%s) is %s', (baseUrl, expected) => {
+    expect(lmStudioOpenAiBase(baseUrl)).toBe(expected);
   });
 
   it('resolves a mock handle for kind mock, requiring no key', () => {

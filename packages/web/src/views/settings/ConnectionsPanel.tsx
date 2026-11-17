@@ -5,10 +5,11 @@ import { useOtherBenchStore } from '../../state/store.js';
 import { isGenerationKind } from '@otherbench/core/domain/media.js';
 import { WorkflowsSection } from './WorkflowsSection.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'lmstudio', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
 
 /** Kinds shown under a name of their own (the rest show as their kind). */
 const KIND_LABELS: Partial<Record<ConnectionKind, string>> = {
+  lmstudio: 'LM Studio',
   comfyui: 'ComfyUI (recommended)',
   a1111: 'Automatic1111',
   openai_images: 'OpenAI-compatible images',
@@ -17,6 +18,7 @@ const KIND_LABELS: Partial<Record<ConnectionKind, string>> = {
 /** What the Base URL box suggests for a kind; the generation kinds are never auto-detected, so they show their usual address. */
 const BASE_URL_PLACEHOLDERS: Partial<Record<ConnectionKind, string>> = {
   ollama: 'Defaults to http://127.0.0.1:11434',
+  lmstudio: 'Defaults to http://127.0.0.1:1234',
   claude_code: 'Leave empty to use your Claude login',
   comfyui: 'http://127.0.0.1:8188',
   a1111: 'http://127.0.0.1:7860',
@@ -302,10 +304,17 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         {kind === 'openai_compatible' && (
           <p className="mt-1 text-xs text-[var(--text-muted)]">Required -- an OpenAI-compatible connection has no default host to talk to.</p>
         )}
+        {kind === 'lmstudio' && (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            Start LM Studio&rsquo;s server first (Developer tab, or <code>lms server start</code>). For LM Studio on another machine, turn on
+            &ldquo;Serve on local network&rdquo; there and enter its address, such as http://192.168.1.20:1234. Discover models reads each
+            model&rsquo;s vision, tools and context from LM Studio.
+          </p>
+        )}
         {kind === 'claude_code' && (
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             Runs turns through your local Claude Code. Empty uses your Claude login (no API key). An Anthropic-compatible endpoint such as
-            Ollama&rsquo;s (http://localhost:11434) runs local models through Claude Code instead.
+            Ollama&rsquo;s (http://localhost:11434) or LM Studio&rsquo;s (http://localhost:1234) runs local models through Claude Code instead.
           </p>
         )}
       </div>
