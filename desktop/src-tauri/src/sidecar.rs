@@ -34,8 +34,11 @@ pub fn plain_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// How long to wait for the announce line before giving up.
-const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long to wait for the announce line before giving up. A server that dies says so at once
+/// (its stdout ends), so this only bounds one that is slow or stuck. The first start after an
+/// update took over 15 s on 2026-11-18 (11 s just to load, with the new files still being scanned)
+/// where the same build starts in 3 s once warm.
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The same for the smoke tests' build, which runs on machines busy with other test runs: a fresh
 /// server took 18-25 s to start on a machine at 100% CPU, where the app's own 15 s failed the run.
 const TEST_ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(90);

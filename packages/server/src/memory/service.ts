@@ -1,4 +1,5 @@
 import {
+  MEMORY_HEADINGS,
   MEMORY_QUIET_MS,
   NO_MEMORY_MODEL_MESSAGE,
   emptyMemoryBody,
@@ -18,7 +19,7 @@ import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import { collectMessageTree } from '../routes/chats.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
-import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askMemoryModel, errorMessage, pickMemoryProfile } from './shared.js';
+import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askForNote, errorMessage, pickMemoryProfile } from './shared.js';
 
 export { MEMORY_UPDATE_TIMEOUT_MS } from './shared.js';
 
@@ -233,9 +234,17 @@ export class ProjectMemoryService {
     if (!profile) return this.fail(projectId, chatId, NO_MEMORY_MODEL_MESSAGE);
 
     const about = pending.findLast((m) => m.role === 'assistant')!;
-    const answer = await this.ask(profile, chatId, about.id, memoryUpdatePrompt(start.project.name, currentBody, renderMemoryTranscript(pending)));
+    const answer = await askForNote(
+      { engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running, store: this.store },
+      profile,
+      chatId,
+      about.id,
+      memoryUpdatePrompt(start.project.name, currentBody, renderMemoryTranscript(pending)),
+      (output) => finaliseSummary(currentBody, output),
+      MEMORY_HEADINGS
+    );
     if (!answer.ok) return this.fail(projectId, chatId, `Memory update failed: ${answer.error}`);
-    const checked = finaliseSummary(currentBody, answer.text);
+    const checked = answer.check;
     if (!checked.ok) return this.fail(projectId, chatId, `The memory model (${profile.name}) wrote a note that was rejected: ${checked.reason}`);
 
     // Anything may have changed while the model was answering (spec §6).
@@ -269,10 +278,6 @@ export class ProjectMemoryService {
   private pickProfile(project: Project): Promise<ResolvedProfile | null> {
     const chosen = this.store.settings.get().memoryProfileId;
     return pickMemoryProfile(this.store, this.resolveProfile, [chosen, project.defaultProfileId, appDefaultProfileId(this.store)], chosen);
-  }
-
-  private ask(profile: ResolvedProfile, chatId: string, aboutMessageId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-    return askMemoryModel({ engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running, store: this.store }, profile, chatId, aboutMessageId, prompt);
   }
 
   private fail(projectId: string, chatId: string, message: string): MemoryUpdateOutcome {

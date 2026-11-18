@@ -1,4 +1,4 @@
-import { emptyGlobalMemoryBody, finaliseGlobalSummary, globalMemoryUpdatePrompt, normaliseGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
+import { GLOBAL_MEMORY_HEADINGS, emptyGlobalMemoryBody, finaliseGlobalSummary, globalMemoryUpdatePrompt, normaliseGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
 import { MEMORY_QUIET_MS, pendingMemoryMessages, renderMemoryTranscript, type MemoryFailure } from '@otherbench/core/domain/memory.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
@@ -8,7 +8,7 @@ import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import { collectMessageTree } from '../routes/chats.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
-import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askMemoryModel, errorMessage, pickMemoryProfile } from './shared.js';
+import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askForNote, errorMessage, pickMemoryProfile } from './shared.js';
 
 /** `lastError` when no profile can run the summariser. */
 export const NO_GLOBAL_MEMORY_MODEL_MESSAGE = 'No model available for global memory';
@@ -199,15 +199,17 @@ export class GlobalMemoryService {
     const profile = await pickMemoryProfile(this.store, this.resolveProfile, [chosen, appDefaultProfileId(this.store)], chosen);
     if (!profile) return this.fail(chatId, NO_GLOBAL_MEMORY_MODEL_MESSAGE);
 
-    const answer = await askMemoryModel(
+    const answer = await askForNote(
       { engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running, store: this.store },
       profile,
       chatId,
       pending.findLast((m) => m.role === 'assistant')!.id,
-      globalMemoryUpdatePrompt(currentBody, renderMemoryTranscript(pending))
+      globalMemoryUpdatePrompt(currentBody, renderMemoryTranscript(pending)),
+      (output) => finaliseGlobalSummary(currentBody, output),
+      GLOBAL_MEMORY_HEADINGS
     );
     if (!answer.ok) return this.fail(chatId, `Global memory update failed: ${answer.error}`);
-    const checked = finaliseGlobalSummary(currentBody, answer.text);
+    const checked = answer.check;
     if (!checked.ok) return this.fail(chatId, `The memory model (${profile.name}) wrote a global note that was rejected: ${checked.reason}`);
 
     // Anything may have changed while the model was answering.

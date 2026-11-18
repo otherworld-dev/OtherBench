@@ -10,6 +10,7 @@ import {
   finaliseSummary,
   hasMemoryContent,
   memoryPath,
+  memoryShortenPrompt,
   memoryUpdatePrompt,
   normaliseMemoryBody,
   pendingMemoryMessages,
@@ -157,6 +158,33 @@ describe('finaliseSummary', () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? '' : result.reason).toMatch(/characters; the limit is 4,000\.$/);
   });
+
+  it('hands back a note that is only too long, Pinned put back, so it can be shortened', () => {
+    const current = note({ pinned: '- Keep v1' });
+    const long = note({ pinned: '- (rewritten)', goals: 'g'.repeat(4_100) });
+    const result = finaliseSummary(current, `Here:\n${long}`);
+    expect(result).toEqual({ ok: false, reason: expect.stringMatching(/the limit is 4,000\.$/), tooLong: note({ pinned: '- Keep v1', goals: 'g'.repeat(4_100) }) });
+  });
+
+  it('hands back nothing to shorten when the headings are wrong', () => {
+    const result = finaliseSummary(emptyMemoryBody(), `## Goals\n${'g'.repeat(4_100)}`);
+    expect(result).toEqual({ ok: false, reason: MEMORY_FORMAT_ERROR });
+  });
+});
+
+describe('memoryShortenPrompt', () => {
+  it('asks for the note under the target, keeping the headings and Pinned, with the note itself', () => {
+    const long = note({ pinned: '- Keep v1', goals: 'g'.repeat(4_100) });
+    const prompt = memoryShortenPrompt(long);
+    expect(prompt).toContain(`This note is ${long.length.toLocaleString('en-US')} characters, over the 4,000 limit. Shorten it to under 3,500 characters.`);
+    expect(prompt).toContain('## Pinned, ## Goals, ## Decisions, ## Current focus, ## Open questions');
+    expect(prompt).toContain('Copy the ## Pinned section exactly as given.');
+    expect(prompt).toContain(`<note>\n${long}\n</note>`);
+  });
+
+  it('uses the headings it is given', () => {
+    expect(memoryShortenPrompt('## Pinned\n\n## Other', ['Pinned', 'Other'])).toContain('these level-2 headings, in this order: ## Pinned, ## Other.');
+  });
 });
 
 describe('renderMemoryTranscript', () => {
@@ -303,7 +331,8 @@ describe('prompts', () => {
     expect(prompt).toContain('the project "Alpha"');
     expect(prompt).toContain('## Pinned, ## Goals, ## Decisions, ## Current focus, ## Open questions');
     expect(prompt).toContain('Copy the ## Pinned section exactly as given.');
-    expect(prompt).toContain('under 4,000 characters');
+    expect(prompt).toContain('Keep the whole note under 3,500 characters: a note over 4,000 is thrown away.');
+    expect(prompt).toContain('make room first');
     expect(prompt).toContain(`<current-note>\n${note({ pinned: '- Keep v1' })}\n</current-note>`);
     expect(prompt).toContain('<new-conversation>\nUser: hi\n\nAssistant: hello\n</new-conversation>');
   });

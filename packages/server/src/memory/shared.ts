@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { memoryShortenPrompt, type NoteHeadings, type SummaryCheck } from '@otherbench/core/domain/memory.js';
 import type { ChatEngine, EngineEvent } from '@otherbench/core/ports/chat-engine.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
@@ -153,6 +154,31 @@ export async function askMemoryModel(
   if (timedOut) return timeoutFailure;
   if (stopped) return { ok: false, error: 'The memory service was shut down.' };
   return { ok: true, text };
+}
+
+/**
+ * Asks for an updated note and checks it with `finalise`. A note refused only
+ * for being over the cap gets one more call asking the model to shorten that
+ * note, instead of the update being thrown away: a note near the cap otherwise
+ * fails nearly every update, so it never changes again and every chat behind
+ * it is retried (and billed) at each start.
+ */
+export async function askForNote(
+  deps: AskDeps,
+  profile: ResolvedProfile,
+  chatId: string,
+  aboutMessageId: string | null,
+  prompt: string,
+  finalise: (output: string) => SummaryCheck,
+  headings: NoteHeadings
+): Promise<{ ok: true; check: SummaryCheck } | { ok: false; error: string }> {
+  const answer = await askMemoryModel(deps, profile, chatId, aboutMessageId, prompt);
+  if (!answer.ok) return answer;
+  const check = finalise(answer.text);
+  if (check.ok || check.tooLong === undefined) return { ok: true, check };
+  const shorter = await askMemoryModel(deps, profile, chatId, aboutMessageId, memoryShortenPrompt(check.tooLong, headings));
+  if (!shorter.ok) return shorter;
+  return { ok: true, check: finalise(shorter.text) };
 }
 
 /**
