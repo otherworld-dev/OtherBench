@@ -916,7 +916,7 @@ export function runStoreContract(
         store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
         store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', parts: statusParts, createdAt: 20 }));
         store.chats.update('chat-a', { headMessageId: 'a1' });
-        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20, agentStatus: { done: false, left: ['a'] } }]);
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20, agentStatus: { done: false, left: [{ text: 'a' }] } }]);
         // The user answers and the next reply doesn't set it: the old status no longer counts.
         store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
         store.messages.create(makeMessageInput({ id: 'a2', chatId: 'chat-a', parentId: 'u2', role: 'assistant', status: 'complete', parts: [{ type: 'text', text: 'Done that.' }], createdAt: 40 }));

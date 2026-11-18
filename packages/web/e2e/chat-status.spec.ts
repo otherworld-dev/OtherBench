@@ -6,7 +6,7 @@ import { BASE_URL } from '../playwright.config.js';
  * The chat's status (spec 2026-11-15-chat-done-status-design) in a real
  * browser, on the keyless mock connection: `#status left a|b` and
  * `#status done` call the real set_chat_status tool, and the chat's row says
- * "2 left", then "Done", then "Your turn" again after a reply that doesn't
+ * "2 left" (untagged), "1 for you" (tagged), then "Done", then "Your turn" again after a reply that doesn't
  * set it. Names are unique per test: the e2e server keeps one database.
  */
 
@@ -42,10 +42,21 @@ test('the agent marks the chat: N left, then Done, then Your turn after a reply 
 
   await send(page, '#status left push to github|update the docs');
   await expect(word).toHaveText('2 left');
-  await expect(word).toHaveAttribute('title', 'push to github\nupdate the docs');
+  await expect(word).toHaveAttribute('title', 'Left:\n  push to github\n  update the docs');
   const card = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
   await expect(card).toContainText('push to github');
   await expect(page.locator('article[data-role="assistant"]').last()).not.toContainText('set_chat_status');
+
+  await send(page, '#status left you:try it live|me:push to github|parked:dark mode');
+  await expect(word).toHaveText('1 for you');
+  await expect(word).toHaveAttribute('title', 'Waiting on you:\n  try it live\nNext from me:\n  push to github\nParked:\n  dark mode');
+  const grouped = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
+  await expect(grouped.getByRole('list', { name: 'Waiting on you' })).toContainText('try it live');
+  await expect(grouped.getByRole('list', { name: 'Parked' })).toContainText('dark mode');
+
+  await send(page, '#status left me:push to github');
+  await expect(word).toHaveText('1 left');
+  await expect(word).toHaveAttribute('data-for-you', '0');
 
   await send(page, '#status done');
   await expect(word).toHaveText('Done');

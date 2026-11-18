@@ -17,7 +17,14 @@ export const STATUS_TOOL_DESCRIPTION =
   "Tell the user whether this chat's work is finished. Call it as the last step of any turn in which work was done or agreed. " +
   'Set done: true only when everything you and the user agreed to do in this chat is finished. Otherwise set done: false and list what is still left, one short line each, ' +
   "including things that were discussed and parked for later. This is about the whole conversation, not the current task's steps (that's the checklist). " +
+  'Give each item a "who": "you" when it waits on the user (something they must do, check, decide or answer before it can move), ' +
+  '"me" when you will do it yourself once the user says carry on, "parked" when it was agreed to leave it for later. ' +
+  'The user sees only these short lines beside your reply, so for every "you" item say plainly in your reply what they need to do and why. ' +
   'Call it again every turn: a new reply starts with no status.';
+
+/** Who a left item waits on: the user, the agent, or nobody yet (parked). */
+export const STATUS_WHO = ['you', 'me', 'parked'] as const;
+export type StatusWho = (typeof STATUS_WHO)[number];
 
 export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
   type: 'object',
@@ -26,20 +33,53 @@ export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
     left: {
       type: 'array',
       maxItems: STATUS_MAX_ITEMS,
-      items: { type: 'string' },
-      description: 'With done: false, what is still left, one short line each. Leave it out with done: true.',
+      items: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'What is left, in one short line.' },
+          who: {
+            type: 'string',
+            enum: [...STATUS_WHO],
+            description: '"you": waits on the user. "me": you will do it once they say carry on. "parked": agreed to leave for later.',
+          },
+        },
+        required: ['text', 'who'],
+      },
+      description: 'With done: false, what is still left. Leave it out with done: true.',
     },
   },
   required: ['done'],
 };
 
+/** One thing left. `who` is missing on replies saved before items said who they wait on. */
+export interface StatusItem {
+  text: string;
+  who?: StatusWho;
+}
+
 /** What the agent last said about the chat's work. */
 export interface AgentStatus {
   done: boolean;
-  left: string[];
+  left: StatusItem[];
 }
 
 const invalid = (reason: string): Invalid => ({ invalid: reason });
+
+const isWho = (v: unknown): v is StatusWho => typeof v === 'string' && (STATUS_WHO as readonly string[]).includes(v);
+
+/** One `left` entry: `{ text, who }`, or a plain line as replies saved before items said who. */
+function parseItem(raw: unknown): StatusItem | Invalid {
+  if (typeof raw === 'string') {
+    return raw.trim() === '' ? invalid('Each item in "left" needs some text.') : { text: raw.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return invalid('Each item in "left" is { text, who }.');
+  const { text, who } = raw as Record<string, unknown>;
+  if (typeof text !== 'string' || text.trim() === '') return invalid('Each item in "left" needs some text.');
+  const item: StatusItem = { text: text.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
+  if (who === undefined || who === null) return item;
+  if (!isWho(who)) return invalid('"who" must be "you", "me" or "parked".');
+  return { ...item, who };
+}
 
 /** `set_chat_status` input, held to its limits. */
 export function parseChatStatus(args: unknown): AgentStatus | Invalid {
@@ -48,23 +88,44 @@ export function parseChatStatus(args: unknown): AgentStatus | Invalid {
   if (typeof done !== 'boolean') return invalid('"done" must be true or false.');
   // Some providers send null for an optional field they leave unset.
   const list = left === undefined || left === null ? [] : left;
-  if (!Array.isArray(list)) return invalid('"left" must be a list of short lines.');
+  if (!Array.isArray(list)) return invalid('"left" must be a list of items.');
   if (list.length > STATUS_MAX_ITEMS) return invalid(`"left" can have at most ${STATUS_MAX_ITEMS} items.`);
-  const items: string[] = [];
+  const items: StatusItem[] = [];
   for (const raw of list) {
-    if (typeof raw !== 'string' || raw.trim() === '') return invalid('Each item in "left" needs some text.');
-    items.push(raw.trim().slice(0, STATUS_ITEM_MAX_CHARS));
+    const item = parseItem(raw);
+    if ('invalid' in item) return item;
+    items.push(item);
   }
   if (done && items.length > 0) return invalid('With done: true, leave "left" out: nothing is left.');
   if (!done && items.length === 0) return invalid('With done: false, list what is still left in "left".');
   return { done, left: items };
 }
 
+/** How many of these items wait on the user. */
+export function waitingOnUser(items: readonly StatusItem[]): number {
+  return items.filter((i) => i.who === 'you').length;
+}
+
+/** How each group of left items is headed, in the order they're shown; untagged items (older replies) come last. */
+export const STATUS_GROUPS: ReadonlyArray<{ who: StatusWho | undefined; label: string }> = [
+  { who: 'you', label: 'Waiting on you' },
+  { who: 'me', label: 'Next from me' },
+  { who: 'parked', label: 'Parked' },
+  { who: undefined, label: 'Left' },
+];
+
+/** The left items grouped by who they wait on, in `STATUS_GROUPS` order, empty groups dropped. */
+export function groupLeft(items: readonly StatusItem[]): Array<{ who: StatusWho | undefined; label: string; items: string[] }> {
+  return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.who === g.who).map((i) => i.text) })).filter((g) => g.items.length > 0);
+}
+
 /** `set_chat_status`: nothing to store or wait for; the row and the card read the call itself. */
 export function runStatusCommand(args: unknown): string | ThreadToolError {
   const status = parseChatStatus(args);
   if ('invalid' in status) return inputError(status.invalid);
-  return status.done ? 'Status set: done.' : `Status set: ${status.left.length} left.`;
+  if (status.done) return 'Status set: done.';
+  const yours = waitingOnUser(status.left);
+  return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user` : ''}.`;
 }
 
 /** A result that is a refusal or an input error: Claude Code sets `isError`; the API engines store `{ error: true }` with isError false. */

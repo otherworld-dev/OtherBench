@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { CHAT_NEED_WINDOW_MS } from '@otherbench/core/domain/overview.js';
+import type { AgentStatus } from '@otherbench/core/domain/chat-status-tool.js';
 import { chatStatus, groupStatusSummary, isLive, isNeedsYou, isOnCard, needsYouChats, shownChatIds, useChatActivity, type ChatActivity } from './chatStatus.js';
 import type { PeersOverview } from './api.js';
 import { useOtherBenchStore } from './store.js';
@@ -175,12 +176,12 @@ describe('isLive', () => {
 });
 
 describe('chatStatus: the agent says the chat is done, or what is left', () => {
-  const withStatus = (agentStatus: { done: boolean; left: string[] }, over: Partial<NonNullable<Chat['head']>> = {}): Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' | 'head'> =>
+  const withStatus = (agentStatus: AgentStatus, over: Partial<NonNullable<Chat['head']>> = {}): Pick<Chat, 'id' | 'archivedAt' | 'dealtWithAt' | 'head'> =>
     finished({ head: { chatId: 'c', role: 'assistant', status: 'complete', createdAt: NOW - 60_000, agentStatus, ...over } });
 
   it('says done, or that work is left, in place of your turn', () => {
     expect(chatStatus(withStatus({ done: true, left: [] }), activity(), NOW)).toBe('done');
-    expect(chatStatus(withStatus({ done: false, left: ['a', 'b'] }), activity(), NOW)).toBe('left');
+    expect(chatStatus(withStatus({ done: false, left: [{ text: 'a' }, { text: 'b' }] }), activity(), NOW)).toBe('left');
     expect(chatStatus(finished(), activity(), NOW)).toBe('your-turn');
   });
 

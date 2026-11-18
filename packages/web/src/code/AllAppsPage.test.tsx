@@ -2,6 +2,7 @@ import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within }
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { App, AppFolder, Chat } from '@otherbench/core/ports/store.js';
+import type { AgentStatus } from '@otherbench/core/domain/chat-status-tool.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -84,14 +85,14 @@ describe('AllAppsPage', () => {
   });
 
   it("counts the chats the agent marked done, and those with work left as one Work left, whatever each has left", () => {
-    const head = (agentStatus: { done: boolean; left: string[] }) => ({ chatId: 'x', role: 'assistant' as const, status: 'complete' as const, createdAt: NOW - 60_000, agentStatus });
+    const head = (agentStatus: AgentStatus) => ({ chatId: 'x', role: 'assistant' as const, status: 'complete' as const, createdAt: NOW - 60_000, agentStatus });
     setup(
       [app('alpha')],
       [
         chat('c1', 'alpha', { head: { ...head({ done: true, left: [] }), chatId: 'c1' } }),
         chat('c2', 'alpha', { head: { ...head({ done: true, left: [] }), chatId: 'c2' } }),
-        chat('c3', 'alpha', { head: { ...head({ done: false, left: ['a'] }), chatId: 'c3' } }),
-        chat('c4', 'alpha', { head: { ...head({ done: false, left: ['a', 'b', 'c'] }), chatId: 'c4' } }),
+        chat('c3', 'alpha', { head: { ...head({ done: false, left: [{ text: 'a' }] }), chatId: 'c3' } }),
+        chat('c4', 'alpha', { head: { ...head({ done: false, left: [{ text: 'a' }, { text: 'b' }, { text: 'c' }] }), chatId: 'c4' } }),
       ]
     );
     render(<AllAppsPage />);
