@@ -67,6 +67,15 @@ export async function prepareReply(
   // does, and it uses the classifier only when its schedule allows Auto.
   const proc: { live: LiveProcess | null } = { live: null };
   const classifier = isClaudeLogin(backend) && (req.unattended !== true || autoMode);
+  // An endpoint backend has no classifier: its Auto approves what the profile
+  // allows. The chat's setting is read at each call (Auto switched mid-reply
+  // holds at once); a scheduled run keeps its schedule's.
+  const endpointAuto = (): boolean => {
+    if (isClaudeLogin(backend)) return false;
+    if (req.unattended === true) return req.autoMode === true;
+    const current = deps.chatSettings?.(req.chatId, profile.id);
+    return current ? current.autoMode : req.autoMode === true;
+  };
   const binding: TurnBinding = {
     gate: createGate({
       approvals: deps.approvals,
@@ -75,6 +84,7 @@ export async function prepareReply(
       claudeFolders: claudeFolders(deps, req.workspaceRoot, account),
       ...(req.handover === true ? { handover: true } : {}),
       autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
+      autoApprove: endpointAuto,
       helpers,
       // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
       backgroundOwner: async (toolUseId, wait) => {

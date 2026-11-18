@@ -569,6 +569,30 @@ describe('requestApproval in auto mode (deferAsk)', () => {
     provider.onApprovalEvent((e) => { if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'deny' }); });
     expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'npm test' }, policy(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
   });
+
+  describe('with approveDeferrable (an endpoint backend: no classifier)', () => {
+    it('approves a Claude Code call outright, with no card, audited as auto:endpoint', async () => {
+      const { provider, store } = makeProvider();
+      const seen: string[] = [];
+      provider.onApprovalEvent((e) => seen.push(e.type));
+      const out = await provider.requestApproval(agentSpec('Write', 'mutate'), { path: 'main.py' }, policy(), ctx(), { deferAsk: true, approveDeferrable: true });
+      expect(out).toEqual({ allowed: true, grantedBy: 'auto:endpoint' });
+      expect(seen).toEqual([]);
+      expect(store.audit.list('chat-1')).toEqual([expect.objectContaining({ toolName: 'Write', grantedBy: 'auto:endpoint', resultSummary: 'delegated to Claude Code' })]);
+    });
+
+    it('still lets the profile deny, and refuses an unattended run that has no Auto', async () => {
+      const { provider } = makeProvider();
+      expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx(), { deferAsk: true, approveDeferrable: true })).toMatchObject({ allowed: false, reason: expect.stringMatching(/disabled/) });
+      expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy(), ctx({ unattended: true }), { deferAsk: true, approveDeferrable: true })).toMatchObject({ allowed: false });
+    });
+
+    it('means nothing without deferAsk: a card as before', async () => {
+      const { provider } = makeProvider();
+      provider.onApprovalEvent((e) => { if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'deny' }); });
+      expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy(), ctx(), { approveDeferrable: true })).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+    });
+  });
 });
 
 describe('recordAgentDenial', () => {

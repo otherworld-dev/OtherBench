@@ -35,6 +35,10 @@ describe('env', () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(buildChildEnv({}, conn('http://h'), 'secret', 'm').ANTHROPIC_AUTH_TOKEN).toBe('secret');
   });
+  it("turns Anthropic's experimental betas off for an endpoint only, so tools added mid-chat aren't sent as tool_addition blocks", () => {
+    expect(buildChildEnv({ PATH: '/bin' }, conn('http://127.0.0.1:1234/'), null, 'qwen/qwen3.6-27b').CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe('1');
+    expect(buildChildEnv({ PATH: '/bin' }, conn(null), null, 'sonnet').CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBeUndefined();
+  });
   it("never lets Claude Code move a long tool call to the background, whatever OtherBench's own environment says", () => {
     for (const b of [null, 'http://h']) {
       const env = buildChildEnv({ PATH: '/bin', CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '30000', claude_code_mcp_auto_background_ms: '5000' }, conn(b), null, 'm');

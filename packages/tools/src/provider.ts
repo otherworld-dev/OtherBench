@@ -533,7 +533,11 @@ export class OtherBenchToolProvider implements ToolProvider {
       // with. Either way only an enabled tool gets here; a tool the profile
       // has off was denied above.
       this.broker.discard(decision.request.id);
-      if (isDeferrableInAutoMode(call.tool, call.args)) return { kind: 'deferred', args: call.args };
+      if (isDeferrableInAutoMode(call.tool, call.args)) {
+        // No classifier on an endpoint backend: Auto there approves what the profile allows (Adam's choice, 2026-11-17).
+        if (opts.approveDeferrable === true) return { kind: 'approved', args: call.args, grantedBy: 'auto:endpoint' };
+        return { kind: 'deferred', args: call.args };
+      }
       return { kind: 'approved', args: call.args, grantedBy: 'auto' };
     }
     const auth = await this.approvals.settle(decision, ctx, tool);

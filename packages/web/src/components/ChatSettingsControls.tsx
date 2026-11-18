@@ -10,13 +10,14 @@ export interface ChatSettingsControlsProps {
   planMode: boolean;
   showAutoToggle: boolean;
   autoActive: boolean;
-  autoUnavailable: boolean;
+  /** Every Claude Code profile in the turn uses an endpoint backend: no Claude login, so no classifier, plan meter or account. */
+  endpointOnly: boolean;
   effort: ClaudeEffort | null;
   claudeAccount: string | null;
 }
 
 /** The composer toolbar's Plan and Auto toggles, effort and Claude account: the chat's settings for its next turns. */
-export function ChatSettingsControls({ settings, planMode, showAutoToggle, autoActive, autoUnavailable, effort, claudeAccount }: ChatSettingsControlsProps): JSX.Element {
+export function ChatSettingsControls({ settings, planMode, showAutoToggle, autoActive, endpointOnly, effort, claudeAccount }: ChatSettingsControlsProps): JSX.Element {
   const { planSaving, togglePlanMode, autoSaving, toggleAutoMode, effortSaving, changeEffort, accountSaving, changeAccount } = settings;
   return (
     <>
@@ -37,10 +38,12 @@ export function ChatSettingsControls({ settings, planMode, showAutoToggle, autoA
           type="button"
           aria-label="Auto mode"
           aria-pressed={autoActive}
-          disabled={autoUnavailable || autoSaving}
+          disabled={autoSaving}
           title={
-            autoUnavailable
-              ? 'Auto mode needs the Claude login'
+            endpointOnly
+              ? autoActive
+                ? 'Auto mode is on: tool calls your profile allows run without asking. A local model has no classifier, so nothing checks them first.'
+                : 'Run tool calls your profile allows without asking (no classifier checks them on a local model; applies at once, even to a reply that is running)'
               : autoActive
                 ? 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.'
                 : 'Let Claude Code decide routine tool calls (applies at once, even to a reply that is running)'
@@ -72,7 +75,7 @@ export function ChatSettingsControls({ settings, planMode, showAutoToggle, autoA
       )}
 
       {/* The Claude login's accounts, so like the plan meter not for a Claude Code profile on an endpoint. */}
-      {showAutoToggle && !autoUnavailable && <AccountSelect value={claudeAccount} disabled={accountSaving} onChange={(next) => void changeAccount(next)} />}
+      {showAutoToggle && !endpointOnly && <AccountSelect value={claudeAccount} disabled={accountSaving} onChange={(next) => void changeAccount(next)} />}
     </>
   );
 }

@@ -178,6 +178,13 @@ export function createGate(deps: {
   ctx: ToolContext;
   /** Whether calls OtherBench would ask about go to Claude Code's classifier instead; a function is asked at each call (the mode can be switched mid-reply). */
   autoMode?: boolean | (() => boolean);
+  /**
+   * Auto on an endpoint backend (LM Studio, Ollama), whose Claude Code can't
+   * run its auto mode: a call OtherBench would ask about is approved instead
+   * of raising a card, as there is no classifier to hand it to. Asked at each
+   * call, like `autoMode`.
+   */
+  autoApprove?: boolean | (() => boolean);
   /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4), with the call's tool-use id when Claude Code gave one. */
   onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown, toolUseId: string | undefined) => void;
   /** The reply's helpers: a call one of them made says so on its approval card. */
@@ -268,7 +275,8 @@ export function createGate(deps: {
       // Claude Code's classifier. canUseTool (reached when the classifier
       // can't decide) always gets a card.
       const auto = typeof deps.autoMode === 'function' ? deps.autoMode() : deps.autoMode === true;
-      const deferAsk = auto && opts?.mayDefer === true;
+      const approve = !auto && (typeof deps.autoApprove === 'function' ? deps.autoApprove() : deps.autoApprove === true);
+      const deferAsk = (auto || approve) && opts?.mayDefer === true;
       // A helper's call is named on its card; the decision is the reply's own,
       // but for a generation, which a helper may never make (core refuses one
       // with `shownSubagent`). Claude Code says itself when a helper made the
@@ -284,7 +292,7 @@ export function createGate(deps: {
       // A helper's call nothing can name yet keeps the helper a between-replies context names, else is "a helper".
       const tag = helper ?? (agentId !== undefined && !deps.ctx.shownSubagent ? { callId: agentId, label: UNNAMED_HELPER } : null);
       const shown = tag ? { shownSubagent: { callId: tag.callId, label: tag.label, parentProfileId: deps.ctx.profileId } } : {};
-      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal, ...shown }, { deferAsk });
+      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal, ...shown }, { deferAsk, ...(deferAsk && approve ? { approveDeferrable: true } : {}) });
       if ('deferred' in outcome && outcome.deferred === true) {
         return deferAsk ? { defer: true } : { allow: false, reason: 'OtherBench could not check this tool call: unexpected deferral.' };
       }
