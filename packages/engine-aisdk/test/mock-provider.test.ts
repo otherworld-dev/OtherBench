@@ -292,6 +292,13 @@ describe('MockChatEngine', () => {
       expect(text(events)).toBe('Some left.');
     });
 
+    it('#status left sends you:/me:/parked: items with who they wait on', async () => {
+      const execute = vi.fn(async () => 'Status set: 2 left.');
+      const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#status left you: try it|me:push|plain', { tools: [tool] })));
+      expect(execute).toHaveBeenCalledWith({ done: false, left: [{ text: 'try it', who: 'you' }, { text: 'push', who: 'me' }, 'plain'] }, expect.anything());
+    });
+
     it('#status done calls it with done: true, then says all finished', async () => {
       const execute = vi.fn(async () => 'Status set: done.');
       const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };

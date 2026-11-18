@@ -359,7 +359,7 @@ export class MockChatEngine implements ChatEngine {
 
     const status = /#status[ \t]+(done|left[ \t]+([^\r\n]+))/.exec(prompt);
     if (status) {
-      yield* this.streamStatusTurn(req, status[2] === undefined ? null : status[2].split('|').map((s) => s.trim()), tokensIn);
+      yield* this.streamStatusTurn(req, status[2] === undefined ? null : status[2].split('|').map(mockStatusItem), tokensIn);
       return;
     }
 
@@ -644,9 +644,10 @@ export class MockChatEngine implements ChatEngine {
 
   /**
    * `#status done` / `#status left <a>|<b>` (spec 2026-11-15-chat-done-status-design): one `set_chat_status` call
-   * through the real tool when offered, then "All finished." or "Some left.".
+   * through the real tool when offered, then "All finished." or "Some left.". An item may start `you:`, `me:` or
+   * `parked:` to say who it waits on; without one it goes as a plain line, as replies did before items said who.
    */
-  private async *streamStatusTurn(req: EngineRequest, left: string[] | null, tokensIn: number): AsyncGenerator<EngineEvent> {
+  private async *streamStatusTurn(req: EngineRequest, left: Array<string | { text: string; who: string }> | null, tokensIn: number): AsyncGenerator<EngineEvent> {
     const callId = `mock-status-${randomUUID()}`;
     const args = left === null ? { done: true } : { done: false, left };
     if (req.signal.aborted) return;
@@ -872,4 +873,10 @@ export class MockChatEngine implements ChatEngine {
 function finishEvent(tokensIn: number, tokensOut: number): EngineEvent {
   const usage: Usage = { tokensIn, tokensOut, tokensCached: 0, tokensReasoning: 0 };
   return { type: 'finish', usage, finishReason: 'stop' };
+}
+
+/** A `#status left` item: `you:x`, `me:x` or `parked:x` says who it waits on; anything else is a plain line. */
+function mockStatusItem(raw: string): string | { text: string; who: string } {
+  const tagged = /^(you|me|parked):(.*)$/s.exec(raw.trim());
+  return tagged?.[1] !== undefined && tagged[2] !== undefined ? { text: tagged[2].trim(), who: tagged[1] } : raw.trim();
 }

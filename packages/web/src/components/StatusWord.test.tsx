@@ -11,10 +11,29 @@ describe('StatusWord: done and what is left', () => {
     expect(screen.getByTestId('w').getAttribute('title')).toBe('Finished: nothing left, check and archive');
   });
 
-  it('counts what is left, with the items on hover', () => {
-    render(<StatusWord status="left" left={['push', 'docs']} testId="w" />);
+  it('counts untagged items from older replies as left, in amber, with the items on hover', () => {
+    render(<StatusWord status="left" left={[{ text: 'push' }, { text: 'docs' }]} testId="w" />);
     expect(screen.getByTestId('w').textContent).toBe('2 left');
-    expect(screen.getByTestId('w').getAttribute('title')).toBe('push\ndocs');
+    expect(screen.getByTestId('w').getAttribute('title')).toBe('Left:\n  push\n  docs');
+    expect(screen.getByTestId('w').className).toContain('text-[var(--warn)]');
+  });
+
+  it('says how many wait on the user, in amber, with every item grouped on hover', () => {
+    render(<StatusWord status="left" left={[{ text: 'push', who: 'me' }, { text: 'try it', who: 'you' }, { text: 'docs', who: 'parked' }]} testId="w" />);
+    const word = screen.getByTestId('w');
+    expect(word.textContent).toBe('1 for you');
+    expect(word.getAttribute('data-for-you')).toBe('1');
+    expect(word.getAttribute('title')).toBe('Waiting on you:\n  try it\nNext from me:\n  push\nParked:\n  docs');
+    expect(word.className).toContain('text-[var(--warn)]');
+  });
+
+  it('is quiet when nothing left waits on the user', () => {
+    render(<StatusWord status="left" left={[{ text: 'push', who: 'me' }, { text: 'docs', who: 'parked' }]} testId="w" />);
+    const word = screen.getByTestId('w');
+    expect(word.textContent).toBe('2 left');
+    expect(word.getAttribute('data-for-you')).toBe('0');
+    expect(word.className).toContain('text-[var(--text-muted)]');
+    expect(word.className).not.toContain('text-[var(--warn)]');
   });
 
   it('says Work left when it is not told the items', () => {
