@@ -109,8 +109,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const machines = useOtherBenchStore((s) => s.machines);
   const elsewhereUnreachable = remoteUnreachable(machines, storedChat ?? chat);
   // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
-  // when any selected profile runs through Claude Code; it needs the Claude
-  // login, so it's unavailable when every such profile uses an endpoint backend.
+  // when any selected profile runs through Claude Code. On an endpoint backend
+  // (LM Studio, Ollama) Claude Code can't run its own auto mode, so OtherBench
+  // approves what the profile allows instead; `endpointOnly` says so on the button.
   const claudeCodeProfiles = selectedProfiles.filter((p) => isClaudeCodeProfile(p, connections));
   const showAutoToggle = claudeCodeProfiles.length > 0;
   const slashTyped = /^\/\S*$/.test(text);
@@ -118,9 +119,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const menuRows = slashTyped && claudeCodeProfiles.length > 0 ? filterCommands(chatCommands.commands, text.slice(1)) : [];
   const menuOpen = menuRows.length > 0 && !menuDismissed;
   const activeRow = menuRows[Math.min(menuIndex, menuRows.length - 1)];
-  const autoUnavailable = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
+  const endpointOnly = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
   const autoMode = (storedChat ?? chat).autoMode;
-  const autoActive = autoMode && !autoUnavailable;
+  const autoActive = autoMode;
   const planMode = (storedChat ?? chat).planMode === true;
   const effort = (storedChat ?? chat).effort ?? null;
   const claudeAccount = (storedChat ?? chat).claudeAccount ?? null;
@@ -394,7 +395,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             planMode={planMode}
             showAutoToggle={showAutoToggle}
             autoActive={autoActive}
-            autoUnavailable={autoUnavailable}
+            endpointOnly={endpointOnly}
             effort={effort}
             claudeAccount={claudeAccount}
           />
@@ -412,7 +413,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
-            {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} account={(storedChat ?? chat).claudeAccount ?? null} />}
+            {showAutoToggle && !endpointOnly && <PlanUsageMeter busy={isStreaming} account={(storedChat ?? chat).claudeAccount ?? null} />}
             {/* While a reply runs, Send stays beside Stop: what's sent then waits for the reply or goes into it. */}
             {canStop && (
               <button

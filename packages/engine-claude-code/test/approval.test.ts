@@ -465,6 +465,24 @@ describe('auto mode gate', () => {
     expect(requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: true });
   });
 
+  it("autoApprove (an endpoint's Auto) asks requestApproval to approve on the hook path, never on canUseTool's", async () => {
+    const requestApproval = allowing();
+    let on = true;
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoApprove: () => on });
+    expect(await gate('Write', { file_path: 'main.py', content: 'x' }, undefined, { mayDefer: true })).toEqual({ allow: true });
+    await gate('Write', { file_path: 'main.py', content: 'x' });
+    on = false;
+    await gate('Write', { file_path: 'main.py', content: 'x' }, undefined, { mayDefer: true });
+    expect(requestApproval.mock.calls.map((c) => c[4])).toEqual([{ deferAsk: true, approveDeferrable: true }, { deferAsk: false }, { deferAsk: false }]);
+  });
+
+  it('leaves autoApprove alone when the classifier is there (autoMode wins)', async () => {
+    const requestApproval = deferring();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true, autoApprove: true });
+    expect(await gate('Bash', { command: 'npm test' }, undefined, { mayDefer: true })).toEqual({ defer: true });
+    expect(requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: true });
+  });
+
   it('never asks to defer outside auto mode, or without mayDefer', async () => {
     const requestApproval = allowing();
     await createGate({ approvals: { requestApproval }, policy, ctx: ctx() })('Bash', { command: 'ls' }, undefined, { mayDefer: true });

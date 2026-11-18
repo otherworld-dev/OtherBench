@@ -588,12 +588,42 @@ describe('ClaudeCodeChatEngine auto mode', () => {
     expect(calls[0]!.options.hooks?.PermissionDenied?.[0]?.hooks).toHaveLength(1);
   });
 
-  it('ignores Auto on an endpoint backend', async () => {
+  it("keeps Claude Code in default mode on an endpoint backend, whose Claude Code can't run auto mode", async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     const events = await collect(engine(query).stream(req({ autoMode: true, profile: profile({ connection: conn('http://localhost:11434') }) })));
     expect(calls[0]!.options.permissionMode).toBe('default');
     expect(calls[0]!.options.hooks?.PermissionDenied).toBeUndefined();
     expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it("on an endpoint backend, the chat's Auto (read at each call) approves from the hook instead of a card", async () => {
+    const requestApproval = vi.fn(async (..._a: unknown[]) => ({ allowed: true, grantedBy: 'auto:endpoint' }) as never);
+    const settings = { autoMode: true };
+    const hookOut: unknown[] = [];
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init();
+      const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      hookOut.push(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'main.py', content: 'x' }, tool_use_id: 't1' } as never, 't1', sig()));
+      settings.autoMode = false;
+      hookOut.push(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'main.py', content: 'x' }, tool_use_id: 't2' } as never, 't2', sig()));
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: { requestApproval, recordAgentDenial: vi.fn() }, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, chatSettings: () => ({ autoMode: settings.autoMode, planMode: false, policy: profile().toolPolicy }) });
+    await collect(e.stream(req({ autoMode: true, profile: profile({ connection: conn('http://127.0.0.1:1234') }) })));
+    expect(requestApproval.mock.calls.map((c) => c[4])).toEqual([{ deferAsk: true, approveDeferrable: true }, { deferAsk: false }]);
+    expect(hookOut[0]).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    e.dispose();
+  });
+
+  it('on the Claude login, Auto never asks OtherBench to approve in place of the classifier', async () => {
+    const a = autoApprovals();
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1', 'auto');
+      await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never, 't1', sig());
+      yield success();
+    });
+    await collect(withApprovals(query, a).stream(req({ autoMode: true })));
+    expect(a.requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: true });
   });
 
   it('ignores Auto for utility calls', async () => {

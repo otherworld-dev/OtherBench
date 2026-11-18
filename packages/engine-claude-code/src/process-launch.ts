@@ -59,7 +59,7 @@ export function launchProcess(deps: ClaudeCodeEngineDeps, options: Options, key:
    * as they are now. The last reply's signal is dead by then (TurnRunner
    * aborts it when a reply ends), so the call is tied to the process's own.
    */
-  const helperContext = async (toolUseId: string | undefined): Promise<{ ctx: ToolContext; policy: ToolPolicy; autoMode: boolean } | null> => {
+  const helperContext = async (toolUseId: string | undefined): Promise<{ ctx: ToolContext; policy: ToolPolicy; autoMode: boolean; autoApprove: boolean } | null> => {
     const owner = live?.last && toolUseId ? await live.background?.whenOwned(toolUseId, OWNER_WAIT_MS) : null;
     if (!live?.last || !owner) return null;
     const last = live.last;
@@ -73,6 +73,11 @@ export function launchProcess(deps: ClaudeCodeEngineDeps, options: Options, key:
       // Claude Code's own mode can't change mid-process: Auto turned on since doesn't make it auto.
       // A scheduled run keeps its schedule's Auto, whatever the chat's says now.
       autoMode: (last.unattended ? last.autoMode : current.autoMode) && live.permissionMode === 'auto',
+      // An endpoint backend's Auto approves instead (no classifier). Not for a
+      // scheduled run's helper: its schedule's Auto isn't kept for an endpoint
+      // (last.autoMode is the Claude Code mode, always off there), so it asks
+      // and, with nobody there, is refused.
+      autoApprove: !canAuto && !last.unattended && current.autoMode,
     };
   };
   const gate: Gate = async (toolName, toolInput, signal, opts) => {

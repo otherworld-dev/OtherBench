@@ -75,6 +75,16 @@ export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: 
     env['ANTHROPIC_AUTH_TOKEN'] = token ?? 'otherbench-local';
     env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = modelId;
     env['ANTHROPIC_SMALL_FAST_MODEL'] = modelId;
+    // Claude Code treats a model it doesn't know (qwen/qwen3.6-27b) as taking
+    // tools added mid-conversation, sent as `tool_addition` blocks in a system
+    // message once an MCP server's tools arrive. LM Studio's Anthropic API
+    // only takes text there and refuses the request ("messages.8.content.1.type:
+    // Invalid literal value, expected \"text\""), which Claude Code doesn't
+    // recognise as that feature being refused, so every later turn fails.
+    // That path is gated on experimental betas being allowed (`I_e` → `xb()`
+    // in Claude Code 2.1.x); with them off the tools go in the request's own
+    // tool list. An endpoint gets nothing from Anthropic's betas anyway.
+    env['CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'] = '1';
   }
   // Newer models aren't offered TodoWrite in SDK sessions; this turns it on
   // for every model (probe: test/fixtures/README.md, "Thread tools"). OtherBench

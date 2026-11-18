@@ -85,8 +85,33 @@
   mode paused after 3 blocks in a row or 20 in all), since a call the
   classifier can't decide is denied (unverified live -- see Known gaps). Classifier blocks are audited
   `deny:auto` from a `PermissionDenied` hook (unverified live -- see Known
-  gaps). Endpoint backends and utility calls ignore the toggle; if Claude Code
-  doesn't start in auto mode the turn fails with a capability error.
+  gaps). Utility calls ignore the toggle; if Claude Code doesn't start in
+  auto mode the turn fails with a capability error.
+- Auto on an endpoint backend (LM Studio, Ollama; added 2026-11-17). Claude
+  Code can't run its auto mode there (its classifier is Anthropic's server
+  check, which it refuses to reach through a custom endpoint), so the process
+  stays in `default` mode and OtherBench decides instead: with the chat's
+  Auto on, a hook call the broker would ask about is approved outright
+  (`ApprovalOptions.approveDeferrable`, audited `auto:endpoint`, shown as
+  "auto mode (no classifier)"), Claude Code's own tools included. Adam chose
+  this over approving file tools only. Nothing checks those calls, a shell
+  command included; the profile's limits, outside-folder denials, sends to
+  other chats (which still ask once) and `canUseTool` cards hold as on the
+  Claude login. The gate reads the chat's setting at each call
+  (`ClaudeCodeEngineDeps.chatSettings`), so switching Auto applies mid-reply
+  with no mode switch. A scheduled run uses its schedule's Auto; its helpers
+  between replies don't, and are refused. The Composer keeps the button
+  enabled for such a chat, with its own tooltip, and still hides the plan
+  meter and Claude account there.
+- An endpoint backend also gets `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
+  (`buildChildEnv`). Claude Code 2.1.x treats a model it doesn't know as
+  taking tools added mid-conversation, sent as `tool_addition` blocks in a
+  system message once an MCP server's tools arrive; LM Studio's Anthropic API
+  refused that from the second request on (`messages.8.content.1.type:
+  Invalid literal value, expected "text"`), an error Claude Code doesn't
+  match as the feature being refused, so it never fell back. The path is
+  gated on experimental betas (`I_e` -> `xb()` in the binary), so with them
+  off the tools go in the request's own tool list.
 - Hand-off mechanics (Task 1 probe): the hook hands a deferred call over by
   returning `{}` (no decision). Returning `permissionDecision: 'defer'` does
   not reach the classifier; it pauses the turn (`terminal_reason:

@@ -898,21 +898,22 @@ describe('Composer auto mode toggle', () => {
     expect(useOtherBenchStore.getState().chats[0]).toMatchObject({ autoMode: false, title: 'Renamed meanwhile' });
   });
 
-  it('is disabled, with the reason, when every selected Claude Code profile uses an endpoint', () => {
-    renderWith({ profileId: 'local-cc' });
-    expect(toggle()).toBeDisabled();
-    expect(toggle()).toHaveAttribute('title', 'Auto mode needs the Claude login');
+  it('works for a Claude Code profile on an endpoint, saying no classifier checks the calls', async () => {
+    const chat = renderWith({ profileId: 'local-cc', autoMode: false });
+    mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...chat, ...(body as Partial<Chat>) }));
+    expect(toggle()).toBeEnabled();
+    expect(toggle()).toHaveAttribute('title', expect.stringMatching(/no classifier/));
+    await userEvent.setup().click(toggle());
+    expect(mockedChatsPatch).toHaveBeenCalledWith(expect.any(String), { autoMode: true });
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle()).toHaveAttribute('title', expect.stringMatching(/^Auto mode is on: tool calls your profile allows run without asking/));
   });
 
-  it('shows no hint while unavailable, even if the chat has auto mode on', () => {
+  it('shows pressed on an endpoint chat with auto mode on, still without the plan meter or Claude account', () => {
     renderWith({ profileId: 'local-cc', autoMode: true });
-    expect(toggle()).toBeDisabled();
-    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
-  });
-
-  it('does not announce pressed while unavailable, even if the chat has auto mode on', () => {
-    renderWith({ profileId: 'local-cc', autoMode: true });
-    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('plan-usage')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Claude account' })).not.toBeInTheDocument();
   });
 
   it('does not re-insert a chat removed from the store during a failed save', async () => {
