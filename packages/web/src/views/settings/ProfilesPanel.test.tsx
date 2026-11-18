@@ -1033,6 +1033,11 @@ describe('ProfilesPanel generation', () => {
       expect(screen.queryByText(/can't use tools/)).toBeNull();
     });
 
+    it("warns for an LM Studio model that can't use tools too, since LM Studio reports it", async () => {
+      await pickComfy(makeConnection({ id: 'lms', kind: 'lmstudio' }), local, makeModel({ connectionId: 'lms', supportsTools: false }));
+      expect(screen.getByText(/llama3.2 can't use tools/)).toBeInTheDocument();
+    });
+
     it("does not warn for a non-Ollama model, whose supportsTools is only a default", async () => {
       await pickComfy(makeConnection({ id: 'ant', kind: 'anthropic' }), local, makeModel({ connectionId: 'ant', modelId: 'sonnet', supportsTools: false }));
       expect(screen.queryByText(/can't use tools/)).toBeNull();

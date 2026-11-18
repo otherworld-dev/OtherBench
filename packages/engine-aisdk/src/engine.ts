@@ -21,7 +21,7 @@ import { toModelMessages } from './convert.js';
 import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@otherbench/core/domain/tool-images.js';
 import { liveToolOutput, toolImagesSupported } from './tool-images.js';
 import { MockChatEngine } from './mock-provider.js';
-import { DEFAULT_OLLAMA_BASE_URL, type ProviderHandle } from './registry.js';
+import { DEFAULT_OLLAMA_BASE_URL, lmStudioOpenAiBase, lmStudioRoot, type ProviderHandle } from './registry.js';
 
 /**
  * The subset of `ProviderRegistry`'s public surface `AiSdkChatEngine`
@@ -367,6 +367,21 @@ export class AiSdkChatEngine implements ChatEngine {
         return conn.kind === 'ollama' ? this.seedOllamaCapabilities(base, headers, models) : models;
       }
 
+      case 'lmstudio': {
+        const headers: Record<string, string> = { ...conn.extraHeaders };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+        const models = await this.fetchJsonModels(`${lmStudioOpenAiBase(conn.baseUrl)}/models`, headers, (body) =>
+          asArray(body['data']).map((m) => ({
+            modelId: stringField(m, 'id') ?? 'unknown',
+            displayName: stringField(m, 'id') ?? 'unknown',
+            contextWindow: null,
+            supportsVision: null,
+            supportsTools: null,
+          }))
+        );
+        return this.seedLmStudioCapabilities(lmStudioRoot(conn.baseUrl), headers, models);
+      }
+
       case 'claude_code':
         throw new Error('listRealModels() was called for a claude_code connection; RoutingChatEngine should have routed it elsewhere.');
 
@@ -475,6 +490,104 @@ export class AiSdkChatEngine implements ChatEngine {
       clearTimeout(timer);
     }
   }
+
+  /**
+   * Enriches LM Studio's bare `/v1/models` ids from its native model list,
+   * the same way `seedOllamaCapabilities` does for Ollama, and drops the
+   * embedding models that `/v1/models` lists beside the chat ones.
+   *
+   * Two shapes, newest first:
+   *  - `GET /api/v1/models` (0.4 and later): `{models: [{key, display_name,
+   *    type: 'llm'|'embedding', max_context_length, capabilities: {vision,
+   *    trained_for_tool_use}}]}`.
+   *  - `GET /api/v0/models` (0.3): `{data: [{id, type: 'llm'|'vlm'|
+   *    'embeddings', max_context_length, capabilities?: ['tool_use']}]}`.
+   *    Vision is `type === 'vlm'`; a release that predates `capabilities`
+   *    leaves tools unknown (null) rather than claiming "no".
+   *
+   * Both are tried inside one `OLLAMA_TAGS_TIMEOUT_MS` budget. Any failure
+   * returns `models` as listed, like the Ollama path: a capability hint is
+   * never worth failing discovery over.
+   */
+  private async seedLmStudioCapabilities(root: string, headers: Record<string, string>, models: DiscoveredModel[]): Promise<DiscoveredModel[]> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OLLAMA_TAGS_TIMEOUT_MS);
+    const read = async (path: string): Promise<Record<string, unknown> | null> => {
+      try {
+        const response = await this.fetchImpl(`${root}${path}`, { headers, signal: controller.signal });
+        if (!response.ok) return null;
+        const body: unknown = await response.json();
+        return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    };
+    try {
+      const native = new Map<string, LmStudioModel>();
+      const v1 = await read('/api/v1/models');
+      if (v1 && Array.isArray(v1['models'])) {
+        for (const row of asArray(v1['models'])) {
+          const key = stringField(row, 'key');
+          if (!key) continue;
+          const caps = row['capabilities'];
+          const capsObj = typeof caps === 'object' && caps !== null && !Array.isArray(caps) ? (caps as Record<string, unknown>) : null;
+          native.set(key, {
+            embedding: isEmbeddingType(stringField(row, 'type')),
+            displayName: stringField(row, 'display_name'),
+            contextWindow: numberField(row, 'max_context_length'),
+            supportsVision: typeof capsObj?.['vision'] === 'boolean' ? capsObj['vision'] : null,
+            supportsTools: typeof capsObj?.['trained_for_tool_use'] === 'boolean' ? capsObj['trained_for_tool_use'] : null,
+          });
+        }
+      } else {
+        const v0 = await read('/api/v0/models');
+        for (const row of asArray(v0?.['data'])) {
+          const id = stringField(row, 'id');
+          if (!id) continue;
+          const type = stringField(row, 'type');
+          const caps = row['capabilities'];
+          native.set(id, {
+            embedding: isEmbeddingType(type),
+            displayName: null,
+            contextWindow: numberField(row, 'max_context_length'),
+            supportsVision: type === null ? null : type === 'vlm',
+            supportsTools: Array.isArray(caps) ? caps.includes('tool_use') : null,
+          });
+        }
+      }
+
+      return models.flatMap((model) => {
+        const hit = native.get(model.modelId);
+        if (!hit) return [model];
+        if (hit.embedding) return [];
+        return [
+          {
+            ...model,
+            displayName: hit.displayName ?? model.displayName,
+            contextWindow: hit.contextWindow,
+            supportsVision: hit.supportsVision,
+            supportsTools: hit.supportsTools,
+          },
+        ];
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** One model from LM Studio's native model list, as `seedLmStudioCapabilities` reads it. */
+interface LmStudioModel {
+  embedding: boolean;
+  displayName: string | null;
+  contextWindow: number | null;
+  supportsVision: boolean | null;
+  supportsTools: boolean | null;
+}
+
+/** LM Studio calls them `embedding` in its v1 API and `embeddings` in v0. */
+function isEmbeddingType(type: string | null): boolean {
+  return type === 'embedding' || type === 'embeddings';
 }
 
 /**

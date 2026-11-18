@@ -28,7 +28,9 @@ pub enum Choice {
     /// Take feed `feed`'s build.
     Install { feed: usize, version: String },
     UpToDate,
-    /// The betas switch is off and this build is newer than the newest full release: stay put, never downgrade.
+    /// This build is newer than anything on the feeds checked: stay put, never downgrade. With the betas switch off
+    /// that's a beta past the newest full release; with it on, a build no release has caught up with (an old
+    /// hand-built plain X.Y.Z outranks every X.Y.Z-beta.N), which the user should know isn't updating.
     Ahead { newest: String },
     /// Nothing has been released on these channels yet.
     NoReleases,
@@ -38,7 +40,7 @@ pub enum Choice {
 /// Picks the build to install from the feeds checked, in order `[full, beta]`
 /// (`beta` only when the switch is on). The highest version across them wins,
 /// and only one strictly higher than `current` is ever installed.
-pub fn choose(current: &str, beta: bool, feeds: &[FeedResult]) -> Choice {
+pub fn choose(current: &str, feeds: &[FeedResult]) -> Choice {
     let mut found: Vec<(usize, Version)> = Vec::new();
     let mut failed: Option<String> = None;
     for (i, feed) in feeds.iter().enumerate() {
@@ -67,7 +69,7 @@ pub fn choose(current: &str, beta: bool, feeds: &[FeedResult]) -> Choice {
     if *newest > current {
         return Choice::Install { feed: *feed, version: newest.to_string() };
     }
-    if !beta && current > *newest {
+    if current > *newest {
         return Choice::Ahead { newest: newest.to_string() };
     }
     Choice::UpToDate
@@ -374,6 +376,8 @@ pub struct UpdateStatus {
     pub state: String,
     pub available: Option<String>,
     pub newest_full: Option<String>,
+    /// While `ahead`: the newest version on the feeds checked, which this build is past.
+    pub newest: Option<String>,
     pub last_checked_at: Option<u64>,
     pub waiting_for: Vec<String>,
     pub error: Option<String>,
@@ -482,6 +486,7 @@ impl Updates {
             state: if installed { "idle" } else { "dev-build" }.into(),
             available: None,
             newest_full: None,
+            newest: None,
             last_checked_at: None,
             waiting_for: Vec::new(),
             error: None,
@@ -646,7 +651,7 @@ impl Updates {
             Some(FeedResult::Found(v)) => Some(v.clone()),
             _ => None,
         };
-        let choice = choose(&current, beta, &results);
+        let choice = choose(&current, &results);
         {
             let mut inner = locked(&self.inner);
             if inner.ready.as_ref().is_some_and(|r| !keep_ready(&r.update.version, &choice)) {
@@ -696,9 +701,9 @@ impl Updates {
                     Err(e) => self.record_failure(&version, &format!("Downloading {version} failed: {e}")),
                 }
             }
-            Choice::UpToDate => self.settled("up-to-date"),
-            Choice::Ahead { .. } => self.settled("ahead"),
-            Choice::NoReleases => self.settled("no-releases"),
+            Choice::UpToDate => self.settled("up-to-date", None),
+            Choice::Ahead { newest } => self.settled("ahead", Some(newest)),
+            Choice::NoReleases => self.settled("no-releases", None),
             Choice::Error(e) => self.change(|s| {
                 s.state = "error".into();
                 s.error = Some(e);
@@ -722,9 +727,10 @@ impl Updates {
     }
 
     /// Nothing to install (`check` has already dropped any build the choice no longer wants).
-    fn settled(&self, state: &str) {
+    fn settled(&self, state: &str, newest: Option<String>) {
         self.change(|s| {
             s.state = state.into();
+            s.newest = newest;
             s.available = None;
             s.waiting_for.clear();
         });
@@ -834,7 +840,7 @@ mod tests {
     #[test]
     fn a_newer_beta_is_installed_when_the_switch_is_on() {
         assert_eq!(
-            choose("0.2.0-beta.5", true, &[FeedResult::Found("0.1.0".into()), FeedResult::Found("0.2.0-beta.6".into())]),
+            choose("0.2.0-beta.5", &[FeedResult::Found("0.1.0".into()), FeedResult::Found("0.2.0-beta.6".into())]),
             Choice::Install { feed: 1, version: "0.2.0-beta.6".into() }
         );
     }
@@ -842,42 +848,59 @@ mod tests {
     #[test]
     fn a_full_release_outranks_its_betas() {
         assert_eq!(
-            choose("0.2.0-beta.9", true, &[FeedResult::Found("0.2.0".into()), FeedResult::Found("0.2.0-beta.9".into())]),
+            choose("0.2.0-beta.9", &[FeedResult::Found("0.2.0".into()), FeedResult::Found("0.2.0-beta.9".into())]),
             Choice::Install { feed: 0, version: "0.2.0".into() }
         );
     }
 
     #[test]
     fn turning_betas_off_never_downgrades() {
-        assert_eq!(choose("0.2.0-beta.9", false, &[FeedResult::Found("0.1.0".into())]), Choice::Ahead { newest: "0.1.0".into() });
+        assert_eq!(choose("0.2.0-beta.9", &[FeedResult::Found("0.1.0".into())]), Choice::Ahead { newest: "0.1.0".into() });
+    }
+
+    #[test]
+    fn a_build_ahead_of_every_release_says_so_with_betas_on_too() {
+        // An old hand-built plain 0.2.0 outranks every 0.2.0-beta.N: it stays put, and says why instead of "up to date".
+        assert_eq!(
+            choose("0.2.0", &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.118".into())]),
+            Choice::Ahead { newest: "0.2.0-beta.118".into() }
+        );
+    }
+
+    #[test]
+    fn a_hand_built_installer_moves_on_to_the_next_beta() {
+        assert_eq!(
+            choose("0.2.0-alpha.local.202611151309", &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.118".into())]),
+            Choice::Install { feed: 1, version: "0.2.0-beta.118".into() }
+        );
     }
 
     #[test]
     fn the_same_version_is_never_reinstalled() {
-        assert_eq!(choose("0.2.0-beta.6", true, &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.6".into())]), Choice::UpToDate);
+        assert_eq!(choose("0.2.0-beta.6", &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.6".into())]), Choice::UpToDate);
     }
 
     #[test]
     fn no_full_release_yet_is_not_an_error() {
         assert_eq!(
-            choose("0.2.0-beta.1", true, &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.2".into())]),
+            choose("0.2.0-beta.1", &[FeedResult::Missing, FeedResult::Found("0.2.0-beta.2".into())]),
             Choice::Install { feed: 1, version: "0.2.0-beta.2".into() }
         );
-        assert_eq!(choose("0.2.0", false, &[FeedResult::Missing]), Choice::NoReleases);
+        assert_eq!(choose("0.2.0", &[FeedResult::Missing]), Choice::NoReleases);
     }
 
     #[test]
     fn one_feed_failing_does_not_hide_the_other() {
         assert_eq!(
-            choose("0.2.0-beta.1", true, &[FeedResult::Failed("timeout".into()), FeedResult::Found("0.2.0-beta.2".into())]),
+            choose("0.2.0-beta.1", &[FeedResult::Failed("timeout".into()), FeedResult::Found("0.2.0-beta.2".into())]),
             Choice::Install { feed: 1, version: "0.2.0-beta.2".into() }
         );
-        assert!(matches!(choose("0.2.0", false, &[FeedResult::Failed("dns".into())]), Choice::Error(_)));
+        assert!(matches!(choose("0.2.0", &[FeedResult::Failed("dns".into())]), Choice::Error(_)));
     }
 
     #[test]
     fn a_version_that_does_not_parse_counts_as_a_failed_feed() {
-        assert!(matches!(choose("0.2.0", false, &[FeedResult::Found("latest".into())]), Choice::Error(_)));
+        assert!(matches!(choose("0.2.0", &[FeedResult::Found("latest".into())]), Choice::Error(_)));
     }
 
     #[test]

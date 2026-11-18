@@ -21,7 +21,12 @@
   serves both the chat menu and the project menu; it opens from right-click,
   the **⋯** button, or Shift+F10 / the ContextMenu key on a focused row.
   Collapse state is per device, in `localStorage` key
-  `otherbench.collapsedGroups`; whether the archived section is open is in
+  `otherbench.collapsedGroups`. Opening a parent project (or No project) from its
+  arrow folds every other parent, so one shows at a time; its sub-projects keep
+  their own state and opening one folds nothing. Settings → Appearance → "One
+  project open at a time" turns that off (`otherbench.oneProjectOpen`,
+  `state/oneProjectOpen.ts`, on by default; Code mode's apps aren't affected).
+  Whether the archived section is open is in
   `otherbench.showArchived`; each group's sort, where it differs from the default,
   is in `otherbench.groupSort` (`state/sidebarSort.ts`). "Show N more" and the
   filter chips last only for the session. Archive sets `archivedAt` and is reversible from the

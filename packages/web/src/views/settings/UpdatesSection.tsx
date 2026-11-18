@@ -13,7 +13,7 @@ export function updateStatusText(s: UpdateStatus): string {
     case 'up-to-date':
       return `Up to date (${s.current})`;
     case 'ahead':
-      return `You're on a newer build than the current release (${s.newestFull ?? 'none yet'})`;
+      return `This build (${s.current}) is newer than the newest release (${s.newest ?? s.newestFull ?? 'none yet'}), so it doesn't update until a release passes it`;
     case 'no-releases':
       return 'No releases yet';
     case 'downloading':
@@ -87,8 +87,19 @@ export function UpdatesSection(): JSX.Element {
     <fieldset className="space-y-2">
       <legend className="mb-1 font-medium">Updates</legend>
       {status && (
+        <p data-testid="update-version" className="font-mono">
+          This build: {status.current}
+        </p>
+      )}
+      {status && (
         <p data-testid="update-status" className={status.state === 'error' || status.state === 'failed' ?'text-[var(--danger)]' : undefined}>
           {updateStatusText(status)}
+        </p>
+      )}
+      {/* With betas on, only a hand-built plain version can be past every release: it never moves by itself. */}
+      {status?.state === 'ahead' && status.beta && status.newest && (
+        <p data-testid="update-stranded" className="text-[var(--warn)]">
+          To get back on the betas, install {status.newest} by hand: run its installer from the release page, choose Uninstall when it says a newer version is installed, and keep the application data.
         </p>
       )}
       {status?.lastCheckedAt != null && (

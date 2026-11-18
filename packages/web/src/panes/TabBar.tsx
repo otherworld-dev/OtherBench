@@ -179,7 +179,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                 title={t.title}
                 className={`flex min-w-0 items-center gap-1.5 py-1 pl-2.5 pr-1 text-xs ${active ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
               >
-                {status && <StatusWord status={status} testId={`tab-status-${t.id}`} />}
+                {status && <StatusWord status={status} left={chat?.head?.agentStatus?.left} testId={`tab-status-${t.id}`} />}
                 {paneState.pinned.some((i) => paneState.panes[i] === t.id) && (
                   <span data-testid={`tab-pinned-${t.id}`} className="shrink-0" title="Pinned">
                     <PinIcon filled className="h-3 w-3" />

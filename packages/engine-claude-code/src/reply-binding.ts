@@ -1,6 +1,7 @@
 import { ARTIFACT_TOOL } from '@otherbench/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@otherbench/core/domain/recall.js';
 import { PLAN_TOOL, runPlanCommand } from '@otherbench/core/domain/thread-tools.js';
+import { runStatusCommand, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { toolContextFor } from '@otherbench/core/domain/tool-context.js';
 import type { EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
@@ -53,6 +54,7 @@ export async function prepareReply(
     artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
     recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
     plan: req.plan !== undefined && askUser !== undefined,
+    status: deps.chatStatusTool === true,
     relay: relay.hash,
   };
   const tickets = new ApprovalTickets();
@@ -65,6 +67,15 @@ export async function prepareReply(
   // does, and it uses the classifier only when its schedule allows Auto.
   const proc: { live: LiveProcess | null } = { live: null };
   const classifier = isClaudeLogin(backend) && (req.unattended !== true || autoMode);
+  // An endpoint backend has no classifier: its Auto approves what the profile
+  // allows. The chat's setting is read at each call (Auto switched mid-reply
+  // holds at once); a scheduled run keeps its schedule's.
+  const endpointAuto = (): boolean => {
+    if (isClaudeLogin(backend)) return false;
+    if (req.unattended === true) return req.autoMode === true;
+    const current = deps.chatSettings?.(req.chatId, profile.id);
+    return current ? current.autoMode : req.autoMode === true;
+  };
   const binding: TurnBinding = {
     gate: createGate({
       approvals: deps.approvals,
@@ -73,6 +84,7 @@ export async function prepareReply(
       claudeFolders: claudeFolders(deps, req.workspaceRoot, account),
       ...(req.handover === true ? { handover: true } : {}),
       autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
+      autoApprove: endpointAuto,
       helpers,
       // A call the reply's own registry can't name: its process's background tasks may (an earlier reply's helper, or this one's not read yet).
       backgroundOwner: async (toolUseId, wait) => {
@@ -87,6 +99,7 @@ export async function prepareReply(
     ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
     ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
     ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
+    ...(own.status ? { status: async (args: unknown) => runStatusCommand(args) } : {}),
     // The current reply's spec for that tool, not the one the process started
     // with (an edit to the sandbox allowlist or the browser's blocked sites
     // applies without a new process), and only if it is the kind of tool the
@@ -117,6 +130,7 @@ export function replyMapper(live: LiveProcess, req: EngineRequest, helpers: Help
   if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
   if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
   if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
+  if (live.statusTool) renames.set(live.statusTool, STATUS_TOOL);
   for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
   const relayedResult = (id: string): unknown => {
     const held = results.get(id);

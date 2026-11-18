@@ -299,7 +299,7 @@ export interface ThreadToolError {
   message: string;
 }
 
-const inputError = (message: string): ThreadToolError => ({ error: true, code: 'invalid_input', message });
+export const inputError = (message: string): ThreadToolError => ({ error: true, code: 'invalid_input', message });
 
 /** `ToolProvider.askUser`'s signature. */
 export type AskFn = (ctx: ToolContext, input: AskInput) => Promise<AskOutcome>;

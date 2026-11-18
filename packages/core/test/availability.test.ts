@@ -19,6 +19,8 @@ describe('connection availability', () => {
     expect(defaultAvailability('openai_compatible', 'http://localhost:1234/v1', 'pc')).toBe('pc');
     expect(defaultAvailability('ollama', null, 'pc')).toBe('pc');
     expect(defaultAvailability('ollama', 'http://192.168.1.20:11434', 'pc')).toBe('anywhere');
+    expect(defaultAvailability('lmstudio', null, 'pc')).toBe('pc');
+    expect(defaultAvailability('lmstudio', 'http://192.168.1.20:1234', 'pc')).toBe('anywhere');
     expect(defaultAvailability('anthropic', null, 'pc')).toBe('anywhere');
   });
 

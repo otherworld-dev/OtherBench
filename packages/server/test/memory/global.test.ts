@@ -208,6 +208,21 @@ describe('global memory: an update', () => {
     expect(service.lastError()).toBeNull();
   });
 
+  it('asks the model once to shorten a note that came back over the cap, and saves the shorter one', async () => {
+    const long = gnote({ prefs: 'x'.repeat(4_100) });
+    respond = (req) => reply(promptOf(req).startsWith('This note is') ? gnote({ prefs: '- Short' }) : long);
+    const service = makeService();
+    addChat('chat');
+    exchange('chat', 'hi', 'ok');
+    service.noteTurnCompleted('chat');
+    clock.advance(MEMORY_QUIET_MS);
+    await service.idle();
+    expect(requests).toHaveLength(2);
+    expect(promptOf(requests[1])).toContain(`<note>\n${long}\n</note>`);
+    expect(store.globalMemory.get().note).toBe(gnote({ prefs: '- Short' }));
+    expect(service.lastError()).toBeNull();
+  });
+
   it('discards its result when the user saves the note while it runs: the user save wins', async () => {
     const gate = deferred<EngineEvent[]>();
     respond = () => gate.promise;

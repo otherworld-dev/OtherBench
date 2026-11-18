@@ -125,6 +125,7 @@ describe('globalMemoryUpdatePrompt', () => {
     expect(prompt).toContain('## Pinned, ## Preferences, ## Setup and tools, ## Working style');
     expect(prompt).toContain('Copy the ## Pinned section exactly as given.');
     expect(prompt).toContain('Never record project details');
+    expect(prompt).toContain('Keep the whole note under 3,500 characters: a note over 4,000 is thrown away.');
     expect(prompt).toContain(`<current-note>\n${NOTE}\n</current-note>`);
     expect(prompt).toContain('<new-conversation>\nUser: I moved to Linux.\n</new-conversation>');
   });

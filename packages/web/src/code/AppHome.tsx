@@ -249,7 +249,7 @@ function AppChats({ app }: { app: App }): JSX.Element {
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>
                 {/* Beside the button, not in it, so a screen reader reads the status (as in ChatRow). */}
-                {status && <StatusWord status={status} testId={`app-home-chat-status-${c.id}`} className="mx-2" />}
+                {status && <StatusWord status={status} left={c.head?.agentStatus?.left} testId={`app-home-chat-status-${c.id}`} className="mx-2" />}
               </li>
             );
           })}

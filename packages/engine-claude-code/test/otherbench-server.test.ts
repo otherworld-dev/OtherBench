@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
-import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchToolName, type OtherBenchServerTool } from '../src/otherbench-server.js';
+import { otherBenchArtifactTool, otherBenchMcpServer, otherBenchPlanTool, otherBenchRecallTool, otherBenchServerName, otherBenchStatusTool, otherBenchToolName, type OtherBenchServerTool } from '../src/otherbench-server.js';
 import { relayServerTool } from '../src/relay.js';
 
 /** A real MCP client connected to OtherBench's server over an in-memory link, as Claude Code talks to it. */
@@ -149,5 +149,21 @@ describe("OtherBench's plan tool for Claude Code", () => {
     const bad = await otherBenchPlanTool(() => async () => ({ error: true, code: 'invalid_input', message: '"plan" must be your plan, in Markdown.' })).call({});
     expect(bad).toEqual({ content: [{ type: 'text', text: '"plan" must be your plan, in Markdown.' }], isError: true });
     expect((await otherBenchPlanTool(() => undefined).call({ plan: 'x' })).isError).toBe(true);
+  });
+});
+
+describe("OtherBench's chat status tool for Claude Code", () => {
+  it('is always loaded, and answers with the running reply\'s text', async () => {
+    const run = vi.fn(async (_args: unknown) => 'Status set: done.');
+    const def = otherBenchStatusTool(() => run);
+    expect(def.name).toBe('set_chat_status');
+    expect(def.alwaysLoad).toBe(true);
+    expect(await def.call({ done: true })).toEqual({ content: [{ type: 'text', text: 'Status set: done.' }], isError: false });
+    expect(run).toHaveBeenCalledWith({ done: true });
+  });
+  it('flags bad input, and refuses when no reply is running', async () => {
+    const bad = await otherBenchStatusTool(() => async () => ({ error: true, code: 'invalid_input', message: '"done" must be true or false.' })).call({});
+    expect(bad).toEqual({ content: [{ type: 'text', text: '"done" must be true or false.' }], isError: true });
+    expect((await otherBenchStatusTool(() => undefined).call({ done: true })).isError).toBe(true);
   });
 });

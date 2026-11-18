@@ -50,6 +50,7 @@ setup have their own pages (see Where to look).
 - [App notes](features/app-notes.md)
 - [Fresh chat handover](features/fresh-chat-handover.md)
 - [Chats that message each other](features/chat-messages.md)
+- [Chat status: done, or what's left](features/chat-status.md)
 
 ## What is NOT built
 

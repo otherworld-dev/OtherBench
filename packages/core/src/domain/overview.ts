@@ -44,6 +44,15 @@ export function deckSummary(view: DeckBoardView, now: Date): OverviewDeck {
 export const CHAT_NEED_WINDOW_MS = 7 * 86_400_000;
 
 /**
+ * Where the window starts for the sidebar's marks and the Overview's tick-off: a reply that said the chat is done,
+ * or what's left (`agentStatus`), has no window, since a chat marked Done and never archived is the one the user
+ * wants to find (spec 2026-11-15-chat-done-status-design). The Overview's own list keeps the plain window.
+ */
+export function needWindowStart(head: Pick<ChatHead, 'agentStatus'> | null, now: number): number {
+  return head?.agentStatus ? -Infinity : now - CHAT_NEED_WINDOW_MS;
+}
+
+/**
  * Whether a chat wants the user: waiting on them, or a finished reply from
  * `since` (ms) on that they haven't dealt with. A chat still `busy` (background
  * tasks running) may not be done, so it wants them only if it's waiting on them

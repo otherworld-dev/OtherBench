@@ -905,6 +905,64 @@ export function runStoreContract(
         expect(store.messages.heads('chat-b')).toEqual([{ chatId: 'chat-b', role: 'assistant', status: 'complete', createdAt: 20 }]);
       });
 
+      it("carries the agent's status from the reply's set_chat_status call, and only for that reply", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        const statusParts: Part[] = [
+          { type: 'tool-call', id: 't1', name: 'set_chat_status', args: { done: false, left: ['a'] } },
+          { type: 'tool-result', id: 't1', name: 'set_chat_status', result: 'Status set: 1 left.', isError: false },
+          { type: 'text', text: 'One thing left.' },
+        ];
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', parentId: 'u1', role: 'assistant', status: 'complete', parts: statusParts, createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 20, agentStatus: { done: false, left: ['a'] } }]);
+        // The user answers and the next reply doesn't set it: the old status no longer counts.
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: 'chat-a', parentId: 'a1', role: 'user', createdAt: 30 }));
+        store.messages.create(makeMessageInput({ id: 'a2', chatId: 'chat-a', parentId: 'u2', role: 'assistant', status: 'complete', parts: [{ type: 'text', text: 'Done that.' }], createdAt: 40 }));
+        store.chats.update('chat-a', { headMessageId: 'a2' });
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 40 }]);
+      });
+
+      it("gives no agent status from a helper's call inside its subagent part, and takes the reply's own last call", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId }));
+        const helperParts: Part[] = [
+          { type: 'tool-call', id: 'h1', name: 'set_chat_status', args: { done: true } },
+          { type: 'tool-result', id: 'h1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+        ];
+        const helper: Part = { type: 'subagent', callId: 'sa', label: 'helper', prompt: 'p', profileId, profileName: 'P', modelId: 'm', status: 'complete', parts: helperParts };
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'assistant', status: 'complete', parts: [helper, { type: 'text', text: 'ok' }], createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'assistant', status: 'complete', createdAt: 20, parts: [
+          { type: 'tool-call', id: 't1', name: 'set_chat_status', args: { done: false, left: ['a'] } },
+          { type: 'tool-result', id: 't1', name: 'set_chat_status', result: 'Status set: 1 left.', isError: false },
+          { type: 'text', text: 'and then' },
+          { type: 'tool-call', id: 't2', name: 'set_chat_status', args: { done: true } },
+          { type: 'tool-result', id: 't2', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+        ] }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        expect(store.messages.heads('chat-a')[0]).not.toHaveProperty('agentStatus');
+        expect(store.messages.heads('chat-b')[0]?.agentStatus).toEqual({ done: true, left: [] });
+      });
+
+      it('gives no agent status for a reply that failed or is still being written', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId }));
+        const statusParts: Part[] = [
+          { type: 'tool-call', id: 't1', name: 'set_chat_status', args: { done: true } },
+          { type: 'tool-result', id: 't1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
+        ];
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: 'chat-a', role: 'assistant', status: 'error', parts: statusParts, createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'b1', chatId: 'chat-b', role: 'assistant', status: 'streaming', parts: statusParts, createdAt: 20 }));
+        store.chats.update('chat-a', { headMessageId: 'a1' });
+        store.chats.update('chat-b', { headMessageId: 'b1' });
+        expect(store.messages.heads('chat-a')[0]).not.toHaveProperty('agentStatus');
+        expect(store.messages.heads('chat-b')[0]).not.toHaveProperty('agentStatus');
+      });
+
       it('follows a user head to the completed reply below it', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

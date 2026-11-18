@@ -30,7 +30,15 @@ describe('thread tools for API profiles', () => {
       ['update_todos', 'thread', 'read'],
       ['ask_user', 'thread', 'read'],
       ['propose_plan', 'thread', 'read'],
+      ['set_chat_status', 'thread', 'read'],
     ]);
+  });
+
+  it('set_chat_status answers with what was set, and refuses bad input', async () => {
+    const { tool } = setup();
+    const status = await tool('set_chat_status');
+    expect(await status.execute({ done: false, left: ['push', 'docs'] }, ctx())).toBe('Status set: 2 left.');
+    expect(await status.execute({ done: false }, ctx())).toMatchObject({ error: true });
   });
 
   it('ask_user waits for the answer and returns it in result text, audited', async () => {

@@ -5,7 +5,8 @@ import { FolderPlusIcon } from '../components/icons.js';
 import { useNow } from '../lib/useNow.js';
 import { ALL_APPS_TAB_ID } from '../state/allAppsTab.js';
 import { chatStatus, needsYouChats, useChatActivity } from '../state/chatStatus.js';
-import { useCollapsedGroups } from '../state/sidebarGroups.js';
+import { useOneProjectOpen } from '../state/oneProjectOpen.js';
+import { NO_PROJECT_KEY, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { groupSortOf, useGroupSorts } from '../state/sidebarSort.js';
 import { OverviewJumpList } from '../overview/OverviewJumpList.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -82,6 +83,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const openAppPage = useOtherBenchStore((s) => s.openAppPage);
   const codeMode = mode === 'code';
   const collapsedGroups = useCollapsedGroups();
+  const [oneProjectOpen] = useOneProjectOpen();
   const groupSorts = useGroupSorts();
   const now = useNow(60_000);
   const activity = useChatActivity();
@@ -121,6 +123,11 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     const parentOf = (p: Project): string | null => projectParentOf(p, lookup)?.id ?? null;
     return sorted.filter((p) => parentOf(p) === null).flatMap((p) => [p, ...sorted.filter((c) => parentOf(c) === p.id)]);
   }, [projects, lookup]);
+  /** The parent projects' group keys and No project's: the groups the one-project-open setting folds. */
+  const topLevelGroupKeys = useMemo(
+    () => [...projects.filter((p) => projectParentOf(p, lookup) === null).map((p) => p.id), NO_PROJECT_KEY],
+    [projects, lookup]
+  );
   // Looked up on every render, so the menu and dialog act on the chat as it is now.
   const menuChat = chatMenu ? (chats.find((c) => c.id === chatMenu.chatId) ?? null) : null;
 
@@ -164,6 +171,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     activeChatId,
     setActiveChatId,
     collapsedGroups,
+    topLevelGroupKeys,
+    oneProjectOpen,
     expandedGroups,
     setExpandedGroups,
     dropTarget,

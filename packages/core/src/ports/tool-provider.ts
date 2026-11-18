@@ -228,6 +228,15 @@ export interface ApprovalOptions {
    * auto mode (`ToolContext.unattendedAuto`).
    */
   deferAsk?: boolean;
+  /**
+   * With `deferAsk`: there is no classifier to hand a Claude Code tool to (a
+   * Claude Code endpoint backend such as LM Studio, whose Claude Code can't
+   * run its auto mode), so it is approved like OtherBench's own tools
+   * (grantedBy `auto:endpoint`) instead of `{ deferred: true }`. Everything
+   * `deferAsk` says about deny/allow, sends to other chats and unattended runs
+   * still holds.
+   */
+  approveDeferrable?: boolean;
 }
 
 /** One declared call of a live page, as the viewer's panel shows it (spec 2026-10-12-live-artifacts). */

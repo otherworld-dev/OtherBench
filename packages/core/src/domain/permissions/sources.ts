@@ -22,6 +22,7 @@ import type { Decision } from './decision.js';
 import { stringField } from './fields.js';
 import { UNATTENDED_REASON } from './modes.js';
 import { SUBAGENT_CHATS_REFUSAL } from '../chat-sends.js';
+import { STATUS_TOOL, SUBAGENT_STATUS_REFUSAL } from '../chat-status-tool.js';
 
 /** A media call made from inside a sub-agent, or a helper Claude Code's own agent started. */
 export const SUBAGENT_MEDIA_REFUSAL = "Sub-agents can't generate images or video.";
@@ -121,8 +122,13 @@ export function sourceDecision(store: Store, tool: ToolSpec, args: unknown, poli
     // none of them: it can't ask the user anything, a plan it proposed would
     // open its parent's plan gate, and the checklist is the reply's own.
     // SubagentRunner never offers them; this refuses one that arrives anyway.
+    // A Claude Code helper (`shownSubagent`) may not set its parent chat's
+    // status either (spec 2026-11-15-chat-done-status-design); the other
+    // thread tools keep the helper rule they had.
     case 'thread':
-      return ctx.subagent ? { kind: 'deny', reason: SUBAGENT_THREAD_REFUSAL } : { kind: 'allow', grantedBy: 'policy' };
+      if (ctx.subagent) return { kind: 'deny', reason: SUBAGENT_THREAD_REFUSAL };
+      if (ctx.shownSubagent && tool.name === STATUS_TOOL) return { kind: 'deny', reason: SUBAGENT_STATUS_REFUSAL };
+      return { kind: 'allow', grantedBy: 'policy' };
 
     // Sub-agents (spec 2026-10-12-api-subagents-design): the call itself has
     // no effect; every tool call the sub-agent makes comes back through here
