@@ -298,13 +298,37 @@ describe('an update', () => {
     expect(service.lastError('proj')).toEqual({ message: error, at: clock.time, chatId: 'chat' });
   });
 
-  it('rejects a note over 4,000 characters', async () => {
+  it('rejects a note still over 4,000 characters after one call to shorten it', async () => {
     exchange('chat', 'Plan', 'ok');
     respond = () => reply(note({ goals: 'x'.repeat(4_100) }));
     const outcome = await service.updateNow('chat');
     expect(outcome.status).toBe('failed');
     expect(outcome.status === 'failed' ? outcome.error : '').toMatch(/the limit is 4,000\.$/);
+    expect(requests).toHaveLength(2);
     expect(store.projectMemory.get('proj')).toBeNull();
+    expect(store.chats.get('chat')!.memoryCursor).toBeNull();
+  });
+
+  it('asks the model once to shorten a note that came back over the cap, and saves the shorter one', async () => {
+    store.projectMemory.save('proj', note({ pinned: '- Never break v1 clients' }), 'user', null);
+    const { replyId } = exchange('chat', 'Plan', 'ok');
+    const long = note({ pinned: '- Never break v1 clients', goals: 'x'.repeat(4_100) });
+    respond = (req) => reply(promptOf(req).startsWith('This note is') ? note({ pinned: '- (rewritten)', goals: '- Short' }) : long);
+
+    expect((await service.updateNow('chat')).status).toBe('updated');
+
+    expect(requests).toHaveLength(2);
+    expect(promptOf(requests[1])).toContain(`<note>\n${long}\n</note>`);
+    expect(store.projectMemory.get('proj')!.body).toBe(note({ pinned: '- Never break v1 clients', goals: '- Short' }));
+    expect(store.chats.get('chat')!.memoryCursor).toBe(replyId);
+    expect(service.lastError('proj')).toBeNull();
+  });
+
+  it('does not ask to shorten a note refused for anything but its length', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => reply(`## Goals\n${'x'.repeat(4_100)}`);
+    expect((await service.updateNow('chat')).status).toBe('failed');
+    expect(requests).toHaveLength(1);
   });
 
   it('accepts a note wrapped in a code fence after a preamble (review focus 1)', async () => {

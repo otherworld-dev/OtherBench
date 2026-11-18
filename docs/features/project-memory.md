@@ -31,11 +31,17 @@
   Updates run one at a time across all projects (a single queue, so a project's
   own updates stay in order), on the Memory model setting, else the project's
   default profile, else the app default, as one tool-less `purpose:
-  'utility'` call with a 120 s timeout. The answer must keep the headings
-  and the cap; Pinned is put back verbatim if the model changed it; an answer
-  that is cut off (`finishReason` `length` and the like) or that blanks every
-  section but Pinned is a failure, not a save. Summariser calls write no usage
-  rows, so memory spend does not show in the Usage view. A
+  'utility'` call with a 120 s timeout. The prompt asks for under 3,500
+  characters (`MEMORY_TARGET_CHARS`) so a model that miscounts still lands
+  under the 4,000 cap. The answer must keep the headings and the cap; Pinned
+  is put back verbatim if the model changed it. A note refused only for its
+  length gets one more call asking the model to shorten it (`askForNote` in
+  `memory/shared.ts`, global memory too): before that, notes that had filled
+  up came back 4,000-5,800 characters on almost every update, never changed
+  again, and every chat behind them was retried at each start. An answer that
+  is cut off (`finishReason` `length` and the like) or that blanks every
+  section but Pinned is a failure, not a save. Each call writes a usage row
+  with `purpose: 'memory'`. A
   failure changes nothing and shows as `lastError` until the next success.
   A user save during an update wins over it. `sweep()` on startup re-queues
   chats that went quiet while the server was down.
