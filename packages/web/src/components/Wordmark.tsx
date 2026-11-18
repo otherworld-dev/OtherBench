@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 
 /**
  * "OtherBench" set the Other family way (brand sheet v1): "Other" light, the
- * suffix bold in the brand teal, one word. Not in caps, so it never takes
+ * suffix bold in the brand amber, one word. Not in caps, so it never takes
  * `label-caps`. The icon sits beside it when `icon` is set.
  */
 export function Wordmark({ className = '', icon = true }: { className?: string; icon?: boolean }): JSX.Element {

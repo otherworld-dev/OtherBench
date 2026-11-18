@@ -293,8 +293,27 @@ fn node_binary(app: &tauri::AppHandle) -> PathBuf {
     PathBuf::from("node")
 }
 
+/// The title bar, taskbar and tray icon (tray.rs takes the default window icon). Tauri loads it
+/// from the exe's icon at the system's large-icon size, which is 80 or more above 200% scaling,
+/// but the brand's ICO holds the bold taskbar variant only up to 64 (the master icon above that),
+/// so the size is capped there: a shrunk master would blend in with the rest of the family on the taskbar.
+#[cfg(windows)]
+fn use_small_window_icon<R: tauri::Runtime>(context: &mut tauri::Context<R>) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXICON};
+    let size = match unsafe { GetSystemMetrics(SM_CXICON) } {
+        n if n > 0 => (n as u32).min(64),
+        _ => 32,
+    };
+    if let Ok(icon) = tauri::image::Image::from_icon_resource(tauri::utils::platform::WINDOWS_APP_ICON_RESOURCE_ID, size, size) {
+        context.set_default_window_icon(Some(icon));
+    }
+}
+
 fn main() {
-    let context = tauri::generate_context!();
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    #[cfg(windows)]
+    use_small_window_icon(&mut context);
     let identifier = context.config().identifier.clone();
     // Before the builder: the webview opens its storage folder as the windows are made.
     // Not in a test build, which must leave the installed app's folders alone.

@@ -36,7 +36,7 @@ export function ImageLightbox({ src, label, onClose }: { src: string; label: str
         e.stopPropagation();
         onClose();
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1e2124]/90 p-4"
     >
       <button ref={closeRef} type="button" aria-label="Close" onClick={onClose} className="btn absolute top-3 right-3 px-2 py-1">
         Close

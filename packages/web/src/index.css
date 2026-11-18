@@ -3,11 +3,12 @@
 
 /*
  * Quiet, dense, long-session tool -- not a landing page. The colours are the
- * Other family's (Otherworld brand sheet v1): night and paper-white with one
- * teal accent, condensed caps for labels and buttons, mono for anything
- * that's data. Dark is the signature scheme; light ("paper") is its twin with
- * the teal deepened for contrast. Redefined under `prefers-color-scheme` so
- * the OS preference is honoured without a manual toggle.
+ * Other family's (rebrand brief, 15 Nov 2026): the studio's slate, chalk and
+ * stone with OtherBench's one accent, bracken amber, condensed caps for labels
+ * and buttons, mono for anything that's data. Dark is slate with the amber
+ * ring colour; light is chalk with the amber deepened for contrast. Redefined
+ * under `prefers-color-scheme` so the OS preference is honoured without a
+ * manual toggle.
  */
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
@@ -19,50 +20,53 @@
 
 :root {
   color-scheme: light;
-  --bg: #f2efe6;
-  --bg-raised: #faf9f5;
-  --bg-sunken: #e6e3da;
-  --border: #d5d3cb;
-  --border-strong: #b3b6b4;
-  --text: #0a1118;
-  --text-muted: #5b6670;
-  --text-faint: #87929c;
-  /* The brand's deep teal (#0d9488) is 3.3:1 on paper, too faint for links and
-     button labels, so the accent is a step darker. The wordmark keeps it. */
-  --accent: #0f766e;
-  --accent-text: #ffffff;
-  --brand: #0d9488;
-  --danger: #b42318;
-  --success: #4d7c0f;
-  --warn: #a16207;
+  --bg: #f4f0e8;
+  --bg-raised: #faf8f3;
+  --bg-sunken: #ece6db;
+  --border: #dcd5c8;
+  /* 3:1 on chalk and the raised panels, so button and field outlines stay visible. */
+  --border-strong: #857e72;
+  --text: #23262b;
+  --text-muted: #5a5650;
+  --text-faint: #6f695e;
+  /* The brand's light accent (#9e5f1b) is 4.5:1 on chalk but only 4.1:1 on
+     stone, too faint for links on sunken panels, so the accent is a step
+     darker. The wordmark keeps it. */
+  --accent: #94581a;
+  --accent-text: #f4f0e8;
+  --brand: #9e5f1b;
+  --danger: #a63a2b;
+  --success: #566330;
+  --warn: #6a5d16;
   /* File-edit diffs (spec 2026-10-20-code-tab-design, Goal 5). */
-  --diff-add-bg: #e3f1d3;
-  --diff-add-text: #2f5209;
-  --diff-del-bg: #fbe1de;
-  --diff-del-text: #8f1d14;
+  --diff-add-bg: #e4e8d2;
+  --diff-add-text: #3e4a1e;
+  --diff-del-bg: #f6dfd8;
+  --diff-del-text: #8a2e22;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #0a0f16;
-    --bg-raised: #0f1720;
-    --bg-sunken: #070a0f;
-    --border: #1c2733;
-    --border-strong: #2c3a48;
-    --text: #f2efe6;
-    --text-muted: #8a97a3;
-    --text-faint: #5b6874;
-    --accent: #22d3c4;
-    --accent-text: #0a0f16;
-    --brand: #22d3c4;
-    --danger: #f28b82;
-    --success: #8fbf4a;
-    --warn: #f5c518;
-    --diff-add-bg: #14281a;
-    --diff-add-text: #b5dd84;
-    --diff-del-bg: #33161a;
-    --diff-del-text: #f29a9d;
+    --bg: #23262b;
+    --bg-raised: #2a2d32;
+    --bg-sunken: #1c1e22;
+    --border: #383c42;
+    --border-strong: #7a766e;
+    --text: #f4f0e8;
+    --text-muted: #a8a39a;
+    --text-faint: #948f86;
+    --accent: #d89b3e;
+    --accent-text: #23262b;
+    --brand: #d89b3e;
+    /* Russet (#c8553d) is 3.5:1 on slate, short of 4.5 for error text, so a lighter step of it. */
+    --danger: #e07a62;
+    --success: #9db060;
+    --warn: #c9b44a;
+    --diff-add-bg: #2b3322;
+    --diff-add-text: #c3d58e;
+    --diff-del-bg: #3b2622;
+    --diff-del-text: #f0a391;
   }
 }
 
@@ -84,10 +88,10 @@ body {
   ::selection {
     background: color-mix(in srgb, var(--accent) 30%, transparent);
   }
-  /* Find in a chat's current match (lib/findInDom.ts): a browser's find yellow, dark text on it in either theme. */
+  /* Find in a chat's current match (lib/findInDom.ts): a find yellow, slate text on it in either theme. */
   ::highlight(chat-find) {
-    background-color: #facc15;
-    color: #0a1118;
+    background-color: #e6cf5c;
+    color: #23262b;
   }
   :focus-visible {
     outline: 2px solid var(--accent);
