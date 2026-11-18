@@ -26,7 +26,8 @@ export function AccountSelect({ value, disabled, onChange }: { value: string | n
       onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
       className={`chip max-w-40 shrink-0 field-sizing-content bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] ${value ? 'chip-on' : ''}`}
     >
-      <option value="">{fallback ? `default account (${fallback.name})` : 'default account'}</option>
+      {/* Short, to keep the toolbar to one line: the tooltip says it's the account. */}
+      <option value="">{fallback ? `default (${fallback.name})` : 'default account'}</option>
       {value && !accounts.some((a) => a.slug === value) && <option value={value}>{value} (missing)</option>}
       {accounts.map((a) => (
         <option key={a.slug} value={a.slug}>

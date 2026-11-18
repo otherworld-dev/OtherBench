@@ -279,7 +279,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`border-t px-3 py-2 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
+      className={`border-t px-3 py-1.5 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
     >
       <ComposerNotices
         uploadError={uploadError}
@@ -359,7 +359,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           placeholder="Message…"
           title="Enter to send, Shift+Enter for a new line. Drag and drop or paste to attach a file."
           rows={1}
-          className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
+          className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-1.5 pb-0.5 text-sm outline-none"
         />
         </div>
 
@@ -368,14 +368,14 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           drop to a line of their own. Left alone on theirs, the controls cut the profile name short, and past
           that wrap rather than run out of the box: how wide they need to be depends on which ones show.
         */}
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-1.5">
-          <div className="flex flex-auto flex-wrap items-center gap-x-1.5 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-1">
+          <div className="flex flex-auto flex-wrap items-center gap-x-1 gap-y-1">
           <button
             type="button"
             aria-label="Attach files"
             title="Attach files"
             onClick={() => fileInputRef.current?.click()}
-            className="shrink-0 rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+            className="shrink-0 rounded px-1 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
           >
             <span aria-hidden="true">📎</span>
           </button>
@@ -411,7 +411,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
 
           </div>
 
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
             {showAutoToggle && !endpointOnly && <PlanUsageMeter busy={isStreaming} account={(storedChat ?? chat).claudeAccount ?? null} />}
             {/* While a reply runs, Send stays beside Stop: what's sent then waits for the reply or goes into it. */}
@@ -419,7 +419,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               <button
                 type="button"
                 onClick={() => void handleStop()}
-                className="btn btn-danger bg-[var(--danger)] px-3 py-1 text-[var(--bg)]"
+                className="btn btn-danger bg-[var(--danger)] px-2 py-0.5 text-[var(--bg)]"
               >
                 Stop
               </button>
@@ -428,7 +428,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               type="button"
               onClick={() => void handleSend()}
               disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || folderUnresolved || elsewhereUnreachable}
-              className="btn btn-primary px-3 py-1"
+              className="btn btn-primary px-2 py-0.5"
             >
               Send
             </button>
