@@ -63,7 +63,7 @@ How the test setup behaves and why, moved out of `HANDOVER.md` on 2026-11-09. Co
   learned building it: Playwright's `dragTo` is synthesised inside Chromium and
   passes with WebView2's drop handler on, so the drag check moves the real
   mouse (`real-drag.ps1`); and a fresh server took 18-25 s to start on a
-  machine at 100% CPU, past the shell's 15 s, so the test build waits 90 s.
+  machine at 100% CPU, past the shell's own wait (15 s then, 60 s since 2026-11-18), so the test build waits 90 s.
   WebView2's browser process outlives a killed app by a minute or more and
   `taskkill` can't end it; the harness closes it over CDP first. Not in CI
   (the drag check needs the real mouse and a visible window).
