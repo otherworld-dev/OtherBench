@@ -6,7 +6,7 @@ const section = (...lines: string[]) => `# X\n\n## Project links\n\n${lines.join
 describe('parseProjectLinks', () => {
   it.each([
     ['- Deck board: `OtherBench` (columns `Backlog`, `To Do`, `Doing`)', 'OtherBench'],
-    ['- **Deck board:** `Glados MCP` (Backlog / To Do / Doing / Done)', 'Glados MCP'],
+    ['- **Deck board:** `Harbour MCP` (Backlog / To Do / Doing / Done)', 'Harbour MCP'],
     ['- Deck board: **BriefCycle**', 'BriefCycle'],
     ['- **Deck board:** ClaudeSync', 'ClaudeSync'],
   ])('reads the board from %s', (line, board) => expect(parseProjectLinks(section(line)).deckBoard).toBe(board));

@@ -74,6 +74,7 @@ import type {
   ChatSend,
   ChatSendPatch,
   ChatSendRepo,
+  JobChatStore,
   NewChatSend,
   RemoteSession,
   RemoteSessionRepo,
@@ -934,6 +935,20 @@ class InMemoryPushSubscriptionRepo implements PushSubscriptionRepo {
       }
     }
     return false;
+  }
+}
+
+/** Job chats (migration 051), in memory. */
+class InMemoryJobChatStore implements JobChatStore {
+  private readonly rows = new Map<string, string>();
+  add(chatId: string, folder: string): void {
+    this.rows.set(chatId, folder);
+  }
+  folderFor(chatId: string): string | null {
+    return this.rows.get(chatId) ?? null;
+  }
+  remove(chatId: string): void {
+    this.rows.delete(chatId);
   }
 }
 
@@ -1852,6 +1867,7 @@ export class InMemoryStore implements Store {
   readonly remoteSessions: RemoteSessionRepo;
   readonly pushSubscriptions: PushSubscriptionRepo;
   readonly chatSends: ChatSendRepo = new InMemoryChatSendRepo();
+  readonly jobChats: JobChatStore = new InMemoryJobChatStore();
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {

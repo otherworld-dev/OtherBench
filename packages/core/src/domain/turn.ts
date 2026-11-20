@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
+import { jobProfile } from './job.js';
 import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Store } from '../ports/store.js';
 import type { ToolProvider } from '../ports/tool-provider.js';
@@ -34,6 +36,16 @@ export { fencedFileText } from './turn-attachments.js';
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
 
+/** The same folder, as Windows compares paths (without case) and ignoring a trailing separator. An empty path is no folder. */
+function sameFolder(a: string, b: string): boolean {
+  if (a === '' || b === '') return false;
+  const norm = (p: string): string => {
+    const r = resolvePath(p).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
+}
+
 /**
  * Written for a variant cancelled before the engine ever reported usage --
  * see the comment at this file's only use site (the end of `runVariant`) for
@@ -62,6 +74,7 @@ export class TurnRunner {
   private readonly canonicalPath: (path: string) => string;
   private readonly saveToolImage?: SaveToolImage;
   private readonly claudeAccountFor?: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined;
+  private readonly jobFolderFor?: (chatId: string) => string | null;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** messageId -> the notice `cancel` was given, for the reply to end with (a scheduled run's time limit). */
@@ -92,6 +105,7 @@ export class TurnRunner {
     this.canonicalPath = options.canonicalPath ?? ((p) => p);
     this.saveToolImage = options.saveToolImage;
     this.claudeAccountFor = options.claudeAccountFor;
+    this.jobFolderFor = options.jobFolderFor;
     this.prompts = new TurnPromptBuilder(store, this.now, this.canonicalPath);
     this.toolProvider?.onApprovalEvent((event) => {
       switch (event.type) {
@@ -112,6 +126,21 @@ export class TurnRunner {
           break;
       }
     });
+  }
+
+  /**
+   * The chat's job folder, or null when it isn't a job chat. A lookup
+   * that fails counts as a job chat with no folder (''), which then refuses to
+   * run: a job chat must never run as an ordinary one because a read failed.
+   */
+  private jobFolderOf(chatId: string): string | null {
+    if (!this.jobFolderFor) return null;
+    try {
+      return this.jobFolderFor(chatId);
+    } catch (err) {
+      console.error(`[TurnRunner] could not tell whether chat ${chatId} is a job:`, err);
+      return '';
+    }
   }
 
   /** Subscribes to every `TurnEvent` this runner emits, across every turn/chat it drives. Returns an unsubscribe function. */
@@ -463,10 +492,13 @@ export class TurnRunner {
     chatId: string,
     userMessageId: string,
     messageId: string,
-    profile: ResolvedProfile,
+    givenProfile: ResolvedProfile,
     unattended = false,
     variant: { stream?: (req: EngineRequest) => AsyncIterable<EngineEvent>; notice?: string; unattendedAuto?: boolean } = {}
   ): Promise<void> {
+    // A job chat (docs/features/jobs.md) runs as the job profile, whatever profile the turn was sent with.
+    const jobFolder = this.jobFolderOf(chatId);
+    const profile = jobFolder !== null ? jobProfile(givenProfile) : givenProfile;
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
     this.running.set(messageId, { chatId, unattended });
@@ -515,6 +547,12 @@ export class TurnRunner {
         throw new WorkspaceUnresolvedError(workspace);
       }
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
+      // A job chat works in its job folder and nowhere else: a folder changed by any route, or by a paired machine's sync, stops it.
+      if (jobFolder !== null && (workspaceRoot === null || !sameFolder(workspaceRoot, jobFolder))) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        throw new Error("This job chat's folder isn't its job folder, so it can't run.");
+      }
+      const job = jobFolder !== null;
       // Which Claude login this turn runs on, resolved fresh per variant (a
       // chat moved off a limited main stays moved). Endpoint backends have none.
       // A self-started or follow-on reply streams from a process already running,
@@ -533,15 +571,17 @@ export class TurnRunner {
       // resolved here; one not on this machine is left out, and none apply
       // without a workspace (spec 2026-10-07-extra-folders).
       const projectFolders = this.prompts.projectChain(chat).map((p) => p.folders);
-      const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
-      const autoMode = chat?.autoMode ?? false;
+      // A job chat has none: its folder is the job's.
+      const folders = workspaceRoot === null || job ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
+      // Nor Auto: Claude Code's classifier is no boundary for a job's untrusted instructions.
+      const autoMode = job ? false : (chat?.autoMode ?? false);
       const effort = chat?.effort ?? null;
       // A handover summary (spec 2026-11-06-fresh-chat-handover-design) uses no tools, so it never plans.
       const userMessage = this.store.messages.get(userMessageId);
       const handover = userMessage !== null && isHandoverRequest(userMessage);
       // A self-started reply is held to the chat's plan mode like any other (a fresh, closed gate):
       // nothing changes before a plan is approved, however the turn began.
-      const planMode = chat?.planMode === true && !handover;
+      const planMode = chat?.planMode === true && !handover && !job;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -693,8 +733,9 @@ export class TurnRunner {
         // Nobody can catch what auto mode's classifier allows in a scheduled
         // run (the classifier isn't a security boundary), so it is used there
         // only when the schedule says so, never because of the chat's Auto.
-        autoMode: unattended ? variant.unattendedAuto === true : autoMode,
+        autoMode: job ? false : unattended ? variant.unattendedAuto === true : autoMode,
         ...(unattended ? { unattended: true } : {}),
+        ...(job ? { job: true } : {}),
         ...(effort ? { effort } : {}),
         ...(plan ? { plan } : {}),
         ...(handover ? { handover: true } : {}),

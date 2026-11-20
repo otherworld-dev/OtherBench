@@ -56,7 +56,8 @@ describe('toolContextFor', () => {
     const call = new AbortController().signal;
     const subagent = { callId: 'c1', label: 'Helper', parentProfileId: 'profile-a', profileName: 'B' };
     const req = request({ profile: { id: 'profile-b' } as ResolvedProfile, folders, plan, unattended: true, autoMode: true, subagents: host, subagent });
-    const expected: Required<Omit<ToolContext, 'live' | 'shownSubagent'>> = {
+    // `job` is left out too: it turns `unattendedAuto` off, so the two never come together (permissions-job.test.ts).
+    const expected: Required<Omit<ToolContext, 'live' | 'shownSubagent' | 'job'>> = {
       chatId: 'chat-1',
       messageId: 'reply-1',
       profileId: 'profile-a',

@@ -166,13 +166,13 @@ describe('DeckTab', () => {
   });
 
   it('a card on another board says which board', async () => {
-    vi.mocked(api.nextcloud.card).mockResolvedValue(detail({ boardId: 12, boardTitle: 'Glados MCP', stackTitle: 'To Do' }));
+    vi.mocked(api.nextcloud.card).mockResolvedValue(detail({ boardId: 12, boardTitle: 'Harbour MCP', stackTitle: 'To Do' }));
     const { view } = await openTerminal();
-    expect(within(view).getByText('On the Glados MCP board')).toBeInTheDocument();
+    expect(within(view).getByText('On the Harbour MCP board')).toBeInTheDocument();
   });
 
   it("a card on another board is fetched and changed on its own board, so nothing rescans the app's", async () => {
-    vi.mocked(api.nextcloud.card).mockResolvedValue(detail({ boardId: 12, boardTitle: 'Glados MCP', stackTitle: 'To Do' }));
+    vi.mocked(api.nextcloud.card).mockResolvedValue(detail({ boardId: 12, boardTitle: 'Harbour MCP', stackTitle: 'To Do' }));
     const { user, view } = await openTerminal();
     expect(api.nextcloud.card).toHaveBeenLastCalledWith(966, 7);
     await user.click(within(view).getByRole('button', { name: 'Done' }));

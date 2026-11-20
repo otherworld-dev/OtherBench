@@ -83,6 +83,15 @@ export interface ToolContext {
    */
   unattendedAuto?: boolean;
   /**
+   * The call is in a job chat (docs/features/jobs.md): the
+   * broker's job rules apply (`permissions/job.ts`), nothing is handed to
+   * Claude Code's classifier, and Claude Code's own folders (the user's
+   * skills, its project memory, the global CLAUDE.md) are out of reach. Set
+   * only by `toolContextFor`, from `EngineRequest.job`, which only
+   * `TurnRunner` sets, from the local job table.
+   */
+  job?: boolean;
+  /**
    * Set only by `OtherBenchToolProvider.runLiveCall`, never by an engine or
    * `toolContextFor`: this call is one a live artifact's page asked for (spec
    * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live

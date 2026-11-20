@@ -31,6 +31,7 @@ import { persistAnswer } from './permissions/grant-minting.js';
 import { decideLive, grantLive, liveGrant, liveIneligibility, revokeLive } from './permissions/live.js';
 import { allowedWhilePlanning, openNeedsStandingGrant, PLAN_BROWSER_OPEN_REFUSAL, UNATTENDED_REASON } from './permissions/modes.js';
 import { DEFAULT_MAX_PENDING, PendingApprovals } from './permissions/pending.js';
+import { jobDecision } from './permissions/job.js';
 import { checkPolicy } from './permissions/policy.js';
 import { askOnMutateReadPass, isProtectedAgentWrite, sourceDecision, workspaceDenial } from './permissions/sources.js';
 import { cardSummary } from './permissions/summaries.js';
@@ -215,6 +216,14 @@ export class PermissionBroker {
 
     const noWorkspace = workspaceDenial(tool, ctx);
     if (noWorkspace) return noWorkspace;
+
+    // A job (permissions/job.ts): its writes are allowed or refused by
+    // rule here, and anything that reaches past its folder is refused, before
+    // any shortcut, grant, card or classifier.
+    if (ctx.job === true) {
+      const byJob = jobDecision(tool, args, ctx);
+      if (byJob) return byJob;
+    }
 
     // Each source's own refusals and shortcuts (permissions/sources.ts): the
     // sandbox network's local and private hosts, read-only folders, the

@@ -16,6 +16,7 @@ import type { ArtifactRepo } from './store/artifacts.js';
 import type { ScheduleRepo } from './store/schedules.js';
 import type { RemoteSessionRepo, PushSubscriptionRepo } from './store/remote-access.js';
 import type { ChatSendRepo } from './store/chat-sends.js';
+import type { JobChatStore } from './store/job-chats.js';
 
 export type * from './store/config.js';
 export type * from './store/chats.js';
@@ -35,6 +36,7 @@ export type * from './store/artifacts.js';
 export type * from './store/schedules.js';
 export type * from './store/remote-access.js';
 export type * from './store/chat-sends.js';
+export type * from './store/job-chats.js';
 
 // --- store ----------------------------------------------------------------
 
@@ -71,6 +73,8 @@ export interface Store {
   /** Signed-in devices' Web Push subscriptions (migration 040): local, never synced, deleted with their session. */
   pushSubscriptions: PushSubscriptionRepo;
   chatSends: ChatSendRepo;
+  /** Which chats are job chats, and their folders (migration 051): local, never synced. Read for every turn. */
+  jobChats: JobChatStore;
   /**
    * Runs `fn` as one unit: SQLite commits everything it writes together, or
    * rolls it all back when it throws (the error is rethrown). Inside an open

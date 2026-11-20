@@ -77,6 +77,14 @@ export interface TurnResult {
 }
 
 export interface TurnRunnerOptions {
+  /**
+   * The job folder of a job chat, or null for any other chat
+   * (docs/features/jobs.md). Read from the machine-local job table,
+   * which only the job service writes. A chat it names runs every turn, however
+   * the turn began, under the job profile (`jobProfile`), in that folder
+   * only, with no extra folders, Auto or Plan mode, and with `job` on the request.
+   */
+  jobFolderFor?: (chatId: string) => string | null;
   /** Hands over the note Claude just picked up in reply `messageId` as a part, or null when nobody holds it (then it is ignored). */
   takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
   /**

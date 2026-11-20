@@ -106,6 +106,15 @@ export interface EngineRequest {
    */
   unattended?: boolean;
   /**
+   * A turn in a job chat (docs/features/jobs.md). Set only by
+   * `TurnRunner`, from its `jobFolderFor` (the local job table), never from
+   * a request body. Every engine copies it onto each `ToolContext.job`; the
+   * Claude Code engine also loads no settings from the folder, keeps git on
+   * this machine from running the folder's hooks, and offers no tool that
+   * reaches past the folder.
+   */
+  job?: boolean;
+  /**
    * A handover summary (the message answered holds a `handover-request` part): the Claude Code engine sends its
    * fixed prompt and refuses every tool call, so the reply can never stop on a card. Other engines ignore it.
    */

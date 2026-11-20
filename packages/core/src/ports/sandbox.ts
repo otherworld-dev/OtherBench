@@ -93,6 +93,12 @@ export interface SandboxRunRequest {
    * away): take the card down then; any answer is ignored.
    */
   askHost(host: string, port: number | undefined, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Told of each host the sandbox refused by itself, without asking (`askHost`): one that doesn't resolve, or
+   * resolves to this machine or a private network. Optional: only a job's run asks for it, so the refusal
+   * can be audited and counted; without it the agent isn't asked to report them. An older agent never does.
+   */
+  refusedHost?(host: string, port: number | undefined): void;
 }
 
 /** What `run_command` returns on the host, plus `sandbox: true` and the Linux `cwd` (the chat's home with fs 'off'). */

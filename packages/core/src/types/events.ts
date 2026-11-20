@@ -103,6 +103,8 @@ export type AppEvent =
   | { type: 'overview-changed' }
   /** GitHub or Nextcloud was turned on or off (Settings, Features): re-read the settings, as each window holds its own. */
   | { type: 'settings-changed' }
+  /** Something an add-on shows changed (docs/features/addons.md): its settings page re-reads. */
+  | { type: 'addon-changed'; id: string }
   /**
    * An MCP server's health may have changed (its status, error, tool count or sign-in state), or a server was added,
    * edited or deleted: re-read `GET /api/mcp-servers`. `serverId` is null when it could be any of them.

@@ -7,9 +7,10 @@ import type { ApprovalRequest } from '../../ports/tool-provider.js';
 
 export type Decision =
   /** `site_list`: the profile's browser site list covers the call's website; `siteEntry` is the entry that did. */
-  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox' | 'site_list'; grantId?: string; siteEntry?: string }
-  /** `plan`: refused while the reply's plan waits. `unattended`: refused because nobody is there (computer use). */
-  | { kind: 'deny'; reason: string; plan?: true; unattended?: true; code?: 'not_approved' }
+  /** `job`: a write in a job's folder, allowed by the job rules (permissions/job.ts). */
+  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox' | 'site_list' | 'job'; grantId?: string; siteEntry?: string }
+  /** `plan`: refused while the reply's plan waits. `unattended`: refused because nobody is there (computer use). `job`: refused by a job's rules. */
+  | { kind: 'deny'; reason: string; plan?: true; unattended?: true; job?: true; code?: 'not_approved' }
   | { kind: 'ask'; request: ApprovalRequest };
 
 /**

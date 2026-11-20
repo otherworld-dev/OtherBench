@@ -128,7 +128,7 @@ export function hasShortNameSegment(path: string): boolean {
 }
 
 /** A path's segments compared the way Windows opens them: an NTFS stream suffix cut, trailing dots and spaces dropped, lower case. */
-function pathSegments(path: string): string[] {
+export function pathSegments(path: string): string[] {
   return path
     .split(/[\\/]+/)
     .map((s) => s.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase())
