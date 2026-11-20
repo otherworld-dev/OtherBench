@@ -38,6 +38,8 @@ export function hardenedGitConfig(noHooksDir: string): [string, string][] {
     ['maintenance.auto', 'false'],
     // Never read the folder itself as a bare repository (a planted HEAD, config and objects at its top level).
     ['safe.bareRepository', 'explicit'],
+    // A commit-graph file says which tree each commit has; one a job wrote could make a commit's tree read as another.
+    ['core.commitGraph', 'false'],
   ];
 }
 

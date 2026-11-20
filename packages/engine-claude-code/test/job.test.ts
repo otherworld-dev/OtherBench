@@ -133,6 +133,7 @@ describe('ClaudeCodeChatEngine in a job chat', () => {
     ['a commondir file', () => writeFileSync(join(ws, '.git', 'commondir'), '../../elsewhere\n')],
     ['a config.worktree file', () => writeFileSync(join(ws, '.git', 'config.worktree'), '[core]\n')],
     ['a worktrees folder', () => mkdirSync(join(ws, '.git', 'worktrees'))],
+    ['a shallow file', () => writeFileSync(join(ws, '.git', 'shallow'), `${'a'.repeat(40)}\n`)],
   ])("starts no Claude Code when the folder's .git holds %s, which sends git to config the sandbox doesn't guard", async (_name, plant) => {
     plant();
     const { query, calls } = fakeQuery(async function* () {

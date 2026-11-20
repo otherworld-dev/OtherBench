@@ -127,9 +127,10 @@ export function plantedCommandReason(name: string): string {
  * config, and more, from the folder it names, in any repository, not only a linked worktree), `config.worktree`, and
  * `worktrees`. None is in a clone OtherBench made, and the sandbox only guards `.git/config` and `.git/hooks` itself,
  * so a command in a job could plant one, and the next host git in the folder (Claude Code's own, at a turn's start)
- * would then run a filter or pager that config names.
+ * would then run a filter or pager that config names. `shallow` cuts history short, so a job's commits would read as
+ * fewer; a clone OtherBench made is never shallow.
  */
-export const JOB_GIT_REDIRECTS: readonly string[] = ['commondir', 'config.worktree', 'worktrees'];
+export const JOB_GIT_REDIRECTS: readonly string[] = ['commondir', 'config.worktree', 'worktrees', 'shallow'];
 
 /**
  * Why a job folder's `.git` can't be trusted for host git, or null when it is a plain folder.

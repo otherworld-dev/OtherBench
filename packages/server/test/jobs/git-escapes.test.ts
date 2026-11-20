@@ -116,6 +116,24 @@ describe('JobGit on a job folder a job has tampered with', () => {
     expect(plain).not.toContain('claude-hook');
   });
 
+  it("reads a job folder with no commit-graph, which the job could write to make a commit's tree read as another", async () => {
+    const calls: string[][] = [];
+    const jg = new JobGit({
+      root: join(tmp, 'otherbench'),
+      branchPrefix: 'test',
+      run: async (_cmd, args) => {
+        calls.push(args);
+        return { code: 0, stdout: '', stderr: '', timedOut: false } as never;
+      },
+    });
+    mkdirSync(join(tmp, 'otherbench'));
+    const dest = join(jobs, 'graph');
+    mkdirSync(join(dest, '.git'), { recursive: true });
+    await jg.headOf(dest, 'test/graph').catch(() => null);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const args of calls) expect(args.join(' ')).toContain('core.commitGraph=false');
+  });
+
   it("won't touch a folder whose .git is a file pointing elsewhere, or that holds a stand-in for git", async () => {
     const jg = new JobGit({ root: join(tmp, 'otherbench'), branchPrefix: 'test' });
     mkdirSync(join(tmp, 'otherbench'));
