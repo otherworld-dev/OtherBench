@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -73,6 +73,7 @@ import { ChatSendService } from './chat-sends/service.js';
 import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
+import { JobGit } from './jobs/git.js';
 import { NotesService } from './notes/service.js';
 import { runAbandonedAttachmentSweep, startAbandonedAttachmentSweep, type AbandonedSweeper } from './attachment-sweep.js';
 import { workspaceResolver } from './workspace-view.js';
@@ -491,6 +492,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Next to the database, like its attachments; a :memory: database (tests) uses the temp folder.
   const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `otherbench-data-${process.pid}`) : dirname(options.dbPath);
   const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
+  // Job chats' git (docs/features/jobs.md): OtherBench's own folder beside the database, holding the empty hooks folder.
+  const jobGitRoot = join(dataDir, 'job-git');
+  mkdirSync(jobGitRoot, { recursive: true });
+  const jobGitFor = (branchPrefix: string): JobGit => new JobGit({ root: jobGitRoot, branchPrefix });
+  const jobGit = jobGitFor('job');
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(process.env, { profile: new BrowserProfile(secrets) }), allowLoopbackPorts });
   // Computer use: the shell's driver when the CLI passed one (the desktop
@@ -578,6 +584,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through OtherBench's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (policy) => toolProvider.relayTools(policy),
+      // A job's Claude Code runs git here with its hooks taken from this empty folder (core hardened-git.ts).
+      jobNoHooksDir: () => jobGit.ensureNoHooksDir(),
       // A background helper's call between replies is gated with the chat's settings as they are now.
       chatSettings: (chatId, profileId) => {
         const chat = store.chats.get(chatId);
