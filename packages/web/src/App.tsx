@@ -34,6 +34,7 @@ import { IndicatorView } from './views/IndicatorView.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { useAddonLoadNotice } from './state/addons.js';
 import { SchedulesView } from './views/SchedulesView.js';
 import { UsageView } from './views/UsageView.js';
 
@@ -135,6 +136,8 @@ function OverviewWindow(): JSX.Element {
 }
 
 function MainApp(): JSX.Element {
+  // An add-on on this machine that didn't load gets a desktop notification, once per start (docs/features/addons.md).
+  useAddonLoadNotice();
   const chats = useOtherBenchStore((s) => s.chats);
   const profiles = useOtherBenchStore((s) => s.profiles);
   const activeChatId = useOtherBenchStore((s) => s.activeChatId);

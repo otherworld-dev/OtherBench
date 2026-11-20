@@ -21,6 +21,7 @@ vi.mock('./state/api.js', () => ({
     audit: { list: vi.fn() },
     nextcloud: { boards: vi.fn(async () => []), collectives: vi.fn(async () => []), detectLinks: vi.fn() },
     health: vi.fn(async () => ({ status: 'ok', time: '', platform: 'linux' })),
+    addons: { list: vi.fn(async () => []) },
   },
 }));
 

@@ -1,6 +1,8 @@
 import { useState, type JSX } from 'react';
 import { isDesktop } from '../desktop/bridge.js';
+import { useAddons } from '../state/addons.js';
 import { useAuthStore } from '../state/auth.js';
+import { useOtherBenchStore } from '../state/store.js';
 import { useFeatures } from '../state/features.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
 import { ClaudeAccountsPanel } from './settings/ClaudeAccountsPanel.js';
@@ -17,9 +19,10 @@ import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { MemoryPanel } from './settings/MemoryPanel.js';
 import { ImportPanel } from './settings/ImportPanel.js';
 import { SandboxPanel } from './settings/SandboxPanel.js';
+import { AddonsPanel } from './settings/AddonsPanel.js';
 import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'claudeAccounts' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'features' | 'nextcloud' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop' | 'notifications';
+type Tab = 'connections' | 'claudeAccounts' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'features' | 'nextcloud' | 'sandbox' | 'addons' | 'import' | 'appearance' | 'remote' | 'desktop' | 'notifications';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -33,6 +36,7 @@ const TAB_LABEL: Record<Tab, string> = {
   features: 'Features',
   nextcloud: 'Nextcloud',
   sandbox: 'Sandbox',
+  addons: 'Add-ons',
   import: 'Import',
   appearance: 'Appearance',
   remote: 'Remote access',
@@ -58,11 +62,17 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('connections');
   const signInMode = useAuthStore((s) => s.mode === 'login');
   const nextcloud = useFeatures((s) => s.nextcloud);
+  const addons = useAddons();
+  // A chat an add-on's page asks for (a job's, say): shown in place of Settings.
+  const openChat = (chatId: string): void => {
+    useOtherBenchStore.getState().setActiveChatId(chatId);
+    onClose();
+  };
   // The Desktop tab only exists inside the desktop app, and Notifications (the browser's) only outside it; Remote access
-  // only in sign-in mode; Nextcloud only while it's on.
+  // only in sign-in mode; Nextcloud only while it's on; Add-ons only on a machine with one installed.
   const desktop = isDesktop();
   const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter(
-    (t) => (t !== 'desktop' || desktop) && (t !== 'notifications' || !desktop) && (t !== 'remote' || signInMode) && (t !== 'nextcloud' || nextcloud)
+    (t) => (t !== 'desktop' || desktop) && (t !== 'notifications' || !desktop) && (t !== 'remote' || signInMode) && (t !== 'nextcloud' || nextcloud) && (t !== 'addons' || addons.length > 0)
   );
 
   return (
@@ -103,6 +113,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'features' && <FeaturesPanel />}
         {tab === 'nextcloud' && nextcloud && <NextcloudPanel />}
         {tab === 'sandbox' && <SandboxPanel />}
+        {tab === 'addons' && <AddonsPanel addons={addons} onOpenChat={openChat} />}
         {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}
         {tab === 'remote' && <RemoteAccessPanel />}

@@ -14,6 +14,7 @@ import { overviewApi } from './api/overview.js';
 import { nextcloudApi } from './api/nextcloud.js';
 import { appFoldersApi, appNotesApi, appsApi, terminalsApi } from './api/code.js';
 import { locationsApi, nodeApi, peersApi } from './api/machines.js';
+import { addonsApi } from './api/addons.js';
 import { claudeApi, claudeImportApi, sandboxApi, settingsApi, usageApi } from './api/settings.js';
 import { schedulesApi } from './api/schedules.js';
 import { artifactsApi } from './api/artifacts.js';
@@ -86,6 +87,8 @@ export const api = {
   settings: settingsApi,
 
   sandbox: sandboxApi,
+
+  addons: addonsApi,
 
   claudeImport: claudeImportApi,
 

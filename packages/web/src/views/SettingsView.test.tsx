@@ -14,6 +14,9 @@ vi.mock('./settings/BrowserNotificationsPanel.js', () => ({ BrowserNotifications
 vi.mock('./settings/RemoteAccessPanel.js', () => ({ RemoteAccessPanel: () => <div>remote panel</div> }));
 vi.mock('./settings/FeaturesPanel.js', () => ({ FeaturesPanel: () => <div>features panel</div> }));
 vi.mock('./settings/NextcloudPanel.js', () => ({ NextcloudPanel: () => <div>nextcloud panel</div> }));
+vi.mock('./settings/AddonsPanel.js', () => ({ AddonsPanel: () => <div>addons panel</div> }));
+let addons: { id: string; name: string; version: string | null; status: 'loaded' | 'failed'; error: string | null; settingsPage: boolean }[] = [];
+vi.mock('../state/addons.js', () => ({ useAddons: () => addons }));
 
 import { useAuthStore } from '../state/auth.js';
 import { useFeatures } from '../state/features.js';
@@ -53,6 +56,22 @@ describe('SettingsView', () => {
     expect(screen.queryByRole('tab', { name: 'Nextcloud' })).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Features' }));
     expect(screen.getByText('features panel')).toBeInTheDocument();
+  });
+
+  it('has no Add-ons tab when no add-on is installed', () => {
+    addons = [];
+    render(<SettingsView onClose={vi.fn()} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).not.toContain('Add-ons');
+  });
+
+  it('has an Add-ons tab after Sandbox when one is installed, loaded or not', () => {
+    addons = [{ id: 'glow', name: 'Glow', version: '1', status: 'failed', error: 'x', settingsPage: false }];
+    render(<SettingsView onClose={vi.fn()} />);
+    const names = screen.getAllByRole('tab').map((t) => t.textContent);
+    expect(names.indexOf('Add-ons')).toBe(names.indexOf('Sandbox') + 1);
+    fireEvent.click(screen.getByRole('tab', { name: 'Add-ons' }));
+    expect(screen.getByText('addons panel')).toBeInTheDocument();
+    addons = [];
   });
 
   it('has a Remote access tab only in sign-in mode', () => {

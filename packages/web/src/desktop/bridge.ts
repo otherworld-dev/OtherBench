@@ -122,6 +122,12 @@ export async function openChatInMain(chatId: string): Promise<void> {
   await invoke('open_chat', { chatId });
 }
 
+/** True in the desktop app's main window, or in a browser (where every tab is a main window). */
+export function isMainAppWindow(): boolean {
+  const label = windowLabel();
+  return label === undefined || label === 'main';
+}
+
 /**
  * True in the quick-chat window. It loads the app with `?view=quick`; its
  * window label (`quick`, tauri.conf.json) is checked too, so the full app --

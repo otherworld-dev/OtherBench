@@ -54,6 +54,11 @@ export function serverUrl(path: string): string {
   return `${config.baseUrl}${path}`;
 }
 
+/** The desktop app's per-launch token, for an add-on's settings page in its frame (docs/features/addons.md); null without one. */
+export function currentToken(): string | null {
+  return config.token;
+}
+
 export function hasToken(): boolean {
   return config.token !== null;
 }
