@@ -72,6 +72,8 @@ function writeDecision(tool: ToolSpec, args: unknown, ctx: ToolContext): Decisio
       return deny(`"${tool.name}" was blocked: ${raw} is outside this job's folder.`);
     }
     if (rel === '' || isJobProtectedPath(rel)) return deny(jobProtectedReason(raw));
+    // A named stream (`git.exe::$DATA` is git.exe itself; `a.txt:x` hides data): Windows paths never need one here.
+    if (rel.includes(':')) return deny(`"${tool.name}" was blocked: ${raw} names a file stream, which a job can't write.`);
     // A file at the top level named like a program started by name (git.exe, node.cmd): Windows could run it from here.
     if (!rel.includes('/') && plantedCommandIn([rel]) !== null) return deny(`jobs can't make ${rel} at the top of the folder: it is named like a program, which Windows could run from here in place of the real one. Put it in a subfolder.`);
   }

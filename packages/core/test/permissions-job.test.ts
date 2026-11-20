@@ -77,6 +77,14 @@ describe('Job rules (permissions/job.ts)', () => {
     expect(plantedCommandIn(['src', 'README.md', 'gitignore.txt'])).toBeNull();
   });
 
+  it('refuses a write to a named stream, which would make a file under another name (git.exe::$DATA is git.exe)', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    for (const rel of ['git.exe::$DATA', 'git.exe:x', 'notes.txt:hidden', 'src/a.ts:zone']) {
+      expect(b.decide(agent('Write'), { file_path: join(ws, rel), path: rel }, jobPolicy(), ctx()), rel).toMatchObject({ kind: 'deny', job: true });
+    }
+    expect(b.decide(own('write_file', 'fs'), { path: 'git.exe::$DATA', content: 'MZ' }, jobPolicy(), ctx())).toMatchObject({ kind: 'deny', job: true });
+  });
+
   it('allows ordinary writes in the folder by the job rule, with nobody there to ask', () => {
     const b = new PermissionBroker(new InMemoryStore());
     expect(b.decide(agent('Edit'), { file_path: join(ws, 'src', 'a.ts'), path: 'src/a.ts' }, jobPolicy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'job' });

@@ -10,6 +10,8 @@
  * (`permissions/job.ts`) refuse what a job may never do before any grant,
  * card or classifier is consulted.
  */
+import { lstatSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathSegments } from './agent-tools.js';
 import type { ResolvedProfile, ToolPolicy } from '../types/config.js';
 
@@ -118,6 +120,39 @@ export function plantedCommandIn(names: readonly string[]): string | null {
 /** Why a job's folder can't be used while it holds such a file. */
 export function plantedCommandReason(name: string): string {
   return `This job's folder has a file named ${name} at its top level, which Windows could run in place of the real program. OtherBench won't start anything in it until the file is gone.`;
+}
+
+/**
+ * Entries in a job folder's `.git` that send git to config or a repository somewhere else: `commondir` (git reads
+ * config, and more, from the folder it names, in any repository, not only a linked worktree), `config.worktree`, and
+ * `worktrees`. None is in a clone OtherBench made, and the sandbox only guards `.git/config` and `.git/hooks` itself,
+ * so a command in a job could plant one, and the next host git in the folder (Claude Code's own, at a turn's start)
+ * would then run a filter or pager that config names.
+ */
+export const JOB_GIT_REDIRECTS: readonly string[] = ['commondir', 'config.worktree', 'worktrees'];
+
+/**
+ * Why a job folder's `.git` can't be trusted for host git, or null when it is a plain folder (or there is none).
+ * A `.git` file (`gitdir:` pointing elsewhere) or a link is refused, as is any entry in JOB_GIT_REDIRECTS.
+ */
+export function jobGitProblem(folder: string): string | null {
+  const dotGit = join(folder, '.git');
+  let st;
+  try {
+    st = lstatSync(dotGit);
+  } catch {
+    return null;
+  }
+  if (!st.isDirectory()) return "This job's folder has a .git that isn't a plain folder, so OtherBench won't run git there.";
+  for (const name of JOB_GIT_REDIRECTS) {
+    try {
+      lstatSync(join(dotGit, name));
+    } catch {
+      continue;
+    }
+    return `This job's folder has .git/${name}, which sends git somewhere OtherBench doesn't guard, so it won't run git there.`;
+  }
+  return null;
 }
 
 /** What a refused write in a job chat tells the model. */

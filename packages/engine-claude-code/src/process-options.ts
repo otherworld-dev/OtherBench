@@ -1,7 +1,7 @@
 import type { Options, Settings } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { readdirSync } from 'node:fs';
-import { plantedCommandIn, plantedCommandReason } from '@otherbench/core/domain/job.js';
+import { jobGitProblem, plantedCommandIn, plantedCommandReason } from '@otherbench/core/domain/job.js';
 import { hardenedGitEnv, UNSAFE_GIT_ENV } from '@otherbench/core/domain/hardened-git.js';
 import type { EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
@@ -66,6 +66,9 @@ function jobProcessOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, cwd: 
   // Claude Code starts git (and others) by name in this folder, and Windows looks here before PATH.
   const planted = plantedCommandIn(readdirSync(cwd));
   if (planted !== null) throw new Error(plantedCommandReason(planted));
+  // Claude Code runs git here at start; a .git sending it to config the sandbox doesn't guard could run a filter.
+  const gitProblem = jobGitProblem(cwd);
+  if (gitProblem !== null) throw new Error(gitProblem);
   const env = buildChildEnv(deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId, req.claudeAccount);
   for (const key of Object.keys(env)) if (UNSAFE_GIT_ENV.test(key)) delete env[key];
   // NoDefaultCurrentDirectoryInExePath: Windows (and libuv) skip the working folder when looking a program up by name.

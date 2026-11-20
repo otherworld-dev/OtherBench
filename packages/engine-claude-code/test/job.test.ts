@@ -127,6 +127,35 @@ describe('ClaudeCodeChatEngine in a job chat', () => {
     e.dispose();
   });
 
+  it.each([
+    ['a commondir file', () => writeFileSync(join(ws, '.git', 'commondir'), '../../elsewhere\n')],
+    ['a config.worktree file', () => writeFileSync(join(ws, '.git', 'config.worktree'), '[core]\n')],
+    ['a worktrees folder', () => mkdirSync(join(ws, '.git', 'worktrees'))],
+  ])("starts no Claude Code when the folder's .git holds %s, which sends git to config the sandbox doesn't guard", async (_name, plant) => {
+    mkdirSync(join(ws, '.git'), { recursive: true });
+    plant();
+    const { query, calls } = fakeQuery(async function* () {
+      yield init();
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: deciding(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, jobNoHooksDir: () => noHooks });
+    await expect(collect(e.stream(jobReq()))).rejects.toThrow(/\.git/);
+    expect(calls).toHaveLength(0);
+    e.dispose();
+  });
+
+  it('starts no Claude Code when the folder\'s .git is a file pointing elsewhere', async () => {
+    writeFileSync(join(ws, '.git'), 'gitdir: ../elsewhere\n');
+    const { query, calls } = fakeQuery(async function* () {
+      yield init();
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: deciding(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, jobNoHooksDir: () => noHooks });
+    await expect(collect(e.stream(jobReq()))).rejects.toThrow(/\.git/);
+    expect(calls).toHaveLength(0);
+    e.dispose();
+  });
+
   it("refuses a write to the folder's .claude/settings.json and to Claude Code's own folders, through the real broker", async () => {
     const approvals = deciding();
     const out: unknown[] = [];
