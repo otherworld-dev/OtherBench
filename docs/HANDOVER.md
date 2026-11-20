@@ -51,6 +51,7 @@ setup have their own pages (see Where to look).
 - [Fresh chat handover](features/fresh-chat-handover.md)
 - [Chats that message each other](features/chat-messages.md)
 - [Chat status: done, or what's left](features/chat-status.md)
+- [Job chats: unattended work under fixed rules](features/jobs.md)
 
 ## What is NOT built
 

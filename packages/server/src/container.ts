@@ -58,7 +58,7 @@ import { handleBackground } from './background.js';
 import { closeEngineChatsThatAreGone, followChatSettings } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
-import { resolveProfile } from './profile-resolution.js';
+import { appDefaultProfileId, resolveProfile } from './profile-resolution.js';
 import { createMediaHost } from './media.js';
 import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
@@ -74,6 +74,7 @@ import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import { JobGit } from './jobs/git.js';
+import { createJobRunner, type JobRunner } from './jobs/runner.js';
 import { NotesService } from './notes/service.js';
 import { runAbandonedAttachmentSweep, startAbandonedAttachmentSweep, type AbandonedSweeper } from './attachment-sweep.js';
 import { workspaceResolver } from './workspace-view.js';
@@ -134,6 +135,10 @@ export interface Container {
    * tests can build a Container without one.
    */
   schedules?: ScheduleService;
+  /** Unattended job chats (docs/features/jobs.md): the one way a job chat is made. Always set by `createContainer`. */
+  jobs?: JobRunner;
+  /** Git for job folders, its branches under `prefix/` (docs/features/jobs.md). Always set by `createContainer`. */
+  jobGitFor?: (branchPrefix: string) => JobGit;
   /**
    * Messages sent while a reply runs (spec 2026-10-18-send-while-replying-design):
    * which path each takes, the waiting set, and what becomes of them. Always
@@ -884,6 +889,17 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // Never let chat-to-chat recovery stop the server starting.
     console.warn('[otherbench-server] chat-to-chat sends failed to start:', err);
   }
+  // Job chats: made and run only through here, each recorded as a job chat before its first turn.
+  container.jobs = createJobRunner({
+    store,
+    startTurn: (input) => startTurn(container, input),
+    turnRunner,
+    resolveProfile: (id) => resolveProfile({ store, secrets }, id),
+    defaultProfileId: () => appDefaultProfileId(store),
+    sandbox,
+    closeChats: (gone) => engine.closeChats?.(gone),
+  });
+  container.jobGitFor = jobGitFor;
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
   // what tells the service a chat is busy).
