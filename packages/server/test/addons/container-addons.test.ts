@@ -1,0 +1,46 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createApp } from '../../src/app.js';
+import { createContainer } from '../../src/container.js';
+
+let dir: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'otherbench-container-addons-'));
+});
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe('add-ons beside the database', () => {
+  it('are loaded by createContainer, with their routes, secrets and job chats', async () => {
+    const folder = join(dir, 'addons', 'probe');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'addon.json'), JSON.stringify({ id: 'probe', name: 'Probe', version: '0.0.1', apiVersion: 1, main: 'main.mjs' }));
+    // A tiny add-on: one route that says what it can see, using a Hono app the host hands it back through.
+    writeFileSync(
+      join(folder, 'main.mjs'),
+      `export async function activate(host) {
+  await host.secrets.set('k', 'v');
+  host.routes({ fetch: async (req) => new Response(JSON.stringify({ path: new URL(req.url).pathname, secret: await host.secrets.get('k'), prefix: host.git.jobBranchFor('j') }), { headers: { 'Content-Type': 'application/json' } }) });
+}`
+    );
+    const container = await createContainer({ dbPath: join(dir, 'otherbench.db'), secretsPath: join(dir, 'secrets.json') });
+    try {
+      expect(container.addons).toEqual([expect.objectContaining({ id: 'probe', status: 'loaded' })]);
+      const res = await createApp(container).request('/api/addons/probe/hello');
+      expect(await res.json()).toEqual({ path: '/hello', secret: 'v', prefix: 'probe/j' });
+      await expect(container.secrets.get('addon:probe:k')).resolves.toBe('v');
+    } finally {
+      container.close();
+    }
+  });
+
+  it('start fine with no addons folder', async () => {
+    const container = await createContainer({ dbPath: join(dir, 'otherbench.db'), secretsPath: join(dir, 'secrets.json') });
+    try {
+      expect(container.addons).toEqual([]);
+    } finally {
+      container.close();
+    }
+  });
+});

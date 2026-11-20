@@ -22,7 +22,7 @@ function setup(over: Partial<JobRunnerDeps> = {}) {
       started.push(input);
       // TurnRunner reads the job folder for the chat before it runs anything.
       expect(store.jobChats.folderFor(input.chatId)).toBe(FOLDER);
-      return { userMessageId: 'u1', assistantMessageIds: ['a1'] } as unknown as TurnResult;
+      return { userMessageId: 'u1', assistantMessageIds: ['a1'] };
     }),
     turnRunner: { on: (cb) => (listeners.add(cb), () => listeners.delete(cb)), cancel: vi.fn() },
     resolveProfile: vi.fn(async (id: string) => profile({ id })),
@@ -51,7 +51,7 @@ describe('JobRunner', () => {
   });
 
   it('profile() takes the default for null, and says when one is archived', async () => {
-    const { runner } = setup({ resolveProfile: vi.fn(async (id: string) => profile({ id, archivedAt: id === 'old' ? 5 : null } as Partial<ResolvedProfile>)) });
+    const { runner } = setup({ resolveProfile: vi.fn(async (id: string) => profile({ id, archivedAt: id === 'old' ? 5 : null })) });
     await expect(runner.profile(null)).resolves.toMatchObject({ id: 'p-default', archived: false });
     await expect(runner.profile('old')).resolves.toMatchObject({ id: 'old', archived: true });
   });
@@ -65,8 +65,8 @@ describe('JobRunner', () => {
     const { runner, emit } = setup();
     const ended = vi.fn();
     runner.onReplyEnded(ended);
-    emit({ type: 'status', messageId: 'a1', status: 'streaming' } as TurnEvent);
-    emit({ type: 'status', messageId: 'a1', status: 'complete' } as TurnEvent);
+    emit({ type: 'status', messageId: 'a1', status: 'streaming' });
+    emit({ type: 'status', messageId: 'a1', status: 'complete' });
     expect(ended).toHaveBeenCalledTimes(1);
     expect(ended).toHaveBeenCalledWith('a1', 'complete');
   });

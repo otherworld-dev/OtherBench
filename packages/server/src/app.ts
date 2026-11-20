@@ -4,7 +4,8 @@ import type { Container } from './container.js';
 import { CodeRouteError } from './code/route-errors.js';
 import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
-import { authGate, authRoutes } from './remote/auth.js';
+import { addonPageRoutes, addonsRoutes } from './addons/routes.js';
+import { authGate, authRoutes, tokenMatches } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
 import type { PushService } from './push/service.js';
 import { pushRoutes } from './routes/push.js';
@@ -164,6 +165,24 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', terminalStatusRoutes(container, options.terminals === true));
   if (options.terminals === true) authed.route('/', terminalsRoutes(container));
   authed.route('/settings', settingsRoutes(container, options.corsOrigins ?? []));
+  // Add-ons installed on this machine (docs/features/addons.md): the list, and each loaded one's own routes. An add-on's
+  // settings change only at this machine (the desktop app's token, or a server that takes no sign-ins).
+  container.atThisMachine = (c) => remote === null || (token !== null && tokenMatches(c.req.header('Authorization'), token));
+  const addons = (): NonNullable<Container['addons']> => container.addons ?? [];
+  authed.route('/addons', addonsRoutes(addons));
+  // Forwarded by fetch, not mounted: an add-on brings its own copy of Hono, built against whatever version it likes.
+  for (const addon of addons()) {
+    const routes = addon.status === 'loaded' ? addon.routes : null;
+    if (!routes) continue;
+    const prefix = `/api/addons/${addon.id}`;
+    const forward = (c: Context): Response | Promise<Response> => {
+      const url = new URL(c.req.url);
+      url.pathname = url.pathname.slice(prefix.length) || '/';
+      return routes.fetch(new Request(url, c.req.raw));
+    };
+    authed.all(`/addons/${addon.id}`, forward);
+    authed.all(`/addons/${addon.id}/*`, forward);
+  }
   // This machine's Nextcloud (Deck, Wiki and Links tabs): never on the peer listener (forwardedApi).
   authed.route('/nextcloud', nextcloudRoutes(container));
   authed.route('/locations', locationsRoutes(container));
@@ -240,6 +259,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
 
   // MCP sign-in's redirect lands here, in every mode: no token or session (the system browser has none), Host check still applies, its own headers. Before the static UI, which would answer every other path.
   app.route('/oauth', oauthCallbackRoutes(container));
+  // Add-ons' settings pages, framed by Settings → Add-ons: their own headers, before the static UI's frame-ancestors 'none'.
+  app.route('/addons', addonPageRoutes(addons, options.corsOrigins ?? []));
 
   // Sign-in with --tls auto: the CA a device installs to trust OtherBench (spec §4). No sign-in needed:
   // it's public, and the device checks its fingerprint against what `otherbench serve` printed.

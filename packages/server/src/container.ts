@@ -73,7 +73,10 @@ import { ChatSendService } from './chat-sends/service.js';
 import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
+import type { Context } from 'hono';
 import { JobGit } from './jobs/git.js';
+import { disposeAddons, loadAddons, type LoadedAddon } from './addons/loader.js';
+import { makeAddonHost } from './addons/host.js';
 import { createJobRunner, type JobRunner } from './jobs/runner.js';
 import { NotesService } from './notes/service.js';
 import { runAbandonedAttachmentSweep, startAbandonedAttachmentSweep, type AbandonedSweeper } from './attachment-sweep.js';
@@ -139,6 +142,10 @@ export interface Container {
   jobs?: JobRunner;
   /** Git for job folders, its branches under `prefix/` (docs/features/jobs.md). Always set by `createContainer`. */
   jobGitFor?: (branchPrefix: string) => JobGit;
+  /** Add-ons found in `<data dir>/addons` (docs/features/addons.md), loaded or not. Set by `createContainer`. */
+  addons?: LoadedAddon[];
+  /** Whether a request came from this machine; set by `createApp`, which knows the mode and token. */
+  atThisMachine?: (c: Context) => boolean;
   /**
    * Messages sent while a reply runs (spec 2026-10-18-send-while-replying-design):
    * which path each takes, the waiting set, and what becomes of them. Always
@@ -991,6 +998,39 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   closeEngineChatsThatAreGone(events, engine, (chatId) => store.chats.get(chatId) !== null);
   // Auto switched on a chat applies to its running Claude Code at once, as in VS Code.
   followChatSettings(events, engine);
+
+  // Add-ons installed by hand in <data dir>/addons (docs/features/addons.md), last, so each can use everything above.
+  // One that fails is listed with why; it never stops the server starting.
+  const jobs = container.jobs;
+  container.addons = await loadAddons({
+    addonsDir: join(dataDir, 'addons'),
+    makeHost: (manifest, _folder, onRoutes) =>
+      makeAddonHost(
+        {
+          store,
+          secrets,
+          jobs,
+          jobGitFor,
+          emit: (e) => events.emit(e),
+          atThisMachine: (c) => container.atThisMachine?.(c) ?? false,
+          dataRoot: join(dataDir, 'addon-data'),
+          appFolder: (app) => {
+            const folder = workspaceResolver(container)(app.workspace);
+            return folder.status === 'ok' ? folder.root : null;
+          },
+        },
+        manifest,
+        onRoutes
+      ),
+  });
+  for (const a of container.addons) {
+    if (a.status === 'failed') console.warn(`[otherbench-server] add-on ${a.id} didn't load: ${a.error ?? ''}`);
+  }
+  const closeBeforeAddons = container.close;
+  container.close = () => {
+    void disposeAddons(container.addons ?? []);
+    closeBeforeAddons();
+  };
 
   return container;
 }
