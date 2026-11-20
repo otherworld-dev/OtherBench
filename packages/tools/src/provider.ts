@@ -321,7 +321,12 @@ export class OtherBenchToolProvider implements ToolProvider {
 
   /** The sandboxed run_command for this policy; its network questions become sandbox_network cards. */
   private sandboxTool(policy: ToolPolicy): ToolSpec {
-    return sandboxRunCommandTool(this.sandbox, policy, (host, port, ctx, signal) => this.approveNetwork(host, port, policy, ctx, signal));
+    return sandboxRunCommandTool(
+      this.sandbox,
+      policy,
+      (host, port, ctx, signal) => this.approveNetwork(host, port, policy, ctx, signal),
+      (host, port, ctx) => this.recordRefusedHost(host, port, ctx)
+    );
   }
 
   /**
@@ -351,6 +356,18 @@ export class OtherBenchToolProvider implements ToolProvider {
       this.writeAudit(ctx, SANDBOX_NETWORK_TOOL, args, toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
     }
     return auth.ok;
+  }
+
+  /**
+   * A host the sandbox refused by itself, before any card (it doesn't
+   * resolve, or resolves to this machine or a private network), audited for a
+   * job so its refused calls count it. Only a job's run reports these.
+   */
+  private recordRefusedHost(host: string, port: number | undefined, ctx: ToolContext): void {
+    const canonical = canonicalHost(host) ?? host.slice(0, 255);
+    const args = port === undefined ? { host: canonical } : { host: canonical, port };
+    const reason = `The sandbox can't reach ${canonical}: it doesn't resolve, or it is this machine or a private network address.`;
+    this.writeAudit(ctx, SANDBOX_NETWORK_TOOL, args, toolError('permission_denied', reason), 0, ctx.job === true ? 'deny:job' : 'deny:policy');
   }
 
   async refreshMcp(serverId: string): Promise<void> {
@@ -525,7 +542,8 @@ export class OtherBenchToolProvider implements ToolProvider {
     // is there, so the call is refused below rather than handed on.
     // Sending work to other chats is the exception (spec 2026-11-06-chat-to-chat-design): it asks once per chat in
     // auto mode too, as Adam chose, since text planted in this chat could otherwise set other chats working unasked.
-    if (decision.kind === 'ask' && opts.deferAsk === true && call.tool.source !== 'chats' && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
+    // Nor in a job chat: its classifier is no boundary for untrusted instructions, so whatever the job rules left to ask is refused or carded.
+    if (decision.kind === 'ask' && opts.deferAsk === true && call.tool.source !== 'chats' && ctx.job !== true && (ctx.unattended !== true || ctx.unattendedAuto === true)) {
       // Auto mode: no card, no event and nothing stored -- the pending
       // request is dropped unanswered. A Claude Code tool goes to its
       // classifier. One of OtherBench's own (relayed, artifact, recall, plan)

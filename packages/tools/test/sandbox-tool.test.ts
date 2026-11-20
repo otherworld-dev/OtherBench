@@ -373,3 +373,25 @@ describe('a turn reaching the sandboxed shell', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('run_command in a job chat', () => {
+  it("asks the sandbox for the hosts it refuses by itself, and audits each as the job's refused call", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { store, provider } = setup(sandbox);
+    const tool = await runCommand(provider, policy({ sandboxHosts: [] }));
+    await tool.execute({ command: 'curl http://jobs.example.invalid' }, ctx({ job: true, unattended: true }));
+    const req = sandbox.requests[0]!;
+    expect(req.refusedHost).toBeTypeOf('function');
+    req.refusedHost!('jobs.example.invalid', 80);
+    const refused = store.audit.list('chat-1').filter((a) => a.toolName === 'sandbox_network');
+    expect(refused).toEqual([expect.objectContaining({ grantedBy: 'deny:job', argsRedacted: { host: 'jobs.example.invalid', port: 80 } })]);
+  });
+
+  it('leaves an ordinary chat as it was: no refusals asked for', async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { provider } = setup(sandbox);
+    const tool = await runCommand(provider, policy());
+    await tool.execute({ command: 'ls' }, ctx());
+    expect(sandbox.requests[0]!.refusedHost).toBeUndefined();
+  });
+});

@@ -73,6 +73,13 @@ export interface ClaudeCodeEngineDeps {
    * the arguments the gate approved. Without it, no relay.
    */
   relayTools?: (policy: ToolPolicy) => ToolSpec[] | Promise<ToolSpec[]>;
+  /**
+   * An empty folder only OtherBench can write, which a job's Claude Code
+   * process is given as git's hooks folder (core hardened-git.ts), so git that
+   * Claude Code runs on this machine in the job folder runs none of its hooks
+   * or monitor commands. Without it a job turn is refused: it can't be run safely.
+   */
+  jobNoHooksDir?: () => string;
   /** Builds OtherBench's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: OtherBenchServerTool[]) => McpServerConfig;
 }

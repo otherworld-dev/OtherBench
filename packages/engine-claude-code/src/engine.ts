@@ -159,7 +159,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   refreshChatSettings(chatId?: string): void {
     for (const live of this.processes) {
       const last = live.last;
-      if (!last || live.isClosed || !live.canAuto || last.unattended || (chatId !== undefined && last.chatId !== chatId)) continue;
+      // A job's process never goes into Auto, whatever its chat's switch says.
+      if (!last || live.isClosed || !live.canAuto || last.unattended || last.ctx.job === true || (chatId !== undefined && last.chatId !== chatId)) continue;
       const current = this.deps.chatSettings?.(last.chatId, last.profileId);
       if (!current) continue;
       const want = current.autoMode ? 'auto' : 'default';

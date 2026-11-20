@@ -24,7 +24,7 @@ export type Authorization = (
       ok: false;
       code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'plan_mode' | 'approval_unavailable' | 'no_approval';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan' | 'deny:unattended';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan' | 'deny:unattended' | 'deny:job';
       /**
        * The line that says whose words `reason` may hold, when they may not
        * be OtherBench's own (`quoting`). The model reads it first, on every path.
@@ -89,6 +89,11 @@ export function deniedAuth(reason: string, unattended: boolean, plan = false): D
   return unattended
     ? { ok: false, code: 'approval_unavailable', reason, grantedBy: 'deny:unattended' }
     : { ok: false, code: 'permission_denied', reason, grantedBy: 'deny:policy' };
+}
+
+/** A refusal by a job's rules (core permissions/job.ts), kept under its own name in the audit. */
+export function jobDeniedAuth(reason: string): Denied {
+  return { ok: false, code: 'permission_denied', reason, grantedBy: 'deny:job' };
 }
 
 export function toolError(code: string, message: string, about?: string): ToolError {

@@ -66,7 +66,17 @@ export function launchProcess(deps: ClaudeCodeEngineDeps, options: Options, key:
     const current = deps.chatSettings ? deps.chatSettings(last.chatId, last.profileId) : { autoMode: last.autoMode, planMode: last.ctx.plan !== undefined, policy: last.policy };
     if (!current) return null;
     const { plan: lastPlan, ...rest } = last.ctx;
-    const plan = current.planMode ? (lastPlan ?? createPlanGate()) : undefined;
+    // A job's helper keeps the job's rules: the job policy its reply ran under (never the stored profile's), no plan, no Auto.
+    const job = rest.job === true;
+    const plan = current.planMode && !job ? (lastPlan ?? createPlanGate()) : undefined;
+    if (job) {
+      return {
+        ctx: { ...rest, signal: abortController.signal, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
+        policy: last.policy,
+        autoMode: false,
+        autoApprove: false,
+      };
+    }
     return {
       ctx: { ...rest, ...(plan ? { plan } : {}), signal: abortController.signal, messageId: owner.messageId, shownSubagent: { callId: owner.callId, label: owner.label, parentProfileId: last.profileId } },
       policy: current.policy,

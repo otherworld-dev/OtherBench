@@ -244,7 +244,10 @@ export function createGate(deps: {
       // Claude Code's internal ones (TodoWrite, AskUserQuestion) may go on.
       const category = classifyAgentTool(toolName).category;
       if (!workspaceRoot && !own && category !== 'web' && category !== 'internal') return { allow: false, reason: NO_FOLDER_REASON };
-      const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, [...(deps.ctx.folders ?? []), ...(deps.claudeFolders ?? [])]);
+      // A job chat never reaches Claude Code's own folders (the user's skills, its project memory, the global
+      // CLAUDE.md): a write there would carry the job's instructions into the user's own sessions.
+      const extra = deps.ctx.job === true ? [] : (deps.claudeFolders ?? []);
+      const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, [...(deps.ctx.folders ?? []), ...extra]);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
       }

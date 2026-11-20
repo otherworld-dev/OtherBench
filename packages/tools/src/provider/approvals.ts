@@ -17,7 +17,7 @@
 import { COMPUTER_UNATTENDED_REASON, isUnattendedRun } from '@otherbench/core/domain/computer-apps.js';
 import { auditGrantedBy, UNATTENDED_REASON, type Decision, type PermissionBroker } from '@otherbench/core/domain/permissions.js';
 import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
-import { ANSWER_REFUSED_REASON, cancelledAuth, deniedAuth, DROPPED_REASON, messageOf, quoting, type Authorization, type SettleCause } from './outcomes.js';
+import { ANSWER_REFUSED_REASON, cancelledAuth, deniedAuth, DROPPED_REASON, jobDeniedAuth, messageOf, quoting, type Authorization, type SettleCause } from './outcomes.js';
 
 export class ApprovalRoundTrip {
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
@@ -59,6 +59,8 @@ export class ApprovalRoundTrip {
     if (decision.kind === 'deny') {
       // Plan mode's and a scheduled run's refusals are OtherBench's own sentences.
       if (decision.plan === true) return deniedAuth(decision.reason, false, true);
+      // A job's rules (core permissions/job.ts) are OtherBench's own sentences too, audited as `deny:job`.
+      if (decision.job === true) return jobDeniedAuth(decision.reason);
       const denied = deniedAuth(decision.reason, decision.unattended === true);
       return decision.unattended === true ? denied : quoting(tool, denied);
     }

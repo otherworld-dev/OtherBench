@@ -1,5 +1,8 @@
 import type { Options, Settings } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
+import { readdirSync } from 'node:fs';
+import { plantedCommandIn, plantedCommandReason } from '@otherbench/core/domain/job.js';
+import { hardenedGitEnv, UNSAFE_GIT_ENV } from '@otherbench/core/domain/hardened-git.js';
 import type { EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { ClaudeAccountRef } from '@otherbench/core/types/claude-accounts.js';
 import type { ResolvedFolder } from '@otherbench/core/types/workspace.js';
@@ -43,6 +46,49 @@ export function claudeFolders(deps: ClaudeCodeEngineDeps, workspaceRoot: string 
   return [...claudeSkillFolders(env, workspaceRoot), ...claudeProjectFolders(env, workspaceRoot), ...claudeGlobalFiles(env, workspaceRoot)];
 }
 
+/** Tools a job's Claude Code is never offered, on top of what its policy hides: SendMessage reaches other Claude sessions on this machine. */
+const JOB_DISALLOWED_TOOLS: readonly string[] = ['SendMessage'];
+
+/**
+ * A job's process (docs/features/jobs.md). Its folder is a
+ * clone the job's untrusted instructions can change, so: no settings are
+ * loaded from anywhere (not the folder's project or local settings, whose
+ * hooks would run on this machine with no card, nor the user's), no MCP
+ * config but OtherBench's own server, Claude Code's git instructions off,
+ * and every git it runs here kept from the folder's hooks and monitor
+ * commands (`hardenedGitEnv`). Throws when the engine was given no empty
+ * hooks folder: the turn then fails rather than run without it.
+ */
+function jobProcessOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, cwd: string): Options {
+  const profile = req.profile;
+  const noHooks = deps.jobNoHooksDir?.();
+  if (!noHooks) throw new Error("OtherBench can't run a job here: it has no safe folder for git's hooks.");
+  // Claude Code starts git (and others) by name in this folder, and Windows looks here before PATH.
+  const planted = plantedCommandIn(readdirSync(cwd));
+  if (planted !== null) throw new Error(plantedCommandReason(planted));
+  const env = buildChildEnv(deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId, req.claudeAccount);
+  for (const key of Object.keys(env)) if (UNSAFE_GIT_ENV.test(key)) delete env[key];
+  // NoDefaultCurrentDirectoryInExePath: Windows (and libuv) skip the working folder when looking a program up by name.
+  Object.assign(env, hardenedGitEnv(noHooks), { CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '1', NoDefaultCurrentDirectoryInExePath: '1' });
+  const base = processSettings();
+  return {
+    cwd,
+    model: profile.modelId,
+    env,
+    permissionMode: 'default',
+    includePartialMessages: true,
+    settingSources: [],
+    strictMcpConfig: true,
+    // No extra deny rules for .git or .claude here: Claude Code applies its own rules before OtherBench's hook,
+    // so such a write would be refused unaudited and go uncounted. The job rules refuse it, audited (core permissions/job.ts).
+    settings: base,
+    disallowedTools: [...agentDisallowedTools(profile.toolPolicy), ...JOB_DISALLOWED_TOOLS],
+    systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
+    ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
+    ...(req.effort ? { effort: req.effort } : {}),
+  };
+}
+
 /** The options a Claude Code process is started with, minus what each process wires up itself (startProcess). */
 export function processOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, cwd: string, autoMode: boolean, clean: boolean): Options {
   const profile = req.profile;
@@ -68,6 +114,7 @@ export function processOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, c
       ...(req.effort ? { effort: req.effort } : {}),
     };
   }
+  if (req.job === true) return jobProcessOptions(deps, req, cwd);
   return {
     cwd,
     model: profile.modelId,

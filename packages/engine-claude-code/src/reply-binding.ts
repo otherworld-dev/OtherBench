@@ -81,7 +81,7 @@ export async function prepareReply(
       approvals: deps.approvals,
       policy: profile.toolPolicy,
       ctx: gateCtx,
-      claudeFolders: claudeFolders(deps, req.workspaceRoot, account),
+      claudeFolders: req.job === true ? [] : claudeFolders(deps, req.workspaceRoot, account),
       ...(req.handover === true ? { handover: true } : {}),
       autoMode: () => classifier && proc.live?.wantsAuto === true && proc.live.permissionMode === 'auto',
       autoApprove: endpointAuto,

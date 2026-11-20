@@ -52,7 +52,10 @@ export type AskHost = (host: string, port: number | undefined, ctx: ToolContext,
  * It never runs anything on this machine: with no sandbox, one that isn't set
  * up, or one that fails, the call is refused, never handed to the host shell.
  */
-export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolicy, askHost: AskHost): ToolSpec {
+/** Records a host the sandbox refused by itself (private, or not resolving), for a call whose context wants them counted. */
+export type RefusedHost = (host: string, port: number | undefined, ctx: ToolContext) => void;
+
+export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolicy, askHost: AskHost, refusedHost?: RefusedHost): ToolSpec {
   // Fails closed: any value but 'read' or 'readwrite' (a newer peer's synced profile, say) is off.
   const fs = sandboxFileAccess(policy.fs);
   const filesOff = fs === 'off';
@@ -80,6 +83,8 @@ export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolic
           allowedHosts: sandboxHostsOf(policy),
           signal: ctx.signal,
           askHost: (host, port, signal) => askHost(host, port, ctx, signal),
+          // A job counts every refused call, these included; an ordinary chat's run doesn't ask for them.
+          ...(ctx.job === true && refusedHost ? { refusedHost: (host: string, port: number | undefined) => refusedHost(host, port, ctx) } : {}),
         });
       } catch (err) {
         if (isSandboxError(err)) return toolError(err.code, err.message);
