@@ -448,7 +448,11 @@ export function createAgent(deps) {
   async function ask({ host, port }) {
     if (phase === 'closing') return false;
     const during = active;
-    if (!(await resolvesToPublicOnly(String(host)))) return false;
+    if (!(await resolvesToPublicOnly(String(host)))) {
+      // Said to OtherBench only when the run asked (an unattended job's, which counts its refused calls); never answered.
+      if (during && during === active && during.reportRefusals) send({ type: 'refused', id: during.id, host: String(host), port: typeof port === 'number' ? port : null });
+      return false;
+    }
     // The run (or the agent) may have ended while the name was resolving: nobody is waiting for a card.
     if (phase === 'closing' || active !== during || during?.controller.signal.aborted) return false;
     const askId = nextAskId++;
@@ -877,7 +881,7 @@ export function createAgent(deps) {
     const controller = new AbortController();
     /** @type {() => void} */
     let release = () => undefined;
-    const mine = { id, controller, done: new Promise((resolve) => (release = resolve)), restore: null };
+    const mine = { id, controller, done: new Promise((resolve) => (release = resolve)), restore: null, reportRefusals: msg.reportRefusals === true };
     active = mine;
     // A cancel (or close) while the command is still being wrapped, possibly waiting on a network ask, has no child to kill yet.
     controller.signal.addEventListener('abort', refuseAsks, { once: true });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WslResult } from '../src/wsl.js';
-import { BASE_PACKAGES, distroNames, installExtraPackages, NODE_URL, parseWslVersion, runSetup } from '../src/setup.js';
+import { BASE_PACKAGES, distroNames, isAptPackageName, PHP_PACKAGES, installExtraPackages, NODE_URL, parseWslVersion, runSetup } from '../src/setup.js';
 import { FakeWsl, happyWsl, STAGING, type WslCall } from './helpers.js';
 
 const RESOURCES = 'E:\\OtherBench\\packages\\sandbox\\resources';
@@ -327,5 +327,13 @@ describe('setup helpers', () => {
     const { outcome } = await setUp(setup, { packages: ['--reinstall'] });
     expect(outcome).toMatchObject({ ok: false, step: 'Install packages', message: expect.stringContaining('not an apt package name') });
     expect(setup.commands.some((l) => l.includes('apt-get'))).toBe(false);
+  });
+});
+
+describe('PHP for unattended jobs', () => {
+  it('installs PHP 8.3 with the extensions Budget and its tests need, and Composer, as plain apt names', () => {
+    expect(BASE_PACKAGES).toEqual(expect.arrayContaining(PHP_PACKAGES));
+    expect(PHP_PACKAGES).toEqual(expect.arrayContaining(['php8.3-cli', 'php8.3-bcmath', 'php8.3-xml', 'php8.3-mbstring', 'composer']));
+    for (const p of BASE_PACKAGES) expect(isAptPackageName(p), p).toBe(true);
   });
 });

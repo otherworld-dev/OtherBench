@@ -10,6 +10,15 @@ export const NODE_SHA256 = 'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94f
 export const INSTALL_DIR = '/opt/otherbench-sandbox';
 /** Where OtherBench's sandbox/ resource folder is mounted, read-only, while setup copies files in. */
 export const SETUP_MOUNT = '/mnt/otherbench-setup';
+/**
+ * PHP and Composer, for unattended jobs on PHP apps (docs/features/jobs.md). Nextcloud Budget, the first,
+ * requires PHP ^8.1 (its composer.json pins the platform to 8.1) and runs CI on 8.1 to 8.4, with 8.3 for coverage
+ * and static analysis; Ubuntu 24.04's own PHP is 8.3, inside that range. Its extensions are bcmath (Budget's own
+ * requirement), xml, mbstring (PHPUnit's) and zip, curl, intl and sqlite3 (Composer's and Nextcloud's). Composer is
+ * Ubuntu's (2.7), which installs any Composer 2 lock file.
+ */
+export const PHP_PACKAGES = ['php8.3-cli', 'php8.3-bcmath', 'php8.3-xml', 'php8.3-mbstring', 'php8.3-zip', 'php8.3-curl', 'php8.3-intl', 'php8.3-sqlite3', 'composer'];
+
 export const BASE_PACKAGES = [
   'bubblewrap',
   'socat',
@@ -25,6 +34,7 @@ export const BASE_PACKAGES = [
   'python3-pip',
   'python3-venv',
   'build-essential',
+  ...PHP_PACKAGES,
 ];
 /** Copied from the resource folder into INSTALL_DIR, root-owned. */
 export const RESOURCE_FILES: readonly { name: string; mode: string }[] = [

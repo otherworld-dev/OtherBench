@@ -143,7 +143,7 @@ interface ChatState {
   epoch: number;
 }
 
-type RunInput = Pick<SandboxRunRequest, 'command' | 'timeoutMs' | 'allowedHosts' | 'signal' | 'askHost'>;
+type RunInput = Pick<SandboxRunRequest, 'command' | 'timeoutMs' | 'allowedHosts' | 'signal' | 'askHost' | 'refusedHost'>;
 
 /**
  * The sandbox on Windows (spec 2026-10-12-sandbox-design §2): an OtherBench-owned
@@ -513,6 +513,7 @@ export class WslSandbox implements Sandbox {
           allowedHosts: runtimeHosts(input.allowedHosts),
           signal: input.signal,
           askHost: (host, port, askSignal) => (host.length > MAX_HOST_CHARS ? Promise.resolve(false) : input.askHost(host, port, askSignal)),
+          ...(input.refusedHost ? { onRefused: (host: string, port: number | undefined) => input.refusedHost?.(host.slice(0, MAX_HOST_CHARS), port) } : {}),
           onUnguarded: (linuxPaths) => this.markUnguarded(chatId, places, linuxPaths),
         });
       } finally {

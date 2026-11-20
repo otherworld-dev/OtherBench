@@ -20,6 +20,8 @@ export type HostMessage =
       writePaths: string[];
       denyWritePaths: string[];
       allowedHosts: string[];
+      /** Report each host the agent refuses by itself (`refused`). Absent: none are reported, as before. */
+      reportRefusals?: boolean;
     }
   | { type: 'cancel'; id: number }
   | { type: 'answer'; askId: number; allowed: boolean }
@@ -37,7 +39,9 @@ export type AgentMessage =
   | { type: 'failed'; id: number; message: string; unguarded: string[] }
   /** The run's command has ended and the agent is putting its protected files back. */
   | { type: 'restoring'; id: number }
-  | { type: 'ask'; askId: number; host: string; port: number | null };
+  | { type: 'ask'; askId: number; host: string; port: number | null }
+  /** A host the agent refused by itself (it doesn't resolve, or resolves somewhere private), sent only for a run with `reportRefusals`. Information only: nothing answers it. */
+  | { type: 'refused'; id: number; host: string; port: number | null };
 
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -89,6 +93,11 @@ export function parseAgentMessage(line: string): AgentMessage | null {
       const host = m['host'];
       const port = m['port'];
       return isInt(askId) && isStr(host) && (port === null || isInt(port)) ? { type: 'ask', askId, host, port } : null;
+    }
+    case 'refused': {
+      const host = m['host'];
+      const port = m['port'];
+      return isInt(id) && isStr(host) && (port === null || isInt(port)) ? { type: 'refused', id, host, port } : null;
     }
     default:
       return null;

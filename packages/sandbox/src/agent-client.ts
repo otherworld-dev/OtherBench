@@ -50,6 +50,8 @@ export interface AgentRun {
    * went away): take the network card down then; any answer is ignored.
    */
   askHost(host: string, port: number | undefined, askSignal: AbortSignal): Promise<boolean>;
+  /** Told of each host the agent refused by itself; given, the run asks the agent to report them (`reportRefusals`). */
+  onRefused?(host: string, port: number | undefined): void;
   /**
    * Called (before the run settles) with the writable folders, as Linux paths, whose protected files the
    * agent couldn't confirm it put back: it said so, or it died or was stopped after the run was sent and
@@ -309,6 +311,7 @@ export class AgentClient {
         writePaths: run.writePaths,
         denyWritePaths: run.denyWritePaths,
         allowedHosts: run.allowedHosts,
+        ...(run.onRefused ? { reportRefusals: true } : {}),
       });
     });
   }
@@ -354,6 +357,14 @@ export class AgentClient {
         if (cur && m.id === cur.id) {
           this.unguarded(cur, m.unguarded);
           cur.reject(new SandboxError('agent_failed', m.message));
+        }
+        return;
+      case 'refused':
+        if (!cur || m.id !== cur.id) return;
+        try {
+          cur.run.onRefused?.(m.host, m.port ?? undefined);
+        } catch {
+          // information only: a listener's fault changes nothing about the run
         }
         return;
       case 'ask': {

@@ -8,6 +8,8 @@ describe('parseAgentMessage', () => {
     expect(parseAgentMessage('{"type":"failed","id":2,"message":"bad","unguarded":["/mnt/e/ws"]}')).toEqual({ type: 'failed', id: 2, message: 'bad', unguarded: ['/mnt/e/ws'] });
     expect(parseAgentMessage('{"type":"restoring","id":3}')).toEqual({ type: 'restoring', id: 3 });
     expect(parseAgentMessage('{"type":"ask","askId":1,"host":"pypi.org","port":null}')).toEqual({ type: 'ask', askId: 1, host: 'pypi.org', port: null });
+    expect(parseAgentMessage('{"type":"refused","id":3,"host":"jobs.example.invalid","port":80}')).toEqual({ type: 'refused', id: 3, host: 'jobs.example.invalid', port: 80 });
+    expect(parseAgentMessage('{"type":"refused","id":3,"host":7,"port":80}')).toBeNull();
     expect(parseAgentMessage('{"type":"done","id":1,"exitCode":null,"signal":"SIGTERM","timedOut":false,"truncated":false,"note":"","unguarded":[]}')).toEqual({
       type: 'done',
       id: 1,

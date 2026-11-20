@@ -135,6 +135,22 @@ describe('AgentClient', () => {
     await running;
   });
 
+  it("asks the agent to report its own refusals only when the run has a listener, and hands each one to it", async () => {
+    const onRefused = vi.fn();
+    const { client, channel } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.emit({ type: 'refused', id: (m as { id: number }).id, host: 'jobs.example.invalid', port: 80 })) });
+    const running = client.run(run({ onRefused }));
+    await vi.waitFor(() => expect(onRefused).toHaveBeenCalledWith('jobs.example.invalid', 80));
+    expect(channel.runs()[0]).toMatchObject({ reportRefusals: true });
+    channel.finish(1);
+    await running;
+    const plain = scriptedAgent();
+    const second = plain.client.run(run());
+    await vi.waitFor(() => expect(plain.channel.runs()).toHaveLength(1));
+    expect(plain.channel.runs()[0]).not.toHaveProperty('reportRefusals');
+    plain.channel.finish(1);
+    await second;
+  });
+
   describe('a question about a host that stops mattering', () => {
     /** A run with an unanswered question; resolves with the question's signal. */
     async function pending(over: { script?: AgentScript; abort?: AbortController } = {}) {
