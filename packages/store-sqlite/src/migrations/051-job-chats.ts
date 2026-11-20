@@ -6,7 +6,7 @@ import type { Migration } from './types.js';
 // through a row this machine wrote. TurnRunner reads it for every turn.
 //
 // Databases from betas 124 and 125 hold their job chats in a table from the old migration 050 instead. Each one with
-// a chat and a folder is copied here first, so those chats stay locked (a job chat whose row went missing would run
+// a chat is copied here first, so those chats stay locked (a job chat whose row went missing would run
 // as an ordinary chat in a folder a job wrote), then both old tables are dropped.
 const OLD_JOBS = 'gla' + 'dos_job';
 const OLD_PUBLISHES = 'gla' + 'dos_publish';
@@ -27,10 +27,12 @@ CREATE TABLE job_chat (
 `,
   run: (db) => {
     if (tableExists(db, OLD_JOBS)) {
+      // Every chat with a row stays a job chat. One with no folder is held to '' (no folder), so TurnRunner refuses its
+      // turns rather than running them loose; a chat with several rows (a continuation) takes one that has a folder.
       db.exec(
         `INSERT OR IGNORE INTO job_chat (chat_id, folder, created_at)
-         SELECT chat_id, folder, CAST(unixepoch('subsec') * 1000 AS INTEGER) FROM ${OLD_JOBS}
-         WHERE chat_id IS NOT NULL AND folder IS NOT NULL`
+         SELECT chat_id, COALESCE(MAX(folder), ''), CAST(unixepoch('subsec') * 1000 AS INTEGER) FROM ${OLD_JOBS}
+         WHERE chat_id IS NOT NULL GROUP BY chat_id`
       );
       db.exec(`DROP TABLE ${OLD_JOBS}`);
     }

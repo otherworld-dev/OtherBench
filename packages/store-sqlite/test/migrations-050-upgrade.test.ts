@@ -27,7 +27,7 @@ describe('migrations 050 and 051', () => {
     }
   });
 
-  it('a database that ran the old 050 keeps its job chats locked, and loses the old tables', () => {
+  it('a database that ran the old 050 keeps every job chat locked, and loses the old tables', () => {
     const db = openDatabase(':memory:');
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 49));
@@ -38,13 +38,18 @@ describe('migrations 050 and 051', () => {
       insert.run('j2', 'E:\jobs\j2', 'chat-2');
       insert.run('j3', 'E:\jobs\j3', null);
       insert.run('j4', null, 'chat-4');
+      insert.run('j5a', null, 'chat-5');
+      insert.run('j5', 'E:/jobs/j5', 'chat-5');
       db.exec(`INSERT INTO ${OLD}_publish (job_id, state) VALUES ('j1', 'done')`);
       runMigrations(db);
       const store = new SqliteStore(db);
       expect(store.jobChats.folderFor('chat-1')).toBe('E:\jobs\j1');
       expect(store.jobChats.folderFor('chat-2')).toBe('E:\jobs\j2');
-      expect(store.jobChats.folderFor('chat-4')).toBeNull();
-      expect((db.prepare('SELECT COUNT(*) AS n FROM job_chat').get() as { n: number }).n).toBe(2);
+      // A chat with no folder stays a job chat, held to no folder, so its turns are refused rather than run loose.
+      expect(store.jobChats.folderFor('chat-4')).toBe('');
+      // A continuation's two rows share a chat: the one with a folder wins.
+      expect(store.jobChats.folderFor('chat-5')).toBe('E:/jobs/j5');
+      expect((db.prepare('SELECT COUNT(*) AS n FROM job_chat').get() as { n: number }).n).toBe(4);
       expect(tables(db).filter((t) => t.startsWith(OLD))).toEqual([]);
     } finally {
       db.close();
