@@ -64,7 +64,7 @@ const LEFT_QUIET = `${PILL} text-[var(--text-muted)] ring-1 ring-inset ring-[var
 
 /** The hover text for what's left: each group's label, then its items. */
 function leftTooltip(items: readonly StatusItem[]): string {
-  return groupLeft(items).map((g) => `${g.label}:\n${g.items.map((i) => `  ${i}`).join('\n')}`).join('\n');
+  return groupLeft(items).map((g) => `${g.label}:\n${g.items.map((i) => `  ${i.text}`).join('\n')}`).join('\n');
 }
 
 /**

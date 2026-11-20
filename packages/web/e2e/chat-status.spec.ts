@@ -6,8 +6,9 @@ import { BASE_URL } from '../playwright.config.js';
  * The chat's status (spec 2026-11-15-chat-done-status-design) in a real
  * browser, on the keyless mock connection: `#status left a|b` and
  * `#status done` call the real set_chat_status tool, and the chat's row says
- * "2 left" (untagged), "1 for you" (tagged), then "Done", then "Your turn" again after a reply that doesn't
- * set it. Names are unique per test: the e2e server keeps one database.
+ * "2 left" (nothing for the user), "1 for you" with its ask shown in full, then "Done", then "Your turn" again
+ * after a reply that doesn't set it. A "you" item with no ask is refused, so that reply sets no status.
+ * Names are unique per test: the e2e server keeps one database.
  */
 
 const suffix = (): string => randomUUID().slice(0, 8);
@@ -40,19 +41,25 @@ test('the agent marks the chat: N left, then Done, then Your turn after a reply 
   await page.getByRole('button', { name: title }).click();
   const word = page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-status-${chatId}`);
 
-  await send(page, '#status left push to github|update the docs');
+  await send(page, '#status left me:push to github|parked:update the docs');
   await expect(word).toHaveText('2 left');
-  await expect(word).toHaveAttribute('title', 'Left:\n  push to github\n  update the docs');
+  await expect(word).toHaveAttribute('title', 'Next from me:\n  push to github\nParked:\n  update the docs');
   const card = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
   await expect(card).toContainText('push to github');
   await expect(page.locator('article[data-role="assistant"]').last()).not.toContainText('set_chat_status');
 
-  await send(page, '#status left you:try it live|me:push to github|parked:dark mode');
+  await send(page, '#status left you:try it live=Open the app and tell me if the sidebar loads|me:push to github|parked:dark mode');
   await expect(word).toHaveText('1 for you');
   await expect(word).toHaveAttribute('title', 'Waiting on you:\n  try it live\nNext from me:\n  push to github\nParked:\n  dark mode');
   const grouped = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
   await expect(grouped.getByRole('list', { name: 'Waiting on you' })).toContainText('try it live');
+  await expect(grouped.getByTestId('chat-status-ask')).toHaveText('Open the app and tell me if the sidebar loads');
   await expect(grouped.getByRole('list', { name: 'Parked' })).toContainText('dark mode');
+
+  // Waiting on the user with nothing asked: refused, so this reply sets no status and the thread shows the failed call.
+  await send(page, '#status left you:approve it');
+  await expect(word).toHaveText('Your turn');
+  await expect(page.locator('article[data-role="assistant"]').last()).toContainText('set_chat_status');
 
   await send(page, '#status left me:push to github');
   await expect(word).toHaveText('1 left');

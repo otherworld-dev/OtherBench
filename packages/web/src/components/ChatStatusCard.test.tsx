@@ -14,6 +14,14 @@ describe('ChatStatusCard', () => {
     expect(within(screen.getByRole('list', { name: 'Parked' })).getByText('docs')).toBeInTheDocument();
   });
 
+  it('shows a "you" item\'s ask in full under its line, as Markdown', () => {
+    render(<ChatStatusCard status={{ done: false, left: [{ text: 'sudo on the proxy', who: 'you', ask: 'Run this on the proxy, then reply `SUDO_READY`:\n\n```bash\nsudo visudo -c\n```' }, { text: 'push', who: 'me' }] }} />);
+    const ask = within(screen.getByRole('list', { name: 'Waiting on you' })).getByTestId('chat-status-ask');
+    expect(ask).toHaveTextContent('Run this on the proxy, then reply SUDO_READY');
+    expect(ask.querySelector('pre code')).toHaveTextContent('sudo visudo -c');
+    expect(screen.getAllByTestId('chat-status-ask')).toHaveLength(1);
+  });
+
   it('leaves out a group with nothing in it', () => {
     render(<ChatStatusCard status={{ done: false, left: [{ text: 'push', who: 'me' }] }} />);
     expect(screen.queryByText('Waiting on you:')).toBeNull();

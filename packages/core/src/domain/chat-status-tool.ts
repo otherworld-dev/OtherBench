@@ -10,6 +10,7 @@ import { inputError, type Invalid, type ThreadToolError } from './thread-tools.j
 export const STATUS_TOOL = 'set_chat_status';
 export const STATUS_MAX_ITEMS = 20;
 export const STATUS_ITEM_MAX_CHARS = 200;
+export const STATUS_ASK_MAX_CHARS = 2000;
 
 export const SUBAGENT_STATUS_REFUSAL = "A helper can't set the chat's status; the main agent does that.";
 
@@ -19,7 +20,9 @@ export const STATUS_TOOL_DESCRIPTION =
   "including things that were discussed and parked for later. This is about the whole conversation, not the current task's steps (that's the checklist). " +
   'Give each item a "who": "you" when it waits on the user (something they must do, check, decide or answer before it can move), ' +
   '"me" when you will do it yourself once the user says carry on, "parked" when it was agreed to leave it for later. ' +
-  'The user sees only these short lines beside your reply, so for every "you" item say plainly in your reply what they need to do and why. ' +
+  'Every "you" item also needs "ask": the question or request itself, written to the user in full, shown to them under your reply. ' +
+  'Put in it everything they need to act without scrolling back: the exact command to run and where, the choice and what each answer leads to, what to send back. ' +
+  'The user cannot see your thinking, so a question you only worked out there has not been asked. ' +
   'Call it again every turn: a new reply starts with no status.';
 
 /** Who a left item waits on: the user, the agent, or nobody yet (parked). */
@@ -42,6 +45,12 @@ export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
             enum: [...STATUS_WHO],
             description: '"you": waits on the user. "me": you will do it once they say carry on. "parked": agreed to leave for later.',
           },
+          ask: {
+            type: 'string',
+            maxLength: STATUS_ASK_MAX_CHARS,
+            description:
+              'Required when who is "you", left out otherwise: the question or request in full, addressed to the user (Markdown; put commands in code blocks). They read this, not your thinking.',
+          },
         },
         required: ['text', 'who'],
       },
@@ -51,10 +60,14 @@ export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
   required: ['done'],
 };
 
-/** One thing left. `who` is missing on replies saved before items said who they wait on. */
+/**
+ * One thing left. `who` is missing on replies saved before items said who they wait on; `ask`, the full question or
+ * request for a "you" item, on replies saved before items carried one.
+ */
 export interface StatusItem {
   text: string;
   who?: StatusWho;
+  ask?: string;
 }
 
 /** What the agent last said about the chat's work. */
@@ -73,12 +86,14 @@ function parseItem(raw: unknown): StatusItem | Invalid {
     return raw.trim() === '' ? invalid('Each item in "left" needs some text.') : { text: raw.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return invalid('Each item in "left" is { text, who }.');
-  const { text, who } = raw as Record<string, unknown>;
+  const { text, who, ask } = raw as Record<string, unknown>;
   if (typeof text !== 'string' || text.trim() === '') return invalid('Each item in "left" needs some text.');
+  if (ask !== undefined && ask !== null && typeof ask !== 'string') return invalid('"ask" must be text.');
   const item: StatusItem = { text: text.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
+  const asked = typeof ask === 'string' && ask.trim() !== '' ? ask.trim().slice(0, STATUS_ASK_MAX_CHARS) : undefined;
   if (who === undefined || who === null) return item;
   if (!isWho(who)) return invalid('"who" must be "you", "me" or "parked".');
-  return { ...item, who };
+  return who === 'you' && asked !== undefined ? { ...item, who, ask: asked } : { ...item, who };
 }
 
 /** `set_chat_status` input, held to its limits. */
@@ -115,14 +130,31 @@ export const STATUS_GROUPS: ReadonlyArray<{ who: StatusWho | undefined; label: s
 ];
 
 /** The left items grouped by who they wait on, in `STATUS_GROUPS` order, empty groups dropped. */
-export function groupLeft(items: readonly StatusItem[]): Array<{ who: StatusWho | undefined; label: string; items: string[] }> {
-  return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.who === g.who).map((i) => i.text) })).filter((g) => g.items.length > 0);
+export function groupLeft(items: readonly StatusItem[]): Array<{ who: StatusWho | undefined; label: string; items: StatusItem[] }> {
+  return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.who === g.who) })).filter((g) => g.items.length > 0);
+}
+
+/**
+ * What a new call must also have, beyond what `parseChatStatus` takes from stored replies: every item says who it
+ * waits on, and every "you" item carries its `ask`, so a question the agent only put in its (hidden) thinking can't
+ * pass as asked.
+ */
+function newCallProblem(status: AgentStatus): string | null {
+  if (status.left.some((i) => i.who === undefined)) return 'Each item in "left" is { text, who }: say who it waits on.';
+  const unasked = status.left.find((i) => i.who === 'you' && i.ask === undefined);
+  if (unasked) {
+    return `"${unasked.text}" waits on the user but has no "ask". Write the question or request out to them in full in "ask" ` +
+      '(any command to run and where, the choice and what each answer leads to). They cannot see your thinking.';
+  }
+  return null;
 }
 
 /** `set_chat_status`: nothing to store or wait for; the row and the card read the call itself. */
 export function runStatusCommand(args: unknown): string | ThreadToolError {
   const status = parseChatStatus(args);
   if ('invalid' in status) return inputError(status.invalid);
+  const problem = newCallProblem(status);
+  if (problem !== null) return inputError(problem);
   if (status.done) return 'Status set: done.';
   const yours = waitingOnUser(status.left);
   return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user` : ''}.`;

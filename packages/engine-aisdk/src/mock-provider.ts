@@ -645,9 +645,10 @@ export class MockChatEngine implements ChatEngine {
   /**
    * `#status done` / `#status left <a>|<b>` (spec 2026-11-15-chat-done-status-design): one `set_chat_status` call
    * through the real tool when offered, then "All finished." or "Some left.". An item may start `you:`, `me:` or
-   * `parked:` to say who it waits on; without one it goes as a plain line, as replies did before items said who.
+   * `parked:` to say who it waits on (`you:line=ask` adds the full ask); without one it goes as a plain line, as
+   * replies did before items said who (which a new call now refuses).
    */
-  private async *streamStatusTurn(req: EngineRequest, left: Array<string | { text: string; who: string }> | null, tokensIn: number): AsyncGenerator<EngineEvent> {
+  private async *streamStatusTurn(req: EngineRequest, left: Array<string | MockStatusItem> | null, tokensIn: number): AsyncGenerator<EngineEvent> {
     const callId = `mock-status-${randomUUID()}`;
     const args = left === null ? { done: true } : { done: false, left };
     if (req.signal.aborted) return;
@@ -875,8 +876,17 @@ function finishEvent(tokensIn: number, tokensOut: number): EngineEvent {
   return { type: 'finish', usage, finishReason: 'stop' };
 }
 
-/** A `#status left` item: `you:x`, `me:x` or `parked:x` says who it waits on; anything else is a plain line. */
-function mockStatusItem(raw: string): string | { text: string; who: string } {
+interface MockStatusItem {
+  text: string;
+  who: string;
+  ask?: string;
+}
+
+/** A `#status left` item: `you:x`, `me:x` or `parked:x` says who it waits on, `you:x=ask` adds the ask; anything else is a plain line. */
+function mockStatusItem(raw: string): string | MockStatusItem {
   const tagged = /^(you|me|parked):(.*)$/s.exec(raw.trim());
-  return tagged?.[1] !== undefined && tagged[2] !== undefined ? { text: tagged[2].trim(), who: tagged[1] } : raw.trim();
+  if (tagged?.[1] === undefined || tagged[2] === undefined) return raw.trim();
+  const [text = '', ...rest] = tagged[2].split('=');
+  const ask = rest.join('=').trim();
+  return { text: text.trim(), who: tagged[1], ...(ask !== '' ? { ask } : {}) };
 }
