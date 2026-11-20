@@ -18,6 +18,8 @@ let noHooks: string;
 let home: string;
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'otherbench-ccjob-'));
+  // A job folder is always a clone.
+  mkdirSync(join(ws, '.git'));
   noHooks = mkdtempSync(join(tmpdir(), 'otherbench-nohooks-'));
   home = mkdtempSync(join(tmpdir(), 'otherbench-cchome-'));
   mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
@@ -99,7 +101,7 @@ describe('ClaudeCodeChatEngine in a job chat', () => {
     expect(env['CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS']).toBe('1');
     const count = Number(env['GIT_CONFIG_COUNT']);
     const config = Object.fromEntries(Array.from({ length: count }, (_, i) => [env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]]));
-    expect(config).toMatchObject({ 'core.hooksPath': noHooks, 'core.fsmonitor': 'false' });
+    expect(config).toMatchObject({ 'core.hooksPath': noHooks, 'core.fsmonitor': 'false', 'safe.bareRepository': 'explicit' });
     e.dispose();
   });
 
@@ -132,7 +134,6 @@ describe('ClaudeCodeChatEngine in a job chat', () => {
     ['a config.worktree file', () => writeFileSync(join(ws, '.git', 'config.worktree'), '[core]\n')],
     ['a worktrees folder', () => mkdirSync(join(ws, '.git', 'worktrees'))],
   ])("starts no Claude Code when the folder's .git holds %s, which sends git to config the sandbox doesn't guard", async (_name, plant) => {
-    mkdirSync(join(ws, '.git'), { recursive: true });
     plant();
     const { query, calls } = fakeQuery(async function* () {
       yield init();
@@ -145,7 +146,20 @@ describe('ClaudeCodeChatEngine in a job chat', () => {
   });
 
   it('starts no Claude Code when the folder\'s .git is a file pointing elsewhere', async () => {
+    rmSync(join(ws, '.git'), { recursive: true });
     writeFileSync(join(ws, '.git'), 'gitdir: ../elsewhere\n');
+    const { query, calls } = fakeQuery(async function* () {
+      yield init();
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: deciding(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, jobNoHooksDir: () => noHooks });
+    await expect(collect(e.stream(jobReq()))).rejects.toThrow(/\.git/);
+    expect(calls).toHaveLength(0);
+    e.dispose();
+  });
+
+  it('starts no Claude Code in a job folder with no .git at all, which git would search above or read as a bare repository', async () => {
+    rmSync(join(ws, '.git'), { recursive: true });
     const { query, calls } = fakeQuery(async function* () {
       yield init();
       yield success();

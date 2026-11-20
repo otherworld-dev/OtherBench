@@ -36,6 +36,8 @@ export function hardenedGitConfig(noHooksDir: string): [string, string][] {
     // No automatic maintenance or gc started in the background.
     ['gc.auto', '0'],
     ['maintenance.auto', 'false'],
+    // Never read the folder itself as a bare repository (a planted HEAD, config and objects at its top level).
+    ['safe.bareRepository', 'explicit'],
   ];
 }
 

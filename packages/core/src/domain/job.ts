@@ -132,7 +132,7 @@ export function plantedCommandReason(name: string): string {
 export const JOB_GIT_REDIRECTS: readonly string[] = ['commondir', 'config.worktree', 'worktrees'];
 
 /**
- * Why a job folder's `.git` can't be trusted for host git, or null when it is a plain folder (or there is none).
+ * Why a job folder's `.git` can't be trusted for host git, or null when it is a plain folder.
  * A `.git` file (`gitdir:` pointing elsewhere) or a link is refused, as is any entry in JOB_GIT_REDIRECTS.
  */
 export function jobGitProblem(folder: string): string | null {
@@ -141,7 +141,8 @@ export function jobGitProblem(folder: string): string | null {
   try {
     st = lstatSync(dotGit);
   } catch {
-    return null;
+    // A job folder is always a clone: with no .git, git would search the folders above it for one.
+    return "This job's folder has no .git, so OtherBench won't run git there.";
   }
   if (!st.isDirectory()) return "This job's folder has a .git that isn't a plain folder, so OtherBench won't run git there.";
   for (const name of JOB_GIT_REDIRECTS) {
