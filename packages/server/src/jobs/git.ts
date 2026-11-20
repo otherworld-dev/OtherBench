@@ -142,7 +142,18 @@ export class JobGit {
     const base = withoutServerSecrets(process.env);
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(base)) if (value !== undefined && !UNSAFE_GIT_ENV.test(key)) env[key] = value;
-    return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0', GCM_INTERACTIVE: 'never', NoDefaultCurrentDirectoryInExePath: '1' };
+    return {
+      ...env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_PAGER: 'cat',
+      GIT_OPTIONAL_LOCKS: '0',
+      GCM_INTERACTIVE: 'never',
+      NoDefaultCurrentDirectoryInExePath: '1',
+      // A job can write refs/replace and .git/info/grafts, which would make a commit read as another: the repository's
+      // rules, the commits and the diffstat are always the objects' own.
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_GRAFT_FILE: join(this.root, 'no-grafts'),
+    };
   }
 
   private git(): string {
@@ -166,7 +177,7 @@ export class JobGit {
     const r = await this.exec(args, o);
     if (r.code !== 0) {
       const why = (r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ') || `exit ${String(r.code)}`;
-      throw new JobGitError(`${what} failed${r.timedOut ? ' (timed out)' : ''}: ${why}`);
+      throw new JobGitError(`${what} failed${r.timedOut ? ' (timed out)' : ''}: ${scrubCredentials(why)}`);
     }
     return r.stdout;
   }
@@ -225,7 +236,7 @@ export class JobGit {
           if (COMMIT_ID.test(sha)) return { commit: sha, fetch: { ok: true, note: `${o.remote}/${o.baseBranch} at ${short(sha)}` } };
           why = `${tracking} couldn't be read after the fetch`;
         } else {
-          why = fetched.timedOut ? 'the fetch timed out' : (fetched.stderr || fetched.stdout).trim().split(/\r?\n/).slice(-1)[0]?.slice(0, 300) || `the fetch failed (exit ${String(fetched.code)})`;
+          why = fetched.timedOut ? 'the fetch timed out' : scrubCredentials((fetched.stderr || fetched.stdout).trim().split(/\r?\n/).slice(-1)[0] ?? '').slice(0, 300) || `the fetch failed (exit ${String(fetched.code)})`;
         }
       }
     }
