@@ -613,6 +613,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     canonicalPath: realFolderPath,
     // A sub-agent can run as another profile (spec 2026-10-12-api-subagents-design).
     resolveProfile: (id: string) => resolveProfile({ store, secrets }, id),
+    // A job chat runs every turn under the job rules, in its job folder only (local table, never synced).
+    jobFolderFor: (chatId) => store.jobChats.folderFor(chatId),
     // Closes the gap `engine.ts`'s own docstring calls out (task 14):
     // `AiSdkChatEngine` has no filesystem/store access of its own, so
     // without this every real (vision-on) image/file part would fail with
