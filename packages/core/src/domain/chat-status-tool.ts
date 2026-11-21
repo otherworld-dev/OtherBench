@@ -14,7 +14,8 @@ export const STATUS_ITEM_MAX_CHARS = 200;
 export const SUBAGENT_STATUS_REFUSAL = "A helper can't set the chat's status; the main agent does that.";
 
 export const STATUS_TOOL_DESCRIPTION =
-  "Tell the user whether this chat's work is finished. Call it as the last step of any turn in which work was done or agreed. " +
+  "Tell the user whether this chat's work is finished. Call it in any turn in which work was done or agreed, once that work is finished and before your final message. " +
+  'The user sees everything you write in the turn, before and after the call, so never write your reply out again after it. ' +
   'Set done: true only when everything you and the user agreed to do in this chat is finished. Otherwise set done: false and list what is still left, one short line each, ' +
   "including things that were discussed and parked for later. This is about the whole conversation, not the current task's steps (that's the checklist). " +
   'Give each item a "who": "you" when it waits on the user (something they must do, check, decide or answer before it can move), ' +
@@ -119,13 +120,21 @@ export function groupLeft(items: readonly StatusItem[]): Array<{ who: StatusWho 
   return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.who === g.who).map((i) => i.text) })).filter((g) => g.items.length > 0);
 }
 
+/**
+ * Ends every successful result. Claude Code tells the model to end a turn with text, so a model that wrote its reply
+ * before the call wrote the whole reply again after it (2026-11-20, ~1 call in 15); the UI hides the call, so the two
+ * copies showed back to back. The model reads this right before deciding what to write next.
+ */
+export const STATUS_SET_NOTE =
+  "Everything you already wrote this turn is on the user's screen: don't repeat it. If your reply is written, end the turn here.";
+
 /** `set_chat_status`: nothing to store or wait for; the row and the card read the call itself. */
 export function runStatusCommand(args: unknown): string | ThreadToolError {
   const status = parseChatStatus(args);
   if ('invalid' in status) return inputError(status.invalid);
-  if (status.done) return 'Status set: done.';
+  if (status.done) return `Status set: done. ${STATUS_SET_NOTE}`;
   const yours = waitingOnUser(status.left);
-  return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user` : ''}.`;
+  return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user` : ''}. ${STATUS_SET_NOTE}`;
 }
 
 /** A result that is a refusal or an input error: Claude Code sets `isError`; the API engines store `{ error: true }` with isError false. */

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { agentStatusOf, failedStatusCalls, parseChatStatus, runStatusCommand, STATUS_TOOL, SUBAGENT_STATUS_REFUSAL, groupLeft, waitingOnUser } from '../src/domain/chat-status-tool.js';
+import {
+  agentStatusOf,
+  failedStatusCalls,
+  parseChatStatus,
+  runStatusCommand,
+  STATUS_SET_NOTE,
+  STATUS_TOOL,
+  STATUS_TOOL_DESCRIPTION,
+  SUBAGENT_STATUS_REFUSAL,
+  groupLeft,
+  waitingOnUser,
+} from '../src/domain/chat-status-tool.js';
 import { PermissionBroker } from '../src/domain/permissions.js';
 import { SUBAGENT_THREAD_REFUSAL } from '../src/domain/permissions/sources.js';
 import { PLAN_TOOL } from '../src/domain/thread-tools.js';
@@ -79,9 +90,21 @@ describe('groupLeft', () => {
 
 describe('runStatusCommand', () => {
   it('answers with what was set', () => {
-    expect(runStatusCommand({ done: false, left: ['a', 'b'] })).toBe('Status set: 2 left.');
-    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you' }] })).toBe('Status set: 3 left, 2 waiting on the user.');
-    expect(runStatusCommand({ done: true })).toBe('Status set: done.');
+    expect(runStatusCommand({ done: false, left: ['a', 'b'] })).toBe(`Status set: 2 left. ${STATUS_SET_NOTE}`);
+    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you' }] })).toBe(`Status set: 3 left, 2 waiting on the user. ${STATUS_SET_NOTE}`);
+    expect(runStatusCommand({ done: true })).toBe(`Status set: done. ${STATUS_SET_NOTE}`);
+  });
+
+  // 2026-11-20: models wrote their reply, called the tool, then wrote the whole reply again, because the turn
+  // "must end with text". The UI hides the call, so the two copies showed back to back.
+  it('tells the model that what it already wrote is on screen, so it does not write its reply again', () => {
+    expect(STATUS_SET_NOTE).toMatch(/already/i);
+    expect(STATUS_SET_NOTE).toMatch(/don't (repeat|write it again)/i);
+  });
+
+  it('asks for the call before the final message, not after it', () => {
+    expect(STATUS_TOOL_DESCRIPTION).toMatch(/before your final message/i);
+    expect(STATUS_TOOL_DESCRIPTION).not.toMatch(/as the last step/i);
   });
 
   it('answers bad input with an input error', () => {
