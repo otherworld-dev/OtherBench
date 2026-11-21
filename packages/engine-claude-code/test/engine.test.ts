@@ -13,6 +13,7 @@ import { FAKE_PNG } from '@otherbench/core/testing/fake-computer.js';
 import { ClaudeCodeChatEngine, SECRET_DENY_RULES, type QueryFn } from '../src/engine.js';
 import { agentDisallowedTools } from '@otherbench/core/domain/agent-tools.js';
 import { liveKey } from '../src/live.js';
+import { OTHERBENCH_PROMPT } from '../src/process-options.js';
 import { buildRelay } from '../src/relay.js';
 import type { OtherBenchServerTool } from '../src/otherbench-server.js';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
@@ -131,6 +132,18 @@ const followUp = (o: Partial<EngineRequest> = {}): EngineRequest =>
   req({ messages: [user('q1'), answered(), { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
 
 describe('ClaudeCodeChatEngine.stream', () => {
+  // 2026-11-20: replies came out twice, the answer, a tool call (set_chat_status), then the answer again. Claude
+  // Code tells the model text between tool calls may not be shown, so it wrote a final message that stood on its
+  // own; OtherBench shows every text part in order, and hides the status call, so the copies sat back to back.
+  it("tells Claude Code that OtherBench shows all of a reply's text, so the final message doesn't repeat it", async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(engine(query).stream(req()));
+    expect(calls[0]!.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: OTHERBENCH_PROMPT });
+    expect(OTHERBENCH_PROMPT).toMatch(/OtherBench/);
+    expect(OTHERBENCH_PROMPT).toMatch(/between tool calls/);
+    expect(OTHERBENCH_PROMPT).toMatch(/repeat/);
+  });
+
   it('runs a fresh turn with the right options and emits meta, text and finish', async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield delta('hello'); yield success(); });
     const events = await collect(engine(query).stream(req({ profile: profile({ systemPrompt: 'Be brief.' }) })));
@@ -140,7 +153,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
       { type: 'finish', finishReason: 'end_turn', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensCacheWrite: 0, tokensReasoning: 0 } },
     ]);
     const o = calls[0]!.options;
-    expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
+    expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: `${OTHERBENCH_PROMPT}\n\nBe brief.` } });
     expect(o.disallowedTools).toEqual(expect.arrayContaining(['EnterPlanMode', 'ExitPlanMode']));
     expect(o.disallowedTools).not.toContain('AskUserQuestion');
     expect(o.settings).toEqual({ disableSkillShellExecution: true, permissions: { deny: [...SECRET_DENY_RULES] } });
@@ -185,7 +198,9 @@ describe('ClaudeCodeChatEngine.stream', () => {
     const { query, calls } = fakeQuery(async function* () { yield init('sess-0'); yield success(); });
     const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
     await collect(engine(query).stream(req({ profile: profile({ systemPrompt: 'Memory v2' }), messages: [user('q1'), prev, { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1' })));
-    expect(calls[0]!.options).toMatchObject({ resume: 'sess-0', systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Memory v2' } });
+    expect(calls[0]!.options).toMatchObject({ resume: 'sess-0', systemPrompt: { type: 'preset', preset: 'claude_code', append: `${OTHERBENCH_PROMPT}
+
+Memory v2` } });
   });
 
   it('starts a fresh, history-seeded session (no resume, no fork) when the previous message is not the session tip', async () => {
@@ -395,7 +410,9 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
     expect(o.cwd).toBe(ws);
     expect(o.settingSources).toEqual(['project', 'local']);
     expect(o.tools).toBeUndefined();
-    expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: 'Be brief.' });
+    expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: `${OTHERBENCH_PROMPT}
+
+Be brief.` });
   });
 
   it("loads the user's own Claude Code settings too when the profile turns them on", async () => {
