@@ -100,6 +100,8 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
         projectId: null,
         appId: null,
         autoMode: false,
+        // The brief is untrusted, so nothing from it reaches a memory note (memory also skips job chats itself).
+        memoryExcluded: true,
       });
       // From here the chat is a job chat: TurnRunner reads this row for every turn in it.
       d.store.jobChats.add(chat.id, folder);

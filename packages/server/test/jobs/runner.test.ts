@@ -41,6 +41,8 @@ describe('JobRunner', () => {
     expect(store.jobChats.folderFor(chatId)).toBe(FOLDER);
     const chat = store.chats.get(chatId);
     expect(chat).toMatchObject({ title: 'Job: App (j1)', profileId: 'p1', autoMode: false, projectId: null, appId: null, workspace: { kind: 'machine', root: FOLDER } });
+    // The brief is untrusted: nothing from a job chat reaches a memory note.
+    expect(chat!.memoryExcluded).toBe(true);
   });
 
   it('starts an unattended turn from the chat tip with the resolved profile', async () => {

@@ -6,7 +6,7 @@ A job chat is an unattended chat that works on a copy of an app's repository wit
 
 ## What makes a chat a job chat
 
-A row in `job_chat` (migration 051, local: no sync triggers) naming the chat and the folder it is held to. Only `JobRunner.createChat` (`server/src/jobs/runner.ts`) writes it, before the chat's first turn, so no request body and no paired machine can make or unmake a job chat. `TurnRunner` asks `jobFolderFor(chatId)` for every turn, however it began (the job's own, a self-started one, one the user types), and a chat it names runs under `jobProfile` (core `domain/job.ts`: the chosen profile's connection, model and parameters with `JOB_POLICY`, no system prompt, no global memory, no browser sites), in its job folder only, with no extra folders, no Auto, no Plan mode and `EngineRequest.job` set. The turn fails if the chat's folder was changed. A failed lookup counts as a job chat with no folder, and so does a row with an empty folder, so both fail closed.
+A row in `job_chat` (migration 051, local: no sync triggers) naming the chat and the folder it is held to. Only `JobRunner.createChat` (`server/src/jobs/runner.ts`) writes it, before the chat's first turn, so no request body and no paired machine can make or unmake a job chat. `TurnRunner` asks `jobFolderFor(chatId)` for every turn, however it began (the job's own, a self-started one, one the user types), and a chat it names runs under `jobProfile` (core `domain/job.ts`: the chosen profile's connection, model and parameters with `JOB_POLICY`, no system prompt, no global memory, no browser sites), in its job folder only, with no extra folders, no Auto, no Plan mode and `EngineRequest.job` set. The turn fails if the chat's folder was changed. A failed lookup counts as a job chat with no folder, and so does a row with an empty folder, so both fail closed. A job chat never feeds a memory note (global or project: both skip any chat with a `job_chat` row, and `createChat` also marks it kept out of memory), and it can't be handed over to a fresh chat, which would be an ordinary chat in the job folder.
 
 Databases from betas 0.2.0-beta.124 and 125 kept job chats in an older table; migration 051 copies every chat named there into `job_chat` (an empty folder where it had none) before dropping it, so none of those chats turns into an ordinary chat in a folder a job wrote. Migration 050 is an empty stub because those betas used the number.
 
@@ -53,7 +53,7 @@ Between replies a job's helpers keep the job policy (`process-launch.ts`), and a
 
 | Call | What it does |
 |------|--------------|
-| `createChat({ title, folder, profileId })` | Makes the chat on this machine, never in Auto, and records it in `job_chat` before returning. |
+| `createChat({ title, folder, profileId })` | Makes the chat on this machine, never in Auto, kept out of memory, and records it in `job_chat` before returning. |
 | `profile(id \| null)` | The profile jobs would run on (`null` = the app default), with whether it is archived, or null when there is none. |
 | `startTurn({ chatId, text, profileId })` | An unattended turn from the chat's tip; refused for a chat that isn't a job chat. |
 | `onReplyEnded(cb)`, `reply(id)` | When a reply ends, and its text, status, error and the agent's own done/left status. |

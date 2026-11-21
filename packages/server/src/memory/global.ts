@@ -145,9 +145,9 @@ export class GlobalMemoryService {
     for (const stop of [...this.running]) stop();
   }
 
-  /** Only the machine a chat runs on summarises it, as for project memory. */
+  /** Only the machine a chat runs on summarises it, as for project memory. A job chat never does: its brief is untrusted. */
   private contributes(chat: Chat): boolean {
-    return !chat.memoryExcluded && chat.runsOn === this.store.nodes.self().id;
+    return !chat.memoryExcluded && chat.runsOn === this.store.nodes.self().id && this.store.jobChats.folderFor(chat.id) === null;
   }
 
   private pending(chat: Chat): CanonMessage[] {

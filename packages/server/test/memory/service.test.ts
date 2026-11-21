@@ -197,6 +197,12 @@ describe('quiet timer', () => {
     expect(clock.pending()).toEqual([]);
   });
 
+  it('starts no timer for a job chat moved into a project, even one not marked as excluded', () => {
+    store.jobChats.add('chat', '/jobs/j1');
+    service.noteTurnCompleted('chat');
+    expect(clock.pending()).toEqual([]);
+  });
+
   it("never folds an app chat into its linked project's note (spec 2026-10-20-code-tab-design, Goal 9: the link is read-only)", async () => {
     store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId: 'proj' });
     addChat('app-chat', { projectId: null });

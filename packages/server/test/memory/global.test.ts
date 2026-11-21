@@ -158,6 +158,14 @@ describe('global memory: quiet timer', () => {
     service.noteTurnCompleted('no-such-chat');
     expect(clock.pending()).toEqual([]);
   });
+
+  it('starts no timer for a job chat, even one not marked as excluded', () => {
+    const service = makeService();
+    addChat('job');
+    store.jobChats.add('job', '/jobs/j1');
+    service.noteTurnCompleted('job');
+    expect(clock.pending()).toEqual([]);
+  });
 });
 
 describe('global memory: an update', () => {

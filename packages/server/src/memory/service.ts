@@ -173,13 +173,15 @@ export class ProjectMemoryService {
   /**
    * Only the machine a chat runs on summarises it into project memory: with
    * paired machines, two summarisers working through the same chats would
-   * do the work twice and overwrite each other's notes.
+   * do the work twice and overwrite each other's notes. A job chat never
+   * does, even moved into a project: its brief is untrusted.
    */
   private contributes(chat: Chat): boolean {
     return (
       chat.projectId !== null &&
       !chat.memoryExcluded &&
       chat.runsOn === this.store.nodes.self().id &&
+      this.store.jobChats.folderFor(chat.id) === null &&
       this.store.projects.get(chat.projectId) !== null
     );
   }
