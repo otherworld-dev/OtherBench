@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,9 @@ let dataDir: string;
 let addonsDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'otherbench-addons-'));
+  // The long name: on CI the temp folder is an 8.3 short name (RUNNER~1), and vitest's module loader can't import a
+  // file URL holding its %7E (plain Node can, so the app is unaffected).
+  dataDir = realpathSync.native(mkdtempSync(join(tmpdir(), 'otherbench-addons-')));
   addonsDir = join(dataDir, 'addons');
 });
 afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
