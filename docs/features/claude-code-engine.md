@@ -1,5 +1,16 @@
 # Claude Code engine
 
+- OtherBench note on the system prompt (`OTHERBENCH_PROMPT`,
+  `engine-claude-code/src/process-options.ts`). Chat and job processes get
+  Claude Code's `claude_code` preset with this note appended, then the
+  profile's own prompt. It says every text message in a turn stays visible in
+  order, including text before or between tool calls, and asks the model not
+  to repeat in its final message what it already wrote. Without it the
+  preset's guidance (text between tool calls may not be shown, end with a
+  message that stands on its own) made the model write its whole answer again
+  after a tool call, most often `set_chat_status`, and with that call hidden
+  the two copies showed back to back (2026-11-20). Clean chats replace the
+  prompt entirely and don't get the note.
 - Live processes (`engine-claude-code/src/live.ts`). A reply's Claude Code
   process stays alive afterwards, input open, and the session's next message
   is pushed into it instead of starting a process and resuming from disk:

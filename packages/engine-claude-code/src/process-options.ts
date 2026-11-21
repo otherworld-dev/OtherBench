@@ -46,6 +46,26 @@ export function claudeFolders(deps: ClaudeCodeEngineDeps, workspaceRoot: string 
   return [...claudeSkillFolders(env, workspaceRoot), ...claudeProjectFolders(env, workspaceRoot), ...claudeGlobalFiles(env, workspaceRoot)];
 }
 
+/**
+ * Added to Claude Code's own system prompt, ahead of the profile's. Claude Code tells the model that text between
+ * tool calls may not be shown and that the final message should stand on its own, so after a tool call (most often
+ * set_chat_status) it wrote its whole answer out again (2026-11-20). OtherBench shows every text part of a reply in
+ * order, and hides the status call, so the two copies sat back to back. The VS Code extension adds a note like this.
+ */
+export const OTHERBENCH_PROMPT =
+  '# Where your replies are shown\n' +
+  'You are running inside OtherBench, a chat app. Every text message you write in a turn stays visible to the user in order, ' +
+  'including text written before or between tool calls; tool calls are folded into short rows. Ignore any guidance above that ' +
+  'such text may not be shown or that you should end with a recap that stands on its own. Do not repeat in your final message ' +
+  'what you already wrote this turn: if nothing changed since your last text, end the turn without more text, or with one short line.';
+
+/** Claude Code's preset prompt with OtherBench's note and then the profile's own prompt, if it has one. */
+const presetPrompt = (profilePrompt: string | null): Options['systemPrompt'] => ({
+  type: 'preset',
+  preset: 'claude_code',
+  append: profilePrompt ? `${OTHERBENCH_PROMPT}\n\n${profilePrompt}` : OTHERBENCH_PROMPT,
+});
+
 /** Tools a job's Claude Code is never offered, on top of what its policy hides: SendMessage reaches other Claude sessions on this machine. */
 const JOB_DISALLOWED_TOOLS: readonly string[] = ['SendMessage'];
 
@@ -86,7 +106,7 @@ function jobProcessOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, cwd: 
     // so such a write would be refused unaudited and go uncounted. The job rules refuse it, audited (core permissions/job.ts).
     settings: base,
     disallowedTools: [...agentDisallowedTools(profile.toolPolicy), ...JOB_DISALLOWED_TOOLS],
-    systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
+    systemPrompt: presetPrompt(profile.systemPrompt),
     ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
   };
@@ -130,7 +150,7 @@ export function processOptions(deps: ClaudeCodeEngineDeps, req: EngineRequest, c
     // Flag-settings layer: no skill inline shell (R14), and the secrets' deny rules.
     settings: processSettings(),
     disallowedTools: agentDisallowedTools(profile.toolPolicy),
-    systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
+    systemPrompt: presetPrompt(profile.systemPrompt),
     // MCP off: load no MCP config but the servers passed here (only OtherBench's
     // own, for artifacts and recall), so the model isn't offered the user's MCP tools
     // and none of their servers start. The gate still denies MCP calls.
