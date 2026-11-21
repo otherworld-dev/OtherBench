@@ -96,6 +96,26 @@ describe('loadAddons', () => {
     expect(loaded).toMatchObject({ status: 'failed', error: expect.stringMatching(/didn't finish/) });
   });
 
+  it('fails an add-on whose main never finishes loading, and still loads the next one', async () => {
+    addon('hangs', {}, 'await new Promise(() => {});\nexport function activate() {}');
+    addon('next', {}, 'export function activate() {}');
+    const loaded = await loadAddons({ addonsDir, makeHost: fakeHost, activateTimeoutMs: 50 });
+    expect(loaded.find((a) => a.id === 'hangs')).toMatchObject({ status: 'failed', error: expect.stringMatching(/didn't finish loading/) });
+    expect(loaded.find((a) => a.id === 'next')).toMatchObject({ status: 'loaded' });
+  });
+
+  it('fails an add-on whose host could not be made, and still loads the next one', async () => {
+    addon('nohost', {}, 'export function activate() {}');
+    addon('next', {}, 'export function activate() {}');
+    const makeHost = (manifest: AddonManifest, folder: string): AddonHost => {
+      if (manifest.id === 'nohost') throw new Error('EEXIST: addon-data/nohost is a file');
+      return fakeHost(manifest, folder);
+    };
+    const loaded = await loadAddons({ addonsDir, makeHost });
+    expect(loaded.find((a) => a.id === 'nohost')).toMatchObject({ status: 'failed', error: expect.stringMatching(/EEXIST/) });
+    expect(loaded.find((a) => a.id === 'next')).toMatchObject({ status: 'loaded' });
+  });
+
   it('fails an add-on with a bad manifest or no activate, giving the reason', async () => {
     addon('badjson', '{');
     addon('noactivate', {}, 'export const x = 1;');

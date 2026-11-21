@@ -66,32 +66,36 @@ async function loadOne(o: LoadAddonsOptions, name: string, folder: string): Prom
   if (!read.ok) return failed(read.error);
   const { manifest } = read;
   const base = { name: manifest.name, version: manifest.version, pagePath: read.pagePath };
+  const limit = o.activateTimeoutMs ?? DEFAULT_ACTIVATE_MS;
+  const seconds = Math.round(limit / 1000) || limit / 1000;
   let mod: Partial<AddonModule>;
   try {
-    mod = (await import(pathToFileURL(read.mainPath).href)) as Partial<AddonModule>;
+    // Under the same limit as activate: a main whose top-level await never settles would otherwise hold up the server's start.
+    mod = await withinLimit(import(pathToFileURL(read.mainPath).href) as Promise<Partial<AddonModule>>, limit, `it didn't finish loading within ${seconds} s`);
   } catch (err) {
     return failed(`Its main couldn't be loaded: ${message(err)}`, base);
   }
   if (typeof mod.activate !== 'function') return failed('Its main has no activate function.', base);
   let routes: AddonRoutes | null = null;
-  const host = o.makeHost(manifest, folder, (app) => {
-    routes = app;
-  });
-  const limit = o.activateTimeoutMs ?? DEFAULT_ACTIVATE_MS;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      Promise.resolve().then(() => mod.activate!(host)),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`its activate didn't finish within ${Math.round(limit / 1000) || limit / 1000} s`)), limit);
-      }),
-    ]);
+    const host = o.makeHost(manifest, folder, (app) => {
+      routes = app;
+    });
+    await withinLimit(Promise.resolve().then(() => mod.activate!(host)), limit, `its activate didn't finish within ${seconds} s`);
   } catch (err) {
     return failed(`It failed to start: ${message(err)}`, base);
+  }
+  return { id: manifest.id, ...base, status: 'loaded', error: null, folder, routes, module: mod as AddonModule };
+}
+
+/** Settles as `p` does, or rejects with `why` once `ms` has passed. */
+async function withinLimit<T>(p: Promise<T>, ms: number, why: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(why)), ms)))]);
   } finally {
     clearTimeout(timer);
   }
-  return { id: manifest.id, ...base, status: 'loaded', error: null, folder, routes, module: mod as AddonModule };
 }
 
 /** Calls each loaded add-on's dispose; one that throws doesn't stop the rest. */

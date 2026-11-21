@@ -19,7 +19,7 @@ The folder holds `addon.json`:
 
 ## Loading
 
-At start-up, after everything else in the container is built, the server reads each folder in `addons` named like an id, in name order (`server/src/addons/loader.ts`). For each it checks the manifest (`manifest.ts`: the id is the folder's name, `main` and `settingsPage` resolve inside the folder through `containPath`, so no `..`, absolute path or link out), imports `main`, and calls its `activate(host)` with a 10 second limit. An add-on that can't be read, imported or started is listed as failed with the reason, its routes aren't served, and the rest still load: an add-on never stops the server starting. On shutdown each loaded add-on's `dispose` is called. In the desktop app the main window shows a notification, once per start, for each add-on that didn't load.
+At start-up, after everything else in the container is built, the server reads each folder in `addons` named like an id, in name order (`server/src/addons/loader.ts`). For each it checks the manifest (`manifest.ts`: the id is the folder's name, `main` and `settingsPage` resolve inside the folder through `containPath`, so no `..`, absolute path or link out), imports `main` and calls its `activate(host)`, each with a 10 second limit (a top-level await in `main` that never settles counts as a failed load). An add-on that can't be read, imported or given its host, or doesn't start, is listed as failed with the reason, its routes aren't served, and the rest still load: an add-on never stops the server starting. On shutdown each loaded add-on's `dispose` is called. In the desktop app the main window shows a notification, once per start, for each add-on that didn't load.
 
 ## The host
 
