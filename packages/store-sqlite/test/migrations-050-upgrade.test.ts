@@ -3,7 +3,7 @@ import { openDatabase } from '../src/db.js';
 import { MIGRATIONS, runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';
 
-// Betas 124 and 125 shipped a migration 050 that made two tables for an outside job service. Its number now belongs to
+// Betas 124 to 126 shipped a migration 050 that made two tables for an outside job service. Its number now belongs to
 // an empty stub, and 051 carries each of those job chats into job_chat before dropping both tables. The old names are
 // built from parts so this file is the only one that knows them, and doesn't spell them out.
 const OLD = ['gla', 'dos'].join('');

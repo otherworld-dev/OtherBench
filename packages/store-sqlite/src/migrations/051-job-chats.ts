@@ -5,7 +5,7 @@ import type { Migration } from './types.js';
 // the schedules: no sync triggers, so no paired machine ever sees or makes a row, and a chat is a job chat only
 // through a row this machine wrote. TurnRunner reads it for every turn.
 //
-// Databases from betas 124 and 125 hold their job chats in a table from the old migration 050 instead. Each one with
+// Databases from betas 124 to 126 hold their job chats in a table from the old migration 050 instead. Each one with
 // a chat is copied here first, so those chats stay locked (a job chat whose row went missing would run
 // as an ordinary chat in a folder a job wrote), then both old tables are dropped.
 const OLD_JOBS = 'gla' + 'dos_job';
