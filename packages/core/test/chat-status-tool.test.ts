@@ -49,6 +49,23 @@ describe('parseChatStatus', () => {
     expect(parseChatStatus({ done: false, left: [{ text: 'push' }, { text: 'docs', who: null }] })).toEqual({ done: false, left: [{ text: 'push' }, { text: 'docs' }] });
   });
 
+  it('keeps the ask on a "you" item, trimmed, and drops it on the others', () => {
+    expect(parseChatStatus({ done: false, left: [{ text: 'dns', who: 'you', ask: '  Change the record?  ' }, { text: 'push', who: 'me', ask: 'x' }] })).toEqual({
+      done: false,
+      left: [{ text: 'dns', who: 'you', ask: 'Change the record?' }, { text: 'push', who: 'me' }],
+    });
+  });
+
+  it('still reads a "you" item saved before items carried an ask', () => {
+    expect(parseChatStatus({ done: false, left: [{ text: 'try it', who: 'you' }] })).toEqual({ done: false, left: [{ text: 'try it', who: 'you' }] });
+  });
+
+  it('cuts a long ask at 2000 characters', () => {
+    const parsed = parseChatStatus({ done: false, left: [{ text: 'x', who: 'you', ask: 'y'.repeat(2500) }] });
+    if ('invalid' in parsed) throw new Error(parsed.invalid);
+    expect(parsed.left[0]?.ask).toHaveLength(2000);
+  });
+
   it('cuts a long item at 200 characters', () => {
     const parsed = parseChatStatus({ done: false, left: [{ text: 'x'.repeat(250), who: 'me' }] });
     if ('invalid' in parsed) throw new Error(parsed.invalid);
@@ -66,6 +83,7 @@ describe('parseChatStatus', () => {
     ['an item with blank text', { done: false, left: [{ text: ' ', who: 'you' }] }],
     ['an item with no text', { done: false, left: [{ who: 'you' }] }],
     ['an unknown who', { done: false, left: [{ text: 'x', who: 'them' }] }],
+    ['an ask that is not text', { done: false, left: [{ text: 'x', who: 'you', ask: 3 }] }],
     ['no object', null],
   ])('refuses %s', (_label, args) => {
     expect('invalid' in parseChatStatus(args)).toBe(true);
@@ -81,17 +99,17 @@ describe('waitingOnUser', () => {
 describe('groupLeft', () => {
   it('groups by who: you, me, parked, then untagged, dropping empty groups', () => {
     expect(groupLeft([{ text: 'docs', who: 'parked' }, { text: 'old' }, { text: 'try it', who: 'you' }, { text: 'check', who: 'you' }])).toEqual([
-      { who: 'you', label: 'Waiting on you', items: ['try it', 'check'] },
-      { who: 'parked', label: 'Parked', items: ['docs'] },
-      { who: undefined, label: 'Left', items: ['old'] },
+      { who: 'you', label: 'Waiting on you', items: [{ text: 'try it', who: 'you' }, { text: 'check', who: 'you' }] },
+      { who: 'parked', label: 'Parked', items: [{ text: 'docs', who: 'parked' }] },
+      { who: undefined, label: 'Left', items: [{ text: 'old' }] },
     ]);
   });
 });
 
 describe('runStatusCommand', () => {
   it('answers with what was set', () => {
-    expect(runStatusCommand({ done: false, left: ['a', 'b'] })).toBe(`Status set: 2 left. ${STATUS_SET_NOTE}`);
-    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you' }] })).toBe(`Status set: 3 left, 2 waiting on the user. ${STATUS_SET_NOTE}`);
+    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'me' }, { text: 'b', who: 'parked' }] })).toBe(`Status set: 2 left. ${STATUS_SET_NOTE}`);
+    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you', ask: 'Run x?' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you', ask: 'Yes or no?' }] })).toBe(`Status set: 3 left, 2 waiting on the user. ${STATUS_SET_NOTE}`);
     expect(runStatusCommand({ done: true })).toBe(`Status set: done. ${STATUS_SET_NOTE}`);
   });
 
@@ -109,6 +127,18 @@ describe('runStatusCommand', () => {
 
   it('answers bad input with an input error', () => {
     expect(runStatusCommand({ done: false })).toMatchObject({ error: true, code: 'invalid_input' });
+  });
+
+  it('refuses a "you" item with no ask, naming it, since a question left in the thinking was never asked', () => {
+    const out = runStatusCommand({ done: false, left: [{ text: 'approve the DNS change', who: 'you' }, { text: 'b', who: 'me' }] });
+    expect(out).toMatchObject({ error: true, code: 'invalid_input' });
+    expect(JSON.stringify(out)).toContain('approve the DNS change');
+    expect(runStatusCommand({ done: false, left: [{ text: 'x', who: 'you', ask: '   ' }] })).toMatchObject({ error: true });
+  });
+
+  it('refuses untagged items in a new call, though stored replies still read them', () => {
+    expect(runStatusCommand({ done: false, left: ['a'] })).toMatchObject({ error: true, code: 'invalid_input' });
+    expect(parseChatStatus({ done: false, left: ['a'] })).toEqual({ done: false, left: [{ text: 'a' }] });
   });
 });
 

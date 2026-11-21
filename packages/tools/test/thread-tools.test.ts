@@ -37,8 +37,11 @@ describe('thread tools for API profiles', () => {
   it('set_chat_status answers with what was set, and refuses bad input', async () => {
     const { tool } = setup();
     const status = await tool('set_chat_status');
-    expect(await status.execute({ done: false, left: ['push', 'docs'] }, ctx())).toMatch(/^Status set: 2 left\. /);
+    expect(await status.execute({ done: false, left: [{ text: 'push', who: 'me' }, { text: 'docs', who: 'you', ask: 'Read the docs page and say if it is clear.' }] }, ctx())).toMatch(
+      /^Status set: 2 left, 1 waiting on the user\. /,
+    );
     expect(await status.execute({ done: false }, ctx())).toMatchObject({ error: true });
+    expect(await status.execute({ done: false, left: [{ text: 'docs', who: 'you' }] }, ctx())).toMatchObject({ error: true });
   });
 
   it('ask_user waits for the answer and returns it in result text, audited', async () => {
