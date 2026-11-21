@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { TurnEvent, TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import { FakeSandbox, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import { INSTALL_HOSTS, SANDBOX_PLACEHOLDERS } from '../../src/jobs/git.js';
 import { createJobRunner, type JobRunnerDeps } from '../../src/jobs/runner.js';
 
-const FOLDER = 'E:\\jobs\\one';
+// A job folder is always a clone of the app: a real folder with a plain .git in it.
+const ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), 'otherbench-runner-')));
+const FOLDER = join(ROOT, 'one');
+mkdirSync(join(FOLDER, '.git'), { recursive: true });
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 function profile(over: Partial<ResolvedProfile> = {}): ResolvedProfile {
   return { id: 'p1', name: 'Worker', archivedAt: null, toolPolicy: { fs: 'read', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, ...over } as unknown as ResolvedProfile;
@@ -43,6 +50,25 @@ describe('JobRunner', () => {
     expect(chat).toMatchObject({ title: 'Job: App (j1)', profileId: 'p1', autoMode: false, projectId: null, appId: null, workspace: { kind: 'machine', root: FOLDER } });
     // The brief is untrusted: nothing from a job chat reaches a memory note.
     expect(chat!.memoryExcluded).toBe(true);
+  });
+
+  it("createChat refuses a folder that isn't a job's clone: relative, missing, without a plain .git, or the home folder or one above it", () => {
+    const { store, runner } = setup();
+    const noGit = join(ROOT, 'no-git');
+    mkdirSync(noGit);
+    const gitFile = join(ROOT, 'git-file');
+    mkdirSync(gitFile);
+    writeFileSync(join(gitFile, '.git'), 'gitdir: elsewhere\n');
+    for (const folder of ['jobs/one', join(ROOT, 'missing'), noGit, gitFile]) {
+      expect(() => runner.createChat({ title: 'Job', folder, profileId: 'p1' }), folder).toThrow();
+    }
+    // A clone that is the home folder, or holds it, is refused for that alone.
+    for (const home of [FOLDER, join(FOLDER, 'inner')]) {
+      const { runner: r, store: s } = setup({ homeDir: () => home });
+      expect(() => r.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1' }), home).toThrow(/home/);
+      expect(s.chats.list()).toEqual([]);
+    }
+    expect(store.chats.list()).toEqual([]);
   });
 
   it('starts an unattended turn from the chat tip with the resolved profile', async () => {

@@ -74,7 +74,7 @@ import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
 import type { ChatMessenger } from '@otherbench/core/ports/chat-messenger.js';
 import type { Context } from 'hono';
-import { JobGit } from './jobs/git.js';
+import { JobGit, OWN_JOB_BRANCH_PREFIX } from './jobs/git.js';
 import { disposeAddons, loadAddons, type LoadedAddon } from './addons/loader.js';
 import { makeAddonHost } from './addons/host.js';
 import { createJobRunner, type JobRunner } from './jobs/runner.js';
@@ -508,7 +508,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const jobGitRoot = join(dataDir, 'job-git');
   mkdirSync(jobGitRoot, { recursive: true });
   const jobGitFor = (branchPrefix: string): JobGit => new JobGit({ root: jobGitRoot, branchPrefix });
-  const jobGit = jobGitFor('job');
+  const jobGit = jobGitFor(OWN_JOB_BRANCH_PREFIX);
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(process.env, { profile: new BrowserProfile(secrets) }), allowLoopbackPorts });
   // Computer use: the shell's driver when the CLI passed one (the desktop
@@ -1004,6 +1004,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const jobs = container.jobs;
   container.addons = await loadAddons({
     addonsDir: join(dataDir, 'addons'),
+    reservedBranchPrefixes: [OWN_JOB_BRANCH_PREFIX],
     makeHost: (manifest, _folder, onRoutes) =>
       makeAddonHost(
         {
@@ -1026,11 +1027,20 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   for (const a of container.addons) {
     if (a.status === 'failed') console.warn(`[otherbench-server] add-on ${a.id} didn't load: ${a.error ?? ''}`);
   }
+  // Add-ons stop first, and everything else (the database among it) closes once they have: a dispose may still save
+  // its state through the host. With none to stop, it all closes at once, as before.
   const closeBeforeAddons = container.close;
+  const settledBeforeAddons = container.settled;
+  let addonsStopped: Promise<void> = Promise.resolve();
   container.close = () => {
-    void disposeAddons(container.addons ?? []);
-    closeBeforeAddons();
+    const stopping = container.addons?.filter((a) => a.status === 'loaded' && a.module?.dispose) ?? [];
+    if (stopping.length === 0) {
+      closeBeforeAddons();
+      return;
+    }
+    addonsStopped = disposeAddons(stopping).then(() => closeBeforeAddons());
   };
+  container.settled = () => addonsStopped.then(() => settledBeforeAddons?.());
 
   return container;
 }

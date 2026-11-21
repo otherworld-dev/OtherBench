@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AddonHost, AddonManifest, AddonModule, AddonRoutes } from '@otherbench/addon-api';
 import { ADDON_ID, readManifest } from './manifest.js';
+import { stoppable } from './stoppable.js';
 
 /** An add-on found in the addons folder, loaded or not. */
 export interface LoadedAddon {
@@ -27,6 +28,8 @@ export interface LoadAddonsOptions {
   makeHost: (manifest: AddonManifest, folder: string, onRoutes: (app: AddonRoutes) => void) => AddonHost;
   /** How long `activate` may take. Default 10 s. */
   activateTimeoutMs?: number;
+  /** Branch prefixes OtherBench uses itself, which no add-on may have. */
+  reservedBranchPrefixes?: readonly string[];
 }
 
 const DEFAULT_ACTIVATE_MS = 10_000;
@@ -48,6 +51,8 @@ export async function loadAddons(o: LoadAddonsOptions): Promise<LoadedAddon[]> {
     return [];
   }
   const out: LoadedAddon[] = [];
+  // Each add-on's job branches are its own: a prefix OtherBench or an earlier add-on has is refused.
+  const takenPrefixes = new Set(o.reservedBranchPrefixes ?? []);
   for (const name of names) {
     const folder = join(o.addonsDir, name);
     try {
@@ -55,17 +60,20 @@ export async function loadAddons(o: LoadAddonsOptions): Promise<LoadedAddon[]> {
     } catch {
       continue;
     }
-    out.push(await loadOne(o, name, folder));
+    out.push(await loadOne(o, name, folder, takenPrefixes));
   }
   return out;
 }
 
-async function loadOne(o: LoadAddonsOptions, name: string, folder: string): Promise<LoadedAddon> {
+async function loadOne(o: LoadAddonsOptions, name: string, folder: string, takenPrefixes: Set<string>): Promise<LoadedAddon> {
   const failed = (error: string, over: Partial<LoadedAddon> = {}): LoadedAddon => ({ id: name, name, version: null, status: 'failed', error, folder, pagePath: null, routes: null, module: null, ...over });
   const read = readManifest(folder);
   if (!read.ok) return failed(read.error);
   const { manifest } = read;
   const base = { name: manifest.name, version: manifest.version, pagePath: read.pagePath };
+  const prefix = manifest.branchPrefix ?? manifest.id;
+  if (takenPrefixes.has(prefix)) return failed(`Its branch prefix "${prefix}" is already OtherBench's own or another add-on's. Give it a branchPrefix of its own in its addon.json.`, base);
+  takenPrefixes.add(prefix);
   const limit = o.activateTimeoutMs ?? DEFAULT_ACTIVATE_MS;
   const seconds = Math.round(limit / 1000) || limit / 1000;
   let mod: Partial<AddonModule>;
@@ -77,15 +85,35 @@ async function loadOne(o: LoadAddonsOptions, name: string, folder: string): Prom
   }
   if (typeof mod.activate !== 'function') return failed('Its main has no activate function.', base);
   let routes: AddonRoutes | null = null;
+  // An add-on that fails to start keeps no way into OtherBench, even from code of its that is still running.
+  let stop: (() => void) | null = null;
   try {
-    const host = o.makeHost(manifest, folder, (app) => {
-      routes = app;
-    });
+    const guarded = stoppable(
+      o.makeHost(manifest, folder, (app) => {
+        routes = app;
+      }),
+      manifest.id
+    );
+    stop = guarded.stop;
+    const host = guarded.host;
     await withinLimit(Promise.resolve().then(() => mod.activate!(host)), limit, `its activate didn't finish within ${seconds} s`);
   } catch (err) {
+    // Its dispose first, while it can still tidy up through the host, then the host is cut off.
+    await stopFailed(mod, manifest.id, limit);
+    stop?.();
     return failed(`It failed to start: ${message(err)}`, base);
   }
   return { id: manifest.id, ...base, status: 'loaded', error: null, folder, routes, module: mod as AddonModule };
+}
+
+/** Calls a failed add-on's dispose, so whatever its activate set going is stopped; never throws. */
+async function stopFailed(mod: Partial<AddonModule>, id: string, limit: number): Promise<void> {
+  if (typeof mod.dispose !== 'function') return;
+  try {
+    await withinLimit(Promise.resolve().then(() => mod.dispose!()), limit, "its dispose didn't finish");
+  } catch (err) {
+    console.warn(`[otherbench-server] add-on ${id} failed to stop after failing to start:`, err);
+  }
 }
 
 /** Settles as `p` does, or rejects with `why` once `ms` has passed. */
@@ -98,12 +126,16 @@ async function withinLimit<T>(p: Promise<T>, ms: number, why: string): Promise<T
   }
 }
 
-/** Calls each loaded add-on's dispose; one that throws doesn't stop the rest. */
-export async function disposeAddons(addons: readonly LoadedAddon[]): Promise<void> {
+/** How long one add-on's dispose may take on shutdown before the rest carry on without it. */
+const DISPOSE_MS = 5_000;
+
+/** Calls each loaded add-on's dispose, each within a time limit; one that throws or hangs doesn't stop the rest. */
+export async function disposeAddons(addons: readonly LoadedAddon[], limitMs = DISPOSE_MS): Promise<void> {
   for (const a of addons) {
     if (a.status !== 'loaded' || !a.module?.dispose) continue;
+    const dispose = a.module.dispose.bind(a.module);
     try {
-      await a.module.dispose();
+      await withinLimit(Promise.resolve().then(dispose), limitMs, `its dispose didn't finish within ${Math.round(limitMs / 1000)} s`);
     } catch (err) {
       console.warn(`[otherbench-server] add-on ${a.id} failed to stop:`, err);
     }

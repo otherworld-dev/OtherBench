@@ -52,10 +52,13 @@ export function addonPageRoutes(list: () => readonly LoadedAddon[], frameOrigins
   app.get('/:id/*', (c) => {
     const addon = list().find((a) => a.id === c.req.param('id') && a.status === 'loaded');
     if (!addon?.pagePath) return c.notFound();
-    const prefix = `/addons/${addon.id}/`;
+    // What follows the id's own segment, as sent: the id may be percent-encoded, so its decoded length can't be used.
+    const afterAddons = new URL(c.req.url).pathname.slice('/addons/'.length);
+    const slash = afterAddons.indexOf('/');
+    if (slash < 0) return c.notFound();
     let rel: string;
     try {
-      rel = decodeURIComponent(new URL(c.req.url).pathname.slice(prefix.length));
+      rel = decodeURIComponent(afterAddons.slice(slash + 1));
     } catch {
       return c.notFound();
     }

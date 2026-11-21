@@ -92,6 +92,9 @@ export function isSafeRemoteName(name: unknown): name is string {
   return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name);
 }
 
+/** The prefix of OtherBench's own job branches (`job/<id>`); no add-on may have it. */
+export const OWN_JOB_BRANCH_PREFIX = 'job';
+
 export interface JobGitOptions {
   /** OtherBench's own folder for job git: holds the empty hooks folder, and is every call's working folder. */
   root: string;
@@ -111,11 +114,12 @@ export class JobGit {
   private readonly root: string;
   private readonly run: typeof runProcess;
   private gitPath: string | null;
-  readonly branchPrefix: string;
+  // A true private field behind a getter: an add-on is handed this object, and must not be able to move its prefix.
+  readonly #branchPrefix: string;
 
   constructor(o: JobGitOptions) {
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(o.branchPrefix)) throw new JobGitError(`"${o.branchPrefix}" is not a job branch prefix OtherBench accepts.`);
-    this.branchPrefix = o.branchPrefix;
+    this.#branchPrefix = o.branchPrefix;
     this.root = o.root;
     this.noHooksDir = join(o.root, 'no-git-hooks');
     this.run = o.run ?? runProcess;
@@ -126,6 +130,11 @@ export class JobGit {
    * The empty hooks folder, made if need be and emptied if anything is in it
    * (nothing but OtherBench should ever write there). Called before every use.
    */
+  /** The first part of every job branch this JobGit makes, fetches or pushes. Fixed when it is made. */
+  get branchPrefix(): string {
+    return this.#branchPrefix;
+  }
+
   /** The branch a job's work goes on: `<prefix>/<job id>`. */
   jobBranchFor(jobId: string): string {
     return `${this.branchPrefix}/${jobId}`;
@@ -482,8 +491,8 @@ export class JobGit {
    */
   async fetchInto(o: { appRepo: string; folder: string; branch: string }): Promise<string> {
     if (!isSafeBranchName(o.branch) || !o.branch.startsWith(`${this.branchPrefix}/`)) throw new JobGitError(`"${o.branch}" is not a job branch.`);
-    this.gitDirOf(o.folder);
-    await this.must(['-C', o.appRepo, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', o.folder, `refs/heads/${o.branch}:refs/heads/${o.branch}`], `Fetching ${o.branch}`, {
+    const gitDir = this.gitDirOf(o.folder);
+    await this.must(['-C', o.appRepo, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', gitDir, `refs/heads/${o.branch}:refs/heads/${o.branch}`], `Fetching ${o.branch}`, {
       timeoutMs: 5 * MINUTE,
     });
     const sha = (await this.must(['-C', o.appRepo, 'rev-parse', '--verify', `refs/heads/${o.branch}^{commit}`], 'Reading the fetched branch')).trim();

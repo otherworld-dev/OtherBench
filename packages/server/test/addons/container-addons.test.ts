@@ -37,6 +37,28 @@ describe('add-ons beside the database', () => {
     }
   });
 
+  it("let an add-on's dispose finish with the database before it closes", async () => {
+    const folder = join(dir, 'addons', 'probe');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'addon.json'), JSON.stringify({ id: 'probe', name: 'Probe', version: '0.0.1', apiVersion: 1, main: 'main.mjs' }));
+    // Its dispose waits a moment, then reads the store, as one saving its state on the way out would.
+    writeFileSync(
+      join(folder, 'main.mjs'),
+      `let h;
+export function activate(host) { h = host; }
+export async function dispose() {
+  await new Promise((r) => setTimeout(r, 30));
+  try { globalThis.__disposeSaw?.({ apps: h.apps() }); } catch (err) { globalThis.__disposeSaw?.({ error: String(err) }); }
+}`
+    );
+    const saw: unknown[] = [];
+    (globalThis as { __disposeSaw?: unknown }).__disposeSaw = (x: unknown) => saw.push(x);
+    const container = await createContainer({ dbPath: join(dir, 'otherbench.db'), secretsPath: join(dir, 'secrets.json') });
+    container.close();
+    await container.settled?.();
+    expect(saw).toEqual([{ apps: [] }]);
+  });
+
   it('start fine with no addons folder', async () => {
     const container = await createContainer({ dbPath: join(dir, 'otherbench.db'), secretsPath: join(dir, 'secrets.json') });
     try {

@@ -52,6 +52,21 @@ describe('readManifest', () => {
     expect(r).toMatchObject({ ok: false, error: expect.stringMatching(why) });
   });
 
+  it.each([
+    ['its own folder', '.'],
+    ['a file', 'main.mjs'],
+    ['a folder that does not exist', 'nope'],
+  ])('refuses a settings page that is %s', (_what, settingsPage) => {
+    expect(readManifest(addon('glow', { settingsPage }))).toMatchObject({ ok: false, error: expect.stringMatching(/settings page/i) });
+  });
+
+  it('refuses a settings page folder that holds main, which it would then serve', () => {
+    const folder = addon('glow', { main: 'page/main.mjs', settingsPage: 'page' });
+    mkdirSync(join(folder, 'page'));
+    writeFileSync(join(folder, 'page', 'main.mjs'), 'export function activate() {}');
+    expect(readManifest(folder)).toMatchObject({ ok: false, error: expect.stringMatching(/settings page/i) });
+  });
+
   it('refuses a manifest that is not JSON', () => {
     expect(readManifest(addon('glow', '{ not json'))).toMatchObject({ ok: false, error: expect.stringMatching(/addon\.json/) });
   });
@@ -96,6 +111,31 @@ describe('loadAddons', () => {
     addon('stuck', {}, 'export function activate() { return new Promise(() => {}); }');
     const [loaded] = await loadAddons({ addonsDir, makeHost: fakeHost, activateTimeoutMs: 50 });
     expect(loaded).toMatchObject({ status: 'failed', error: expect.stringMatching(/didn't finish/) });
+  });
+
+  it.each([
+    ['times out', 'return new Promise(() => {});'],
+    ['throws', 'throw new Error("boom");'],
+  ])('stops an add-on whose activate %s: dispose is called and its host refuses any further use', async (_what, body) => {
+    addon('stuck', {}, `export function activate(host) { globalThis.__kept = () => host.id; ${body} } export function dispose() { globalThis.__disposed?.(); }`);
+    const disposed = vi.fn();
+    (globalThis as { __disposed?: unknown }).__disposed = disposed;
+    const [loaded] = await loadAddons({ addonsDir, makeHost: fakeHost, activateTimeoutMs: 50 });
+    expect(loaded).toMatchObject({ status: 'failed' });
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(() => (globalThis as unknown as { __kept: () => string }).__kept()).toThrow(/stopped/);
+  });
+
+  it("refuses an add-on whose branch prefix is OtherBench's own or one an earlier add-on took", async () => {
+    addon('alpha', { branchPrefix: 'shared' });
+    addon('beta', { branchPrefix: 'shared' });
+    addon('job');
+    addon('shared');
+    const loaded = await loadAddons({ addonsDir, makeHost: fakeHost, reservedBranchPrefixes: ['job'] });
+    expect(loaded.find((a) => a.id === 'alpha')).toMatchObject({ status: 'loaded' });
+    expect(loaded.find((a) => a.id === 'beta')).toMatchObject({ status: 'failed', error: expect.stringMatching(/branch prefix "shared"/) });
+    expect(loaded.find((a) => a.id === 'job')).toMatchObject({ status: 'failed', error: expect.stringMatching(/branch prefix "job"/) });
+    expect(loaded.find((a) => a.id === 'shared')).toMatchObject({ status: 'failed', error: expect.stringMatching(/branch prefix "shared"/) });
   });
 
   it('fails an add-on whose main never finishes loading, and still loads the next one', async () => {

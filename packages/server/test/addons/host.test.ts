@@ -66,6 +66,15 @@ describe('makeAddonHost', () => {
     expect(makeAddonHost(deps(), manifest('glow', { branchPrefix: 'gl' }), () => {}).git.jobBranchFor('j1')).toBe('gl/j1');
   });
 
+  it("won't let an add-on change its git's branch prefix", () => {
+    const git = makeAddonHost(deps(), manifest('glow'), () => {}).git;
+    expect(() => {
+      (git as { branchPrefix: string }).branchPrefix = 'job';
+    }).toThrow();
+    expect(git.branchPrefix).toBe('glow');
+    expect(git.jobBranchFor('j1')).toBe('glow/j1');
+  });
+
   it('notify tells the windows this add-on changed', () => {
     const d = deps();
     makeAddonHost(d, manifest('glow'), () => {}).notify();

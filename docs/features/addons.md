@@ -14,12 +14,12 @@ The folder holds `addon.json`:
 | `name`, `version` | What Settings → Add-ons shows. |
 | `apiVersion` | The host API it was built for. This OtherBench offers version 1 (`ADDON_API_VERSION`); any other isn't loaded. |
 | `main` | Its ES module, relative to the folder and inside it. |
-| `settingsPage` | Optional: a folder of static files with an `index.html`, inside the add-on's folder. |
-| `branchPrefix` | Optional: the first part of every job branch its jobs make. Defaults to the id. |
+| `settingsPage` | Optional: a folder of static files with an `index.html`, inside the add-on's folder. It must be a folder of its own, not the add-on's folder itself and not one holding `main`, since everything in it is served without sign-in. |
+| `branchPrefix` | Optional: the first part of every job branch its jobs make. Defaults to the id. It can't be `job` (OtherBench's own) or one an add-on earlier in name order has, whether as its id or its `branchPrefix`; such an add-on isn't loaded. |
 
 ## Loading
 
-At start-up, after everything else in the container is built, the server reads each folder in `addons` named like an id, in name order (`server/src/addons/loader.ts`). For each it checks the manifest (`manifest.ts`: the id is the folder's name, `main` and `settingsPage` resolve inside the folder through `containPath`, so no `..`, absolute path or link out), imports `main` and calls its `activate(host)`, each with a 10 second limit (a top-level await in `main` that never settles counts as a failed load). An add-on that can't be read, imported or given its host, or doesn't start, is listed as failed with the reason, its routes aren't served, and the rest still load: an add-on never stops the server starting. On shutdown each loaded add-on's `dispose` is called. In the desktop app the main window shows a notification, once per start, for each add-on that didn't load.
+At start-up, after everything else in the container is built, the server reads each folder in `addons` named like an id, in name order (`server/src/addons/loader.ts`). For each it checks the manifest (`manifest.ts`: the id is the folder's name, `main` and `settingsPage` resolve inside the folder through `containPath`, so no `..`, absolute path or link out), imports `main` and calls its `activate(host)`, each with a 10 second limit (a top-level await in `main` that never settles counts as a failed load). An add-on that can't be read, imported or given its host, or doesn't start, is listed as failed with the reason, its routes aren't served, and the rest still load: an add-on never stops the server starting. When `activate` throws or runs out of time, the add-on's `dispose` is called (under the same limit) so it can stop what it set going, and then its host is cut off (`stoppable.ts`): anything it reads from the host, or calls that it got from it earlier, throws from then on. On shutdown each loaded add-on's `dispose` is called, each with 5 seconds, before the database and everything else close, so a dispose can still save its state through the host. In the desktop app the main window shows a notification, once per start, for each add-on that didn't load.
 
 ## The host
 
@@ -45,7 +45,7 @@ The tab (`web/src/views/settings/AddonsPanel.tsx`) appears after Sandbox when `G
 - with `X-Content-Type-Options: nosniff` and a policy of `default-src 'self'; script-src 'self'`, and `frame-ancestors` that allows only this server and the desktop app's own origins (everything else OtherBench serves keeps `frame-ancestors 'none'`);
 - without sign-in, like the main UI's own files. The page's calls to its API need the usual sign-in.
 
-The frame has `sandbox="allow-scripts allow-same-origin allow-forms"`, so it can't navigate the app or open windows. The page and the app talk by `postMessage`:
+The frame has `sandbox="allow-scripts allow-same-origin allow-forms"`, so it can't navigate the app or open windows. That holds the page back only where it is served from another origin than the app, as in the desktop app. In a browser the app and the page both come from the server, so with `allow-same-origin` the page can reach the app's own window (`window.parent`) and do anything the app can. This is left as it is because the page is the add-on's own code, which already runs in the server with full access, and `allow-same-origin` is what lets the page call its API with the browser's sign-in cookie. The page and the app talk by `postMessage`:
 
 | From | Message | |
 |------|---------|---|

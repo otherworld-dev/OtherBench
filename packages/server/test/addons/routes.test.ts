@@ -94,6 +94,12 @@ describe('/addons/<id>/ (settings pages)', () => {
     expect((await app([loaded()]).request('/addons/glow/page.js')).headers.get('Content-Type')).toMatch(/^text\/javascript/);
   });
 
+  it('serves the right file when the id in the path is percent-encoded', async () => {
+    const res = await app([loaded()]).request('/addons/%67low/page.js');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('console.log(1)');
+  });
+
   it('serves index.html for the folder itself', async () => {
     expect((await app([loaded()]).request('/addons/glow/')).status).toBe(200);
   });

@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, relative, resolve } from 'node:path';
+import { jobGitProblem } from '@otherbench/core/domain/job.js';
 import { agentStatusOf, type AgentStatus } from '@otherbench/core/domain/chat-status-tool.js';
 import type { TurnEvent, TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
@@ -62,6 +66,25 @@ export interface JobRunnerDeps {
   defaultProfileId: () => string | null;
   sandbox: Sandbox | null;
   closeChats?: (gone: (chatId: string) => boolean) => void;
+  /** Tests: this machine's home folder. */
+  homeDir?: () => string;
+}
+
+/**
+ * Why a folder can't be a job's, or null. A job folder is a clone made for the job: an absolute path to a real
+ * folder with a plain `.git` (jobGitProblem), and never the home folder or one holding it, since the job's agent
+ * may write anywhere in it.
+ */
+export function jobFolderProblem(folder: string, home: string): string | null {
+  if (!isAbsolute(folder)) return `A job's folder must be a full path, and ${folder} isn't.`;
+  try {
+    if (!statSync(folder).isDirectory()) return `${folder} isn't a folder.`;
+  } catch {
+    return `${folder} doesn't exist.`;
+  }
+  const toHome = relative(resolve(folder), resolve(home));
+  if (toHome === '' || (!toHome.startsWith('..') && !isAbsolute(toHome))) return `${folder} is the home folder or holds it, so it can't be a job's folder.`;
+  return jobGitProblem(folder);
 }
 
 function errorMessage(err: unknown): string {
@@ -89,6 +112,8 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
 
   return {
     createChat({ title, folder, profileId }) {
+      const problem = jobFolderProblem(folder, (d.homeDir ?? homedir)());
+      if (problem !== null) throw new Error(problem);
       const chat = d.store.chats.create({
         id: randomUUID(),
         title,

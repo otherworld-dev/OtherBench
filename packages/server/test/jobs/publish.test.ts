@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runProcess } from '../../src/code/process.js';
 import { JobGit, scrubCredentials } from '../../src/jobs/git.js';
 
 /**
@@ -153,6 +154,21 @@ describe('publishing a job branch', () => {
     const r = await jg.publish({ appRepo: app, folder, jobId: JOB, branch: BRANCH, headCommit: tip, remote: 'origin' });
     expect(r).toMatchObject({ ok: false, note: expect.stringContaining('.github/workflows/leak.yml') });
     expect(remoteRef(`refs/heads/${BRANCH}`)).toBeNull();
+  });
+
+  it('fetches a job branch into the app from the .git it checked, not the folder around it', async () => {
+    const calls: string[][] = [];
+    const recording = new JobGit({
+      root: join(tmp, 'ob'),
+      branchPrefix: 'test',
+      run: (cmd, args, o) => {
+        calls.push(args);
+        return runProcess(cmd, args, o);
+      },
+    });
+    expect(await recording.fetchInto({ appRepo: app, folder, branch: BRANCH })).toBe(head);
+    const fetch = calls.find((a) => a.includes('fetch'));
+    expect(fetch?.slice(fetch.indexOf('--') + 1)).toEqual([join(folder, '.git'), `refs/heads/${BRANCH}:refs/heads/${BRANCH}`]);
   });
 
   it('refuses a job folder whose .git sends git elsewhere', async () => {
