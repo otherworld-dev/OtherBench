@@ -83,30 +83,41 @@ const PROTECTED_FILES = new Set([
  * CI config: a pushed job branch that changes it would have the forge run the
  * changed pipeline with the repository's secrets (GitHub, Gitea and Forgejo
  * run workflows from the pushed branch itself). Matched like the protected
- * files above, in any folder, so a job can neither write nor push it.
+ * files above, in any folder, so a job can neither write nor push it. A file
+ * counts by its name before the extension, with any extension (`.yml`,
+ * `.yaml`, `.star`, `.json`…), since pipelines accept several. The list is
+ * the known forms; a forge reading some other file is not covered.
  */
-const CI_FOLDERS = new Set(['.github', '.gitea', '.forgejo', '.gitlab', '.circleci', '.buildkite', '.woodpecker', '.azure-pipelines', '.semaphore']);
-const CI_FILES = new Set([
-  '.gitlab-ci.yml',
-  '.travis.yml',
-  'azure-pipelines.yml',
-  'bitbucket-pipelines.yml',
-  'appveyor.yml',
-  '.appveyor.yml',
-  '.drone.yml',
-  '.woodpecker.yml',
-  '.cirrus.yml',
+const CI_FOLDERS = new Set(['.github', '.gitea', '.forgejo', '.gitlab', '.circleci', '.buildkite', 'buildkite', '.woodpecker', '.azure-pipelines', '.semaphore', '.tekton']);
+const CI_STEMS = new Set([
+  '.gitlab-ci',
+  '.travis',
+  'azure-pipelines',
+  '.azure-pipelines',
+  'bitbucket-pipelines',
+  'appveyor',
+  '.appveyor',
+  '.drone',
+  '.woodpecker',
+  '.cirrus',
   'jenkinsfile',
-  'cloudbuild.yaml',
-  'cloudbuild.yml',
-  'buildspec.yml',
+  'cloudbuild',
+  'buildspec',
+  'buildkite',
+  'bitrise',
+  'codemagic',
+  '.gitlab-ci-local',
 ]);
 
-/** Whether a path relative to the job folder is CI config (see CI_FOLDERS/FILES). */
+/** Whether a path relative to the job folder is CI config (see CI_FOLDERS/STEMS). */
 export function isCiConfigPath(relPath: string): boolean {
   const segments = pathSegments(relPath);
   if (segments.some((s) => CI_FOLDERS.has(s))) return true;
-  return CI_FILES.has(segments[segments.length - 1] ?? '');
+  const last = segments[segments.length - 1] ?? '';
+  // The name before its last extension, keeping a leading dot: `.drone.yaml` → `.drone`, `Jenkinsfile` → `jenkinsfile`.
+  const dot = last.lastIndexOf('.');
+  const stem = dot > 0 ? last.slice(0, dot) : last;
+  return CI_STEMS.has(stem) || CI_STEMS.has(last);
 }
 
 /** Whether a path relative to the job folder is one a job may never write (see PROTECTED_FOLDERS/FILES and CI_FOLDERS/FILES). */

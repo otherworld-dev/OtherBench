@@ -50,7 +50,7 @@ describe('Job rules (permissions/job.ts)', () => {
   });
 
   it("refuses a write to CI config, which a pushed branch would run with the repository's secrets", () => {
-    for (const rel of ['.github/workflows/ci.yml', '.github/actions/setup/action.yml', '.GITHUB./workflows/x.yml', '.gitea/workflows/ci.yml', '.forgejo/workflows/ci.yml', '.gitlab-ci.yml', '.circleci/config.yml', 'azure-pipelines.yml', 'sub/Jenkinsfile', '.travis.yml']) {
+    for (const rel of ['.github/workflows/ci.yml', '.github/actions/setup/action.yml', '.GITHUB./workflows/x.yml', '.gitea/workflows/ci.yml', '.forgejo/workflows/ci.yml', '.gitlab-ci.yml', '.circleci/config.yml', 'azure-pipelines.yml', 'sub/Jenkinsfile', '.travis.yml', '.woodpecker.yaml', 'azure-pipelines.yaml', '.cirrus.star', '.drone.yaml', 'bitrise.yml', 'codemagic.yaml', 'buildkite.yml']) {
       expect(isJobProtectedPath(rel), rel).toBe(true);
       expect(isCiConfigPath(rel), rel).toBe(true);
     }

@@ -142,6 +142,19 @@ describe('publishing a job branch', () => {
     expect(remoteRef(`refs/heads/${BRANCH}`)).toBeNull();
   });
 
+  it('still refuses CI config the app repository holds only on a fetched job branch', async () => {
+    mkdirSync(join(folder, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(folder, '.github', 'workflows', 'leak.yml'), 'on: push\n');
+    git(folder, '-c', 'core.hooksPath=/nonexistent', 'add', '.github');
+    git(folder, '-c', 'core.hooksPath=/nonexistent', 'commit', '-q', '-m', 'more work');
+    const tip = git(folder, 'rev-parse', 'HEAD');
+    // An earlier job's branch fetched into the app repository for review, holding the same commits.
+    git(app, 'fetch', '-q', join(folder, '.git'), `+refs/heads/${BRANCH}:refs/heads/test/cmwolderjob000001`);
+    const r = await jg.publish({ appRepo: app, folder, jobId: JOB, branch: BRANCH, headCommit: tip, remote: 'origin' });
+    expect(r).toMatchObject({ ok: false, note: expect.stringContaining('.github/workflows/leak.yml') });
+    expect(remoteRef(`refs/heads/${BRANCH}`)).toBeNull();
+  });
+
   it('refuses a job folder whose .git sends git elsewhere', async () => {
     writeFileSync(join(folder, '.git', 'commondir'), '../../elsewhere\n');
     const r = await jg.publish({ appRepo: app, folder, jobId: JOB, branch: BRANCH, headCommit: head, remote: 'origin' });

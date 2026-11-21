@@ -417,10 +417,16 @@ export class JobGit {
     const inApp = (await this.execApp(o.appRepo, ['rev-parse', '--verify', '--quiet', `${privateRef}^{commit}`])).stdout.trim();
     if (inApp !== o.headCommit) return fail(`The fetched ${privateRef} is at ${inApp.slice(0, 7) || 'nothing'}, not ${o.headCommit.slice(0, 7)}.`);
 
-    // 4b. No CI config in any commit the app repository doesn't already have: the forge would run a changed pipeline
-    // with the repository's secrets. Checked on the commits themselves (each against every parent, renames as add and
-    // delete), so a file a sandboxed command wrote and committed is caught as well as one a file tool wrote.
-    const changed = await this.execApp(o.appRepo, ['log', '-m', '--no-renames', '--name-only', '-z', '--format=', o.headCommit, '--not', `--exclude=refs/otherbench-jobs/*`, '--all']);
+    // 4b. No CI config in any commit the remote doesn't already have, as far as the app repository knows it: the forge
+    // would run a changed pipeline with the repository's secrets. Checked on the commits themselves (each against every
+    // parent, renames as add and delete), so a file a sandboxed command wrote and committed is caught as well as one a
+    // file tool wrote. Only the remote's own branches count as already there, never this prefix's job branches there,
+    // and never a local branch, which could be a job branch fetched in for review; so a local branch ahead of the
+    // remote counts as new too, which only ever refuses more.
+    const changed = await this.execApp(o.appRepo, [
+      'log', '-m', '--no-renames', '--name-only', '-z', '--format=', o.headCommit,
+      '--not', `--exclude=${o.remote}/${this.branchPrefix}/*`, `--remotes=${o.remote}/*`,
+    ]);
     if (changed.code !== 0) return fail(`The job's changes couldn't be listed: ${(changed.stderr || changed.stdout).trim().slice(-300)}`);
     const ci = [...new Set(changed.stdout.split('\0').map((p) => p.trim()).filter((p) => p !== '' && isCiConfigPath(p)))];
     if (ci.length > 0) return fail(`The job changed CI config (${ci.slice(0, 5).join(', ')}${ci.length > 5 ? ', …' : ''}), which the remote would run with the repository's secrets, so nothing was pushed.`);
