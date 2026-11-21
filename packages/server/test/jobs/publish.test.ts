@@ -49,6 +49,9 @@ beforeEach(async () => {
   git(tmp, 'init', '-q', '--bare', '-b', 'dev', remote);
   git(tmp, 'clone', '-q', remote, app);
   writeFileSync(join(app, 'a.txt'), 'one\n');
+  // The app already has CI: only a job's own changes to it are refused, not a repository that has it.
+  mkdirSync(join(app, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(app, '.github', 'workflows', 'ci.yml'), 'on: push\n');
   git(app, 'add', '.');
   git(app, 'commit', '-q', '-m', 'base');
   git(app, 'push', '-q', 'origin', 'dev');
@@ -80,7 +83,7 @@ describe('publishing a job branch', () => {
     expect(appState()).toEqual(before);
     expect(readdirSync(markers)).toEqual([]);
     // The uncommitted file in the job folder isn't in what was pushed.
-    expect(git(tmp, `--git-dir=${remote}`, 'ls-tree', '--name-only', head)).toBe('a.txt');
+    expect(git(tmp, `--git-dir=${remote}`, 'ls-tree', '--name-only', head).split('\n')).toEqual(['.github', 'a.txt']);
   });
 
   it('is "already there" the second time, so a repeated task is safe', async () => {
@@ -122,6 +125,21 @@ describe('publishing a job branch', () => {
     expect(run).not.toHaveBeenCalled();
     expect(remoteRef(`refs/heads/${BRANCH}`)).toBeNull();
     expect(guarded.jobBranchFor(JOB)).toBe(BRANCH);
+  });
+
+  it('refuses a branch whose commits touch CI config, however it was written, and pushes nothing', async () => {
+    // Written and committed by plain git, as a sandboxed command could, past the file tools' rules.
+    mkdirSync(join(folder, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(folder, '.github', 'workflows', 'leak.yml'), 'on: push\n');
+    git(folder, '-c', 'core.hooksPath=/nonexistent', 'add', '.github');
+    git(folder, '-c', 'core.hooksPath=/nonexistent', 'commit', '-q', '-m', 'more work');
+    // An ordinary commit on top, so the CI change isn't the tip.
+    writeFileSync(join(folder, 'a.txt'), 'one\ntwo\nthree\n');
+    git(folder, '-c', 'core.hooksPath=/nonexistent', 'commit', '-q', '-am', 'tip');
+    const tip = git(folder, 'rev-parse', 'HEAD');
+    const r = await jg.publish({ appRepo: app, folder, jobId: JOB, branch: BRANCH, headCommit: tip, remote: 'origin' });
+    expect(r).toMatchObject({ ok: false, note: expect.stringContaining('.github/workflows/leak.yml') });
+    expect(remoteRef(`refs/heads/${BRANCH}`)).toBeNull();
   });
 
   it('refuses a job folder whose .git sends git elsewhere', async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { classifyAgentTool } from '../src/domain/agent-tools.js';
-import { JOB_POLICY, jobPolicy, jobProfile, isJobProtectedPath, plantedCommandIn } from '../src/domain/job.js';
+import { JOB_POLICY, jobPolicy, jobProfile, isCiConfigPath, isJobProtectedPath, plantedCommandIn } from '../src/domain/job.js';
 import { PermissionBroker } from '../src/domain/permissions.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
 import type { EngineRequest } from '../src/ports/chat-engine.js';
@@ -47,7 +47,14 @@ describe('Job rules (permissions/job.ts)', () => {
   it('refuses a write through a short-name segment, which could be any protected folder', () => {
     expect(isJobProtectedPath('CLAUDE~1/settings.json')).toBe(true);
     expect(isJobProtectedPath('src/index.ts')).toBe(false);
-    expect(isJobProtectedPath('.github/workflows/ci.yml')).toBe(false);
+  });
+
+  it("refuses a write to CI config, which a pushed branch would run with the repository's secrets", () => {
+    for (const rel of ['.github/workflows/ci.yml', '.github/actions/setup/action.yml', '.GITHUB./workflows/x.yml', '.gitea/workflows/ci.yml', '.forgejo/workflows/ci.yml', '.gitlab-ci.yml', '.circleci/config.yml', 'azure-pipelines.yml', 'sub/Jenkinsfile', '.travis.yml']) {
+      expect(isJobProtectedPath(rel), rel).toBe(true);
+      expect(isCiConfigPath(rel), rel).toBe(true);
+    }
+    for (const rel of ['src/github.ts', 'docs/ci.md', 'workflows/notes.md']) expect(isCiConfigPath(rel), rel).toBe(false);
   });
 
   it('refuses a write that resolves into .git through a link inside the folder', () => {

@@ -79,14 +79,44 @@ const PROTECTED_FILES = new Set([
   '.ripgreprc',
 ]);
 
-/** Whether a path relative to the job folder is one a job may never write (see PROTECTED_FOLDERS/FILES). */
+/**
+ * CI config: a pushed job branch that changes it would have the forge run the
+ * changed pipeline with the repository's secrets (GitHub, Gitea and Forgejo
+ * run workflows from the pushed branch itself). Matched like the protected
+ * files above, in any folder, so a job can neither write nor push it.
+ */
+const CI_FOLDERS = new Set(['.github', '.gitea', '.forgejo', '.gitlab', '.circleci', '.buildkite', '.woodpecker', '.azure-pipelines', '.semaphore']);
+const CI_FILES = new Set([
+  '.gitlab-ci.yml',
+  '.travis.yml',
+  'azure-pipelines.yml',
+  'bitbucket-pipelines.yml',
+  'appveyor.yml',
+  '.appveyor.yml',
+  '.drone.yml',
+  '.woodpecker.yml',
+  '.cirrus.yml',
+  'jenkinsfile',
+  'cloudbuild.yaml',
+  'cloudbuild.yml',
+  'buildspec.yml',
+]);
+
+/** Whether a path relative to the job folder is CI config (see CI_FOLDERS/FILES). */
+export function isCiConfigPath(relPath: string): boolean {
+  const segments = pathSegments(relPath);
+  if (segments.some((s) => CI_FOLDERS.has(s))) return true;
+  return CI_FILES.has(segments[segments.length - 1] ?? '');
+}
+
+/** Whether a path relative to the job folder is one a job may never write (see PROTECTED_FOLDERS/FILES and CI_FOLDERS/FILES). */
 export function isJobProtectedPath(relPath: string): boolean {
   const segments = pathSegments(relPath);
   if (segments.length === 0) return true;
   if (segments.some((s) => /~\d/.test(s))) return true;
   if (segments.some((s) => PROTECTED_FOLDERS.has(s))) return true;
   const last = segments[segments.length - 1] ?? '';
-  return PROTECTED_FILES.has(last);
+  return PROTECTED_FILES.has(last) || isCiConfigPath(relPath);
 }
 
 /**

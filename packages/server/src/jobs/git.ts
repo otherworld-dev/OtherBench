@@ -1,7 +1,7 @@
 import { appendFileSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { withoutServerSecrets } from '@otherbench/core/domain/child-env.js';
-import { jobGitProblem, plantedCommandIn, plantedCommandReason } from '@otherbench/core/domain/job.js';
+import { isCiConfigPath, jobGitProblem, plantedCommandIn, plantedCommandReason } from '@otherbench/core/domain/job.js';
 import { appRepoGitArgs, hardenedGitArgs, UNSAFE_GIT_ENV } from '@otherbench/core/domain/hardened-git.js';
 import { ExecutableNotFoundError, resolveExecutable } from '@otherbench/tools/mcp/spawn.js';
 import { runProcess, type RunResult } from '../code/process.js';
@@ -416,6 +416,14 @@ export class JobGit {
     if (fetched.code !== 0) return fail(`Fetching ${o.branch} from the job folder failed: ${(fetched.stderr || fetched.stdout).trim().slice(-300)}`);
     const inApp = (await this.execApp(o.appRepo, ['rev-parse', '--verify', '--quiet', `${privateRef}^{commit}`])).stdout.trim();
     if (inApp !== o.headCommit) return fail(`The fetched ${privateRef} is at ${inApp.slice(0, 7) || 'nothing'}, not ${o.headCommit.slice(0, 7)}.`);
+
+    // 4b. No CI config in any commit the app repository doesn't already have: the forge would run a changed pipeline
+    // with the repository's secrets. Checked on the commits themselves (each against every parent, renames as add and
+    // delete), so a file a sandboxed command wrote and committed is caught as well as one a file tool wrote.
+    const changed = await this.execApp(o.appRepo, ['log', '-m', '--no-renames', '--name-only', '-z', '--format=', o.headCommit, '--not', `--exclude=refs/otherbench-jobs/*`, '--all']);
+    if (changed.code !== 0) return fail(`The job's changes couldn't be listed: ${(changed.stderr || changed.stdout).trim().slice(-300)}`);
+    const ci = [...new Set(changed.stdout.split('\0').map((p) => p.trim()).filter((p) => p !== '' && isCiConfigPath(p)))];
+    if (ci.length > 0) return fail(`The job changed CI config (${ci.slice(0, 5).join(', ')}${ci.length > 5 ? ', …' : ''}), which the remote would run with the repository's secrets, so nothing was pushed.`);
 
     // 5. The remote's ref first: there at the commit is success, there at anything else is refused.
     const dest = `refs/heads/${o.branch}`;
