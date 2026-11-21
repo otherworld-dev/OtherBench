@@ -15,7 +15,7 @@ export class HandoverError extends Error {
   constructor(
     readonly status: 400 | 404 | 409,
     message: string,
-    readonly kind: 'not_found' | 'not_here' | 'busy' | 'handover_running' | 'not_latest' | 'not_a_reply'
+    readonly kind: 'not_found' | 'not_here' | 'busy' | 'handover_running' | 'not_latest' | 'not_a_reply' | 'job_chat'
   ) {
     super(message);
   }
@@ -50,6 +50,8 @@ export class HandoverService {
     const chat = store.chats.get(chatId);
     if (!chat) throw new HandoverError(404, `Chat "${chatId}" not found.`, 'not_found');
     if (chat.runsOn !== store.nodes.self().id) throw new HandoverError(409, NOT_HERE, 'not_here');
+    // A job chat's fresh chat would be an ordinary chat in the job folder, outside every job rule, starting from the untrusted brief.
+    if (store.jobChats.folderFor(chatId) !== null) throw new HandoverError(409, "A job chat can't be handed over.", 'job_chat');
     const message = store.messages.get(messageId);
     if (!message || message.chatId !== chatId) throw new HandoverError(404, `Message "${messageId}" not found in this chat.`, 'not_found');
     if (!isWholeClaudeCodeReply(message)) throw new HandoverError(400, 'Only a finished Claude Code reply can be handed over.', 'not_a_reply');

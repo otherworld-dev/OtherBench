@@ -182,6 +182,15 @@ describe('POST /api/chats/:id/handover', () => {
     expect(seen.some((e) => e.type === 'chat-handed-over')).toBe(false);
   });
 
+  it('refuses a job chat, whose fresh chat would run outside the job rules', async () => {
+    container.store.jobChats.add('chat-1', '/ws');
+    const res = await post('chat-1', { messageId: 'a1' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { kind: string }).kind).toBe('job_chat');
+    expect(requests).toEqual([]);
+    expect(container.store.messages.children('a1')).toEqual([]);
+  });
+
   it('refuses a reply in a compare turn', async () => {
     container.store.messages.create({
       id: 'a2', chatId: 'chat-1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'Other.' }], status: 'complete', error: null,
