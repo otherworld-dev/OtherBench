@@ -69,7 +69,10 @@ every installed build keeps itself current.
   version mismatch asks for doesn't.
 - **Database copy.** Before a new build migrates the database to a higher
   schema it copies it to `otherbench.db.before-schema-<from>` (newest 3 kept,
-  `store-sqlite/src/backup.ts`); if the copy fails it doesn't start.
+  `store-sqlite/src/backup.ts`); if the copy fails it doesn't start. An
+  older build started on a database a newer one has migrated doesn't open it
+  (`NewerDatabaseError` from `runMigrations`): it says so and names the newest
+  copy it could open.
 - **Sync refusals.** The refusal names both builds, is kept in
   `app_setting` `sync-version-mismatch:<node>` until a pull succeeds (so it
   survives a restart), shows in Settings → Machines and the tray as "sync
