@@ -4,7 +4,7 @@ Spec *docs/superpowers/specs/2026-10-29-auto-update-design.md*. Machines on
 different builds stop syncing (a schema or protocol mismatch is refused), so
 every installed build keeps itself current.
 
-- **Releases.** CI (`.github/workflows/ci.yml`, job `release`, after `test`)
+- **Releases.** CI (`.github/workflows/ci.yml`, job `release`, after `test` and `rust`)
   builds and publishes them with `desktop/scripts/release/publish.mjs`:
   - Every push of `dev` to GitHub → a beta, `vX.Y.Z-beta.N` (a pre-release,
     `N` = the run number, `X.Y.Z` the next full version: `desktop/package.json`'s
