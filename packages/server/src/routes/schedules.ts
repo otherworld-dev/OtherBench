@@ -24,6 +24,7 @@ import type { Container } from '../container.js';
 import { releaseBlobs, scheduleBlobShas, toPublicScheduleAttachment } from '../schedule/attachments.js';
 import { ScheduleBusyError } from '../schedule/service.js';
 import { limitUploadBody, readUploadedFile, storeUpload } from './attachments.js';
+import { readJsonBody } from '../validation.js';
 
 interface ScheduleBody {
   name?: unknown;
@@ -159,7 +160,7 @@ export function schedulesRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(container.store.schedules.list().map((s) => scheduleView(container, s))));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ScheduleBody;
+    const body = (await readJsonBody(c)) as ScheduleBody;
     const name = parseName(body.name);
     const prompt = parsePrompt(body.prompt);
     const profileId = parseProfile(container, body.profileId);
@@ -194,7 +195,7 @@ export function schedulesRoutes(container: Container): Hono {
 
   app.patch('/:id', async (c) => {
     const current = getOr404(c.req.param('id'));
-    const body = (await c.req.json().catch(() => ({}))) as ScheduleBody;
+    const body = (await readJsonBody(c)) as ScheduleBody;
     if (body.target !== undefined) throw new HTTPException(400, { message: '"target" can\'t change. Make a new schedule for another chat or project.' });
     const now = Date.now();
     const patch: SchedulePatch = { updatedAt: now };

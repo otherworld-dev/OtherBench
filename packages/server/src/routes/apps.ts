@@ -14,7 +14,7 @@ import { folderFromQuery } from '../code/folder-query.js';
 import { CodeRouteError, codeCall } from '../code/route-errors.js';
 import { githubOnOrThrow } from '../features.js';
 import { ambiguousOnWindows, viewFailure } from '../view/roots.js';
-import { optionalNullableString } from '../validation.js';
+import { optionalNullableString, readJsonBody } from '../validation.js';
 import { appView, appViews, parseWorkspaceBody, workspaceResolver } from '../workspace-view.js';
 import { listViewDir, pathOf, readViewText } from './view.js';
 
@@ -255,8 +255,8 @@ function requireBranch(value: unknown): string {
   return value;
 }
 
-async function bodyOf<T>(c: { req: { json(): Promise<unknown> } }): Promise<T> {
-  return (await c.req.json().catch(() => ({}))) as T;
+async function bodyOf<T>(c: { req: { text(): Promise<string> } }): Promise<T> {
+  return (await readJsonBody(c)) as T;
 }
 
 let realGithub: GithubService | null = null;

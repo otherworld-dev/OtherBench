@@ -21,7 +21,7 @@ import { chatTip, collectMessageTree } from '../chat-read.js';
 import { continueOnAccount, NOT_HERE } from '../claude-accounts/switcher.js';
 import { HandoverError } from '../handover/service.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
-import { optionalBoolean, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, requireNonEmptyString, readJsonBody } from '../validation.js';
 import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
 
 interface ChatBody {
@@ -155,7 +155,7 @@ export function chatsRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(chatViews(container, container.store.chats.list())));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ChatBody;
+    const body = (await readJsonBody(c)) as ChatBody;
     const project = body.projectId === undefined || body.projectId === null ? null : requireExistingProject(container, body.projectId);
     const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
     // Spec 2026-10-20-code-tab-design, "Data": a chat created under an app takes the app's folder (always: the
@@ -212,7 +212,7 @@ export function chatsRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const current = getChatOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as ChatBody;
+    const body = (await readJsonBody(c)) as ChatBody;
 
     // headMessageId is deliberately not accepted here -- moving it is an
     // explicit, separate action (POST /:id/head, routes/turns.ts) so that
@@ -376,7 +376,7 @@ export function chatsRoutes(container: Container): Hono {
   // usage limit on to another account, whether or not the chat switches by
   // itself (spec 2026-10-28-claude-accounts-design, "Switching mid-chat").
   app.post('/:id/continue-on-account', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown; account?: unknown };
+    const body = (await readJsonBody(c)) as { messageId?: unknown; account?: unknown };
     const chat = getChatOrThrow(container, c.req.param('id'));
     const chatId = chat.id;
     // As the peer API refuses it: the machine that runs the chat holds its replies and its accounts.
@@ -390,7 +390,7 @@ export function chatsRoutes(container: Container): Hono {
   // "Start fresh chat" on the fresh chat card (spec 2026-11-06-fresh-chat-handover-design): the summary
   // turn starts now and the rest runs on the server, so the answer is the summary turn's ids.
   app.post('/:id/handover', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { messageId?: unknown };
+    const body = (await readJsonBody(c)) as { messageId?: unknown };
     const messageId = requireNonEmptyString(body.messageId, 'messageId');
     const handover = container.handover;
     if (!handover) throw new HTTPException(503, { message: 'Handing chats over is not available here.' });

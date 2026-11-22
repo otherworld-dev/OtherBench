@@ -4,6 +4,7 @@ import { emptyProjectMemory, normaliseMemoryBody, validateMemoryBody, type Memor
 import { emptyGlobalMemoryBody, normaliseGlobalMemoryBody, validateAbout, validateGlobalMemoryBody } from '@otherbench/core/domain/global-memory.js';
 import type { GlobalMemory, GlobalMemoryVersion, Project, ProjectMemoryVersion } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
+import { readJsonBody } from '../validation.js';
 
 interface MemoryBody {
   body?: unknown;
@@ -53,7 +54,7 @@ export function memoryRoutes(container: Container): Hono {
 
   app.put('/projects/:id/memory', async (c) => {
     const project = getProjectOrThrow(container, c.req.param('id'));
-    const body = (await c.req.json().catch(() => ({}))) as MemoryBody;
+    const body = (await readJsonBody(c)) as MemoryBody;
     if (typeof body.body !== 'string') throw new HTTPException(400, { message: '"body" is required and must be a string.' });
     const problem = validateMemoryBody(body.body);
     if (problem) throw new HTTPException(400, { message: problem });
@@ -87,7 +88,7 @@ export function memoryRoutes(container: Container): Hono {
   app.get('/memory/global', (c) => c.json(globalView(container)));
 
   app.put('/memory/global/about', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { about?: unknown };
+    const body = (await readJsonBody(c)) as { about?: unknown };
     if (typeof body.about !== 'string') throw new HTTPException(400, { message: '"about" is required and must be a string.' });
     const problem = validateAbout(body.about);
     if (problem) throw new HTTPException(400, { message: problem });
@@ -96,7 +97,7 @@ export function memoryRoutes(container: Container): Hono {
   });
 
   app.put('/memory/global', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as MemoryBody;
+    const body = (await readJsonBody(c)) as MemoryBody;
     if (typeof body.body !== 'string') throw new HTTPException(400, { message: '"body" is required and must be a string.' });
     const problem = validateGlobalMemoryBody(body.body);
     if (problem) throw new HTTPException(400, { message: problem });

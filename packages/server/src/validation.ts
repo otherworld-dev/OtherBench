@@ -3,6 +3,37 @@ import { sandboxHostProblem } from '@otherbench/core/domain/network-hosts.js';
 
 /** Small, dependency-free request-body validators shared by the route modules. Each throws a 400 `HTTPException` (Hono's built-in error type, which the app's default error handling already converts to a proper JSON response) on a bad value. */
 
+/** What a request is told when its body is there but can't be read as JSON. */
+export const BODY_NOT_JSON = 'The request body is not valid JSON.';
+/** What a request is told when its body is JSON but not an object (an array, a string, a number, null). */
+export const BODY_NOT_OBJECT = 'The request body must be a JSON object.';
+
+/**
+ * A request's JSON body as an object. No body at all (or only white space) is
+ * `{}`: the web client sends `Content-Type: application/json` with nothing
+ * after it for a POST that takes no body, and a route that does need a field
+ * then says which one is missing. A body that is there but isn't valid JSON,
+ * or isn't an object, is a 400 saying so, rather than being read as `{}` and
+ * either doing nothing or failing over a field the caller did send.
+ *
+ * Read as text whatever the `Content-Type`, as every write route always has
+ * (cross-site.ts is what keeps another site's form from posting here).
+ */
+export async function readJsonBody(c: { req: { text(): Promise<string> } }): Promise<Record<string, unknown>> {
+  const text = await c.req.text();
+  if (text.trim() === '') return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HTTPException(400, { message: BODY_NOT_JSON });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new HTTPException(400, { message: BODY_NOT_OBJECT });
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function requireNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new HTTPException(400, { message: `"${field}" is required and must be a non-empty string.` });

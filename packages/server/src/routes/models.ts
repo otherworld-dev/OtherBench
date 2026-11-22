@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ModelInfo } from '@otherbench/core/types/config.js';
 import type { Container } from '../container.js';
-import { optionalBoolean, optionalNumber, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNumber, requireNonEmptyString, readJsonBody } from '../validation.js';
 
 interface ModelBody {
   connectionId?: unknown;
@@ -35,7 +35,7 @@ export function modelsRoutes(container: Container): Hono {
   });
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ModelBody;
+    const body = (await readJsonBody(c)) as ModelBody;
     const created = container.store.models.create({
       id: randomUUID(),
       connectionId: requireNonEmptyString(body.connectionId, 'connectionId'),
@@ -60,7 +60,7 @@ export function modelsRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getModelOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as ModelBody;
+    const body = (await readJsonBody(c)) as ModelBody;
 
     const patch: Partial<Omit<ModelInfo, 'id'>> = {};
     if (body.displayName !== undefined) patch.displayName = requireNonEmptyString(body.displayName, 'displayName');

@@ -6,14 +6,7 @@ import type { Chat, Grant, McpServer } from '@otherbench/core/ports/store.js';
 import { mcpServerUrlProblem } from '@otherbench/tools/mcp/url.js';
 import type { Container } from '../container.js';
 import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
-import {
-  optionalBoolean,
-  optionalNonEmptySecretRecord,
-  optionalNullableString,
-  optionalSecretPatchRecord,
-  optionalStringArray,
-  requireNonEmptyString,
-} from '../validation.js';
+import { optionalBoolean, optionalNonEmptySecretRecord, optionalNullableString, optionalSecretPatchRecord, optionalStringArray, requireNonEmptyString, readJsonBody } from '../validation.js';
 
 // ---------------------------------------------------------------------------
 // MCP servers -- CRUD + live health + per-server refresh.
@@ -406,7 +399,7 @@ export function toolsRoutes(container: Container): Hono {
   });
 
   app.post('/mcp-servers/import/claude-desktop', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { names?: unknown; profileIds?: unknown };
+    const body = (await readJsonBody(c)) as { names?: unknown; profileIds?: unknown };
     if (!Array.isArray(body.names) || !body.names.every((n) => typeof n === 'string')) {
       throw new HTTPException(400, { message: '"names" must be a list of server names.' });
     }
@@ -464,7 +457,7 @@ export function toolsRoutes(container: Container): Hono {
   app.get('/mcp-servers/:id', (c) => c.json(getMcpServerOrThrow(container, c.req.param('id'))));
 
   app.post('/mcp-servers', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as McpServerBody;
+    const body = (await readJsonBody(c)) as McpServerBody;
     const name = requireNonEmptyString(body.name, 'name');
     const transport = parseTransport(body.transport);
     const env = optionalNonEmptySecretRecord(body.env, 'env');
@@ -494,7 +487,7 @@ export function toolsRoutes(container: Container): Hono {
   app.patch('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
     getMcpServerOrThrow(container, id); // a plain 404 without waiting for the lock
-    const body = (await c.req.json().catch(() => ({}))) as McpServerBody;
+    const body = (await readJsonBody(c)) as McpServerBody;
 
     // Everything from reading the row to reconnecting runs under the server's
     // lock, and the row is read inside it: what a PATCH changed is judged
@@ -631,7 +624,7 @@ export function toolsRoutes(container: Container): Hono {
 
   app.post('/approvals/:id/resolve', async (c) => {
     const id = c.req.param('id');
-    const body = (await c.req.json().catch(() => ({}))) as ApprovalBody;
+    const body = (await readJsonBody(c)) as ApprovalBody;
     const choice = parseApprovalChoice(body);
     const resolved = container.toolProvider.resolveApproval(id, choice);
     if (!resolved) {
@@ -644,7 +637,7 @@ export function toolsRoutes(container: Container): Hono {
 
   app.post('/asks/:id/answer', async (c) => {
     const id = c.req.param('id');
-    const reply = parseAskReply(await c.req.json().catch(() => ({})));
+    const reply = parseAskReply(await readJsonBody(c));
     const result = container.toolProvider.answerAsk(id, reply);
     if (result === 'unknown') throw new HTTPException(404, { message: `Question or plan "${id}" is unknown or was already answered.` });
     if (typeof result === 'object') throw new HTTPException(400, { message: result.invalid });

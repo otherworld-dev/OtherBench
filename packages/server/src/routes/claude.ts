@@ -5,6 +5,7 @@ import { AccountInputError, type ClaudeAccountService } from '../claude-accounts
 import type { ClaudeLoginRunner, LoginStatus } from '../claude-accounts/login.js';
 import type { Container } from '../container.js';
 import { PlanUsageCache, readPlanUsage } from '../plan-usage.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * The Claude account logins on this machine and their plan usage. Local to
@@ -68,10 +69,7 @@ export function claudeRoutes(container: Container, cache = new PlanUsageCache(()
       throw err;
     }
   };
-  const bodyOf = async (c: { req: { json(): Promise<unknown> } }): Promise<Record<string, unknown>> => {
-    const body = await c.req.json().catch(() => ({}));
-    return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
-  };
+  const bodyOf = (c: { req: { text(): Promise<string> } }): Promise<Record<string, unknown>> => readJsonBody(c);
   const text = (value: unknown, field: string): string => {
     if (typeof value !== 'string') throw new HTTPException(400, { message: `"${field}" must be a string.` });
     return value;

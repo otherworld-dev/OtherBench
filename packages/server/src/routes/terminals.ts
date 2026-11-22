@@ -6,6 +6,7 @@ import { CodeRouteError } from '../code/route-errors.js';
 import { STREAM_KEEPALIVE_MS, sseStream } from '../stream/sse.js';
 import { TerminalError, type TerminalManager } from '../terminal/manager.js';
 import { appRootOrThrow, getAppOrThrow } from './apps.js';
+import { readJsonBody } from '../validation.js';
 
 /** The most one input POST may carry (a big paste goes in pieces). */
 export const TERMINAL_INPUT_MAX = 64 * 1024;
@@ -54,8 +55,8 @@ function requireSize(value: unknown, field: string): number {
   return value;
 }
 
-async function bodyOf<T>(c: { req: { json(): Promise<unknown> } }): Promise<T> {
-  return (await c.req.json().catch(() => ({}))) as T;
+async function bodyOf<T>(c: { req: { text(): Promise<string> } }): Promise<T> {
+  return (await readJsonBody(c)) as T;
 }
 
 export function terminalsRoutes(container: Container): Hono {

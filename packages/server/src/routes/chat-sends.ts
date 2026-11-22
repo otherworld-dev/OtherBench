@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ChatSendService } from '../chat-sends/service.js';
 import type { Container } from '../container.js';
+import { readJsonBody } from '../validation.js';
 
 function serviceOf(container: Container): ChatSendService {
   if (!container.chatSends) throw new HTTPException(503, { message: 'Messaging between chats is not available.' });
@@ -51,7 +52,7 @@ export function chatSendsRoutes(container: Container): Hono {
   // The card's Stop, scoped to its chat so it can be forwarded to the machine the chat runs on.
   app.post('/chats/:id/sends/stop', async (c) => {
     const chatId = chatOf(c);
-    const body = (await c.req.json().catch(() => ({}))) as { fromMessageId?: unknown };
+    const body = (await readJsonBody(c)) as { fromMessageId?: unknown };
     if (typeof body.fromMessageId !== 'string' || body.fromMessageId === '') throw new HTTPException(400, { message: '"fromMessageId" is required.' });
     const message = container.store.messages.get(body.fromMessageId);
     if (!message || message.chatId !== chatId) throw new HTTPException(404, { message: `Message "${body.fromMessageId}" not found in this chat.` });

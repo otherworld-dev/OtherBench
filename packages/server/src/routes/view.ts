@@ -8,6 +8,7 @@ import type { Container } from '../container.js';
 import { kindByName, type ViewKind } from '../view/kinds.js';
 import type { ViewLinks } from '../view/links.js';
 import { chatRoots, listForView, locateForView, openForView, viewFailure, type ViewFailure } from '../view/roots.js';
+import { readJsonBody } from '../validation.js';
 
 /** The most of a text file `GET /api/view/text` returns (spec 2026-10-07-viewer). */
 export const MAX_VIEW_TEXT_BYTES = 2 * 1024 * 1024;
@@ -89,7 +90,7 @@ export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c
     if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
       throw new HTTPException(415, { message: 'Send the request as JSON.' });
     }
-    const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown; artifactVersionId?: unknown; downloads?: unknown };
+    const body = (await readJsonBody(c)) as { chatId?: unknown; path?: unknown; artifactVersionId?: unknown; downloads?: unknown };
     const chat = chatOf(container, body.chatId);
     // Let this page save files: asked for by the viewer's button, and only an HTML page can have it.
     const wantsDownloads = body.downloads === true;

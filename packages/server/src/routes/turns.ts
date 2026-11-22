@@ -12,7 +12,7 @@ import { writeClearLine } from '../context-commands.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { startTurn } from '../turn-start.js';
-import { requireNonEmptyString } from '../validation.js';
+import { requireNonEmptyString, readJsonBody } from '../validation.js';
 import { chatView, workspaceResolver } from '../workspace-view.js';
 
 interface TurnBody {
@@ -230,7 +230,7 @@ export function turnsRoutes(container: Container): Hono {
     const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
 
-    const body = (await c.req.json().catch(() => ({}))) as TurnBody;
+    const body = (await readJsonBody(c)) as TurnBody;
     const parentId = parseParentId(body.parentId);
     const parts = parseParts(body.parts);
     const profileIds = parseProfileIds(body.profileIds);
@@ -362,7 +362,7 @@ export function turnsRoutes(container: Container): Hono {
     const refusal = workspaceRefusal(container, c, chatId) ?? notesWaiting(container, c, chatId);
     if (refusal) return refusal;
 
-    const body = (await c.req.json().catch(() => ({}))) as RegenerateBody;
+    const body = (await readJsonBody(c)) as RegenerateBody;
     const messageId = requireNonEmptyString(body.messageId, 'messageId');
     const message = container.store.messages.get(messageId);
     if (!message) throw new HTTPException(404, { message: `Message "${messageId}" not found.` });
@@ -415,7 +415,7 @@ export function turnsRoutes(container: Container): Hono {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
 
-    const body = (await c.req.json().catch(() => ({}))) as HeadBody;
+    const body = (await readJsonBody(c)) as HeadBody;
     const messageId = requireNonEmptyString(body.messageId, 'messageId');
 
     const message = container.store.messages.get(messageId);
