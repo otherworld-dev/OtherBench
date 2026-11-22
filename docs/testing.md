@@ -36,7 +36,7 @@ How the test setup behaves and why, moved out of `HANDOVER.md` on 2026-11-09. Co
 - **Tests run the other packages' source, not their `dist/`.** Each
   package's `exports` point at `dist/`, so a test in store-sqlite, server or
   web used to run whatever core was last built (a test added to core's store
-  contract once silently didn't run in the SQLite suite). `vitest.workspace.ts`
+  contract once silently didn't run in the SQLite suite). `vitest.config.ts`
   now resolves `@otherbench/<pkg>/<path>.js` to `packages/<pkg>/src/<path>.ts`
   for tests only; `tsc -b`, Node and the bundles still use `dist/`. What still
   needs `npx tsc -b` first: the server tests that start a real worker thread
@@ -44,21 +44,46 @@ How the test setup behaves and why, moved out of `HANDOVER.md` on 2026-11-09. Co
   worker from `packages/server/dist`, and `npm run typecheck:tests`, which
   reads the other packages' types from `dist/`.
 - **Start vitest from the folder's real spelling on Windows.** Started from
-  `e:\...` when the folder is `E:\...`, vitest 2 loads modules under both
-  spellings and every `vi.mock` of a relative path quietly misses: each web
-  test file with one fails ("mockReset is not a function"), 72 files at
-  d71c5a08, 88 now. This was the "first full run after a merge fails 72 web
-  files" flake. Git Bash and PowerShell hand Node `E:`, while a process
+  `e:\...` when the folder is `E:\...`, vitest loads modules under both
+  spellings. On vitest 2 every `vi.mock` of a relative path quietly missed:
+  each web test file with one failed ("mockReset is not a function"), 72
+  files at d71c5a08, 88 later. This was the "first full run after a merge
+  fails 72 web files" flake. Vitest 5 still does it, with a different face:
+  the web tests get a second `expect` that jest-dom never extended ("Invalid
+  Chai property: toHaveTextContent", 126 of ChatList's 175 tests on
+  2026-11-22), and a test file named by its path isn't found at all ("No
+  test files found"). So the guard stays. Git Bash and PowerShell hand Node `E:`, while a process
   started with a lowercase cwd (`cmd /c "cd /d e:\..."` reproduces it) keeps
   `e:`, which most likely is why a re-run from another shell passed. `npm
   test` (`scripts/vitest.mjs`) now starts vitest from the real path, and
-  `vitest.workspace.ts` refuses a direct `npx vitest` started from the wrong
+  `vitest.config.ts` refuses a direct `npx vitest` started from the wrong
   case with a message saying so.
+- **Vitest 5, since 2026-11-22** (from 2.1). What the move changed:
+  - The packages are `test.projects` of the root `vitest.config.ts`;
+    `vitest.workspace.ts` is gone, as vitest no longer reads one.
+  - Vitest takes vite as a peer now and no longer brings vite 5 with it, so
+    vite (8.2.1, the version web pins) is a root dev dependency and the
+    tests run on the same vite as the build. `esbuild` used to arrive with
+    vite 5 and `packages/server/scripts/bundle.mjs` relied on that; it is
+    now the server's own dev dependency at the same version.
+  - Vitest stopped leaving `dist/` out by default, and `tsc -b` emits every
+    test there as `.js`, so each project excludes `**/dist/**` itself.
+    Without it the run collects every test twice.
+  - Web's tsconfigs list `node` in `types`: the node types used to come in
+    through vitest 2's own.
+  - `ReturnType<typeof vi.fn>` is no longer callable as the function it
+    stands in for. Type a mock as `Mock<TheFunction>`.
+  - `node:sqlite` is a plain `import` again. Vitest 2's vite-node couldn't
+    resolve it, so it was loaded through `createRequire`; that is gone from
+    `store-sqlite/src/db.ts` and `server/src/legacy-data.ts`.
+  - A full run took about 155 s on vitest 2 and 85-95 s on vitest 5 on the
+    same machine, same 574 files and 10,762 tests. The default reporter
+    prints only failed files when its output isn't a terminal.
 - **Test time limits allow for a busy machine.** With other full runs going
   at once (parallel agents), tests that start real processes (git, MCP
   servers over stdio, the SQLite secret store's concurrent writes) or render
   big panels missed vitest's 5 s, and `findBy*` missed testing-library's 1 s,
-  with nothing wrong. `vitest.workspace.ts` gives every package 20 s per test
+  with nothing wrong. `vitest.config.ts` gives every package 20 s per test
   and hook, and `packages/web/test/setup.ts` gives `findBy*`/`waitFor` 5 s; a
   passing test is no slower. Tests that need wall-clock order use a fake
   clock instead: the Office render queue (`office/render.test.ts`, which

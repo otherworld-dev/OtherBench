@@ -4,15 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
 
 // A run started from `e:\...` when Windows spells the folder `E:\...` loads
-// modules under both spellings, and every vi.mock of a relative path ('./x.js')
-// then quietly misses: each web test file that has one fails with
-// "mockReset is not a function". `npm test` (scripts/vitest.mjs) starts vitest
-// from the folder's real spelling; this stops a direct `npx vitest` that wasn't.
+// modules under both spellings, vitest's own among them. On vitest 2 every
+// vi.mock of a relative path ('./x.js') then quietly missed ("mockReset is not
+// a function"); on vitest 5 the web tests get a second `expect` without
+// jest-dom's matchers ("Invalid Chai property: toHaveTextContent") and a file
+// named by its path isn't found at all. `npm test` (scripts/vitest.mjs) starts
+// vitest from the folder's real spelling; this stops a direct `npx vitest`
+// that wasn't.
 if (process.platform === 'win32') {
   const cwd = process.cwd();
   const real = realpathSync.native(cwd);
   if (real !== cwd && real.toLowerCase() === cwd.toLowerCase()) {
-    throw new Error(`vitest was started in ${cwd}, but Windows spells it ${real}; vi.mock misses under the wrong case. Run \`npm test\`, or cd to ${real} first.`);
+    throw new Error(`vitest was started in ${cwd}, but Windows spells it ${real}; the tests load every module twice under the wrong case. Run \`npm test\`, or cd to ${real} first.`);
   }
 }
 

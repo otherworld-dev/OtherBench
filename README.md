@@ -424,7 +424,7 @@ build with scratch data that never touches an installed OtherBench; see
 `packages/web/e2e-desktop/README.md`.
 
 Tests import the other workspace packages from their TypeScript source
-(`vitest.workspace.ts`), so a change to core is seen by the server's tests
+(`vitest.config.ts`), so a change to core is seen by the server's tests
 without a rebuild. The server's worker-thread tests (Office files, the Claude
 import reader) still run `packages/server/dist`: run `npx tsc -b` first.
 Judge a run by its exit code and the `Errors` line, not only the counts.
