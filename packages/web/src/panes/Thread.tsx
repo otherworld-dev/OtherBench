@@ -565,11 +565,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     // retried stream's deltas build on a clean slate rather than appending
     // onto stale content -- mirrors what the server does to the same row
     // (TurnRunner.retry).
+    setSwitchError(null);
+    const before = useOtherBenchStore.getState();
+    const previous = before.messages[variant.id];
+    const previousExtras = before.extras[variant.id];
     resetMessageForRetry(variant.id);
+    const cleared = useOtherBenchStore.getState().messages[variant.id];
     try {
       await api.turns.retry(variant.id);
     } catch (err) {
       console.error(`[otherbench-web] failed to retry ${variant.id}:`, err);
+      // No retry started, so nothing will fill the cleared reply: it goes back as it was, with its Retry.
+      if (previous && cleared) useOtherBenchStore.getState().restoreMessageAfterRetry(cleared, previous, previousExtras);
+      setSwitchError(`Couldn't retry that reply: ${err instanceof Error && err.message ? err.message : 'please try again'}`);
     } finally {
       setRetryingIds((s) => {
         const next = new Set(s);

@@ -440,6 +440,12 @@ export interface OtherBenchState {
    * if the message isn't known locally.
    */
   resetMessageForRetry(messageId: string): void;
+  /**
+   * Undoes `resetMessageForRetry` when the retry request itself failed: puts the reply and its extras back as
+   * they were. Only while the message is still the cleared one (`cleared`), so a retry that did start, and has
+   * streamed since, is never overwritten.
+   */
+  restoreMessageAfterRetry(cleared: CanonMessage, previous: CanonMessage, extras: MessageExtras | undefined): void;
 
   // --- UI ---------------------------------------------------------------------
   inspectorCollapsed: boolean;

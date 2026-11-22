@@ -892,6 +892,15 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
       };
     }),
 
+  restoreMessageAfterRetry: (cleared, previous, extras) =>
+    set((state) => {
+      if (state.messages[previous.id] !== cleared) return state;
+      const nextExtras = { ...state.extras };
+      if (extras) nextExtras[previous.id] = extras;
+      else delete nextExtras[previous.id];
+      return { messages: { ...state.messages, [previous.id]: previous }, extras: nextExtras };
+    }),
+
   inspectorCollapsed: loadInspectorCollapsed(),
   setInspectorCollapsed: (collapsed) => set({ inspectorCollapsed: collapsed }),
   inspectorOverlayOpen: false,

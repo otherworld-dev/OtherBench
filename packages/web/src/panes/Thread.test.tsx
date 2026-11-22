@@ -427,6 +427,34 @@ describe('Thread', () => {
     // The sibling is completely unaffected.
     expect(useOtherBenchStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
   });
+
+  it('a Retry the server refuses puts the failed reply back as it was and says why', async () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const failing = variantMessage('failing', 'root', {
+      createdAt: 1,
+      status: 'error',
+      error: { kind: 'rate_limit', message: 'boom', retryable: true },
+      parts: [{ type: 'text', text: 'partial before failing' }],
+    });
+    const other = variantMessage('other', 'root', { createdAt: 2 });
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, failing, other], null);
+    const usage = { inputTokens: 3, outputTokens: 4 };
+    useOtherBenchStore.setState({ extras: { failing: { usage, pendingApprovals: [] } } });
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockedRetry.mockRejectedValue(new Error('the server is restarting'));
+
+    const user = userEvent.setup();
+    render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+    await user.click(screen.getByTestId('variant-tab-failing'));
+    await user.click(screen.getByRole('button', { name: /retry profile failing/i }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("Couldn't retry that reply: the server is restarting"));
+    // Not left blank and "streaming" for ever: the reply, its error and its extras are back, and Retry is offered again.
+    expect(useOtherBenchStore.getState().messages['failing']).toEqual(failing);
+    expect(useOtherBenchStore.getState().extras['failing']).toEqual({ usage, pendingApprovals: [] });
+    expect(screen.getByRole('button', { name: /retry profile failing/i })).toBeEnabled();
+    failed.mockRestore();
+  });
 });
 
 describe('Thread auto-scroll', () => {
