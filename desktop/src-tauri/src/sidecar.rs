@@ -43,8 +43,12 @@ const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The same for the smoke tests' build, which runs on machines busy with other test runs: a fresh
 /// server took 18-25 s to start on a machine at 100% CPU, where the app's own 15 s failed the run.
 const TEST_ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(90);
-/// How long the server gets to exit on its own after stdin closes before it is killed.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// How long the server gets to exit on its own after stdin closes before it is killed. The server
+/// exits as soon as it has closed everything, so a normal quit takes no longer for this; the time is
+/// for the slow case: it waits up to 5 s for an add-on to stop and 2.5 s more to close the database
+/// and unmount the sandbox's folders (server/src/cli.ts, addons/loader.ts), and at 3 s it was killed
+/// in the middle of that.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 pub struct LaunchSpec {
     pub node: PathBuf,
