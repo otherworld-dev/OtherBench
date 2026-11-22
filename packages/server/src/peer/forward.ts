@@ -6,6 +6,7 @@ import { encodeHlc } from '@otherbench/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@otherbench/core/domain/sync.js';
 import { appendDelta, applySubagentEvent, isSubagentEvent } from '@otherbench/core/domain/parts.js';
 import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
+import { isHistorySummaryPart } from '@otherbench/core/domain/history-summary.js';
 import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
@@ -303,6 +304,9 @@ export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
     case 'user-note':
       // A note Claude read there mid-reply, kept in place.
       return isUserNotePart(e['part']) ? [...parts, e['part']] : parts;
+    case 'history-summary':
+      // The summary the machine running the reply made for its request, kept like the part it stores.
+      return isHistorySummaryPart(e['part']) ? [...parts, e['part']] : parts;
     default:
       return parts;
   }

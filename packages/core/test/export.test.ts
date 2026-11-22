@@ -137,6 +137,16 @@ describe('chatToMarkdown', () => {
     expect(md).toContain('A\n\n**You:** stop\n\nB');
   });
 
+  it('leaves out the summary a model was sent in place of older messages: the export has the messages themselves', () => {
+    const ms = [
+      msg({ id: 'u1', createdAt: 1 }),
+      msg({ id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'), parts: [{ type: 'history-summary', uptoMessageId: 'u0', covered: 'h', text: 'SUMMARY TEXT' }, { type: 'text', text: 'B' }] }),
+    ];
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).toContain('B');
+    expect(md).not.toContain('SUMMARY TEXT');
+  });
+
   it('fences tool output with more backticks than it contains, so it cannot break out', () => {
     const ms = [
       msg({ id: 'u1', createdAt: 1 }),

@@ -309,6 +309,7 @@ async function userContentFromParts(messageId: string, parts: Part[], caps: Mode
       case 'notice':
       case 'context':
       case 'context-summary':
+      case 'history-summary':
       case 'handover-request':
       case 'handover':
       case 'subagent':
@@ -365,6 +366,8 @@ async function assistantContentFromParts(
         break;
       case 'context':
       case 'context-summary':
+      // A summary of older messages reaches a model only through the system prompt TurnRunner builds, never as something this reply said.
+      case 'history-summary':
       case 'notice':
       // A handover link says where the chat went, not anything the model said.
       case 'handover-request':

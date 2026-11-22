@@ -20,6 +20,14 @@ describe('withEvent (a kept copy of a reply running on another machine)', () => 
     expect(parts).toEqual([{ type: 'text', text: 'Looking' }, note, { type: 'text', text: 'Tests pass' }]);
   });
 
+  it('withEvent keeps a history-summary part as the machine running the reply stores it, and ignores a malformed one', () => {
+    const part = { type: 'history-summary', uptoMessageId: 'a4', covered: 'hash', text: 'What came before.' };
+    const parts = withEvent([], { messageId: 'm1', type: 'history-summary', part });
+    expect(parts).toEqual([part]);
+    expect(withEvent(parts, { messageId: 'm1', type: 'history-summary', part: { type: 'history-summary', text: 'no cut' } })).toBe(parts);
+    expect(withEvent(parts, { messageId: 'm1', type: 'history-summary' })).toBe(parts);
+  });
+
   it('ignores a malformed user-note event', () => {
     const parts: Part[] = [{ type: 'text', text: 'x' }];
     for (const bad of [

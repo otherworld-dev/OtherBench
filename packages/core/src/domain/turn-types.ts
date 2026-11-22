@@ -46,6 +46,8 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'subagent'; callId: string; event: SubagentEvent }
   /** A note the user sent mid-reply, folded into the reply at the point Claude read it (replaces the engine's `note-picked`). */
   | { type: 'user-note'; part: UserNotePart }
+  /** The request's oldest messages were swapped for a summary (docs/features/history-summary.md); the part is the one stored on the reply. */
+  | { type: 'history-summary'; part: Extract<Part, { type: 'history-summary' }> }
 );
 
 export interface TurnInput {

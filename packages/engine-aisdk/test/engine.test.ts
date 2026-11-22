@@ -3,7 +3,7 @@ import { APICallError, type LanguageModelV3StreamPart, type LanguageModelV3Strea
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import type { EngineEvent, EngineRequest } from '@otherbench/core/ports/chat-engine.js';
 import type { ToolContext, ToolSpec } from '@otherbench/core/ports/tool-provider.js';
-import type { CanonMessage } from '@otherbench/core/types/messages.js';
+import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import type { Connection, ResolvedProfile } from '@otherbench/core/types/config.js';
 import { createPlanGate } from '@otherbench/core/domain/thread-tools.js';
 import { FakeChatEngine } from '@otherbench/core/testing/fakes.js';
@@ -167,6 +167,49 @@ describe('AiSdkChatEngine.stream', () => {
     });
     const events = await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest()));
     expect(events.at(-1)).toMatchObject({ type: 'finish', usage: { tokensIn: 1000, tokensCached: 600, tokensCacheWrite: 300 } });
+  });
+
+  it("reports what the reply's last model call read as contextTokens, not the sum over the tool loop", async () => {
+    const spec: ToolSpec = { name: 'probe', description: 'probe', parameters: { type: 'object', properties: {} }, risk: 'read', source: 'mcp', execute: async () => 'ok' };
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'probe', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: { inputTokens: { total: 1000 }, outputTokens: { total: 10 } } },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1200 }, outputTokens: { total: 20 } } },
+        ]
+      ),
+    });
+    const events = await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec] })));
+    expect(events.at(-1)).toMatchObject({ type: 'finish', usage: { tokensIn: 2200, tokensOut: 30, contextTokens: 1200 } });
+  });
+
+  it('drops a history-summary part from the replayed conversation', async () => {
+    let prompt: unknown;
+    const model = new MockLanguageModelV3({
+      doStream: async (options) => {
+        prompt = options.prompt;
+        return { stream: streamOf([{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]) };
+      },
+    });
+    const message = (id: string, role: 'user' | 'assistant', parts: Part[]): CanonMessage => ({ id, chatId: 'chat-1', parentId: null, role, parts, status: 'complete', error: null, producedBy: null, createdAt: 0 });
+    await drain(
+      new AiSdkChatEngine(resolverFor(model)).stream(
+        makeRequest({
+          messages: [
+            message('u1', 'user', [{ type: 'text', text: 'first' }]),
+            message('a1', 'assistant', [{ type: 'history-summary', uptoMessageId: 'u0', covered: 'h', text: 'SECRET SUMMARY' }, { type: 'text', text: 'answer' }]),
+            message('u2', 'user', [{ type: 'text', text: 'second' }]),
+          ],
+        })
+      )
+    );
+    expect(JSON.stringify(prompt)).toContain('answer');
+    expect(JSON.stringify(prompt)).not.toContain('SECRET SUMMARY');
   });
 
   describe('prompt caching', () => {
