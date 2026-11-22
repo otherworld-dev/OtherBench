@@ -9,6 +9,7 @@ import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js
 import { LOCATION_NAME_MAX } from '../routes/locations.js';
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
+import { compareVersions, peerVersionsOf, PeerVersionError, type VersionMismatch } from './version.js';
 
 /** Rows per `/peer/changes` batch: well under the client's 64 MiB answer cap for ordinary chats. */
 export const SYNC_BATCH_SIZE = 500;
@@ -28,15 +29,7 @@ function usableBlobSize(size: unknown): size is number {
   return typeof size === 'number' && Number.isInteger(size) && size >= 0 && size <= MAX_BLOB_BYTES;
 }
 
-/** Sync was refused because the two machines run different versions; kept until a pull succeeds. */
-export interface VersionMismatch {
-  peerAppVersion: string | null;
-  peerSchemaVersion: number;
-  peerProtocolVersion: number;
-  /** The peer is ahead, so updating this machine is what fixes it (the desktop app then checks for an update). */
-  thisMachineOlder: boolean;
-  at: number;
-}
+export type { VersionMismatch };
 
 export interface SyncStatus {
   lastSyncedAt: number | null;
@@ -100,6 +93,8 @@ export class Syncer {
   private readonly now: () => number;
   private timers: ReturnType<typeof setInterval>[] = [];
   private announcedSeq = 0;
+  /** The failure last logged for each peer by `pullSoon`, so one that repeats every minute is logged once. */
+  private readonly loggedFailures = new Map<string, string>();
 
   constructor(private readonly options: SyncerOptions) {
     this.now = options.now ?? Date.now;
@@ -153,9 +148,31 @@ export class Syncer {
     this.options.onLocalChanges?.();
   }
 
-  /** `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines). */
+  /**
+   * `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines too). The same failure again
+   * (a version mismatch on every fallback pull, say) isn't logged again until a pull has worked or it fails another way.
+   */
   pullSoon(nodeId: string): void {
-    this.pullFrom(nodeId).catch(() => {});
+    this.pullFrom(nodeId).then(
+      () => {
+        this.loggedFailures.delete(nodeId);
+      },
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (this.loggedFailures.get(nodeId) === message) return;
+        this.loggedFailures.set(nodeId, message);
+        // The pull may have failed because the server is closing: then the store can't be asked for the name either.
+        let name = nodeId;
+        try {
+          name = this.options.peers.peer(nodeId)?.name ?? nodeId;
+        } catch {
+          // The id will do.
+        }
+        // A machine that can't be reached or refuses is said in a line; anything else is a fault here, with its stack.
+        if (err instanceof PeerError) console.error(`[otherbench-server] sync with ${name} failed: ${message}`);
+        else console.error(`[otherbench-server] sync with ${name} failed:`, err);
+      }
+    );
   }
 
   /** Pulls everything `nodeId` has that this machine doesn't. Resolves with the number of rows written. */
@@ -201,24 +218,13 @@ export class Syncer {
     try {
       const info = (await peers.call(nodeId, { method: 'GET', path: '/peer/info' })).body as PeerInfo;
       this.followRename(nodeId, info.name);
-      const self = peers.info();
-      if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
-        const peerOlder = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION;
-        const older = peerOlder ? info.name : self.name;
-        const versions =
-          info.appVersion && self.appVersion
-            ? `${info.appVersion}; this machine ${self.appVersion}`
-            : `protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}`;
-        const message = `${info.name} runs a different version of OtherBench (${versions}). Update ${older} to sync.`;
-        mismatch = {
-          peerAppVersion: typeof info.appVersion === 'string' ? info.appVersion : null,
-          peerSchemaVersion: info.schemaVersion,
-          peerProtocolVersion: info.protocolVersion,
-          thisMachineOlder: !peerOlder,
-          at: this.now(),
-        };
-        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message });
-        throw new PeerError(message, 409);
+      // What it runs, for every other call to it as well (PeerService.checkVersion).
+      peers.noteVersions(nodeId, info);
+      const verdict = compareVersions(peers.info(), typeof info.name === 'string' ? info.name : (peers.peer(nodeId)?.name ?? 'The other machine'), peerVersionsOf(info), this.now());
+      if (verdict) {
+        mismatch = verdict.mismatch;
+        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message: verdict.message });
+        throw new PeerVersionError(nodeId, verdict);
       }
       let written = 0;
       let waiting: string | null = null;

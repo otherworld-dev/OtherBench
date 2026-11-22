@@ -23,21 +23,14 @@ import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
 import { PairingSessions } from './pairing.js';
 import { peerScheduleControlOf, peerSchedulesOf } from './schedules.js';
+import { PeerError } from './peer-error.js';
 import type { Syncer } from './syncer.js';
+import { compareVersions, peerVersionsOf, PeerVersionError, VERSION_MISMATCH_KIND, versionExempt, versionHeaders, type PeerVersions, type VersionVerdict } from './version.js';
 
 /** How long the machine entering a code waits for the other's answer: long enough to derive a key, too short to crack one. */
 const PAIRING_RESPONSE_TIMEOUT_MS = 15_000;
 
-/** A pairing attempt or a call to a peer that failed in a way the user should read. */
-export class PeerError extends Error {
-  constructor(
-    message: string,
-    readonly status: 400 | 403 | 404 | 409 | 410 | 502 | 503 = 400
-  ) {
-    super(message);
-    this.name = 'PeerError';
-  }
-}
+export { PeerError };
 
 /** What `POST /peer/pair` carries: the initiator's side of the exchange (v2 spec §3, step 3). */
 export interface PairRequest {
@@ -224,19 +217,25 @@ export class PeerService {
   private schedulesSent: string | null = null;
   /** Each paired machine's schedules, as it last said; absent until it says (an older build never does). */
   private readonly schedulesByPeer = new Map<string, PeerScheduleSummary[]>();
+  /** The versions each paired machine last said it runs (its stream's hello, a sync's `/peer/info`); null: it said none. */
+  private readonly versionsByPeer = new Map<string, PeerVersions | null>();
   /** Whether each paired machine last said it lets this one manage its schedules, and the zone it makes them in. */
   private readonly scheduleControlByPeer = new Map<string, { manage: boolean; timezone: string | null }>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
     this.platform = options.platform ?? process.platform;
-    this.client = new PeerClient(() => options.identity.get());
+    this.client = new PeerClient(() => options.identity.get(), () => versionHeaders(this.info()));
     this.pairing = new PairingSessions(this.now);
     this.listener = new PeerListener(options.createApp(this), options.identity, options.port, options.hosts);
     this.monitor = new PeerMonitor(this, {
       ...options.monitor,
       ...(options.events ? { events: options.events } : {}),
       now: this.now,
+      onHello: (nodeId, data) => {
+        options.monitor?.onHello?.(nodeId, data);
+        this.noteVersions(nodeId, data);
+      },
       // A peer that (re)connects, or says it has changes, is pulled from.
       onConnected: (nodeId) => {
         options.monitor?.onConnected?.(nodeId);
@@ -438,6 +437,40 @@ export class PeerService {
   /** The `gh` login `nodeId` last said it has; null if none, unknown, or while it isn't reachable. */
   githubLogin(nodeId: string): string | null {
     return this.status(nodeId).status === 'reachable' ? (this.loginByPeer.get(nodeId) ?? null) : null;
+  }
+
+  // --- the same version on both machines (peer/version.ts) -------------------
+
+  /** What a paired machine said of itself: kept for `checkVersion`, and told to the UI when it changes what it shows. */
+  noteVersions(nodeId: string, said: unknown): void {
+    const before = this.knownMismatch(nodeId)?.message ?? null;
+    this.versionsByPeer.set(nodeId, peerVersionsOf(said));
+    if ((this.knownMismatch(nodeId)?.message ?? null) !== before) this.options.events?.emit({ type: 'peers-changed' });
+  }
+
+  /** The mismatch with `nodeId` as far as it has said its versions; null when they match or it hasn't said. */
+  knownMismatch(nodeId: string): VersionVerdict | null {
+    const peer = this.store.peers.get(nodeId);
+    if (!peer || !this.versionsByPeer.has(nodeId)) return null;
+    return compareVersions(this.info(), peer.name, this.versionsByPeer.get(nodeId) ?? null, this.now());
+  }
+
+  /** `caller`'s mismatch with this machine, from the versions it sent with a call; null when they match. */
+  callerMismatch(caller: Peer, sent: PeerVersions | null): VersionVerdict | null {
+    return compareVersions(this.info(), caller.name, sent, this.now());
+  }
+
+  /**
+   * Throws `PeerVersionError` unless `nodeId` runs this machine's version. From what it last said while its events
+   * stream is up (a machine that updates restarts, so its new version is heard as it reconnects); otherwise, and
+   * before it has said anything, it is asked once (`GET /peer/info`), which also tells an unreachable machine apart.
+   */
+  async checkVersion(nodeId: string): Promise<void> {
+    if (this.status(nodeId).status !== 'reachable' || !this.versionsByPeer.has(nodeId)) {
+      this.noteVersions(nodeId, (await this.call(nodeId, { method: 'GET', path: '/peer/info' }, { timeoutMs: PAIRING_RESPONSE_TIMEOUT_MS, maxBytes: 64 * 1024 })).body);
+    }
+    const verdict = this.knownMismatch(nodeId);
+    if (verdict) throw new PeerVersionError(nodeId, verdict);
   }
 
   /** The syncer, for the peer listener's sync routes. */
@@ -692,6 +725,7 @@ export class PeerService {
     this.computerByPeer.delete(peer.nodeId);
     this.schedulesByPeer.delete(peer.nodeId);
     this.scheduleControlByPeer.delete(peer.nodeId);
+    this.versionsByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------
@@ -746,21 +780,46 @@ export class PeerService {
   /**
    * A call to a paired machine: its pinned certificate, our token, its last
    * working address first. A success moves that address to the front and
-   * records when the machine was last seen.
+   * records when the machine was last seen. Refused here (`PeerVersionError`)
+   * when that machine runs another version, unless the call is one that
+   * always passes (`versionExempt`); and when that machine refuses it for
+   * the same reason, its answer is turned into the same error.
    */
   async call(nodeId: string, req: Omit<PeerRequest, 'token'>, limits: ResponseLimits = {}): Promise<PeerResponse> {
     const peer = this.store.peers.get(nodeId);
     if (!peer) throw new PeerError(`No paired machine "${nodeId}".`, 404);
+    const exempt = versionExempt(req.method, req.path);
+    if (!exempt) await this.checkVersion(nodeId);
     const token = await this.options.secrets.get(peer.heldTokenRef);
     if (!token) throw new PeerError(`The token for ${peer.name} is missing; pair again.`, 409);
     try {
       const res = await this.client.request({ addresses: peer.addresses, fingerprint: peer.fingerprint }, { ...req, token }, limits);
       this.noteReached(peer, res.address);
+      if (!exempt) this.refusedForVersion(nodeId, res.status, res.body);
       return res;
     } catch (err) {
       if (err instanceof PeerUnreachableError) throw new PeerError(`${peer.name} isn't reachable. ${err.message}`, 503);
       throw err;
     }
+  }
+
+  /**
+   * A paired machine's listener refused a call because the versions differ (peer/app.ts): what it says it runs is
+   * kept, and the refusal is thrown as this machine's own would be. Its listener and this check can disagree only
+   * when one of the two has not yet heard the other's new version.
+   */
+  refusedForVersion(nodeId: string, status: number, body: unknown): void {
+    if (status !== 409 || typeof body !== 'object' || body === null || (body as { kind?: unknown }).kind !== VERSION_MISMATCH_KIND) return;
+    const peer = this.store.peers.get(nodeId);
+    const theirs = peerVersionsOf((body as { info?: unknown }).info);
+    if (theirs) this.noteVersions(nodeId, theirs);
+    const said = (body as { error?: unknown }).error;
+    const verdict = this.knownMismatch(nodeId) ?? {
+      // It says we differ and what it says it runs looks the same as ours: its own words, then.
+      message: typeof said === 'string' ? said : `${peer?.name ?? 'The other machine'} runs a different version of OtherBench.`,
+      mismatch: { peerAppVersion: theirs?.appVersion ?? null, peerSchemaVersion: theirs?.schemaVersion ?? 0, peerProtocolVersion: theirs?.protocolVersion ?? 0, thisMachineOlder: false, at: this.now() },
+    };
+    throw new PeerVersionError(nodeId, verdict);
   }
 
   /** Records a working address (moved to the front) and the time. */

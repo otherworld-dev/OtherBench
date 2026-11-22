@@ -238,7 +238,7 @@ describe('the signed-in devices list', () => {
     const mine = await signIn();
     const id = (await devices(mine))[0]!.id;
     const peer = createPeerApp(
-      { authenticate: () => ({ nodeId: 'node-pc', name: 'Gigabyte' }), noteCalledFrom: () => {} } as unknown as PeerService,
+      { authenticate: () => ({ nodeId: 'node-pc', name: 'Gigabyte' }), noteCalledFrom: () => {}, callerMismatch: () => null } as unknown as PeerService,
       { forwardedApi: () => forwardedApi(makeContainer()) }
     ) as unknown as Hono;
     for (const path of ['/api/auth/sessions', '/peer/auth/sessions', '/auth/sessions']) expect((await peer.request(path)).status, path).toBe(404);

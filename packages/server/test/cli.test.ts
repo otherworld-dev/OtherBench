@@ -9,6 +9,7 @@ import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
+import { ADDON_DISPOSE_MS, type LoadedAddon } from '../src/addons/loader.js';
 import { DatabaseLockedError } from '../src/db-lock.js';
 import { NewerDatabaseError } from '@otherbench/store-sqlite/migrations/index.js';
 import { LegacyDataError } from '../src/legacy-data.js';
@@ -256,6 +257,32 @@ describe('runServe desktop mode', () => {
       await tick();
       expect(io.exit).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(SHUTDOWN_WAIT_MS);
+      expect(io.exit).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits long enough for each add-on's dispose as well, and still exits when one never finishes", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      const container = deps.container;
+      const addon = (id: string, dispose: boolean): LoadedAddon => ({
+        id, name: id, version: null, status: 'loaded', error: null, folder: '', pagePath: null, routes: null,
+        module: { activate: () => {}, ...(dispose ? { dispose: () => {} } : {}) },
+      });
+      // Two with a dispose to wait for; one without, and one that never loaded, add nothing.
+      container.addons = [addon('a', true), addon('b', true), addon('c', false), { ...addon('d', true), status: 'failed' }];
+      container.settled = () => new Promise<void>(() => undefined);
+      await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { OTHERBENCH_TOKEN: 'tok' });
+
+      io.stdin.end();
+      await tick();
+      await vi.advanceTimersByTimeAsync(SHUTDOWN_WAIT_MS + 2 * ADDON_DISPOSE_MS - 1);
+      expect(io.exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(io.exit).toHaveBeenCalledWith(0);
     } finally {
       vi.useRealTimers();

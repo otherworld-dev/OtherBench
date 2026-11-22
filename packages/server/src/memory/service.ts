@@ -17,7 +17,7 @@ import type { Chat, Project, ProjectMemory, Store } from '@otherbench/core/ports
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
-import { collectMessageTree } from '../routes/chats.js';
+import { collectMessageTree } from '../chat-read.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
 import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askForNote, errorMessage, pickMemoryProfile } from './shared.js';
 

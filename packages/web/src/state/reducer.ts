@@ -207,8 +207,9 @@ function storedOnly(part: Part): boolean {
  * event list, never on when or how many times it's applied.
  *
  * The one thing kept from the message is what the event list can never
- * hold (`storedOnly`: a handover link, say): every hello covers every reply
- * of the chat, so dropping those stripped the links on each reconnect. Each
+ * hold (`storedOnly`: a handover link, say): a hello covers a reply that
+ * ended in the last minute as well as those being written, so dropping
+ * those stripped the links on a reconnect. Each
  * goes back after as many replayed parts as it had streamed parts before
  * it, which is where it was; they are never replayed themselves, so this
  * stays idempotent.

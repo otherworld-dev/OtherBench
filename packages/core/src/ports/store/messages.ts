@@ -73,6 +73,11 @@ export interface MessageRepo {
    * this without reading every message's parts.
    */
   outline(chatId: string): MessageOutline[];
+  /**
+   * Every message in `chatId`, whole, oldest first (by createdAt, then id): the chat's tree in one read, for a
+   * caller that needs all of it (`children` per message is one query each).
+   */
+  chatTree(chatId: string): CanonMessage[];
   /** Records that the user kept this compare variant at `at` (see `CanonMessage.keptAt`). Throws when the id does not exist. */
   markKept(id: string, at: number): void;
 }

@@ -29,6 +29,18 @@ export function remoteUnreachable(machines: PeersOverview | null, chat: Pick<Cha
   return !peer || peer.status === 'unreachable';
 }
 
+/**
+ * Why a chat that runs on another machine can't be used from here because the two run different versions of
+ * OtherBench (the server refuses every call to it but Stop): the server's own words, which say which machine to
+ * update. Null when the versions match, or the chat runs here.
+ */
+export function remoteVersionMismatch(machines: PeersOverview | null, chat: Pick<Chat, 'runsOn'>): string | null {
+  if (!machines || chat.runsOn === machines.self.id) return null;
+  const peer = machines.peers.find((p) => p.nodeId === chat.runsOn);
+  if (!peer?.versionMismatch) return null;
+  return peer.syncError ?? `${peer.name} runs a different version of OtherBench. Update ${peer.versionMismatch.thisMachineOlder ? machines.self.name : peer.name} to use this chat.`;
+}
+
 const STREAM_STATUS_LABEL: Record<StreamConnectionStatus, string> = {
   idle: '',
   connecting: 'Connecting…',
@@ -44,6 +56,8 @@ const STREAM_STATUS_LABEL: Record<StreamConnectionStatus, string> = {
  */
 export function streamStatusText(status: StreamConnectionStatus, chat: Pick<Chat, 'runsOn'>, machines: PeersOverview | null): string {
   if (remoteUnreachable(machines, chat)) return `${machineName(machines, chat.runsOn)} isn't reachable`;
+  // Its stream is refused until the versions match: said, rather than reconnecting for ever.
+  if (remoteVersionMismatch(machines, chat)) return `${machineName(machines, chat.runsOn)} runs a different version`;
   return STREAM_STATUS_LABEL[status];
 }
 

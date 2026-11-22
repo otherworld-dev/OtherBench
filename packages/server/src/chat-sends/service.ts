@@ -10,7 +10,7 @@ import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus, Part } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
-import { chatTip } from '../routes/chats.js';
+import { chatTip } from '../chat-read.js';
 import { lineAfter } from '../turn-start.js';
 import { CANCELLED_BY_USER, notHereReason, sendsOffReason, unreachableReason, type ChatSendRemote, type Handover, type HandoverAnswer, type Outcome } from './remote-port.js';
 

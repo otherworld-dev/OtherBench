@@ -17,14 +17,16 @@ export function busyReasons(counts: { runningTurns: number; scheduledRuns: numbe
 /**
  * Routes only the desktop shell calls. `GET /busy` is asked by the shell's
  * updater before it installs (desktop/src-tauri/src/update.rs): replies being
- * written count, including Claude Code turns and turns run here for a paired
- * machine, which are all turns on this machine's runner.
+ * written here count, including Claude Code turns and turns run here for a
+ * paired machine, which are all turns on this machine's runner. A reply this
+ * machine had a paired machine write doesn't: it carries on there whatever
+ * happens here, and sync brings it once this server is back.
  */
 export function desktopRoutes(container: Container): Hono {
   const app = new Hono();
   app.get('/busy', (c) => {
     const reasons = busyReasons({
-      runningTurns: container.events?.runningTurns().length ?? 0,
+      runningTurns: (container.events?.runningTurns() ?? []).filter((t) => container.remoteRuns?.messageNode(t.messageId) === undefined).length,
       scheduledRuns: container.schedules?.activeRunCount() ?? 0,
       // A Claude Code agent's helpers still running between replies.
       backgroundTasks: (container.events?.backgroundChats() ?? []).reduce((n, c) => n + c.count, 0),

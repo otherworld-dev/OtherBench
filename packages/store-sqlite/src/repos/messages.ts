@@ -397,6 +397,11 @@ export class SqliteMessageRepo implements MessageRepo {
     return rows.map((r) => ({ id: r.id, parentId: r.parent_id, role: r.role }));
   }
 
+  chatTree(chatId: string): CanonMessage[] {
+    const rows = this.db.prepare(`SELECT ${COLUMNS} FROM message WHERE chat_id = ? ORDER BY created_at ASC, id ASC`).all(chatId) as Record<string, unknown>[];
+    return rows.map(fromRow);
+  }
+
   latestBySession(chatId: string, sessionId: string): CanonMessage | null {
     const row = this.db
       .prepare(
