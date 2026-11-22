@@ -178,7 +178,21 @@ describe('SchedulesView', () => {
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' }, autoMode: false, timeLimitMinutes: 30, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
     );
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New schedule' })).not.toBeInTheDocument());
+  });
+
+  it('is a dialog itself, which Escape closes when no editor or question is open', async () => {
+    list.mockResolvedValue([]);
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={onClose} />);
+    expect(screen.getByRole('dialog', { name: 'Scheduled' })).toBe(screen.getByTestId('schedules-view'));
+    // The editor takes its own Escape: the view stays.
+    await user.click(await screen.findByRole('button', { name: 'New schedule' }));
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('takes a cron rule, showing a typo in place of the next three runs as it is typed, and saves it', async () => {
@@ -307,7 +321,7 @@ describe('SchedulesView', () => {
     await user.type(within(dialog).getByLabelText('Prompt'), 'hello');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^(New|Edit) schedule/ })).not.toBeInTheDocument());
     expect(uploadAttachment).toHaveBeenCalledTimes(1);
     expect(uploadAttachment).toHaveBeenCalledWith('s9', expect.objectContaining({ name: 'chart.png' }));
     expect(create.mock.invocationCallOrder[0]!).toBeLessThan(uploadAttachment.mock.invocationCallOrder[0]!);
@@ -331,7 +345,7 @@ describe('SchedulesView', () => {
     await user.upload(within(dialog).getByLabelText('Attach files'), new File(['new'], 'new.txt', { type: 'text/plain' }));
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^(New|Edit) schedule/ })).not.toBeInTheDocument());
     expect(patch).toHaveBeenCalledWith('s1', {});
     expect(deleteAttachment).toHaveBeenCalledWith('s1', 'a1');
     expect(uploadAttachment).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'new.txt' }));
@@ -356,7 +370,7 @@ describe('SchedulesView', () => {
     expect(screen.getByRole('dialog', { name: 'Edit schedule' })).toBeInTheDocument();
     expect(within(dialog).getByTestId('schedule-files')).toHaveTextContent('big.txt');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^(New|Edit) schedule/ })).not.toBeInTheDocument());
     expect(create).toHaveBeenCalledTimes(1);
     expect(patch).toHaveBeenCalledWith('s9', {});
     expect(uploadAttachment).toHaveBeenCalledTimes(2);
@@ -402,7 +416,7 @@ describe('SchedulesView', () => {
       expect(dialog).toContainElement(document.activeElement as HTMLElement);
 
       await user.keyboard('{Escape}');
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'New schedule' })).not.toBeInTheDocument();
       expect(screen.getByTestId('schedules-view')).toBeInTheDocument();
     });
 
@@ -570,13 +584,13 @@ describe('SchedulesView', () => {
       render(<SchedulesView onClose={vi.fn()} />);
       const row = await screen.findByTestId('peer-schedule-row-ps1');
       fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
-      const dialog = await screen.findByRole('dialog');
+      const dialog = await screen.findByRole('dialog', { name: /^(New|Edit) schedule/ });
       expect(dialog).toHaveTextContent('Edit schedule on PC');
       expect(within(dialog).getByLabelText('Prompt')).toHaveValue('Back up the photos');
       fireEvent.change(within(dialog).getByLabelText('Prompt'), { target: { value: 'Back up everything' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(there.patch).toHaveBeenCalledWith('node-pc', 'ps1', { prompt: 'Back up everything' }));
-      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /^(New|Edit) schedule/ })).not.toBeInTheDocument());
       expect(patch).not.toHaveBeenCalled();
     });
 
@@ -591,7 +605,7 @@ describe('SchedulesView', () => {
       peerSchedules.mockResolvedValue([machine({ manage: true, timezone: 'America/New_York' })]);
       render(<SchedulesView onClose={vi.fn()} />);
       fireEvent.click(await screen.findByRole('button', { name: 'New schedule on PC' }));
-      const dialog = await screen.findByRole('dialog');
+      const dialog = await screen.findByRole('dialog', { name: /^(New|Edit) schedule/ });
       expect(dialog).toHaveTextContent('New schedule on PC');
       expect(dialog).toHaveTextContent('America/New_York');
       const chats = within(within(dialog).getByRole('combobox', { name: 'Chat' })).getAllByRole('option').map((o) => o.textContent);

@@ -125,6 +125,11 @@ describe('ProjectView, creating', () => {
 });
 
 describe('ProjectView, closing', () => {
+  it('is a dialog named for what it does', () => {
+    render(<ProjectView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'New project' })).toBe(screen.getByTestId('project-view'));
+  });
+
   it('Esc closes a clean page at once, but asks before discarding changes; Esc in that question only closes the question', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

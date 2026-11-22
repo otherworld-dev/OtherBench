@@ -165,6 +165,14 @@ export interface OtherBenchState {
    * other machine): an open chat reloads its messages (useChatSync).
    */
   chatReloads: Record<string, number>;
+  /**
+   * Why a chat's messages didn't load, by chat: the thread says so with a Retry instead of waiting for ever.
+   * Cleared when a load succeeds or another is asked for.
+   */
+  chatLoadErrors: Record<string, string>;
+  setChatLoadError(chatId: string, error: string | null): void;
+  /** Loads the chat's messages again after a failure (useChatSync does the loading). */
+  retryChatLoad(chatId: string): void;
   /** This machine and its paired ones, with reachability (state/machines.ts); null until loaded. */
   machines: PeersOverview | null;
   setMachines(machines: PeersOverview | null): void;
@@ -432,6 +440,12 @@ export interface OtherBenchState {
    * if the message isn't known locally.
    */
   resetMessageForRetry(messageId: string): void;
+  /**
+   * Undoes `resetMessageForRetry` when the retry request itself failed: puts the reply and its extras back as
+   * they were. Only while the message is still the cleared one (`cleared`), so a retry that did start, and has
+   * streamed since, is never overwritten.
+   */
+  restoreMessageAfterRetry(cleared: CanonMessage, previous: CanonMessage, extras: MessageExtras | undefined): void;
 
   // --- UI ---------------------------------------------------------------------
   inspectorCollapsed: boolean;

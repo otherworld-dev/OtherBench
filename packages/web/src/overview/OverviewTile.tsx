@@ -2,6 +2,7 @@ import { useState, type JSX, type ReactNode } from 'react';
 import type { GithubNotification, NotificationKind, OverviewChat, OverviewDueCard, OverviewTile as Tile } from '@otherbench/core/types/overview.js';
 import { formatAge } from '../lib/relativeTime.js';
 import { openInBrowser } from '../desktop/bridge.js';
+import { toast } from '../lib/toasts.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { doneNotification, openNotification, startChatFromNotification } from './notificationActions.js';
@@ -44,7 +45,10 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
  */
 export function OverviewChatRow({ chat }: { chat: OverviewChat }): JSX.Element {
   const patch = (body: { dealtWithAt: true } | { archivedAt: number }, what: string): void => {
-    api.chats.patch(chat.chatId, body).catch((err: unknown) => console.error(`[otherbench-web] failed to ${what} chat ${chat.chatId}:`, err));
+    api.chats.patch(chat.chatId, body).catch((err: unknown) => {
+      console.error(`[otherbench-web] failed to ${what} chat ${chat.chatId}:`, err);
+      toast({ text: `Couldn't ${what} ${chat.title}.`, tone: 'error' });
+    });
   };
   return (
     <div className={ROW_WRAP}>
@@ -123,7 +127,10 @@ export function OverviewNotificationRow({ notification: n, appId }: { notificati
           aria-label={`Start a chat on ${label}`}
           onClick={(e) => {
             e.stopPropagation();
-            startChatFromNotification(app, n).catch((err: unknown) => console.error(`[otherbench-web] failed to start a chat on notification ${n.id}:`, err));
+            startChatFromNotification(app, n).catch((err: unknown) => {
+              console.error(`[otherbench-web] failed to start a chat on notification ${n.id}:`, err);
+              toast({ text: `Couldn't start a chat on ${label}.`, tone: 'error' });
+            });
           }}
           className={ACTION}
         >
@@ -245,7 +252,10 @@ function GithubSection({ tile }: { tile: Tile }): JSX.Element {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            openInBrowser('https://github.com/notifications').catch((err: unknown) => console.error('[otherbench-web] failed to open the GitHub inbox:', err));
+            openInBrowser('https://github.com/notifications').catch((err: unknown) => {
+              console.error('[otherbench-web] failed to open the GitHub inbox:', err);
+              toast({ text: "Couldn't open the GitHub inbox.", tone: 'error' });
+            });
           }}
           className={`${MUTED} block pt-0.5 underline hover:text-[var(--text)]`}
         >

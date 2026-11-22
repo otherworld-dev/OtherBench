@@ -213,6 +213,11 @@ describe('AppView, creating (spec 2026-10-20-code-tab-design, "Creating an app")
     );
   });
 
+  it('is a dialog named for what it does', () => {
+    render(<AppView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'New app' })).toBe(screen.getByTestId('app-view'));
+  });
+
   it('Escape with nothing typed closes; with a draft it asks first', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

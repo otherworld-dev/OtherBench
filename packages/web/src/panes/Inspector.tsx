@@ -2,6 +2,7 @@ import { useMemo, type JSX } from 'react';
 import { latestTodos } from '@otherbench/core/domain/thread-tools.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
+import { chatMessagesOf, useChatMessages } from '../state/chatMessages.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { isClaudeLoginChat } from '../state/claudeAccounts.js';
@@ -28,16 +29,16 @@ export interface InspectorProps {
 
 /** Running replies' checklists (spec 2026-10-12-thread-cards-design §7); the section exists only while one is running with a checklist. */
 function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const messages = useOtherBenchStore((s) => s.messages);
+  const messages = useChatMessages(chatId);
   const running = useMemo(
     () =>
-      Object.values(messages)
-        .filter((m) => m.chatId === chatId && m.role === 'assistant' && m.status === 'streaming')
+      messages
+        .filter((m) => m.role === 'assistant' && m.status === 'streaming')
         .flatMap((m) => {
           const todos = latestTodos(m.parts);
           return todos ? [{ id: m.id, profileName: m.producedBy?.profileName ?? 'Assistant', todos }] : [];
         }),
-    [messages, chatId]
+    [messages]
   );
   if (running.length === 0) return null;
   return (
@@ -55,7 +56,7 @@ function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
 }
 
 function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const hasSession = useOtherBenchStore((s) => Object.values(s.messages).some((m) => m.chatId === chatId && !!m.engineMeta));
+  const hasSession = useOtherBenchStore((s) => chatMessagesOf(s.messages, chatId).some((m) => !!m.engineMeta));
   const login = useOtherBenchStore((s) => isClaudeLoginChat(s.chats.find((c) => c.id === chatId), s.profiles, s.connections));
   if (!hasSession && !login) return null;
   return (

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type JSX } from 'react';
-import type { EngineMeta } from '@otherbench/core/types/messages.js';
+import { useEffect, useState, type JSX } from 'react';
+import type { CanonMessage, EngineMeta } from '@otherbench/core/types/messages.js';
 import { api } from '../state/api.js';
 import { defaultAccountName, isClaudeLoginChat, showsAccountPicker, useClaudeAccounts } from '../state/claudeAccounts.js';
+import { chatMessagesOf } from '../state/chatMessages.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useSectionSummary } from './InspectorSection.js';
 
@@ -75,7 +76,14 @@ function serverLabel(group: McpServerGroup): string {
 
 /** The chat's latest Claude Code session: what it ran on, what it could use, and how to pick it up in a terminal. */
 export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element | null {
-  const messages = useOtherBenchStore((s) => s.messages);
+  // The newest session's details. A message keeps its `engineMeta` object as it streams, so this changes only with the session.
+  const meta = useOtherBenchStore(
+    (s) =>
+      chatMessagesOf(s.messages, chatId)
+        .filter((m) => m.engineMeta)
+        // The newest; of two made in the same millisecond, the one first in the pool.
+        .reduce<CanonMessage | null>((latest, m) => (latest === null || m.createdAt > latest.createdAt ? m : latest), null)?.engineMeta ?? null
+  );
   const chat = useOtherBenchStore((s) => s.chats.find((c) => c.id === chatId));
   const profiles = useOtherBenchStore((s) => s.profiles);
   const connections = useOtherBenchStore((s) => s.connections);
@@ -84,11 +92,6 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
   const loadAccounts = useClaudeAccounts((s) => s.load);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const meta = useMemo(() => {
-    const withMeta = Object.values(messages).filter((m) => m.chatId === chatId && m.engineMeta);
-    withMeta.sort((a, b) => b.createdAt - a.createdAt);
-    return withMeta[0]?.engineMeta ?? null;
-  }, [messages, chatId]);
   const toolCount = meta?.tools?.length ?? 0;
   const login = isClaudeLoginChat(chat, profiles, connections);
   const showAccounts = login && showsAccountPicker(accounts, chat?.claudeAccount);

@@ -1,4 +1,5 @@
-import { useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import { useRef, useState, type JSX } from 'react';
+import { Overlay } from '../components/Overlay.js';
 import { compareProjects, PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import { folderPath } from '../components/FolderList.js';
 import type { Project } from '@otherbench/core/ports/store.js';
@@ -45,7 +46,7 @@ function awayFolderNote(project: Project | null): string | null {
 
 function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
   return (
-    <div data-testid="project-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    <Overlay label="Project settings" testId="project-view" onEscape={onClose}>
       <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-raised)] px-4 py-3">
         <h2 className="label-caps text-base">Project settings</h2>
         <span className="flex-1" />
@@ -54,7 +55,7 @@ function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
         </button>
       </div>
       <p className="p-6 text-sm text-[var(--text-muted)]">This project no longer exists. It may have been deleted in another tab or on another machine.</p>
-    </div>
+    </Overlay>
   );
 }
 
@@ -155,15 +156,10 @@ function ProjectForm({ project, parentId, returnFocus, onClose }: { project: Pro
     }
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
-    // The discard question handles its own Esc (and marks it handled): that Esc only closes the question.
-    if (e.key !== 'Escape' || e.defaultPrevented || confirmDiscard) return;
-    e.preventDefault();
-    requestClose();
-  }
-
   return (
-    <div data-testid="project-view" onKeyDown={onKeyDown} className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    // The discard question handles its own Esc (and marks it handled): that Esc only closes the question.
+    // Focus goes back through `close` above, which knows a second place to try.
+    <Overlay label={creating ? 'New project' : 'Project settings'} testId="project-view" restoreFocus={false} onEscape={() => (confirmDiscard ? undefined : requestClose())}>
       <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-raised)] px-4 py-3">
         <h2 className="label-caps text-base">{creating ? 'New project' : 'Project settings'}</h2>
         <span className="flex-1" />
@@ -346,6 +342,6 @@ function ProjectForm({ project, parentId, returnFocus, onClose }: { project: Pro
           onCancel={keepEditing}
         />
       )}
-    </div>
+    </Overlay>
   );
 }

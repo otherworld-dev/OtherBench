@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode } from 'react';
+import { memo, useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
 import { agentStatusOf, failedStatusCalls, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
@@ -893,8 +893,9 @@ function ThinkingClock({ since, tokens }: { since: number; tokens?: number }): J
  * the tab strip and the split view to be "a container swap, not a second
  * implementation", so this component stays deliberately unaware of whether
  * it's being shown standalone, inside a tab, or inside a split column.
+ * A memo: a thread is drawn again for each chunk of a reply, and only the message that changed needs to be.
  */
-export function Message({
+export const Message = memo(function Message({
   message,
   otherVariantsCount = 0,
   onReopenVariants,
@@ -1055,4 +1056,4 @@ export function Message({
 
     </article>
   );
-}
+});

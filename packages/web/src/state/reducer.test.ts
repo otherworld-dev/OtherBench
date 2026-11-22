@@ -128,6 +128,29 @@ describe('applyHelloBuffer', () => {
     expect(twice.message.parts).toEqual([{ type: 'text', text: 'Hello world' }]);
   });
 
+  // The server's hello leaves out parts no stream event carries (registry.ts reconstructEvents): a handover's link
+  // is written to the stored message after the turn. A reconnect must not strip them.
+  it('keeps the parts a stream never carries, where they were, and stays idempotent', () => {
+    const to = { type: 'handover', direction: 'to', chatId: 'c2', title: 'Fresh chat' } as const;
+    const from = { type: 'handover', direction: 'from', chatId: 'c0', title: 'Old chat' } as const;
+    const loaded = baseMessage({ status: 'complete', parts: [from, { type: 'text', text: 'Summary' }, { type: 'tool-call', id: 't1', name: 'x', args: {} }, to] });
+    const events: TurnEvent[] = [
+      { messageId: 'm1', type: 'text-delta', text: 'Summary' },
+      { messageId: 'm1', type: 'tool-call', id: 't1', name: 'x', args: {} },
+      { messageId: 'm1', type: 'status', status: 'complete' },
+    ];
+    const once = applyHelloBuffer(loaded, events, 'complete');
+    expect(once.message.parts).toEqual(loaded.parts);
+    expect(applyHelloBuffer(once.message, events, 'complete').message.parts).toEqual(loaded.parts);
+  });
+
+  it('keeps such a part after what the stream has added since', () => {
+    const link = { type: 'handover', direction: 'to', chatId: 'c2', title: 'Fresh chat' } as const;
+    const loaded = baseMessage({ parts: [{ type: 'text', text: 'Sum' }, link] });
+    const { message } = applyHelloBuffer(loaded, [{ messageId: 'm1', type: 'text-delta', text: 'Summary' }, { messageId: 'm1', type: 'notice', text: 'n' }], 'streaming');
+    expect(message.parts).toEqual([{ type: 'text', text: 'Summary' }, link, { type: 'notice', text: 'n' }]);
+  });
+
   it('the authoritative status wins even if the last event implied something else', () => {
     const events: TurnEvent[] = [{ messageId: 'm1', type: 'text-delta', text: 'partial' }];
     const { message } = applyHelloBuffer(baseMessage(), events, 'complete');

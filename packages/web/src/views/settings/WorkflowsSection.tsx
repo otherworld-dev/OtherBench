@@ -3,6 +3,7 @@ import { checkpointLoaderOf, type MediaWorkflow, type WorkflowBinding, type Work
 import type { ComfyTemplate, RecentWorkflow } from '@otherbench/core/types/media-library.js';
 import { ApiError, api, type MediaModelsResult } from '../../state/api.js';
 import { openInBrowser } from '../../desktop/bridge.js';
+import { toast } from '../../lib/toasts.js';
 import { useChanged } from '../../lib/useChanged.js';
 
 const ROLE_LABELS: Record<WorkflowRole, string> = {
@@ -349,7 +350,10 @@ export function WorkflowsSection({ connectionId, baseUrl = '' }: { connectionId:
     const base = baseUrl.replace(/\/+$/, '');
     // ComfyUI's front end loads `?template=` only for plain names; any other opens its page and the hint says which to pick.
     const url = TEMPLATE_PARAM.test(t.name) ? `${base}/?template=${encodeURIComponent(t.name)}` : base;
-    void openInBrowser(url).catch((err: unknown) => console.error('[otherbench-web] failed to open ComfyUI:', err));
+    void openInBrowser(url).catch((err: unknown) => {
+      console.error('[otherbench-web] failed to open ComfyUI:', err);
+      toast({ text: "Couldn't open ComfyUI in the browser.", tone: 'error' });
+    });
   }
 
   const select = 'w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm';

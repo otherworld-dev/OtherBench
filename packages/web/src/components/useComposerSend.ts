@@ -5,6 +5,7 @@ import type { Profile } from '@otherbench/core/types/config.js';
 import { isCommandText, type CommandRow } from '@otherbench/core/domain/context-lines.js';
 import { COMMAND_MID_REPLY } from '@otherbench/core/domain/notes.js';
 import { CLIENT_ID } from '../lib/clientId.js';
+import { toast } from '../lib/toasts.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -194,7 +195,10 @@ export function useComposerSend({
     // (compare) turn instead surfaces as an open tab strip right after
     // this message, since its several replies are NOT a single-child run.
     setHeadMessageId(chat.id, result.userMessageId);
-    void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
+    void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => {
+      console.error('[otherbench-web] failed to persist head:', err);
+      toast({ text: "Sent, but couldn't save which branch the chat is on. It may open on the earlier one next time.", tone: 'error', chatId: chat.id });
+    });
   }
 
   return { sending, sendError, handleSend };
