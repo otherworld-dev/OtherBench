@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { adoptLegacyData, claudeProjectKey, LegacyDataError, rewriteLegacyPaths } from '../src/legacy-data.js';
 
 let home: string;
@@ -16,7 +16,6 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 /** The imported project's folder, as Grunt stored it. */
 function importedFolder(dataDir: string, db: string): string {

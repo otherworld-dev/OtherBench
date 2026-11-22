@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, renameSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { join, sep as nodeSep } from 'node:path';
 import { liveLockHolder } from './db-lock.js';
 
@@ -109,7 +109,6 @@ const PATH_COLUMNS: readonly (readonly [string, string])[] = [
  * a folder on this machine, so there is nothing for a peer to learn.
  */
 export function rewriteLegacyPaths(dbPath: string, oldDir: string, newDir: string): number {
-  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
   const db = new DatabaseSync(dbPath);
   try {
     const pairs: [string, string][] = [];
