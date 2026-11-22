@@ -190,6 +190,40 @@ describe('Thread', () => {
     expect(screen.queryByTestId('git-bar')).toBeNull();
   });
 
+  it('draws a line under the last message a model API is sent as a summary, with the summary behind it, and none on a branch without one', () => {
+    const reply = (id: string, parentId: string, parts: CanonMessage['parts']): CanonMessage =>
+      makeMessage(id, 'chat-1', { parentId, role: 'assistant', parts, producedBy: { profileId: 'p1', profileName: 'P', connectionId: 'c1', modelId: 'model-x' } });
+    useOtherBenchStore.setState({
+      chats: [makeChat({ headMessageId: 'r3' })],
+      messages: {
+        u1: makeMessage('u1', 'chat-1'),
+        r1: reply('r1', 'u1', [{ type: 'text', text: 'reply one' }]),
+        u2: makeMessage('u2', 'chat-1', { parentId: 'r1' }),
+        r2: reply('r2', 'u2', [{ type: 'text', text: 'reply two' }]),
+        u3: makeMessage('u3', 'chat-1', { parentId: 'r2' }),
+        r3: reply('r3', 'u3', [{ type: 'history-summary', uptoMessageId: 'r1', covered: 'h', text: 'What the first exchange settled.' }, { type: 'text', text: 'reply three' }]),
+        // An edit of the second question: a branch the summary's reply isn't on.
+        u2b: makeMessage('u2b', 'chat-1', { parentId: 'r1', createdAt: 5 }),
+      },
+    });
+    render(<ThreadForChat chatId="chat-1" />);
+    const line = screen.getByText('Earlier messages are summarised for the model from here up').closest('[data-history-summary]')!;
+    // Straight after the first reply, before the second question; every message is still drawn.
+    expect(line.compareDocumentPosition(screen.getByText('reply one')) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(line.compareDocumentPosition(screen.getByText('text of u2')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('text of u1')).toBeInTheDocument();
+    expect(screen.queryByText('What the first exchange settled.')).toBeNull();
+    fireEvent.click(within(line as HTMLElement).getByRole('button', { name: 'Show summary' }));
+    expect(screen.getByText('What the first exchange settled.')).toBeInTheDocument();
+    expect(screen.getByText('reply three')).toBeInTheDocument();
+
+    cleanup();
+    useOtherBenchStore.setState((s) => ({ chats: s.chats.map((c) => ({ ...c, headMessageId: 'u2b' })) }));
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(within(screen.getByTestId('thread-scroll')).getByText('text of u2b')).toBeInTheDocument();
+    expect(screen.queryByText('Earlier messages are summarised for the model from here up')).toBeNull();
+  });
+
   it("keeps showing the conversation while its new head hasn't loaded yet, instead of blanking the thread", () => {
     useOtherBenchStore.setState({
       chats: [makeChat({ headMessageId: 'r1' })],
