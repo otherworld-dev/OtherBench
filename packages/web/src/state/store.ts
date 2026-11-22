@@ -690,6 +690,9 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
             continue;
           }
         }
+        // A reply this window still showed as being written has ended (it ended while the stream was away, so
+        // its end was never heard): the stored reply is all of it, and nothing waits on it any more, a card least of all.
+        if (state.messages[m.id]?.status === 'streaming') nextExtras[m.id] = emptyExtras;
         nextMessages[m.id] = m;
       }
       return {

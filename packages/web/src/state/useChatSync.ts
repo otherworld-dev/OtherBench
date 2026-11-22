@@ -14,6 +14,14 @@ import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } fro
  * `GET /chats/:id/stream` for live + replayed events. Tears the previous
  * chat's connection down and opens a fresh one whenever `chatId` changes,
  * and on unmount. A `null` id (nothing selected) does nothing.
+ *
+ * The two requests divide the chat between them. The messages are every
+ * stored reply; the stream's hello is only the replies being written, whole
+ * so far, and those that ended in the last minute (the server's
+ * `StreamRegistry.snapshot`), which covers a reply ending between the two
+ * requests. So when the stream comes back after dropping, the messages are
+ * read again: a reply that ended while this window was away for longer than
+ * that minute is in no hello, only in the store.
  */
 /** The chat stream's hello: its replies in flight, and its background tasks with their open approval cards. */
 interface ChatHello {
@@ -81,8 +89,11 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     const applyTurnEvent = useOtherBenchStore.getState().applyTurnEvent;
     const setStreamStatus = useOtherBenchStore.getState().setStreamStatus;
     const { setChatLoadError, retryChatLoad } = useOtherBenchStore.getState();
+    // The stream dropped since its last hello: what ended meanwhile may be in no hello (see above).
+    let dropped = false;
     const report = (status: StreamConnectionStatus): void => {
       statusRef.current = status;
+      if (status === 'reconnecting') dropped = true;
       if (reporting()) setStreamStatus(status);
       // The server answers again: messages that failed to load are asked for again, without a click on Retry.
       if (status === 'open' && chatId in useOtherBenchStore.getState().chatLoadErrors) retryChatLoad(chatId);
@@ -115,6 +126,11 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         applyHello(hello.inFlight ?? []);
         setChatBackground(chatId, hello.helpers ?? [], hello.backgroundApprovals ?? []);
         setChatNotes(chatId, hello.notes ?? [], hello.noteOutcomes ?? [], messagesLoaded);
+        // Back after a drop: the messages again, once (the first connect has just read them).
+        if (dropped) {
+          dropped = false;
+          retryChatLoad(chatId);
+        }
       },
       onEvent: (event) => applyChatEvent(chatId, event),
       onStatusChange: report,
