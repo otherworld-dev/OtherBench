@@ -12,6 +12,7 @@ import { createApp } from './app.js';
 import { DesktopChannel } from './computer/desktop-channel.js';
 import { DesktopComputerDriver } from './computer/desktop-driver.js';
 import { createContainer, type Container } from './container.js';
+import { NewerDatabaseError } from '@otherbench/store-sqlite/migrations/index.js';
 import { DatabaseLockedError } from './db-lock.js';
 import { adoptLegacyData, DATA_DIR, DB_NAME, LegacyDataError } from './legacy-data.js';
 import { announceLine, exitOnStdinClose } from './desktop.js';
@@ -596,6 +597,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
       err instanceof DesktopRpcWithoutAnnounceError ||
       err instanceof RemoteStartError ||
       err instanceof DatabaseLockedError ||
+      err instanceof NewerDatabaseError ||
       err instanceof LegacyDataError
     ) {
       console.error(`Error: ${err.message}`);

@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
-import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
+import { runMigrations, MIGRATIONS, NewerDatabaseError, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
 import { MCP_OAUTH_ALREADY_THERE } from '../src/migrations/025-mcp-oauth.js';
 import { USAGE_SUBAGENT_ALREADY_THERE } from '../src/migrations/026-usage-subagent.js';
 import type { DatabaseSync } from 'node:sqlite';
@@ -828,6 +828,75 @@ describe('runMigrations', () => {
     } finally {
       db.close();
     }
+  });
+
+  describe('a database made by a newer build', () => {
+    it('is refused, saying so, and nothing is changed', () => {
+      const db = freshDb();
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+        let thrown: unknown;
+        try {
+          runMigrations(db);
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(NewerDatabaseError);
+        expect((thrown as Error).message).toContain('newer OtherBench');
+        expect((thrown as Error).message).toContain(`schema ${SCHEMA_VERSION + 1}`);
+        expect(userVersion(db)).toBe(SCHEMA_VERSION + 1);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("opens a database at exactly this build's version", () => {
+      const db = freshDb();
+      try {
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+      } finally {
+        db.close();
+      }
+    });
+
+    it('names the newest copy beside it that this build can open', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'otherbench-newer-'));
+      const path = join(dir, 'otherbench.db');
+      const db = openDatabase(path);
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 2}`);
+        for (const v of [SCHEMA_VERSION - 3, SCHEMA_VERSION, SCHEMA_VERSION + 1]) writeFileSync(`${path}.before-schema-${v}`, '');
+        expect(() => runMigrations(db)).toThrow(`${path}.before-schema-${SCHEMA_VERSION}`);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('says there is no copy when none can be opened', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'otherbench-newer-'));
+      const path = join(dir, 'otherbench.db');
+      const db = openDatabase(path);
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 2}`);
+        writeFileSync(`${path}.before-schema-${SCHEMA_VERSION + 1}`, '');
+        let message = '';
+        try {
+          runMigrations(db);
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message).toContain('newer OtherBench');
+        expect(message).not.toContain('before-schema');
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('message_fts', () => {

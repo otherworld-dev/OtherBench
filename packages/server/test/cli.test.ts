@@ -10,6 +10,7 @@ import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@otherbench/core
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { DatabaseLockedError } from '../src/db-lock.js';
+import { NewerDatabaseError } from '@otherbench/store-sqlite/migrations/index.js';
 import { LegacyDataError } from '../src/legacy-data.js';
 import { createApp as realCreateApp } from '../src/app.js';
 import {
@@ -612,6 +613,19 @@ describe('main() CLI entry', () => {
 
     expect(io.exit).toHaveBeenCalledWith(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('OTHERBENCH_TOKEN'));
+    errorSpy.mockRestore();
+  });
+
+  it('exits non-zero with a plain message when the database was made by a newer build', async () => {
+    const deps = fakeDeps();
+    deps.createContainer.mockRejectedValueOnce(new NewerDatabaseError(60, 52, null));
+    const io = fakeStdio();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main(['serve'], { ...deps, ...io, env: {} });
+
+    expect(io.exit).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^Error: .*newer OtherBench/));
     errorSpy.mockRestore();
   });
 

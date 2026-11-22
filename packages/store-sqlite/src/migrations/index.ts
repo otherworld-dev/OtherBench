@@ -51,6 +51,7 @@ import { MIGRATION_049_CHAT_SEND_REMOTE } from './049-chat-send-remote.js';
 import { MIGRATION_050_RESERVED } from './050-reserved.js';
 import { MIGRATION_051_JOB_CHATS } from './051-job-chats.js';
 import { MIGRATION_052_JOB_APP_CONTEXT } from './052-job-app-context.js';
+import { newestBackup } from '../backup.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -114,6 +115,28 @@ export const MIGRATIONS: Migration[] = [
 export const SCHEMA_VERSION = Math.max(...MIGRATIONS.map((m) => m.version));
 
 /**
+ * Thrown by {@link runMigrations} for a database whose schema is newer than
+ * this build's (an older OtherBench started on data a newer one has used).
+ * Opening it anyway would run this build's queries against tables it doesn't
+ * know, so startup stops here with a message for the person at the machine.
+ */
+export class NewerDatabaseError extends Error {
+  constructor(
+    readonly databaseVersion: number,
+    readonly buildVersion: number,
+    /** A copy from before an upgrade that this build can open, if there is one. */
+    readonly backup: string | null
+  ) {
+    super(
+      `This database was made by a newer OtherBench (schema ${databaseVersion}; this version only knows up to ${buildVersion}), so it was not opened. ` +
+        'Update OtherBench to the version that last used it.' +
+        (backup ? ` To stay on this version instead, a copy from before the upgrade is at "${backup}" (anything done since is not in it).` : '')
+    );
+    this.name = 'NewerDatabaseError';
+  }
+}
+
+/**
  * Applies every migration in `migrations` (defaults to {@link MIGRATIONS})
  * whose version is greater than the database's current `PRAGMA user_version`,
  * in ascending version order. Each migration's `sql`/`run` (see
@@ -139,11 +162,20 @@ export const SCHEMA_VERSION = Math.max(...MIGRATIONS.map((m) => m.version));
  * (naming the migration and what was skipped) instead of swallowed --
  * silently sailing through would otherwise leave a user with no way to
  * know the scrub never happened.
+ *
+ * A database already past the newest migration in `migrations` was made by a
+ * newer build: that throws {@link NewerDatabaseError} and changes nothing.
+ * (A version in between, like the 50 three betas left, is an older database.)
  */
 export function runMigrations(db: DatabaseSync, migrations: Migration[] = MIGRATIONS): void {
   const sorted = [...migrations].sort((a, b) => a.version - b.version);
   const currentVersion = (db.prepare('PRAGMA user_version').get() as { user_version: number })
     .user_version;
+
+  const newest = sorted[sorted.length - 1]?.version ?? 0;
+  if (currentVersion > newest) {
+    throw new NewerDatabaseError(currentVersion, newest, newestBackup(db.location() ?? ':memory:', newest));
+  }
 
   for (const migration of sorted) {
     if (migration.version <= currentVersion) continue;

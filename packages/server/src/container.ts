@@ -409,13 +409,14 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 async function openContainer(options: ContainerOptions): Promise<Container> {
   const db = openDatabase(options.dbPath);
   // An update that brings a migration leaves the old database beside the new one (throws, so nothing migrates, if it can't).
+  // A database from a newer build is refused by `runMigrations` (NewerDatabaseError), before anything is written.
   try {
     backupBeforeMigration(db, options.dbPath, SCHEMA_VERSION);
+    runMigrations(db);
   } catch (err) {
     db.close();
     throw err;
   }
-  runMigrations(db);
   // Every chat change, whoever makes it, is announced on the app-wide stream.
   const events = new AppEventBus();
   const store = withStoreEvents(new SqliteStore(db), events);
