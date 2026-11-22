@@ -52,6 +52,7 @@ import { MIGRATION_050_RESERVED } from './050-reserved.js';
 import { MIGRATION_051_JOB_CHATS } from './051-job-chats.js';
 import { MIGRATION_052_JOB_APP_CONTEXT } from './052-job-app-context.js';
 import { MIGRATION_053_CLOCK_MARK } from './053-clock-mark.js';
+import { MIGRATION_054_MESSAGE_FTS_ON_TEXT_CHANGE } from './054-message-fts-on-text-change.js';
 import { newestBackup } from '../backup.js';
 import type { Migration } from './types.js';
 
@@ -111,6 +112,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_051_JOB_CHATS,
   MIGRATION_052_JOB_APP_CONTEXT,
   MIGRATION_053_CLOCK_MARK,
+  MIGRATION_054_MESSAGE_FTS_ON_TEXT_CHANGE,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
