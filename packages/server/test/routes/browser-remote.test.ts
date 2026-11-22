@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import { createBlobStore } from '@otherbench/store-sqlite/blob-store.js';
@@ -33,7 +33,7 @@ const ROUTES = [
 
 let dir: string;
 let container: Container;
-let browser: { [K in keyof BrowserPort]: ReturnType<typeof vi.fn> };
+let browser: { [K in keyof BrowserPort]: Mock<BrowserPort[K]> };
 let fx: RemoteFixture;
 
 beforeEach(async () => {

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineWorkspace, type Plugin } from 'vitest/config';
+import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
 
 // A run started from `e:\...` when Windows spells the folder `E:\...` loads
 // modules under both spellings, and every vi.mock of a relative path ('./x.js')
@@ -66,11 +66,18 @@ function workspaceSources(): Plugin {
 // longer limit; a test that sets its own keeps it.
 const timeouts = { testTimeout: 20_000, hookTimeout: 20_000 };
 
-export default defineWorkspace([
-  ...packages.map((p) => ({
-    ...(p.config ? { extends: join(p.dir, p.config) } : {}),
-    plugins: [workspaceSources()],
-    test: { name: p.name, root: p.dir, ...timeouts },
-  })),
-  'desktop',
-]);
+// Each package is its own project, with its own vite/vitest config if it has one. Vitest no longer leaves `dist/` out
+// by default, and `tsc -b` emits every test there as `.js`, so it is left out here (an `extends`ed config's own
+// `exclude` is added to this one, not swapped for it).
+export default defineConfig({
+  test: {
+    projects: [
+      ...packages.map((p) => ({
+        ...(p.config ? { extends: join(p.dir, p.config) } : {}),
+        plugins: [workspaceSources()],
+        test: { name: p.name, root: p.dir, exclude: [...configDefaults.exclude, '**/dist/**'], ...timeouts },
+      })),
+      'desktop',
+    ],
+  },
+});
