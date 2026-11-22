@@ -1437,12 +1437,13 @@ class InMemoryMessageRepo implements MessageRepo {
       if (chatId !== undefined && c.id !== chatId) continue;
       const head = c.archivedAt === null && c.headMessageId ? this.byId.get(c.headMessageId) : undefined;
       if (!head) continue;
-      // The tip: the newest message (then the largest id) at or below the head.
+      // The tip: the newest message at or below the head; of two with one time, one with nothing under it, then the largest id.
       let tip = head;
       const seen = new Set<string>([head.id]);
       const stack = [head];
       for (let m = stack.pop(); m; m = stack.pop()) {
-        if (m.createdAt > tip.createdAt || (m.createdAt === tip.createdAt && m.id > tip.id)) tip = m;
+        const leaf = (x: CanonMessage): boolean => (children.get(x.id) ?? []).length === 0;
+        if (m.createdAt > tip.createdAt || (m.createdAt === tip.createdAt && (leaf(m) !== leaf(tip) ? leaf(m) : m.id > tip.id))) tip = m;
         for (const k of children.get(m.id) ?? []) {
           if (!seen.has(k.id)) { seen.add(k.id); stack.push(k); }
         }

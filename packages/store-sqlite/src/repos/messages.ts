@@ -316,7 +316,10 @@ export class SqliteMessageRepo implements MessageRepo {
          ),
          ranked AS (
            SELECT b.chat_id, m.id,
-                  ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC, m.id DESC) AS rn
+                  -- A reply made in the same millisecond as the message it answers beats it: of two with one time, the one
+                  -- nothing hangs under comes first. Ids are random, so they can't break that tie the right way.
+                  ROW_NUMBER() OVER (PARTITION BY b.chat_id ORDER BY m.created_at DESC,
+                    EXISTS (SELECT 1 FROM message k WHERE k.parent_id = m.id) ASC, m.id DESC) AS rn
              FROM below b JOIN message m ON m.id = b.id
          )
          -- Only each chat's tip is read past its id: the text's tail, and of a finished reply's parts only its own

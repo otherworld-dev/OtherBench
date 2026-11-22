@@ -908,6 +908,17 @@ export function runStoreContract(
         expect(store.messages.heads('chat-b')).toEqual([]);
       });
 
+      it('takes the reply, not the message it answers, when both were made in the same millisecond', () => {
+        // The head stays on the user's message after a send, and a fast reply can share its time. Ids are random, so
+        // the larger id is as often the question as the reply: the chat's row then showed nothing of the reply.
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'z-question', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a-reply', chatId: 'chat-a', parentId: 'z-question', role: 'assistant', status: 'complete', createdAt: 10 }));
+        store.chats.update('chat-a', { headMessageId: 'z-question' });
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 10 }]);
+      });
+
       it('says when the reply a chat stopped on asks the user something, and only then', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
