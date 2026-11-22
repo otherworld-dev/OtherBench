@@ -311,13 +311,18 @@ export class AiSdkChatEngine implements ChatEngine {
       for (let retries = 0; ; retries += 1) {
         let yielded = false;
         let failure: { cause: unknown } | null = null;
+        // What the newest model call of the tool loop read. The total on `finish` sums every call, so it can't
+        // say how full the context is; this can, and the next turn goes by it (core domain/turn-history.ts).
+        let lastCallRead: number | undefined;
         try {
           for await (const part of start().fullStream) {
             if (part.type === 'error' && !yielded && retryWaitMs(part.error, retries, waited) !== null) {
               failure = { cause: part.error };
               break;
             }
-            const event = mapStreamPart(part);
+            if (part.type === 'finish-step' && typeof part.usage.inputTokens === 'number') lastCallRead = part.usage.inputTokens;
+            const mapped = mapStreamPart(part);
+            const event: EngineEvent | null = mapped?.type === 'finish' && lastCallRead !== undefined && lastCallRead > 0 ? { ...mapped, usage: { ...mapped.usage, contextTokens: lastCallRead } } : mapped;
             if (event) {
               yielded = true;
               yield event;
