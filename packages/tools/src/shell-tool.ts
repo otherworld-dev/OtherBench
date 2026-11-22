@@ -14,6 +14,16 @@ const MAX_TIMEOUT_MS = 600_000; // 600s hard cap -- a requested timeout above th
 const MAX_OUTPUT_BYTES = 100 * 1024; // 100KB combined stdout+stderr cap
 /** Grace window between the soft ("SIGTERM") and hard ("SIGKILL") kill attempts. */
 const KILL_GRACE_MS = 2000;
+/**
+ * How long to keep reading after the shell itself has exited (or after the kill
+ * has been tried) before giving up on the pipe closing. What the command wrote
+ * before it exited is already in the pipe and arrives within milliseconds; the
+ * only thing that can keep the pipe open longer is another process that
+ * inherited it and is still running.
+ */
+const EXIT_DRAIN_MS = 500;
+/** The drain window is repeated while output keeps arriving, this many times at most. */
+const MAX_DRAIN_ROUNDS = 4;
 
 // ---------------------------------------------------------------------------
 // Result / error shapes -- same "never reject, always resolve with either
@@ -282,14 +292,51 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onData);
 
+    // 'close' fires only when the process has exited AND every holder of its
+    // stdout/stderr pipes has let go. A background process the command left
+    // behind (`start /b server`, `server &`) inherits those pipes and keeps
+    // them open for as long as it runs, and once the shell has exited the tree
+    // kill has nothing left to find -- so waiting for 'close' alone never
+    // returns, timeout or not, until the user presses Stop. Two things bound
+    // it: a short drain window after the shell exits, and the same window
+    // after a timeout/abort kill has been tried (which also covers a shell
+    // that could not be killed at all). Either way the streams are destroyed
+    // and the call settles with what was captured.
+    let leftRunning = false;
+    let drainTimer: NodeJS.Timeout | undefined;
+    let drainRounds = 0;
+    function settleAfterDrain(): void {
+      if (settled || drainTimer) return;
+      const bytesBefore = totalBytes;
+      drainTimer = setTimeout(() => {
+        drainTimer = undefined;
+        if (settled) return;
+        // Output was still arriving during the window: on a busy machine that
+        // can be the command's own last lines, so wait again rather than cut
+        // them off. Capped, so a background process that never stops printing
+        // cannot hold the call open.
+        drainRounds += 1;
+        if (totalBytes !== bytesBefore && drainRounds < MAX_DRAIN_ROUNDS) {
+          settleAfterDrain();
+          return;
+        }
+        leftRunning = true;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(child.exitCode, child.signalCode);
+      }, EXIT_DRAIN_MS);
+    }
+
+    function stop(): void {
+      void terminate(child, KILL_GRACE_MS).then(settleAfterDrain);
+    }
+
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      void terminate(child, KILL_GRACE_MS);
+      stop();
     }, timeoutMsUsed);
 
-    const onAbort = () => {
-      void terminate(child, KILL_GRACE_MS);
-    };
+    const onAbort = stop;
     ctx.signal.addEventListener('abort', onAbort);
     // Third and final check, closing the gap between spawn() and the
     // listener being attached: an abort landing in there fires an event
@@ -299,6 +346,7 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
 
     function cleanup(): void {
       clearTimeout(timeoutTimer);
+      clearTimeout(drainTimer);
       ctx.signal.removeEventListener('abort', onAbort);
     }
 
@@ -309,7 +357,10 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
       reject(err);
     });
 
-    child.on('close', (code, signal) => {
+    child.on('exit', settleAfterDrain);
+    child.on('close', finish);
+
+    function finish(code: number | null, signal: NodeJS.Signals | null): void {
       if (settled) return;
       settled = true;
       cleanup();
@@ -323,6 +374,11 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
       if (timedOut) {
         output += `\n\n[... command killed after exceeding its ${timeoutMsUsed}ms timeout ...]`;
       }
+      if (leftRunning) {
+        output +=
+          '\n\n[... a process this command started is still running in the background and holding its output open; ' +
+          'anything it prints from here on is not captured ...]';
+      }
 
       resolve({
         command,
@@ -333,6 +389,6 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
         timeoutMsUsed,
         output,
       });
-    });
+    }
   });
 }

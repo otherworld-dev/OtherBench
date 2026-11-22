@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -201,6 +201,122 @@ describe('run_command', () => {
     // it was actually capped rather than passed through whole.
     expect((result.output as string).length).toBeLessThan(150_000);
   });
+});
+
+describe('a background process that keeps the output pipe open', () => {
+  // `start /b` (or `&` on POSIX) leaves a grandchild that inherited stdout
+  // running after the shell itself has exited. The pipe then never closes, so
+  // a call that waits only for 'close' never returns -- not at the timeout
+  // either, because by then there is no shell left for the tree kill to find.
+  // Each test here starts a real one, and kills it afterwards by the pid it
+  // wrote, so nothing is left running whether the assertion passed or not.
+  const HOLD_MS = 60_000;
+  const BOUND_MS = 10_000;
+
+  const script = `require('fs').writeFileSync('pid.txt',String(process.pid));setTimeout(()=>{},${HOLD_MS})`;
+  const wait = `node -e "setTimeout(()=>{},${HOLD_MS})"`;
+
+  function backgroundCommand(tail: string): string {
+    return process.platform === 'win32'
+      ? `start /b node -e "${script}" & ${tail}`
+      : `node -e "${script}" & ${tail}`;
+  }
+
+  // Started through a second shell that exits at once, so the process is no
+  // longer in the tree the timeout/abort kill walks.
+  function orphanCommand(tail: string): string {
+    return process.platform === 'win32'
+      ? `start /b cmd /c start /b node -e "${script}" & ${tail}`
+      : `(setsid node -e "${script}" &) ; ${tail}`;
+  }
+
+  async function killStray(): Promise<void> {
+    const pidFile = join(ws, 'pid.txt');
+    for (let i = 0; i < 50 && !existsSync(pidFile); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!existsSync(pidFile)) return;
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    try {
+      process.kill(pid);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** The call's result, or 'hung' if it has not returned inside the bound. */
+  async function bounded(call: Promise<unknown>): Promise<Record<string, unknown> | 'hung'> {
+    let timer: NodeJS.Timeout | undefined;
+    const hung = new Promise<'hung'>((resolve) => {
+      timer = setTimeout(() => resolve('hung'), BOUND_MS);
+    });
+    try {
+      return (await Promise.race([call, hung])) as Record<string, unknown> | 'hung';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  it(
+    'returns once the shell has exited, with the output it printed',
+    async () => {
+      try {
+        const result = await bounded(
+          runCommandTool.execute({ command: backgroundCommand('echo started-in-background') }, ctx())
+        );
+        expect(result).not.toBe('hung');
+        if (result === 'hung') return;
+        expect(result.error).toBeUndefined();
+        expect(result.exitCode).toBe(0);
+        expect(result.timedOut).toBe(false);
+        expect(result.output as string).toContain('started-in-background');
+        expect(result.output as string).toMatch(/still running in the background/i);
+      } finally {
+        await killStray();
+      }
+    },
+    PROCESS_QUERY_TIMEOUT_MS
+  );
+
+  it(
+    'returns as timed out when the shell outlives the timeout and an orphan holds the pipe',
+    async () => {
+      try {
+        const result = await bounded(runCommandTool.execute({ command: orphanCommand(wait), timeoutMs: 1500 }, ctx()));
+        expect(result).not.toBe('hung');
+        if (result === 'hung') return;
+        expect(result.error).toBeUndefined();
+        expect(result.timedOut).toBe(true);
+        expect(result.output as string).toContain('timeout');
+      } finally {
+        await killStray();
+      }
+    },
+    PROCESS_QUERY_TIMEOUT_MS
+  );
+
+  it(
+    'returns when the turn is stopped while an orphan holds the pipe',
+    async () => {
+      const controller = new AbortController();
+      try {
+        const call = runCommandTool.execute(
+          { command: orphanCommand(wait) },
+          ctx({ signal: controller.signal })
+        );
+        setTimeout(() => controller.abort(), 1000);
+        const result = await bounded(call);
+        expect(result).not.toBe('hung');
+        if (result === 'hung') return;
+        expect(result.error).toBeUndefined();
+        expect(result.timedOut).toBe(false);
+      } finally {
+        controller.abort();
+        await killStray();
+      }
+    },
+    PROCESS_QUERY_TIMEOUT_MS
+  );
 });
 
 describe('cancellation before the command starts', () => {
