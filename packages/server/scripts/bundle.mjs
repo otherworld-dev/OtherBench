@@ -50,7 +50,6 @@ const shared = {
   target: 'node24',
   external: EXTERNAL,
   // CommonJS dependencies call require(); an ES module has none of its own.
-  // node:sqlite is loaded the same way (store-sqlite/src/db.ts), unchanged.
   banner: { js: "import { createRequire as __otherBenchCreateRequire } from 'node:module'; globalThis.require ??= __otherBenchCreateRequire(import.meta.url);" },
   logLevel: 'warning',
 };
