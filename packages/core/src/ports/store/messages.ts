@@ -46,6 +46,12 @@ export interface MessageRepo {
    */
   listByStatus(status: MessageStatus): CanonMessage[];
   /**
+   * The messages of `chatId` still streaming (the replies being written
+   * now), oldest first. What a route asks about one chat on a request,
+   * where `listByStatus` would read every chat's.
+   */
+  listStreaming(chatId: string): CanonMessage[];
+  /**
    * Every message across every chat, at any status, with a top-level
    * `subagent` card at `status`, in no particular order. For startup
    * reconciliation too: a helper card left 'background' by a process that

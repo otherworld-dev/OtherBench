@@ -1793,6 +1793,24 @@ export function runStoreContract(
         expect(store.messages.listByStatus('streaming')).toEqual([]);
       });
 
+      it('listStreaming returns the replies still streaming in that chat only, oldest first, and follows their status', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        store.messages.create(makeMessageInput({ id: 'second-a', chatId: chatA.id, status: 'streaming', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'first-a', chatId: chatA.id, status: 'streaming', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'streaming-b', chatId: chatB.id, status: 'streaming', createdAt: 5 }));
+        store.messages.create(makeMessageInput({ id: 'complete-a', chatId: chatA.id, status: 'complete', createdAt: 1 }));
+
+        expect(store.messages.listStreaming(chatA.id).map((m) => m.id)).toEqual(['first-a', 'second-a']);
+        expect(store.messages.listStreaming(chatA.id)[0]).toEqual(store.messages.get('first-a'));
+        expect(store.messages.listStreaming(chatB.id).map((m) => m.id)).toEqual(['streaming-b']);
+        expect(store.messages.listStreaming('no-such-chat')).toEqual([]);
+
+        store.messages.updateStatus('first-a', 'complete');
+        store.messages.updateStatus('complete-a', 'streaming');
+        expect(store.messages.listStreaming(chatA.id).map((m) => m.id)).toEqual(['complete-a', 'second-a']);
+      });
+
       it('listWithSubagentStatus returns every message, in any chat and at any status, with a sub-agent card at that status', () => {
         const { chat: chatA } = seedChat(store, 'chat-a');
         const { chat: chatB } = seedChat(store, 'chat-b');

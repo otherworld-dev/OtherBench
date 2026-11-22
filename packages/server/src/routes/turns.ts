@@ -244,7 +244,7 @@ export function turnsRoutes(container: Container): Hono {
       if (parts.some((p) => p.type === 'image' || p.type === 'file')) throw new HTTPException(400, { message: COMMAND_WITH_ATTACHMENTS });
       userParts = [contextPart(command)];
       if (command.kind === 'clear') {
-        if (container.store.messages.listByStatus('streaming').some((m) => m.chatId === chatId)) return c.json({ error: CLEAR_MID_REPLY }, 409);
+        if (container.store.messages.listStreaming(chatId).length > 0) return c.json({ error: CLEAR_MID_REPLY }, 409);
         const { userMessageId } = writeClearLine(container, { chatId, parentId });
         return c.json({ userMessageId, assistantMessageIds: [], profileIds: [], userParts }, 202);
       }

@@ -941,7 +941,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   app.get('/chats/:id/in-flight', (c) => {
     const chat = container.store.chats.get(c.req.param('id'));
     if (!chat) return c.json({ error: 'Chat not found.' }, 404);
-    const replies = container.store.messages.listByStatus('streaming').filter((m) => m.chatId === chat.id);
+    const replies = container.store.messages.listStreaming(chat.id);
     const asked = replies.flatMap((m) => (m.parentId ? [container.store.messages.get(m.parentId)] : [])).filter((m): m is CanonMessage => m !== null && m.chatId === chat.id);
     return c.json({ messages: [...asked, ...replies], headMessageId: chat.headMessageId });
   });

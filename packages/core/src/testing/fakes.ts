@@ -1535,6 +1535,13 @@ class InMemoryMessageRepo implements MessageRepo {
     return [...this.byId.values()].filter((m) => m.status === status).map((m) => structuredClone(m));
   }
 
+  listStreaming(chatId: string): CanonMessage[] {
+    return [...this.byId.values()]
+      .filter((m) => m.chatId === chatId && m.status === 'streaming')
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((m) => structuredClone(m));
+  }
+
   listWithSubagentStatus(status: SubagentStatus): CanonMessage[] {
     return [...this.byId.values()]
       .filter((m) => m.parts.some((p) => p.type === 'subagent' && p.status === status))

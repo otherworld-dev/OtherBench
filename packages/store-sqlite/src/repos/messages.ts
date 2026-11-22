@@ -340,9 +340,21 @@ export class SqliteMessageRepo implements MessageRepo {
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {
+    // 'streaming' is written into the SQL, not bound: only then can SQLite use the partial index over
+    // streaming rows (migration 055) instead of reading every message, as startup reconciliation used to.
+    const rows = (
+      status === 'streaming'
+        ? this.db.prepare(`SELECT ${COLUMNS} FROM message WHERE status = 'streaming' ORDER BY created_at ASC, id ASC`).all()
+        : this.db.prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`).all(status)
+    ) as Record<string, unknown>[];
+    return rows.map(fromRow);
+  }
+
+  // Served by the same partial index, which leads with `chat_id`: the few rows streaming in one chat.
+  listStreaming(chatId: string): CanonMessage[] {
     const rows = this.db
-      .prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`)
-      .all(status) as Record<string, unknown>[];
+      .prepare(`SELECT ${COLUMNS} FROM message WHERE chat_id = ? AND status = 'streaming' ORDER BY created_at ASC, id ASC`)
+      .all(chatId) as Record<string, unknown>[];
     return rows.map(fromRow);
   }
 
