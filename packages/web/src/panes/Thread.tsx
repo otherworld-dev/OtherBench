@@ -353,7 +353,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const keepPlaceRef = useRef<{ id: string; y: number } | null>(null);
   const drawEarlier = (): void => {
     const first = displayPath[start];
-    const el = first ? document.getElementById(`msg-${first.id}`) : null;
+    const el = first ? drawnMessage(scrollRef.current, first.id) : null;
     keepPlaceRef.current = first && el ? { id: first.id, y: el.getBoundingClientRect().top } : null;
     setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW), end });
   };
@@ -373,7 +373,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const el = scrollRef.current;
     const before = keepPlaceRef.current;
     keepPlaceRef.current = null;
-    const kept = before ? document.getElementById(`msg-${before.id}`) : null;
+    const kept = before ? drawnMessage(el, before.id) : null;
     if (!el || !before || !kept) return;
     el.scrollTop += kept.getBoundingClientRect().top - before.y;
   }, [start]);
@@ -385,7 +385,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     flushSync(() => {
       if (at !== -1) drawTo(at);
     });
-    document.getElementById(`msg-${messageId}`)?.scrollIntoView({ block: 'start' });
+    drawnMessage(scrollRef.current, messageId)?.scrollIntoView({ block: 'start' });
     if (endRef.current !== null) {
       nearBottomRef.current = false;
       setShowJump(true);

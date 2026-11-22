@@ -1409,6 +1409,63 @@ describe('Thread in a long chat', () => {
     expect(scrollIntoView).toHaveBeenCalled();
     expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('msg-m2'));
   });
+
+  // Nothing stops two panes holding one chat (a saved layout isn't checked for it), and each draws every message
+  // under the same element id: a thread must find its own copy, not the first in the page.
+  describe('with the same chat in another pane', () => {
+    const twoPanes = (): { a: HTMLElement; b: HTMLElement } => {
+      longChat(100);
+      render(
+        <>
+          <div data-testid="pane-a">
+            <ThreadForChat chatId="chat-1" />
+          </div>
+          <div data-testid="pane-b">
+            <ThreadForChat chatId="chat-1" />
+          </div>
+        </>
+      );
+      return { a: screen.getByTestId('pane-a'), b: screen.getByTestId('pane-b') };
+    };
+    const drawnIn = (scroller: HTMLElement): string[] => Array.from(scroller.querySelectorAll('[id^="msg-"]')).map((el) => el.id.slice(4));
+
+    it('goes to a prompt picked in the outline in its own pane', async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      const { a, b } = twoPanes();
+      const user = userEvent.setup();
+      // The outline remembers being open (an earlier test may have left it so).
+      const show = within(b).queryByRole('button', { name: 'Show conversation outline' });
+      if (show) await user.click(show);
+      // Drawn in both panes already.
+      await user.click(within(b).getByTestId('outline-m98'));
+      const own = within(b).getByTestId('thread-scroll').querySelector('[id="msg-m98"]');
+      expect(own).not.toBeNull();
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(own);
+      expect(scrollIntoView.mock.contexts).not.toContain(within(a).getByTestId('thread-scroll').querySelector('[id="msg-m98"]'));
+    });
+
+    it('keeps its own place when earlier messages are drawn', async () => {
+      const { a, b } = twoPanes();
+      const scroller = within(b).getByTestId('thread-scroll');
+      const other = within(a).getByTestId('thread-scroll');
+      Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 150 });
+      // jsdom has no layout: in this pane 100px a message, stacked from the top; the other pane's sit still.
+      const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const top = this.id.startsWith('msg-') && scroller.contains(this) ? drawnIn(scroller).indexOf(this.id.slice(4)) * 100 - scroller.scrollTop : 0;
+        return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) };
+      });
+      try {
+        await userEvent.setup().click(within(b).getByRole('button', { name: `Show earlier messages (${100 - THREAD_WINDOW} more)` }));
+        expect(drawnIn(scroller)).toHaveLength(THREAD_WINDOW * 2);
+        expect(drawnIn(other)).toHaveLength(THREAD_WINDOW);
+        // Pushed down by the forty drawn above it, and moved by as much.
+        expect(scroller.scrollTop).toBe(150 + THREAD_WINDOW * 100);
+      } finally {
+        rect.mockRestore();
+      }
+    });
+  });
 });
 
 describe('Find in a chat', () => {
