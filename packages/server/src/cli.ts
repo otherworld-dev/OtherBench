@@ -289,6 +289,57 @@ export function consoleToStderr(target: Console = console, stream: NodeJS.Writab
     const method = toStderr[name] as (...args: unknown[]) => void;
     (target as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => method.apply(toStderr, args);
   }
+  // The methods just replaced lost their timestamp: put back on a console that had one.
+  const clock = stampedConsoles.get(target);
+  if (clock) timestampConsole(target, clock);
+}
+
+/** The consoles `timestampConsole` has been asked to stamp, each with its clock, and the methods it has wrapped. */
+const stampedConsoles = new WeakMap<Console, () => Date>();
+const stampedMethods = new WeakSet<(...args: unknown[]) => void>();
+
+/**
+ * Begins every line the server logs with the time (ISO, UTC), so the desktop app's server.log and a terminal's
+ * scrollback say when something happened. The one place it is done: everything the server logs goes through
+ * `console`. What the desktop shell reads is not touched: the announce line and the OTHERBENCH-RPC channel are
+ * written to stdout itself, never through `console` (desktop.ts, computer/desktop-channel.ts). A message of several
+ * lines (a stack) is stamped once, at its start. Asking again wraps only methods not yet wrapped.
+ */
+export function timestampConsole(target: Console = console, now: () => Date = () => new Date()): void {
+  stampedConsoles.set(target, now);
+  const methods = target as unknown as Record<string, (...args: unknown[]) => void>;
+  for (const name of ['log', 'info', 'debug', 'warn', 'error']) {
+    const method = methods[name]!;
+    if (stampedMethods.has(method)) continue;
+    const stamped = (...args: unknown[]): void => {
+      const at = now().toISOString();
+      // Into the first argument when it is text, so a format string stays one.
+      if (typeof args[0] === 'string') method.call(target, `${at} ${args[0]}`, ...args.slice(1));
+      else method.call(target, at, ...args);
+    };
+    stampedMethods.add(stamped);
+    methods[name] = stamped;
+  }
+}
+
+/**
+ * Says in the log why the server is about to die, or what failed with nobody waiting on it.
+ *
+ * An uncaught exception is logged from `uncaughtExceptionMonitor`, which leaves what Node does next alone: it prints
+ * the error itself and exits with a failure code, as it must (after a throw nobody caught, nothing here can be
+ * trusted to be in a known state). The line logged here is the one with the time and the server's name on it.
+ *
+ * A promise rejection nobody handled is logged and the server carries on. Left to Node it would be raised as an
+ * uncaught exception and end the process, and with it every reply being written, for what is one background step
+ * that failed after the code that started it had moved on: no half-done synchronous work is left behind. The log
+ * line, with its stack, is there so the missing catch gets written.
+ */
+export function installFatalHandlers(
+  proc: { on(event: string, listener: (...args: unknown[]) => void): unknown } = process,
+  log: (...args: unknown[]) => void = (...args) => console.error(...args)
+): void {
+  proc.on('uncaughtExceptionMonitor', (err) => log('[otherbench-server] fatal: uncaught exception, the server is exiting:', err));
+  proc.on('unhandledRejection', (reason) => log('[otherbench-server] unhandled promise rejection (the server carries on):', reason));
 }
 
 export interface ServeDeps {
@@ -635,6 +686,11 @@ export function sameScriptPath(a: string, b: string): boolean {
 
 const isMainModule = process.argv[1] !== undefined && sameScriptPath(fileURLToPath(import.meta.url), process.argv[1]);
 if (isMainModule) {
+  // The server's log, before anything can write to it or fail; `otherbench password` talks to a person and stays as it is.
+  if (process.argv[2] === 'serve') {
+    timestampConsole();
+    installFatalHandlers();
+  }
   main(process.argv.slice(2)).catch((err: unknown) => {
     console.error(err);
     process.exitCode = 1;
