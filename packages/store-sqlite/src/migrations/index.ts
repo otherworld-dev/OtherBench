@@ -56,6 +56,7 @@ import { MIGRATION_054_MESSAGE_FTS_ON_TEXT_CHANGE } from './054-message-fts-on-t
 import { MIGRATION_055_MESSAGE_STREAMING_INDEX } from './055-message-streaming-index.js';
 import { MIGRATION_056_REOFFER_USAGE } from './056-reoffer-usage.js';
 import { MIGRATION_057_SYNC_PEER_CURSOR } from './057-sync-peer-cursor.js';
+import { MIGRATION_058_USAGE_CONTEXT_TOKENS } from './058-usage-context-tokens.js';
 import { newestBackup } from '../backup.js';
 import type { Migration } from './types.js';
 
@@ -119,6 +120,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_055_MESSAGE_STREAMING_INDEX,
   MIGRATION_056_REOFFER_USAGE,
   MIGRATION_057_SYNC_PEER_CURSOR,
+  MIGRATION_058_USAGE_CONTEXT_TOKENS,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
