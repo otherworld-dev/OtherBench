@@ -196,6 +196,12 @@ function pendingMentions(partsJson: string): string[] {
   return ids;
 }
 
+/**
+ * How far the change log's numbering jumps at each start (see the constructor). More entries than commits lost to
+ * a power cut could hold; the numbers are 64-bit, so a million a start is never missed.
+ */
+const SEQ_GAP_PER_START = 1_000_000;
+
 export class SqliteSyncRepo implements SyncRepo {
   private readonly columnCache = new Map<string, string[]>();
 
@@ -203,7 +209,15 @@ export class SqliteSyncRepo implements SyncRepo {
     private readonly db: DatabaseSync,
     private readonly selfId: () => string,
     private readonly clock: SyncClock
-  ) {}
+  ) {
+    // The database runs with `synchronous = NORMAL` (db.ts), so a power cut can take the newest commits with it, and
+    // the change log's numbering goes back with them. A peer that had already pulled those entries holds a cursor past
+    // the end of what is left, and would never ask for changes numbered at or below it. So every start leaves a gap
+    // far wider than a lost tail can be: what is logged from here on is past any cursor a peer holds. (The rows that
+    // were lost come back from that peer, which logged them when it took them.)
+    const moved = this.db.prepare("UPDATE sqlite_sequence SET seq = seq + ? WHERE name = 'change_log'").run(SEQ_GAP_PER_START);
+    if (Number(moved.changes) === 0) this.db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('change_log', ?)").run(SEQ_GAP_PER_START);
+  }
 
   latestSeq(): number {
     return (this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM change_log').get() as { seq: number }).seq;
