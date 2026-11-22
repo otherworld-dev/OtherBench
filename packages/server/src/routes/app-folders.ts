@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { APP_FOLDER_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import type { AppFolder } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * `/api/app-folders`: the folders that group apps in the Code sidebar (one level; an app is in at most one).
@@ -26,8 +27,8 @@ function optionalSortOrder(value: unknown): number | undefined {
   return value;
 }
 
-async function bodyOf<T>(c: { req: { json(): Promise<unknown> } }): Promise<T> {
-  return (await c.req.json().catch(() => ({}))) as T;
+async function bodyOf<T>(c: { req: { text(): Promise<string> } }): Promise<T> {
+  return (await readJsonBody(c)) as T;
 }
 
 export function appFoldersRoutes(container: Container): Hono {

@@ -64,6 +64,14 @@ export type Part =
   | { type: 'context'; kind: 'clear' | 'compact'; focus?: string }
   /** The summary a compact reply carries; it stands in for everything above the compact line. */
   | { type: 'context-summary'; text: string; preTokens?: number; postTokens?: number }
+  /**
+   * On a reply from a model API whose request had its oldest messages swapped for a summary
+   * (docs/features/history-summary.md), when that summary was made or grew: `text` stands in, in requests only,
+   * for every message on this reply's path up to and including `uptoMessageId`, and `covered` is a hash of exactly
+   * those messages, so it is never used for others. Written by TurnRunner, never by a client or an engine; never
+   * replayed to a model as conversation.
+   */
+  | { type: 'history-summary'; uptoMessageId: string; covered: string; text: string }
   /** A user message asking the chat's Claude Code session for a handover summary (spec 2026-11-06-fresh-chat-handover-design); the engine sends its fixed prompt. */
   | { type: 'handover-request' }
   /** A link between a chat and the fresh chat it was handed over to (`to`, on the old chat's summary) or from (`from`, on the new chat's first message). */

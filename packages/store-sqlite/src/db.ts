@@ -1,21 +1,6 @@
-import type { DatabaseSync } from 'node:sqlite';
-import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
-
-// `node:sqlite` has no unprefixed alias (like `node:test`, `node:sea`), and
-// the vite-node version pinned transitively by vitest ^2.1.0 hardcodes its
-// builtin-module allowlist with only `node:test` special-cased for this —
-// `node:sqlite` isn't in it, so a plain `import { DatabaseSync } from
-// 'node:sqlite'` resolves to the bare specifier "sqlite" inside vitest and
-// fails ("Failed to load url sqlite"). `createRequire` bypasses vite-node's
-// static import rewriting (it's a plain function call, not an import
-// declaration) and hits Node's own module loader, which resolves
-// `node:sqlite` correctly both under vitest and under plain `node`. Revisit
-// this once vitest is upgraded past whatever version fixes vite-node's
-// builtins list.
-const require = createRequire(import.meta.url);
-const sqliteModule = require('node:sqlite') as typeof import('node:sqlite');
 
 /**
  * Thrown by {@link assertLocalDatabasePath} (and therefore {@link openDatabase})
@@ -238,7 +223,7 @@ export function assertLocalDatabasePath(path: string): void {
 export function openDatabase(path: string): DatabaseSync {
   assertLocalDatabasePath(path);
 
-  const db = new sqliteModule.DatabaseSync(path);
+  const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
   // The usual setting with a WAL: the log is flushed to disk at checkpoints rather than on every commit (SQLite's
   // default, FULL), which was an fsync per message, stamp and checkpoint written. What it trades: after a power cut

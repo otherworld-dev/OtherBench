@@ -9,6 +9,7 @@ import { addBookmark, editBookmark, listBookmarks, removeBookmark } from '../nex
 import { boardView, createCard } from '../nextcloud/deck.js';
 import { wikiPage, wikiTree } from '../nextcloud/wiki.js';
 import { getAppOrThrow } from './apps.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * An app's Deck board, wiki subtree and links (spec 2026-10-22-nextcloud-tabs).
@@ -93,7 +94,7 @@ export function appNextcloudRoutes(container: Container): Hono {
     const client = await nextcloudOrThrow(container);
     return codeCall(() => fn(client));
   };
-  const bodyOf = async <T>(c: { req: { json(): Promise<unknown> } }): Promise<T> => (await c.req.json().catch(() => ({}))) as T;
+  const bodyOf = async <T>(c: { req: { text(): Promise<string> } }): Promise<T> => (await readJsonBody(c)) as T;
 
   app.get('/:id/deck', async (c) => {
     const boardId = boardOrThrow(appOf(c));

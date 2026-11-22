@@ -117,6 +117,9 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
       return '*Handover to a fresh chat*';
     case 'handover':
       return `*${part.direction === 'to' ? 'Continued in' : 'Continued from'} ${part.title}*`;
+    case 'history-summary':
+      // What a model was sent in place of older messages; the export has those messages themselves.
+      return '';
     case 'context-summary':
       return `**Summary of the conversation so far:**
 

@@ -6,6 +6,7 @@ import { encodeHlc } from '@otherbench/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@otherbench/core/domain/sync.js';
 import { appendDelta, applySubagentEvent, isSubagentEvent } from '@otherbench/core/domain/parts.js';
 import { interruptSubagents } from '@otherbench/core/domain/reconcile.js';
+import { isHistorySummaryPart } from '@otherbench/core/domain/history-summary.js';
 import type { Part, ProducedBy, SerializedError, UserNotePart } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
@@ -23,6 +24,7 @@ import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
 import { PeerVersionError } from './version.js';
 import { attachmentHandoverRoutes, handOverAttachments } from './attachment-handover.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * Running a chat on the machine it runs on (v2 plan, Task 52; spec §5).
@@ -303,6 +305,9 @@ export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
     case 'user-note':
       // A note Claude read there mid-reply, kept in place.
       return isUserNotePart(e['part']) ? [...parts, e['part']] : parts;
+    case 'history-summary':
+      // The summary the machine running the reply made for its request, kept like the part it stores.
+      return isHistorySummaryPart(e['part']) ? [...parts, e['part']] : parts;
     default:
       return parts;
   }
@@ -1095,7 +1100,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   });
 
   app.post('/approvals/:id/resolve', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as Parameters<typeof parseApprovalChoice>[0];
+    const body = (await readJsonBody(c)) as Parameters<typeof parseApprovalChoice>[0];
     const choice = parseApprovalChoice(body);
     const resolved = container.toolProvider.resolveApproval(c.req.param('id'), choice, c.env.peerNodeId);
     if (!resolved) return c.json({ error: `Approval request "${c.req.param('id')}" is unknown or was already resolved.` }, 404);
@@ -1103,7 +1108,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   });
 
   app.post('/asks/:id/answer', async (c) => {
-    const reply = parseAskReply(await c.req.json().catch(() => ({})));
+    const reply = parseAskReply(await readJsonBody(c));
     const result = container.toolProvider.answerAsk(c.req.param('id'), reply);
     if (result === 'unknown') return c.json({ error: `Question or plan "${c.req.param('id')}" is unknown or was already answered.` }, 404);
     if (typeof result === 'object') return c.json({ error: result.invalid }, 400);

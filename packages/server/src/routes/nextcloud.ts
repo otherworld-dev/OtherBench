@@ -12,6 +12,7 @@ import { nextcloudOnOrThrow } from '../features.js';
 import { NEXTCLOUD_SECRET_REF, NEXTCLOUD_SETTING_KEY, nextcloudOrThrow, nextcloudSettings, storedNextcloudSettings } from '../nextcloud/config.js';
 import { archiveCard, changeLabels, completeCard, deleteCard, findCard, moveCard, reopenCard, updateCard } from '../nextcloud/deck.js';
 import { collectivePagePaths } from '../nextcloud/wiki.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * `/api/nextcloud` (spec 2026-10-22-nextcloud-tabs): this machine's Nextcloud
@@ -120,7 +121,7 @@ export function nextcloudRoutes(container: Container): Hono {
    * anything is written.
    */
   app.put('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as SettingsBody;
+    const body = (await readJsonBody(c)) as SettingsBody;
     if (typeof body.baseUrl !== 'string') throw new HTTPException(400, { message: '"baseUrl" must be a string.' });
     if (typeof body.user !== 'string') throw new HTTPException(400, { message: '"user" must be a string.' });
     const user = body.user.trim();
@@ -199,7 +200,7 @@ export function nextcloudRoutes(container: Container): Hono {
 
   app.patch('/cards/:cardId', async (c) => {
     const { cardId, boardId } = cardRef(c);
-    const body = (await c.req.json().catch(() => ({}))) as CardPatchBody;
+    const body = (await readJsonBody(c)) as CardPatchBody;
     const patch: { title?: string; description?: string; duedate?: string | null } = {};
     if (body.title !== undefined) {
       if (typeof body.title !== 'string' || body.title.trim() === '') throw new HTTPException(400, { message: '"title" must not be blank.' });
@@ -218,7 +219,7 @@ export function nextcloudRoutes(container: Container): Hono {
 
   app.post('/cards/:cardId/move', async (c) => {
     const { cardId, boardId } = cardRef(c);
-    const body = (await c.req.json().catch(() => ({}))) as { stackId?: unknown };
+    const body = (await readJsonBody(c)) as { stackId?: unknown };
     if (!Number.isSafeInteger(body.stackId) || (body.stackId as number) < 0) {
       throw new HTTPException(400, { message: '"stackId" must be a column id.' });
     }
@@ -229,7 +230,7 @@ export function nextcloudRoutes(container: Container): Hono {
 
   app.post('/cards/:cardId/labels', async (c) => {
     const { cardId, boardId } = cardRef(c);
-    const body = (await c.req.json().catch(() => ({}))) as { add?: unknown; remove?: unknown };
+    const body = (await readJsonBody(c)) as { add?: unknown; remove?: unknown };
     const change = { add: requireIdList(body.add, 'add'), remove: requireIdList(body.remove, 'remove') };
     await withClient((client) => changeLabels(client, cardId, change, boardId));
     return c.body(null, 204);

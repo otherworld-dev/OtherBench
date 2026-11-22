@@ -14,7 +14,7 @@ import {
 import type { AppSettings, Store } from '@otherbench/core/ports/store.js';
 import { fromTheDesktopApp } from '../computer/desktop-only.js';
 import type { Container } from '../container.js';
-import { optionalNullableString } from '../validation.js';
+import { optionalNullableString, readJsonBody } from '../validation.js';
 
 interface SettingsBody {
   memoryProfileId?: unknown;
@@ -62,7 +62,7 @@ export function settingsRoutes(container: Container, desktopOrigins: readonly st
   app.get('/', (c) => c.json(container.store.settings.get()));
 
   app.patch('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as SettingsBody;
+    const body = (await readJsonBody(c)) as SettingsBody;
     // Every field is validated before anything is written.
     const patch: Partial<AppSettings> = {};
     if (body.memoryProfileId !== undefined) {

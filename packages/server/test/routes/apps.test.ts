@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
@@ -385,7 +385,7 @@ describe('apps CRUD', () => {
 });
 
 describe('linking a repo or a board checks the Overview straight away', () => {
-  let refresh: ReturnType<typeof vi.fn>;
+  let refresh: Mock<() => Promise<void>>;
   beforeEach(() => {
     refresh = vi.fn(() => Promise.resolve());
     container.overview = { refresh } as unknown as OverviewService;

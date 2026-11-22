@@ -7,6 +7,7 @@ import type { Peer } from '@otherbench/core/types/peer.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { PeerError, type PairRequest, type PeerService } from './service.js';
 import { PeerVersionError, VERSION_MISMATCH_KIND, versionExempt, versionsFromHeaders } from './version.js';
+import { readJsonBody } from '../validation.js';
 
 export interface PeerEnv {
   Bindings: { incoming: IncomingMessage };
@@ -54,7 +55,10 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
 
   // Anyone who can reach the listener can call this one while a code is open, so its body is kept small.
   app.post('/peer/pair', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'Pairing request too large.' }, 413) }), async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as PairRequest;
+    // This listener answers a PeerError with its message; anything else is a 500.
+    const body = (await readJsonBody(c).catch((err: unknown) => {
+      throw new PeerError(err instanceof Error ? err.message : String(err), 400);
+    })) as unknown as PairRequest;
     const remote = c.env?.incoming?.socket?.remoteAddress ?? null;
     return c.json(await service.acceptPairing(body, callerFingerprint(c), remote));
   });

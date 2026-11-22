@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import type { Container } from '../container.js';
 import type { ForwardedEnv } from '../peer/forward.js';
 import { sendsOffReason, type Handover, type Outcome } from './remote-port.js';
+import { readJsonBody } from '../validation.js';
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const OUTCOMES: ReadonlySet<string> = new Set(['replied', 'failed', 'stopped', 'dropped']);
@@ -79,7 +80,7 @@ export function chatSendsPeerRoutes(container: Container): Hono<ForwardedEnv> {
   app.post('/chats/:chatId/sends/:sendId/remote-stop', async (c) => {
     const service = container.chatSends;
     if (!service) return notAvailable(c);
-    const body = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const body = (await readJsonBody(c)) as { reason?: unknown };
     const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason : 'Stopped from the machine that sent it.';
     if (container.store.chatSends.get(c.req.param('sendId'))?.toChatId !== c.req.param('chatId')) return c.json({ error: 'No such message came to that chat.' }, 404);
     if (service.takeStop(c.env.peerNodeId, c.req.param('sendId'), reason) === 'unknown') return c.json({ error: 'No such message came from that machine.' }, 404);

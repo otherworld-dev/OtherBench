@@ -10,6 +10,7 @@ import type { CanonMessage, MessageStatus, NoteAttachment, UserNotePart } from '
 import type { NoteOutcome, ReplyNote } from '@otherbench/core/types/notes.js';
 import type { AppEventBus } from '../stream/events.js';
 import type { StreamRegistry } from '../stream/registry.js';
+import type { TurnClaim, TurnGate } from '../turn-gate.js';
 import { lineAfter } from '../turn-start.js';
 
 /**
@@ -27,9 +28,11 @@ export interface NotesServiceDeps {
   turnRunner: TurnRunner;
   engine: ChatEngine;
   streamRegistry: StreamRegistry;
-  /** Starts a turn as `POST /chats/:id/turns` does (turn-start.ts). */
-  startTurn: (input: TurnInput) => Promise<TurnResult>;
+  /** Starts a turn as `POST /chats/:id/turns` does (turn-start.ts), with the claim on its chat. */
+  startTurn: (input: TurnInput, claim?: TurnClaim) => Promise<TurnResult>;
   resolveProfile: (id: string) => Promise<ResolvedProfile>;
+  /** Where the chat is taken while its waiting notes are made into a turn (turn-gate.ts). */
+  gate: TurnGate;
   events?: AppEventBus;
   /** Told a follow-on started, as `startSelfStartedTurn` tells it, so the chat isn't summarised as quiet mid-reply. */
   memory?: { noteTurnStarted(chatId: string): void };
@@ -79,7 +82,8 @@ export class NotesService {
   private readonly turnRunner: TurnRunner;
   private readonly engine: ChatEngine;
   private readonly streamRegistry: StreamRegistry;
-  private readonly startTurn: (input: TurnInput) => Promise<TurnResult>;
+  private readonly startTurn: NotesServiceDeps['startTurn'];
+  private readonly gate: TurnGate;
   private readonly resolveProfile: (id: string) => Promise<ResolvedProfile>;
   private readonly events?: AppEventBus;
   private readonly memory?: { noteTurnStarted(chatId: string): void };
@@ -103,6 +107,7 @@ export class NotesService {
     this.engine = deps.engine;
     this.streamRegistry = deps.streamRegistry;
     this.startTurn = deps.startTurn;
+    this.gate = deps.gate;
     this.resolveProfile = deps.resolveProfile;
     this.events = deps.events;
     this.memory = deps.memory;
@@ -285,7 +290,8 @@ export class NotesService {
    * Sends the chat's wait notes once nothing in it is running: as one turn
    * when every reply they waited on finished, else back to the box (as are
    * those a stopped or failed reply marked `returning`). They hold while a
-   * live note waits for its follow-on, so two replies never run at once.
+   * live note waits for its follow-on, and while anything else is starting a
+   * turn in the chat (the turn gate), so two replies never run at once.
    */
   private settle(chatId: string): void {
     if (this.inFlight.has(chatId) || this.streaming(chatId).length > 0) return;
@@ -297,10 +303,13 @@ export class NotesService {
       this.giveBack(chatId, due);
       return;
     }
-    void this.sendAsTurn(chatId, due);
+    // Something else is starting a turn here right now: they wait for its reply, like any other.
+    const claim = this.gate.claim(chatId);
+    if (!claim) return;
+    void this.sendAsTurn(chatId, due, claim);
   }
 
-  private async sendAsTurn(chatId: string, due: Held[]): Promise<void> {
+  private async sendAsTurn(chatId: string, due: Held[], claim: TurnClaim): Promise<void> {
     // The first note's parent and profiles: what the composer showed when the user started sending.
     const parentId = this.turnParent(due[0]!);
     const notes = this.startDelivering(chatId, due);
@@ -312,11 +321,14 @@ export class NotesService {
       if (first.profileIds.length === 0) throw new Error('no profile was picked');
       const profiles = await Promise.all(first.profileIds.map((id) => this.resolveProfile(id)));
       // TurnRunner.run binds the notes' attachments to the new user message.
-      const { userMessageId } = await this.startTurn({ chatId, parentId, userParts: notesToParts(notes), profiles });
+      const { userMessageId } = await this.startTurn({ chatId, parentId, userParts: notesToParts(notes), profiles }, claim);
       this.delivered(chatId, parentId, userMessageId);
       sent = true;
     } catch (err) {
       console.error(`[otherbench-server] could not send the notes waiting in chat ${chatId}; they go back to the message box:`, err);
+    } finally {
+      // Let go before the notes are resolved, which looks at the chat again.
+      claim.release();
     }
     this.endDelivering(chatId, notes, sent ? 'turn' : 'returned');
   }
@@ -335,33 +347,39 @@ export class NotesService {
     // Checked again: a /clear, or the chat deleted, while the profile resolved.
     const now = this.store.chats.get(chat.id);
     if (!now || lineAfter({ store: this.store }, now.headMessageId, after.id)) return false;
-    this.memory?.noteTurnStarted(chat.id);
-    // A reply that ended without running Claude Code's turn declines it, so the turn is read and dropped.
-    let ran = false;
-    // It binds the notes' attachments to the new user message.
-    const { userMessageId, assistantMessageId } = await this.turnRunner.runFollowOn({
-      chatId: chat.id,
-      parentId: after.id,
-      userParts: notesToParts(notes),
-      profile,
-      stream: (req) => {
-        ran = true;
-        return start.run(req);
-      },
-      onEnd: () => {
-        if (!ran) start.decline();
-      },
-    });
-    this.delivered(chat.id, after.id, userMessageId);
+    // Claude Code is already running this turn, so it is never refused for a busy chat: held in the gate until it is announced.
+    const held = this.gate.hold(chat.id);
     try {
-      this.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
-      // The head goes to the new user message, as a normal send does.
-      this.store.chats.update(chat.id, { headMessageId: userMessageId, updatedAt: this.now() });
-      this.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId] });
-    } catch (err) {
-      console.error(`[otherbench-server] could not announce the follow-on reply ${assistantMessageId}:`, err);
+      this.memory?.noteTurnStarted(chat.id);
+      // A reply that ended without running Claude Code's turn declines it, so the turn is read and dropped.
+      let ran = false;
+      // It binds the notes' attachments to the new user message.
+      const { userMessageId, assistantMessageId } = await this.turnRunner.runFollowOn({
+        chatId: chat.id,
+        parentId: after.id,
+        userParts: notesToParts(notes),
+        profile,
+        stream: (req) => {
+          ran = true;
+          return start.run(req);
+        },
+        onEnd: () => {
+          if (!ran) start.decline();
+        },
+      });
+      this.delivered(chat.id, after.id, userMessageId);
+      try {
+        this.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
+        // The head goes to the new user message, as a normal send does.
+        this.store.chats.update(chat.id, { headMessageId: userMessageId, updatedAt: this.now() });
+        this.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId] });
+      } catch (err) {
+        console.error(`[otherbench-server] could not announce the follow-on reply ${assistantMessageId}:`, err);
+      }
+      return true;
+    } finally {
+      held.release();
     }
-    return true;
   }
 
   /**

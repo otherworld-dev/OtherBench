@@ -13,12 +13,20 @@ interface Node {
   store: SqliteStore;
 }
 
-/** A machine as it was before migration 056. */
+/**
+ * A machine that has not had migration 056. It has every other migration, so today's repositories can write to
+ * it (a usage row has columns from later ones, 058's `context_tokens`).
+ */
 function before056(id: string): Node {
   const db = openDatabase(':memory:');
-  runMigrations(db, MIGRATIONS.filter((m) => m.version <= 55));
+  runMigrations(db, MIGRATIONS.filter((m) => m.version !== 56));
   db.prepare('UPDATE node_self SET id = ?').run(id);
   return { db, store: new SqliteStore(db) };
+}
+
+/** Migration 056 itself, applied to a machine made by `before056`. */
+function migrate056(db: DatabaseSync): void {
+  db.exec(MIGRATIONS.find((m) => m.version === 56)!.sql!);
 }
 
 function pull(from: Node, to: Node, cursor: { seq: number }, limit = 1000): { written: string[] } {
@@ -73,7 +81,7 @@ describe('usage rows a paired machine was refused before the fix (migration 056)
     expect(Object.keys(stamps(b))).toEqual(['had']);
     const hadBefore = stamps(b)['had'];
 
-    runMigrations(a.db);
+    migrate056(a.db);
     const { written } = pull(a, b, cursor, 2);
 
     expect(written.sort()).toEqual(['usage:lost-1', 'usage:lost-2']);
@@ -97,7 +105,7 @@ describe('usage rows a paired machine was refused before the fix (migration 056)
     b.store.usage.delete('gone');
 
     // Offered again by a before it has heard of either change.
-    runMigrations(a.db);
+    migrate056(a.db);
     pull(a, b, toB);
     expect(b.store.usage.get('edited')).toMatchObject({ tokensOut: 99 });
     expect(b.store.usage.get('gone')).toBeNull();
@@ -116,8 +124,8 @@ describe('usage rows a paired machine was refused before the fix (migration 056)
     const seqA = a.store.sync.latestSeq();
     const seqE = empty.store.sync.latestSeq();
 
-    runMigrations(a.db);
-    runMigrations(empty.db);
+    migrate056(a.db);
+    migrate056(empty.db);
 
     expect((a.db.prepare('SELECT tbl, row_id, op FROM change_log WHERE seq > ? ORDER BY seq').all(seqA) as { row_id: string }[]).map((r) => r.row_id).sort()).toEqual(['one', 'two']);
     expect(empty.store.sync.latestSeq()).toBe(seqE);

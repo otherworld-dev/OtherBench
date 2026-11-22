@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
 import { flushSync } from 'react-dom';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
+import { currentHistorySummary } from '@otherbench/core/domain/history-summary.js';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
@@ -10,6 +11,7 @@ import { Composer } from '../components/Composer.js';
 import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { FindBar } from '../components/FindBar.js';
 import { Gwyn } from '../components/Gwyn.js';
+import { HistorySummaryLine } from '../components/HistorySummaryLine.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
 import { ElsewhereWorking } from '../components/ElsewhereWorking.js';
@@ -294,6 +296,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [path, chatMessages]);
 
   const tailId = displayPath.at(-1)?.id ?? null;
+  // Where a model API's request is cut on this branch, if it is: the newest summary a reply on it carries.
+  const summarised = useMemo(() => currentHistorySummary(displayPath)?.part ?? null, [displayPath]);
 
   // Which messages are drawn (lib/threadWindow.ts). Where they start is fixed once a chat is drawn, so a message
   // arriving at the end doesn't take one off the top under a reader who has scrolled up, and moved earlier only as
@@ -811,10 +815,12 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     }
                     const compare = isCompareSet(siblings);
                     const isReopened = compare && siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
+                    // Under the last message the summary covers: everything from here up reaches the model as the summary.
+                    const cutLine = summarised?.uptoMessageId === m.id ? <HistorySummaryLine text={summarised.text} /> : null;
                     if (isReopened) {
                       return (
+                        <Fragment key={`turn-${m.parentId}`}>
                         <VariantTabs
-                          key={`turn-${m.parentId}`}
                           variants={siblings}
                           extras={extras}
                           models={models}
@@ -826,11 +832,14 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                           onResolveApproval={resolveApproval}
                           onAnswerAsk={answerAsk}
                         />
+                        {cutLine}
+                        </Fragment>
                       );
                     }
                     return (
-                      // One message that can't be drawn (a part from a newer paired machine) takes out only itself.
-                      <ErrorBoundary key={m.id} what="this message" variant="inline" raw={m}>
+                      <Fragment key={m.id}>
+                      {/* One message that can't be drawn (a part from a newer paired machine) takes out only itself. */}
+                      <ErrorBoundary what="this message" variant="inline" raw={m}>
                       <ThreadMessage
                         message={m}
                         extras={extras[m.id]}
@@ -848,6 +857,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         actions={messageActions}
                       />
                       </ErrorBoundary>
+                      {cutLine}
+                      </Fragment>
                     );
                   })}
                   {end !== null && (

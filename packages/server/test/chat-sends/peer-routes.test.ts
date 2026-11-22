@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { ChatSendService } from '../../src/chat-sends/service.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi, PeerInfluence } from '../../src/peer/forward.js';
@@ -51,7 +52,7 @@ beforeEach(() => {
       throw new Error('no profiles here');
     },
     resolveWorkspace: () => ({ status: 'none' }),
-    isChatBusy: () => false,
+    gate: new TurnGate(() => false),
     createAppChat: () => {
       throw new Error('no apps here');
     },
@@ -161,6 +162,26 @@ describe('chat sends on the peer listener', () => {
     // Only for the machine that sent it: another machine's id is refused by the setting as usual.
     expect((await post('/chats/B/sends/incoming', { ...H, id: 's9' })).status).toBe(403);
     expect(take).not.toHaveBeenCalled();
+  });
+
+  it('remote-stop takes no body (with or without the JSON content type), and refuses one that is not valid JSON', async () => {
+    store.chatSends.create({ id: 's1', chainId: 'r', depth: 1, fromChatId: 'X', fromMessageId: 'r', toChatId: 'B', createdChat: false, text: 'x', status: 'running', toReplyId: null, replyText: null, reason: null, resumedAs: null, fromNode: 'node-laptop' });
+    const take = vi.spyOn(service, 'takeStop').mockReturnValue('taken');
+    const raw = (init: RequestInit): Promise<Response> => Promise.resolve(forwardedApi(container).request('/chats/B/sends/s1/remote-stop', { method: 'POST', ...init }, { peerNodeId: 'node-laptop' }));
+
+    expect((await raw({})).status).toBe(200);
+    expect((await raw({ headers: { 'Content-Type': 'application/json' } })).status).toBe(200);
+    expect((await raw({ headers: { 'Content-Type': 'application/json' }, body: '' })).status).toBe(200);
+    expect(take).toHaveBeenCalledTimes(3);
+    expect(take).toHaveBeenLastCalledWith('node-laptop', 's1', 'Stopped from the machine that sent it.');
+
+    const bad = await raw({ headers: { 'Content-Type': 'application/json' }, body: '{"reason": ' });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: 'The request body is not valid JSON.' });
+    const list = await raw({ headers: { 'Content-Type': 'application/json' }, body: '["reason"]' });
+    expect(list.status).toBe(400);
+    expect(await list.json()).toEqual({ error: 'The request body must be a JSON object.' });
+    expect(take).toHaveBeenCalledTimes(3);
   });
 
   it('remote-stop passes the chat marking without peerComputerControl, and reaches takeStop', async () => {

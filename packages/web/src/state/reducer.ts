@@ -71,6 +71,8 @@ export function applyEventToMessage(
         extras: withoutProgress(extras, event.id),
       };
     case 'user-note':
+    // The part TurnRunner stored on the reply; the thread draws its line where the part says (HistorySummaryLine).
+    case 'history-summary':
       return { message: { ...message, parts: [...message.parts, event.part] }, extras };
     case 'finish':
       return { message, extras: { ...extras, usage: event.usage } };
@@ -184,6 +186,7 @@ function storedOnly(part: Part): boolean {
     case 'tool-result':
     case 'notice':
     case 'context-summary':
+    case 'history-summary':
     case 'user-note':
     case 'subagent':
       return false;

@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { ClaudeExportError } from '@otherbench/core/domain/claude-import.js';
 import type { Container } from '../container.js';
 import { ImportBusyError, ImportInputError, type ClaudeImportService } from '../import/claude-import.js';
-import { optionalBoolean, optionalNullableString, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNullableString, requireNonEmptyString, readJsonBody } from '../validation.js';
 
 interface ImportBody {
   folder?: unknown;
@@ -50,7 +50,7 @@ export function importRoutes(container: Container): Hono {
   app.get('/claude', (c) => c.json(service().status()));
 
   app.post('/claude/preview', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ImportBody;
+    const body = (await readJsonBody(c)) as ImportBody;
     // No folder means just this machine's Cowork sessions.
     const folder = optionalNullableString(body.folder, 'folder') ?? '';
     const profileId = optionalNullableString(body.profileId, 'profileId') ?? null;
@@ -62,7 +62,7 @@ export function importRoutes(container: Container): Hono {
   });
 
   app.post('/claude', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ImportBody;
+    const body = (await readJsonBody(c)) as ImportBody;
     const folder = optionalNullableString(body.folder, 'folder') ?? '';
     const profileId = requireNonEmptyString(body.profileId, 'profileId');
     const memory = optionalBoolean(body.memory, 'memory', true);

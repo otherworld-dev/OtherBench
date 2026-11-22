@@ -427,6 +427,18 @@ describe('StreamRegistry', () => {
     expect(buffer.events).toContainEqual({ messageId: 'assistant-1', type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 });
   });
 
+  it('rebuilds a stored history-summary part into a history-summary event', () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const part: Part = { type: 'history-summary', uptoMessageId: 'a4', covered: 'hash', text: 'What came before.' };
+    store.messages.create({ id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'streaming', error: null, producedBy: null, parts: [part, { type: 'text', text: 'Hi' }] });
+    const { engine } = manualEngine();
+    const registry = new StreamRegistry(new TurnRunner(store, engine), store);
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === 'assistant-1')!;
+    expect(buffer.events).toContainEqual({ messageId: 'assistant-1', type: 'history-summary', part });
+  });
+
   it('rebuilds a user-note part as a user-note event', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });

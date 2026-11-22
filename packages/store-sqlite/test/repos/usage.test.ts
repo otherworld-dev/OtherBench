@@ -77,6 +77,22 @@ describe('SqliteUsageRepo', () => {
     db.close();
   });
 
+  it("round-trips a summarising call's purpose and a reply's context size, and reads a row without them back without them", () => {
+    const db = freshDb();
+    seedChatChain(db, { connectionId: 'c1', modelId: 'm1', profileId: 'p1', chatId: 'chat-a' });
+    new SqliteMessageRepo(db).create({ id: 'msg-a', chatId: 'chat-a', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const repo = new SqliteUsageRepo(db);
+
+    repo.create(makeUsage({ id: 'summary', chatId: 'chat-a', messageId: 'msg-a', profileId: 'p1', connectionId: 'c1', modelId: 'm1', purpose: 'summary' }));
+    repo.create(makeUsage({ id: 'own', chatId: 'chat-a', messageId: 'msg-a', profileId: 'p1', connectionId: 'c1', modelId: 'm1', contextTokens: 41_000 }));
+
+    expect(repo.get('summary')).toMatchObject({ purpose: 'summary' });
+    expect(repo.get('summary')).not.toHaveProperty('contextTokens');
+    expect(repo.get('own')).toMatchObject({ contextTokens: 41_000 });
+    expect(repo.get('own')).not.toHaveProperty('purpose');
+    db.close();
+  });
+
   it('list(chatId) filters to that chat', () => {
     const db = freshDb();
     seedChatChain(db, { connectionId: 'c1', modelId: 'm1', profileId: 'p1', chatId: 'chat-a' });

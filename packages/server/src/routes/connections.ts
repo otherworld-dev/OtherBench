@@ -15,7 +15,7 @@ import { comfyCheckpoints, comfySystemSummary } from '@otherbench/tools/media/co
 import { findComfyUI, recentWorkflows, textTemplates } from '../comfy-library.js';
 import type { Container } from '../container.js';
 import { backendOf, mediaConnectionOf } from '../media.js';
-import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
+import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString, readJsonBody } from '../validation.js';
 
 const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'lmstudio', 'claude_code', 'mock', 'comfyui', 'a1111', 'openai_images'];
 
@@ -221,7 +221,7 @@ export function connectionsRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(container.store.connections.list()));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ConnectionBody;
+    const body = (await readJsonBody(c)) as ConnectionBody;
     const name = requireNonEmptyString(body.name, 'name');
     const kind = parseKind(body.kind);
     const baseUrl = optionalNullableString(body.baseUrl, 'baseUrl');
@@ -265,7 +265,7 @@ export function connectionsRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getConnectionOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as ConnectionBody;
+    const body = (await readJsonBody(c)) as ConnectionBody;
 
     const patch: Partial<Omit<Connection, 'id'>> = {};
     if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');

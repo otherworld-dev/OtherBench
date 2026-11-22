@@ -93,6 +93,10 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
         // A note Claude read mid-reply, in place, as it came live.
         events.push({ messageId: message.id, type: 'user-note', part });
         break;
+      case 'history-summary':
+        // The summary this reply's request carried, so a reconnecting client keeps the thread's line.
+        events.push({ messageId: message.id, type: 'history-summary', part });
+        break;
       case 'context':
       case 'image':
       case 'file':

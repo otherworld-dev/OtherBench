@@ -24,6 +24,7 @@ const mapping: CrudMapping<UsageRecord> = {
     'subagent_call_id',
     'tokens_cache_write',
     'purpose',
+    'context_tokens',
   ],
   toRow: (u) => [
     u.id,
@@ -42,6 +43,7 @@ const mapping: CrudMapping<UsageRecord> = {
     u.subagentCallId ?? null,
     u.tokensCacheWrite ?? 0,
     u.purpose ?? null,
+    u.contextTokens ?? null,
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -60,7 +62,8 @@ const mapping: CrudMapping<UsageRecord> = {
     ...(typeof row.subagent_call_id === 'string' ? { subagentCallId: row.subagent_call_id } : {}),
     // Absent when nothing was written, as on a row from before caching (and InMemoryStore's).
     ...(typeof row.tokens_cache_write === 'number' && row.tokens_cache_write > 0 ? { tokensCacheWrite: row.tokens_cache_write } : {}),
-    ...(row.purpose === 'title' || row.purpose === 'memory' ? { purpose: row.purpose } : {}),
+    ...(row.purpose === 'title' || row.purpose === 'memory' || row.purpose === 'summary' ? { purpose: row.purpose } : {}),
+    ...(typeof row.context_tokens === 'number' ? { contextTokens: row.context_tokens } : {}),
   }),
 };
 

@@ -10,6 +10,7 @@ import type { Container } from '../src/container.js';
 import { HandoverService } from '../src/handover/service.js';
 import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
+import { TurnGate } from '../src/turn-gate.js';
 
 const usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 const producedBy = { profileId: 'p1', profileName: 'CC', connectionId: 'cc', modelId: 'opus' };
@@ -152,6 +153,43 @@ describe('POST /api/chats/:id/handover', () => {
     expect(await res.json()).toMatchObject({ kind: 'busy' });
     release();
     await vi.waitFor(() => expect(container.store.messages.get(busy.assistantMessageIds[0]!)!.status).not.toBe('streaming'));
+  });
+
+  it('refuses while something else is starting a turn in the chat', async () => {
+    const gate = new TurnGate(() => false);
+    container.turnGate = gate;
+    const other = gate.hold('chat-1');
+    const res = await post('chat-1', { messageId: 'a1' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ kind: 'busy' });
+    expect(container.handover!.isRunning('chat-1')).toBe(false);
+    other.release();
+    expect((await post('chat-1', { messageId: 'a1' })).status).toBe(202);
+    await handedOver();
+    expect(gate.isBusy('chat-1')).toBe(false);
+  });
+
+  it('holds the chat while its profile resolves, and is refused with nothing written if the person starts a turn there meanwhile', async () => {
+    const gate = new TurnGate(() => false);
+    container.turnGate = gate;
+    container.store.connections.update('cc', { secretRef: 'key' });
+    let arrive!: (key: string | null) => void;
+    const read = vi.spyOn(container.secrets, 'get').mockImplementation(() => new Promise<string | null>((resolve) => (arrive = resolve)));
+    const asked = post('chat-1', { messageId: 'a1' });
+    await vi.waitFor(() => expect(read).toHaveBeenCalled());
+    // Taken before anything was awaited.
+    expect(gate.claim('chat-1')).toBeNull();
+
+    // A send by the person is never refused: it holds the chat beside the handover's claim.
+    const mine = gate.hold('chat-1');
+    arrive(null);
+    const res = await asked;
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ kind: 'busy' });
+    expect(container.store.messages.children('a1')).toEqual([]);
+    expect(container.handover!.isRunning('chat-1')).toBe(false);
+    mine.release();
+    expect(gate.isBusy('chat-1')).toBe(false);
   });
 
   it.each<[string, SerializedError]>([

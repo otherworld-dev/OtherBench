@@ -2,7 +2,7 @@ import type { PricingSnapshot } from '../../types/usage.js';
 
 // --- usage ----------------------------------------------------------------
 
-export type UsagePurpose = 'title' | 'memory';
+export type UsagePurpose = 'title' | 'memory' | 'summary';
 
 export interface UsageRecord {
   id: string;
@@ -23,10 +23,14 @@ export interface UsageRecord {
   /**
    * Set on the row of a call OtherBench made by itself about a reply: naming
    * the chat after it (`title`), or folding it into project or global memory
-   * (`memory`). The row hangs off that reply (`messageId`) but carries the
-   * profile that made the call. Absent on a reply's own row.
+   * (`memory`), or summarising the oldest messages for its request
+   * (`summary`, docs/features/history-summary.md). The row hangs off that
+   * reply (`messageId`) but carries the profile that made the call. Absent on
+   * a reply's own row.
    */
   purpose?: UsagePurpose;
+  /** What the reply's last model call read (`Usage.contextTokens`), when the engine said. Absent otherwise. */
+  contextTokens?: number;
   /**
    * Set on a sub-agent's own usage row (spec 2026-10-12-api-subagents-design):
    * the parent's `subagent` tool call id. The row hangs off the parent reply

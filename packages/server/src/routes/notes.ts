@@ -6,7 +6,7 @@ import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { NoteAttachment } from '@otherbench/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
-import { requireNonEmptyString } from '../validation.js';
+import { requireNonEmptyString, readJsonBody } from '../validation.js';
 import { engineCommands } from './commands.js';
 import { contextCommandOf, getChatOrThrow, isPlainObject, parseProfileIds, workspaceRefusal } from './turns.js';
 
@@ -86,7 +86,7 @@ export function notesRoutes(container: Container): Hono {
     const refusal = workspaceRefusal(container, c, chatId);
     if (refusal) return refusal;
 
-    const body = (await c.req.json().catch(() => ({}))) as NoteBody;
+    const body = (await readJsonBody(c)) as NoteBody;
     if (typeof body.text !== 'string') throw new HTTPException(400, { message: '"text" must be a string.' });
     const text = body.text;
     const clientId = requireNonEmptyString(body.clientId, 'clientId');

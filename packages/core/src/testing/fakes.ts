@@ -881,6 +881,9 @@ class InMemoryRemoteSessionRepo implements RemoteSessionRepo {
   /** Runs after a row is deleted, as SQLite's ON DELETE CASCADE does for push subscriptions. */
   onDelete: (id: string) => void = () => {};
   insert(session: RemoteSession): void {
+    // Like the table's PRIMARY KEY and its UNIQUE token_hash: a second row with either is refused.
+    if (this.rows.has(session.id)) throw new Error(`Duplicate id: ${session.id}`);
+    for (const s of this.rows.values()) if (s.tokenHash === session.tokenHash) throw new Error('UNIQUE constraint failed: remote_session.token_hash');
     this.rows.set(session.id, { ...session });
   }
   byTokenHash(tokenHash: string): RemoteSession | null {
@@ -915,7 +918,10 @@ class InMemoryPushSubscriptionRepo implements PushSubscriptionRepo {
     // Like the table's foreign key: a subscription needs a live session.
     if (!this.sessionExists(sub.sessionId)) throw new Error('FOREIGN KEY constraint failed');
     for (const [id, row] of this.rows) if (row.endpoint === sub.endpoint && id !== sub.sessionId) this.rows.delete(id);
-    this.rows.set(sub.sessionId, { ...sub, prefs: { ...sub.prefs } });
+    // A session's second subscription replaces the first but keeps when it first subscribed, as SQLite's upsert does.
+    const createdAt = this.rows.get(sub.sessionId)?.createdAt ?? sub.createdAt;
+    // Re-set rather than updated in place, but an existing key keeps its place in the map: `list` breaks ties by it.
+    this.rows.set(sub.sessionId, { ...sub, createdAt, prefs: { ...sub.prefs } });
   }
   bySession(sessionId: string): PushSubscriptionRecord | null {
     const row = this.rows.get(sessionId);
@@ -1630,8 +1636,21 @@ class InMemoryArtifactRepo implements ArtifactRepo {
   private readonly artifacts = new Map<string, Artifact>();
   private readonly versionsById = new Map<string, ArtifactVersion>();
 
+  constructor(private readonly chatExists: (chatId: string) => boolean = () => true) {}
+
+  /** Mirrors artifact.chat_id's ON DELETE CASCADE, and artifact_version.artifact_id's after it. */
+  chatDeleted(chatId: string): void {
+    for (const [id, a] of this.artifacts) {
+      if (a.chatId !== chatId) continue;
+      this.artifacts.delete(id);
+      for (const [versionId, v] of this.versionsById) if (v.artifactId === id) this.versionsById.delete(versionId);
+    }
+  }
+
   create(a: Artifact): Artifact {
     if (this.artifacts.has(a.id)) throw new Error(`Artifact "${a.id}" already exists.`);
+    // Like the table's foreign key: an artifact needs its chat.
+    if (!this.chatExists(a.chatId)) throw new Error('FOREIGN KEY constraint failed');
     this.artifacts.set(a.id, { ...a });
     return { ...a };
   }
@@ -1649,6 +1668,7 @@ class InMemoryArtifactRepo implements ArtifactRepo {
   addVersion(v: NewArtifactVersion): ArtifactVersion {
     const artifact = this.artifacts.get(v.artifactId);
     if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
+    if (this.versionsById.has(v.id)) throw new Error(`Duplicate id: ${v.id}`);
     const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
     const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, live: v.live ?? null, number };
     this.versionsById.set(v.id, full);
@@ -1855,6 +1875,62 @@ class InMemoryScheduleRepo implements ScheduleRepo {
   }
 }
 
+/** The stores running a transaction now (kept off the store, which `snapshotOf` walks). */
+const inTransaction = new WeakSet<object>();
+
+/** Rows and other plain data, as opposed to a repo (a class instance) that holds some. */
+function isPlainData(value: object): boolean {
+  if (Array.isArray(value)) return true;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Copies everything the store's repos hold and returns a function that puts
+ * it back. It walks from the store through every repo it can reach (repos
+ * refer to each other, and wrap an `InMemoryCrudRepo`): a `Map` or `Set` is
+ * refilled in place, since closures elsewhere hold on to it, and any other
+ * field (a counter, a list of rows, the settings object) is assigned back.
+ * Functions (the cascade callbacks, a test's spies) are left as they are.
+ */
+function snapshotOf(store: object): () => void {
+  const restores: (() => void)[] = [];
+  const seen = new Set<object>();
+  const visit = (owner: object): void => {
+    if (seen.has(owner)) return;
+    seen.add(owner);
+    const fields = owner as Record<string, unknown>;
+    for (const key of Object.keys(fields)) {
+      const value = fields[key];
+      if (typeof value === 'function') continue;
+      if (value instanceof Map) {
+        const copy = structuredClone(value) as Map<unknown, unknown>;
+        restores.push(() => {
+          value.clear();
+          for (const [k, v] of copy) value.set(k, v);
+        });
+      } else if (value instanceof Set) {
+        const copy = structuredClone(value) as Set<unknown>;
+        restores.push(() => {
+          value.clear();
+          for (const v of copy) value.add(v);
+        });
+      } else if (typeof value === 'object' && value !== null && !isPlainData(value)) {
+        visit(value);
+      } else {
+        const copy = structuredClone(value);
+        restores.push(() => {
+          fields[key] = copy;
+        });
+      }
+    }
+  };
+  visit(store);
+  return () => {
+    for (const restore of restores) restore();
+  };
+}
+
 /** A `Store` test double backed entirely by in-memory `Map`s. No SQL, no I/O. */
 export class InMemoryStore implements Store {
   readonly nodes: NodeRepo;
@@ -1879,7 +1955,7 @@ export class InMemoryStore implements Store {
   readonly usage: UsageRepo = new InMemoryUsageRepo();
   readonly mcpServers: McpServerRepo = new InMemoryMcpServerRepo();
   readonly grants: GrantRepo = new InMemoryGrantRepo();
-  readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
+  readonly artifacts: ArtifactRepo;
   readonly audit: AuditRepo;
   readonly schedules: ScheduleRepo;
   readonly remoteSessions: RemoteSessionRepo;
@@ -1897,7 +1973,12 @@ export class InMemoryStore implements Store {
     this.pushSubscriptions = pushSubscriptions;
     const schedules = new InMemoryScheduleRepo();
     this.schedules = schedules;
-    const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));
+    const artifacts = new InMemoryArtifactRepo((id) => this.chats.get(id) !== null);
+    this.artifacts = artifacts;
+    const chats = new InMemoryChatRepo(selfNodeId, (id) => {
+      schedules.chatDeleted(id);
+      artifacts.chatDeleted(id);
+    });
     this.chats = chats;
     this.messages = new InMemoryMessageRepo(selfNodeId, chats);
     this.audit = new InMemoryAuditRepo(selfNodeId);
@@ -1926,9 +2007,25 @@ export class InMemoryStore implements Store {
     this.profiles = new InMemoryProfileRepo(this.projects, this.apps, (id) => schedules.profileDeleted(id));
   }
 
-  /** Just runs `fn`: there is nothing to roll back to. */
+  /**
+   * Runs `fn`, and if it throws puts every repo back as it was before, as
+   * SQLite's ROLLBACK does: callers write several rows in one and count on
+   * none of them staying when a later one fails (an import's chat and its
+   * messages, a schedule's timetable and its run). A nested one just runs,
+   * inside the outer one's all-or-nothing, as in `SqliteStore`.
+   */
   transaction<T>(fn: () => T): T {
-    return fn();
+    if (inTransaction.has(this)) return fn();
+    const rollBack = snapshotOf(this);
+    inTransaction.add(this);
+    try {
+      return fn();
+    } catch (err) {
+      rollBack();
+      throw err;
+    } finally {
+      inTransaction.delete(this);
+    }
   }
 
   close(): void {
