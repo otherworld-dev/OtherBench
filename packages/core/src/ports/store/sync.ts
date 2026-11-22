@@ -34,6 +34,21 @@ export interface SyncRepo {
   missingBlobs(): { id: string; sha256: string; size: number }[];
   /** Whether a blob belongs to a file that has been sent in a message (only those leave this machine). */
   isSentBlob(sha256: string): boolean;
+  /**
+   * Notes that paired machine `nodeId` asked for changes after `since`: it has everything up to there. What
+   * `pruneLog` goes by. A lower `since` than last time (the machine lost its newest commits) is taken as it is.
+   */
+  notePulled(nodeId: string, since: number): void;
+  /**
+   * One bounded step of tidying the change log and the tombstones: looks at up to `limit` logged rows after
+   * `after` (null to start a pass) and answers where to carry on from, null once the pass is done.
+   *
+   * Only at or below what every paired machine has stood past for `PULL_SETTLE_MS` (everything, with none
+   * paired): a row keeps its first and last entries there, which are what a machine pairing later reads it by,
+   * and a deleted row its delete. A delete's tombstone and entry go once it is also `TOMBSTONE_KEEP_MS` old. A machine that
+   * is paired and has not pulled holds all of it back.
+   */
+  pruneLog(step: { now: number; limit: number; after: string | null }): { entries: number; tombstones: number; after: string | null };
   /** Observes a stamp from another machine (its clock runs a little ahead, say); one too far ahead is not followed. */
   observe(hlc: string): void;
 }
