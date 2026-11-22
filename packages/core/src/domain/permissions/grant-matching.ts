@@ -251,7 +251,28 @@ function commandPrefixMatches(prefix: string, command: string): boolean {
   return !SHELL_METACHARACTERS.test(trimmedCommand);
 }
 
-const SHELL_METACHARACTERS = /[&|;`$<>\n\r]/;
+/**
+ * Any character with which one of the shells a grant can serve (cmd.exe and sh
+ * for `run_command`, bash/zsh and PowerShell for Claude Code's tools) can start
+ * a second command from inside the arguments. The matcher does not know which
+ * shell will run the command, so the set is the union:
+ *
+ *   & | ; < > newline   chaining, piping, redirection (all of them)
+ *   ` $                 sh substitution; PowerShell's `$( )`, variables, and
+ *                       its backtick line continuation
+ *   ( )                 PowerShell evaluates `(cmd)` and `@(cmd)` in argument
+ *                       position; zsh runs code in a glob qualifier `*(e:cmd:)`
+ *   { }                 PowerShell runs the value statements of `@{a=cmd}`
+ *   %                   cmd.exe expands `%VAR%` BEFORE it parses the line, so a
+ *                       variable holding "&" (or one character sliced out of
+ *                       it, `%VAR:~3,1%`) becomes a real separator
+ *
+ * cmd's `^` is not here on purpose: it only escapes the next character, and
+ * every character it could usefully escape is refused already. The cost of the
+ * last three rows is that a harmless `git log --format=%h` or `stash@{0}` under
+ * a prefix grant asks again; that is the safe way round.
+ */
+const SHELL_METACHARACTERS = /[&|;`$<>(){}%\n\r]/;
 
 /** The sources whose grants are pinned to one `host`: the sandbox's network and the browser. */
 export function isHostKeyed(source: ToolSource): source is 'network' | 'browser' {
