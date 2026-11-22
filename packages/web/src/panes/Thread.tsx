@@ -110,6 +110,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   // The chat's running replies, for Escape (the section's onKeyDown) as well as the composer's Stop.
   const replies = useStopReply(chat?.id ?? null);
   const resetMessageForRetry = useOtherBenchStore((s) => s.resetMessageForRetry);
+  // Why this chat's messages didn't load (useChatSync), shown only while there is nothing to draw.
+  const loadError = useOtherBenchStore((s) => (chat ? (s.chatLoadErrors[chat.id] ?? null) : null));
+  const retryChatLoad = useOtherBenchStore((s) => s.retryChatLoad);
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat?.id ?? ''));
   const setViewerOpen = useViewerStore((s) => s.setOpen);
   const setViewerShare = useViewerStore((s) => s.setShare);
@@ -623,7 +626,16 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
             )}
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-                {displayPath.length === 0 && chat.headMessageId !== null ? (
+                {displayPath.length === 0 && chat.headMessageId !== null && loadError !== null ? (
+                  // The messages didn't load: said, with a way to try again, rather than "Opening the chat…" for ever.
+                  <div role="alert" className="flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-muted)]">
+                    <span className="text-[var(--danger)]">Couldn't open this chat.</span>
+                    <span className="max-w-full break-words text-xs text-[var(--text-faint)]">{loadError}</span>
+                    <button type="button" onClick={() => retryChatLoad(chat.id)} className="btn px-3 py-1 text-xs">
+                      Retry
+                    </button>
+                  </div>
+                ) : displayPath.length === 0 && chat.headMessageId !== null ? (
                   // The chat has messages, they just haven't arrived: Gwyn waits with you, held back a moment so a quick load never flashes him.
                   <div role="status" className="gwyn-appear flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-faint)]" style={{ '--gwyn-delay': '300ms' } as CSSProperties}>
                     <Gwyn mood="loading" className="h-24 w-24" />

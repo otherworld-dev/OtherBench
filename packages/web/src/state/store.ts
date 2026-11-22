@@ -167,6 +167,11 @@ function readNoteIds(state: Pick<OtherBenchState, 'messages' | 'pendingEvents'>,
   return ids;
 }
 
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _gone, ...rest } = record;
+  return rest;
+}
+
 function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
 }
@@ -333,6 +338,13 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   syncRevision: 0,
   lastTurnFinished: null,
   chatReloads: {},
+  chatLoadErrors: {},
+  setChatLoadError: (chatId, error) =>
+    set((state) => {
+      if (error === null) return chatId in state.chatLoadErrors ? { chatLoadErrors: withoutKey(state.chatLoadErrors, chatId) } : {};
+      return { chatLoadErrors: { ...state.chatLoadErrors, [chatId]: error } };
+    }),
+  retryChatLoad: (chatId) => set((state) => ({ chatLoadErrors: withoutKey(state.chatLoadErrors, chatId), chatReloads: bump(state.chatReloads, chatId) })),
   machines: null,
   setMachines: (machines) =>
     set((state) => {

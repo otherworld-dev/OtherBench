@@ -227,6 +227,28 @@ describe('Thread', () => {
     expect(screen.queryByTestId('gwyn')).toBeNull();
   });
 
+  it("says so when an opened chat's messages didn't load, with a Retry that loads them again", async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })], messages: {}, chatLoadErrors: { 'chat-1': 'server unreachable' } });
+    render(<ThreadForChat chatId="chat-1" />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't open this chat.");
+    expect(alert).toHaveTextContent('server unreachable');
+    expect(screen.queryByText('Opening the chat…')).toBeNull();
+
+    await userEvent.setup().click(within(alert).getByRole('button', { name: 'Retry' }));
+    // Asked to load again (useChatSync does it), and back to opening meanwhile.
+    expect(useOtherBenchStore.getState().chatReloads['chat-1']).toBe(1);
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+    expect(screen.getByText('Opening the chat…')).toBeInTheDocument();
+  });
+
+  it("keeps showing a chat's messages when a later reload of them fails", () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })], messages: { u1: makeMessage('u1', 'chat-1') }, chatLoadErrors: { 'chat-1': 'server unreachable' } });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(within(screen.getByTestId('thread-scroll')).getByText('text of u1')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't open this chat.")).toBeNull();
+  });
+
   it('has Gwyn wave in a chat with no messages yet', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
