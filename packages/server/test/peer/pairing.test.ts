@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { PAIRING_CODE_TTL_MS, hashPeerToken } from '@otherbench/core/domain/pairing.js';
+import { PAIRING_CODE_TTL_MS, PEER_PROTOCOL_VERSION, hashPeerToken } from '@otherbench/core/domain/pairing.js';
 import { PeerClient } from '../../src/peer/client.js';
 import { IdentityStore } from '../../src/peer/identity.js';
 import { PeerError } from '../../src/peer/service.js';
@@ -68,7 +68,7 @@ describe('pairing', () => {
     expect((await laptop.service.call('node-PC', { method: 'GET', path: '/peer/info' })).body).toEqual({
       nodeId: 'node-PC',
       name: 'PC',
-      protocolVersion: 2,
+      protocolVersion: PEER_PROTOCOL_VERSION,
       schemaVersion: 12,
       platform: 'win32',
     });

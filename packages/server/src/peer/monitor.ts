@@ -18,6 +18,8 @@ export interface PeerMonitorOptions {
   maxBackoffMs?: number;
   /** Each event a peer's stream carries, other than its hello (Task 51 listens for `changes-available`). */
   onMessage?: (nodeId: string, event: string, data: unknown) => void;
+  /** What a peer says of itself as its stream opens (its `PeerInfo`): heard again on every reconnect. */
+  onHello?: (nodeId: string, data: unknown) => void;
   /** A peer's stream (re)connected: a good moment to sync with it. */
   onConnected?: (nodeId: string) => void;
   /** How long a stream may go without a byte (keepalives included) before it's taken as lost. */
@@ -184,7 +186,8 @@ export class PeerMonitor {
             await readEventStream(
               response,
               (event, data) => {
-                if (event !== 'hello') this.options.onMessage?.(nodeId, event, data);
+                if (event === 'hello') this.options.onHello?.(nodeId, data);
+                else this.options.onMessage?.(nodeId, event, data);
               },
               heardFrom
             );

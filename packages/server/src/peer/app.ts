@@ -6,6 +6,7 @@ import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
 import type { Peer } from '@otherbench/core/types/peer.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { PeerError, type PairRequest, type PeerService } from './service.js';
+import { PeerVersionError, VERSION_MISMATCH_KIND, versionExempt, versionsFromHeaders } from './version.js';
 
 export interface PeerEnv {
   Bindings: { incoming: IncomingMessage };
@@ -43,6 +44,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
   const app = new Hono<PeerEnv>();
 
   app.onError((err, c) => {
+    if (err instanceof PeerVersionError) return c.json(err.body(), err.status);
     if (err instanceof PeerError) return c.json({ error: err.message }, err.status);
     console.error('[otherbench-server] peer listener error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
@@ -65,6 +67,18 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
   };
   app.use('/peer/*', pairedOnly);
   app.use('/api/*', pairedOnly);
+
+  // And only one running this machine's version (peer/version.ts), which it sends with every call: a build that
+  // sends none is older. Refused before anything is read or done, with what this machine runs, so the caller can say
+  // which of the two to update. Finding that out, unpairing and every Stop pass (`versionExempt`).
+  const sameVersion = async (c: Context<PeerEnv>, next: () => Promise<void>): Promise<Response | void> => {
+    if (versionExempt(c.req.method, c.req.path)) return next();
+    const verdict = service.callerMismatch(c.get('peer'), versionsFromHeaders((name) => c.req.header(name)));
+    if (verdict) return c.json({ error: verdict.message, kind: VERSION_MISMATCH_KIND, info: service.info() }, 409);
+    await next();
+  };
+  app.use('/peer/*', sameVersion);
+  app.use('/api/*', sameVersion);
 
   /** Running a chat that runs here, for the paired machine whose UI it's open in (Task 52). */
   app.all('/api/*', async (c) => {

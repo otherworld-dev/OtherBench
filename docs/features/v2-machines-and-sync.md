@@ -152,6 +152,40 @@ desktop app and lets two machines share chats. Built so far:
   is never synced and isn't on the peer listener, so the laptop can't turn
   it on.
 
+**Same version on every machine:** paired machines do nothing together
+unless both run the same version, which means the same peer protocol
+number and database schema (`server/src/peer/version.ts`). It used to stop
+only sync; it now stops everything: running a chat on the other machine,
+relaying its stream, notes, regenerate, the head, commands, cards and
+questions, the Inspector's grants, MCP servers and audit trail, its
+schedules and folders, chat sends across machines, files handed over, and
+sync. The app version is not compared (a local build and a beta with the
+same two numbers work together), so anything that changes what machines say
+to each other must bump `PEER_PROTOCOL_VERSION` (`core/domain/pairing.ts`).
+It is checked on both sides. The caller refuses before sending
+(`PeerService.call`, and `checkVersion` ahead of a relayed stream) from what
+the other machine last said of itself: the hello of its `/peer/events`
+stream, heard again on every reconnect, and each sync's `/peer/info`; a
+machine that hasn't said, or isn't connected, is asked once. The listener
+refuses a caller whose versions, sent as headers on every call
+(`x-otherbench-protocol`, `x-otherbench-schema`), differ from its own, with
+409 `peer_version_mismatch` and what it runs; a caller that sends none is an
+older build and is refused the same. Either way this machine's UI gets 409
+`peer_version_mismatch` with the sentence Settings → Machines shows ("PC
+runs a different version of OtherBench (...). Update Laptop to sync."), and
+a chat that runs on such a machine shows it above the message box, with Run
+here, and "PC runs a different version" in its header. What a mismatched
+machine can still do, and nothing else: read `GET /peer/info` and hold
+`GET /peer/events` open (so each knows the other's version, that it is
+reachable, and which chats it is replying in or holds computer use for:
+ids, times and the schedule rows, never content), pair and unpair
+(`POST /peer/pair`, `POST /peer/revoke`), and every Stop (`POST
+/api/chats/:id/stop`, `/api/messages/:id/cancel`,
+`/api/chats/:id/computer/stop`, `/api/chats/:id/helpers/:taskId/stop`,
+`/api/chats/:id/sends/stop`, `/api/chats/:id/sends/:sendId/remote-stop`),
+because Stop is always allowed. Tested with two real servers over TLS
+(`server/test/peer/version-gate.test.ts`).
+
 **Notification clicks:** on Windows a notification is a WinRT toast shown
 by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On
 other platforms the Tauri notification plugin can't report clicks, so

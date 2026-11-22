@@ -21,6 +21,7 @@ import { listLocationDirs } from './location-dirs.js';
 import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
 import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
+import { PeerVersionError } from './version.js';
 import { attachmentHandoverRoutes, handOverAttachments } from './attachment-handover.js';
 
 /**
@@ -539,6 +540,14 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
   const peer = peers.peer(nodeId);
   const token = await peers.heldToken(nodeId);
   if (!peer || !token) return unreachable(c, nodeId, 'That machine is no longer paired.');
+  // The stream is opened on the client itself, past `PeerService.call`: the same check first.
+  try {
+    await peers.checkVersion(nodeId);
+  } catch (err) {
+    if (err instanceof PeerVersionError) return c.json(err.body(), err.status);
+    if (err instanceof PeerError && err.status === 503) return unreachable(c, nodeId, err.message);
+    throw err;
+  }
   let upstream;
   try {
     upstream = await peers.client.stream({ addresses: peer.addresses, fingerprint: peer.fingerprint }, { method: 'GET', path: `/api/chats/${chatId}/stream`, token, headers: { accept: 'text/event-stream' } });
@@ -548,6 +557,11 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
   if (upstream.response.statusCode !== 200) {
     upstream.response.resume();
     upstream.close();
+    // Its listener refuses a machine on another version with 409 (it has heard of an update this one hasn't yet): asked again, so the reason is said.
+    if (upstream.response.statusCode === 409) {
+      const said = await peers.call(nodeId, { method: 'GET', path: `/api/chats/${encodeURIComponent(chatId)}/in-flight` }).catch((err: unknown) => err);
+      if (said instanceof PeerVersionError) return c.json(said.body(), said.status);
+    }
     return c.json({ error: `${peer.name} refused the stream (HTTP ${upstream.response.statusCode}).` }, 502);
   }
   peers.noteReached(peer, upstream.address);

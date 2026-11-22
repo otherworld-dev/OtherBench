@@ -6,6 +6,7 @@ import type { PeerSchedules } from '@otherbench/core/types/peer.js';
 import { peerFolderListingOf } from '../peer/location-dirs.js';
 import { namedPeerSchedules } from '../peer/schedules.js';
 import { PeerError, type PeerService } from '../peer/service.js';
+import { PeerVersionError } from '../peer/version.js';
 import { requireNonEmptyString } from '../validation.js';
 import { LOCATION_NAME_MAX } from './locations.js';
 
@@ -29,6 +30,8 @@ async function guarded<T>(work: () => Promise<T> | T): Promise<T> {
   try {
     return await work();
   } catch (err) {
+    // Its own answer, with which machine to update (app.ts onError).
+    if (err instanceof PeerVersionError) throw err;
     if (err instanceof PeerError) throw new HTTPException(err.status, { message: err.message });
     throw err;
   }
@@ -57,7 +60,9 @@ export function peersRoutes(container: Container): Hono {
       listening: { running: peers.listener.running, addresses: peers.listener.addresses() },
       peers: peers.list().map((p) => {
         const sync = container.peers?.syncerOrNull()?.status(p.nodeId);
-        return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? null, versionMismatch: sync?.versionMismatch ?? null, activeChats: peers.activeChats(p.nodeId), backgroundChats: peers.backgroundChats(p.nodeId), waitingChats: peers.waitingChats(p.nodeId), waitingSince: peers.waitingSince(p.nodeId), computerSessions: peers.computerSessions(p.nodeId) };
+        // The versions differ as soon as the machine says what it runs, which can be before a sync has been refused for it.
+        const differs = peers.knownMismatch(p.nodeId);
+        return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? differs?.message ?? null, versionMismatch: sync?.versionMismatch ?? differs?.mismatch ?? null, activeChats: peers.activeChats(p.nodeId), backgroundChats: peers.backgroundChats(p.nodeId), waitingChats: peers.waitingChats(p.nodeId), waitingSince: peers.waitingSince(p.nodeId), computerSessions: peers.computerSessions(p.nodeId) };
       }),
     });
   });
@@ -99,6 +104,7 @@ export function peersRoutes(container: Container): Hono {
       return c.json(res.body ?? {}, res.status as 200);
     } catch (err) {
       if (err instanceof PeerError && err.status === 503) return c.json({ error: err.message, kind: 'peer_unreachable', nodeId }, 503);
+      if (err instanceof PeerVersionError) throw err;
       if (err instanceof PeerError) throw new HTTPException(err.status, { message: err.message });
       throw err;
     }

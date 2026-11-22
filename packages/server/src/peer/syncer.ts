@@ -8,6 +8,7 @@ import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js
 import { LOCATION_NAME_MAX } from '../routes/locations.js';
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
+import { compareVersions, peerVersionsOf, PeerVersionError, type VersionMismatch } from './version.js';
 
 /** Rows per `/peer/changes` batch: well under the client's 64 MiB answer cap for ordinary chats. */
 export const SYNC_BATCH_SIZE = 500;
@@ -27,15 +28,7 @@ function usableBlobSize(size: unknown): size is number {
   return typeof size === 'number' && Number.isInteger(size) && size >= 0 && size <= MAX_BLOB_BYTES;
 }
 
-/** Sync was refused because the two machines run different versions; kept until a pull succeeds. */
-export interface VersionMismatch {
-  peerAppVersion: string | null;
-  peerSchemaVersion: number;
-  peerProtocolVersion: number;
-  /** The peer is ahead, so updating this machine is what fixes it (the desktop app then checks for an update). */
-  thisMachineOlder: boolean;
-  at: number;
-}
+export type { VersionMismatch };
 
 export interface SyncStatus {
   lastSyncedAt: number | null;
@@ -223,24 +216,13 @@ export class Syncer {
     try {
       const info = (await peers.call(nodeId, { method: 'GET', path: '/peer/info' })).body as PeerInfo;
       this.followRename(nodeId, info.name);
-      const self = peers.info();
-      if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
-        const peerOlder = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION;
-        const older = peerOlder ? info.name : self.name;
-        const versions =
-          info.appVersion && self.appVersion
-            ? `${info.appVersion}; this machine ${self.appVersion}`
-            : `protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}`;
-        const message = `${info.name} runs a different version of OtherBench (${versions}). Update ${older} to sync.`;
-        mismatch = {
-          peerAppVersion: typeof info.appVersion === 'string' ? info.appVersion : null,
-          peerSchemaVersion: info.schemaVersion,
-          peerProtocolVersion: info.protocolVersion,
-          thisMachineOlder: !peerOlder,
-          at: this.now(),
-        };
-        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message });
-        throw new PeerError(message, 409);
+      // What it runs, for every other call to it as well (PeerService.checkVersion).
+      peers.noteVersions(nodeId, info);
+      const verdict = compareVersions(peers.info(), typeof info.name === 'string' ? info.name : (peers.peer(nodeId)?.name ?? 'The other machine'), peerVersionsOf(info), this.now());
+      if (verdict) {
+        mismatch = verdict.mismatch;
+        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message: verdict.message });
+        throw new PeerVersionError(nodeId, verdict);
       }
       let written = 0;
       for (;;) {

@@ -6,8 +6,14 @@ import { createHash, createHmac, randomBytes, randomInt, scrypt, timingSafeEqual
  * The exchange itself lives in the server (peer/pairing.ts).
  */
 
-/** The peer protocol's version, compared in `GET /peer/info` before syncing. */
-export const PEER_PROTOCOL_VERSION = 2;
+/**
+ * The peer protocol's version. Paired machines do nothing together unless this and the database schema version are
+ * the same on both (server `peer/version.ts`): the app version is not compared, so this number is the only thing
+ * that tells two builds with the same schema apart. Bump it with any change to what machines say to each other or
+ * expect of each other: a route on the peer listener or the forwarded API added, removed or answering differently,
+ * a stream's hello or events, an announcement, the sync wire format.
+ */
+export const PEER_PROTOCOL_VERSION = 3;
 
 /** 32 symbols with no lookalikes: no 0/O, 1/I. */
 export const PAIRING_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
