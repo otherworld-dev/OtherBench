@@ -47,6 +47,16 @@ describe('openDatabase', () => {
     }
   });
 
+  it('syncs the WAL at checkpoints, not on every commit (synchronous = NORMAL)', () => {
+    const db = openDatabase(join(base, 'g3.db'));
+    try {
+      // 1 is NORMAL; SQLite's default, FULL, is 2.
+      expect(db.prepare('PRAGMA synchronous').get()).toEqual({ synchronous: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
   it('bypasses the local-path guard for :memory:', () => {
     const db = openDatabase(':memory:');
     db.close();

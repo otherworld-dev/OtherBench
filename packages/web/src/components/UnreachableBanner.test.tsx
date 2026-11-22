@@ -9,7 +9,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api, type PeersOverview } from '../state/api.js';
-import { alsoActive, machineName, remoteUnreachable, streamStatusText } from '../state/machines.js';
+import { alsoActive, machineName, remoteUnreachable, remoteVersionMismatch, streamStatusText } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { UnreachableBanner } from './UnreachableBanner.js';
 
@@ -76,6 +76,44 @@ describe('where a chat runs', () => {
     expect(alsoActive(withActive('unreachable', busy), chats, here)).toEqual([]);
     expect(alsoActive(withActive('reachable', busy), chats, chat({ id: 'nowhere', workspace: null }))).toEqual([]);
     expect(alsoActive(machines('reachable'), chats, here)).toEqual([]);
+  });
+});
+
+/** The PC, reachable, on a newer version than this machine. */
+function mismatched(): PeersOverview {
+  const m = machines('reachable');
+  const message = 'PC runs a different version of OtherBench (0.3.0; this machine 0.2.0). Update Laptop to sync.';
+  return { ...m, peers: m.peers.map((p) => ({ ...p, syncError: message, versionMismatch: { peerAppVersion: '0.3.0', peerSchemaVersion: 53, peerProtocolVersion: 3, thisMachineOlder: true, at: 1 } })) };
+}
+
+describe('a chat on a machine that runs another version', () => {
+  it('is told apart, in the words the server gives, and only for a chat that runs there', () => {
+    expect(remoteVersionMismatch(mismatched(), chat())).toBe('PC runs a different version of OtherBench (0.3.0; this machine 0.2.0). Update Laptop to sync.');
+    expect(remoteVersionMismatch(mismatched(), chat({ runsOn: 'node-laptop' }))).toBeNull();
+    expect(remoteVersionMismatch(machines('reachable'), chat())).toBeNull();
+    expect(remoteVersionMismatch(null, chat())).toBeNull();
+    // An older server gives the mismatch without words.
+    const wordless = mismatched();
+    wordless.peers[0]!.syncError = null;
+    expect(remoteVersionMismatch(wordless, chat())).toBe('PC runs a different version of OtherBench. Update Laptop to use this chat.');
+  });
+
+  it('says so in the header rather than connecting forever, and unreachable still comes first', () => {
+    expect(streamStatusText('reconnecting', chat(), mismatched())).toBe('PC runs a different version');
+    expect(streamStatusText('reconnecting', chat({ runsOn: 'node-laptop' }), mismatched())).toBe('Reconnecting…');
+    const away = mismatched();
+    away.peers[0]!.status = 'unreachable';
+    expect(streamStatusText('reconnecting', chat(), away)).toBe("PC isn't reachable");
+  });
+
+  it('shows the reason above the message box, with Run here', async () => {
+    useOtherBenchStore.setState({ machines: mismatched(), chats: [chat()] });
+    vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
+    render(<UnreachableBanner chat={chat()} />);
+    expect(screen.queryByTestId('unreachable-banner')).toBeNull();
+    expect(screen.getByTestId('version-mismatch-banner')).toHaveTextContent('PC runs a different version of OtherBench (0.3.0; this machine 0.2.0). Update Laptop to sync.');
+    await userEvent.click(screen.getByRole('button', { name: 'Run here' }));
+    await waitFor(() => expect(api.chats.patch).toHaveBeenCalledWith('c', { runsOn: 'node-laptop' }));
   });
 });
 

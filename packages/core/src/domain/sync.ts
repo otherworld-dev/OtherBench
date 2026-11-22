@@ -43,6 +43,20 @@ export function isSha256(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
+/**
+ * How long a paired machine's cursor must have stood before the change log is tidied up to it. A machine that
+ * loses its newest commits (a power cut, with the database flushed at checkpoints) comes back asking from
+ * further back, and what it asks for must still be there. Far longer than commits can stay unflushed.
+ */
+export const PULL_SETTLE_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * How old a delete must be, as well as pulled by every paired machine, before its tombstone goes. The age is
+ * for machines that aren't paired now but hold the row: one unpaired and paired again, or put back from a copy.
+ * Their old row is turned down for as long as the tombstone is kept.
+ */
+export const TOMBSTONE_KEEP_MS = 90 * 24 * 60 * 60_000;
+
 export function isSyncTable(t: string): t is SyncTable {
   return (SYNC_TABLES as readonly string[]).includes(t);
 }

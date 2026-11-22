@@ -14,6 +14,14 @@ import { useOtherBenchStore, type HelloBuffer, type StreamConnectionStatus } fro
  * `GET /chats/:id/stream` for live + replayed events. Tears the previous
  * chat's connection down and opens a fresh one whenever `chatId` changes,
  * and on unmount. A `null` id (nothing selected) does nothing.
+ *
+ * The two requests divide the chat between them. The messages are every
+ * stored reply; the stream's hello is only the replies being written, whole
+ * so far, and those that ended in the last minute (the server's
+ * `StreamRegistry.snapshot`), which covers a reply ending between the two
+ * requests. So when the stream comes back after dropping, the messages are
+ * read again: a reply that ended while this window was away for longer than
+ * that minute is in no hello, only in the store.
  */
 /** The chat stream's hello: its replies in flight, and its background tasks with their open approval cards. */
 interface ChatHello {
@@ -23,6 +31,11 @@ interface ChatHello {
   /** Messages waiting for the chat's replies to end, and what became of the ones already resolved. */
   notes?: ReplyNote[];
   noteOutcomes?: { noteId: string; outcome: NoteOutcome }[];
+}
+
+/** A failed load's reason, as the thread shows it. */
+function loadErrorText(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : String(err);
 }
 
 export function useChatSync(chatId: string | null, reportStatus = true): void {
@@ -49,9 +62,15 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     api.chats
       .messages(chatId)
       .then(({ messages, headMessageId, usage }) => {
-        if (!cancelled) useOtherBenchStore.getState().loadMessages(chatId, messages, headMessageId, usage);
+        if (cancelled) return;
+        useOtherBenchStore.getState().loadMessages(chatId, messages, headMessageId, usage);
+        useOtherBenchStore.getState().setChatLoadError(chatId, null);
       })
-      .catch((err: unknown) => console.error(`[otherbench-web] failed to reload messages for chat ${chatId}:`, err));
+      .catch((err: unknown) => {
+        console.error(`[otherbench-web] failed to reload messages for chat ${chatId}:`, err);
+        // Only shown by a thread with nothing to draw; one with messages keeps them.
+        if (!cancelled) useOtherBenchStore.getState().setChatLoadError(chatId, loadErrorText(err));
+      });
     return () => {
       cancelled = true;
     };
@@ -69,9 +88,15 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
     const applyHello = useOtherBenchStore.getState().applyHello;
     const applyTurnEvent = useOtherBenchStore.getState().applyTurnEvent;
     const setStreamStatus = useOtherBenchStore.getState().setStreamStatus;
+    const { setChatLoadError, retryChatLoad } = useOtherBenchStore.getState();
+    // The stream dropped since its last hello: what ended meanwhile may be in no hello (see above).
+    let dropped = false;
     const report = (status: StreamConnectionStatus): void => {
       statusRef.current = status;
+      if (status === 'reconnecting') dropped = true;
       if (reporting()) setStreamStatus(status);
+      // The server answers again: messages that failed to load are asked for again, without a click on Retry.
+      if (status === 'open' && chatId in useOtherBenchStore.getState().chatLoadErrors) retryChatLoad(chatId);
     };
 
     const { applyChatEvent, setChatBackground, setChatNotes, settleUnsureNotes } = useOtherBenchStore.getState();
@@ -82,9 +107,11 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
       .then(({ messages, headMessageId, usage }) => {
         if (cancelled) return;
         loadMessages(chatId, messages, headMessageId, usage);
+        setChatLoadError(chatId, null);
       })
       .catch((err: unknown) => {
         console.error(`[otherbench-web] failed to load messages for chat ${chatId}:`, err);
+        if (!cancelled) setChatLoadError(chatId, loadErrorText(err));
       })
       .finally(() => {
         if (cancelled) return;
@@ -99,6 +126,11 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
         applyHello(hello.inFlight ?? []);
         setChatBackground(chatId, hello.helpers ?? [], hello.backgroundApprovals ?? []);
         setChatNotes(chatId, hello.notes ?? [], hello.noteOutcomes ?? [], messagesLoaded);
+        // Back after a drop: the messages again, once (the first connect has just read them).
+        if (dropped) {
+          dropped = false;
+          retryChatLoad(chatId);
+        }
       },
       onEvent: (event) => applyChatEvent(chatId, event),
       onStatusChange: report,

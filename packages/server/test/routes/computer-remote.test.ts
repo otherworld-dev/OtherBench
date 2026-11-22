@@ -249,7 +249,7 @@ describe('computer use routes and the Host check', () => {
 
 describe('computer use routes and the peer listener', () => {
   const peerApp = (paired: boolean): Hono =>
-    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null), noteCalledFrom: () => {} } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
+    createPeerApp({ authenticate: () => (paired ? { nodeId: 'node-pc', name: 'Gigabyte' } : null), noteCalledFrom: () => {}, callerMismatch: () => null } as unknown as PeerService, { forwardedApi: () => forwardedApi(container) }) as unknown as Hono;
 
   it('has neither the status nor the events; its Stop ends a session held here', async () => {
     await holding();

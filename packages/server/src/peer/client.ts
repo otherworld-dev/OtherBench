@@ -87,7 +87,11 @@ export interface PeerResponse {
  * tried in the order given (the caller keeps the last one that worked first).
  */
 export class PeerClient {
-  constructor(private readonly identity: () => NodeIdentity) {}
+  /** `headers`: sent on every request (this machine's versions, peer/version.ts); a request's own headers win. */
+  constructor(
+    private readonly identity: () => NodeIdentity,
+    private readonly headers: () => Record<string, string> = () => ({})
+  ) {}
 
   /** One pinned TLS connection to `address`. Rejects with `PinMismatchError` on the wrong certificate. */
   connectTo(address: string, fingerprint: string | null): Promise<PeerConnection> {
@@ -157,6 +161,7 @@ export class PeerClient {
             connection: 'close',
             ...(payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : {}),
             ...(req.token ? { authorization: `Bearer ${req.token}` } : {}),
+            ...this.headers(),
             ...req.headers,
           },
         },

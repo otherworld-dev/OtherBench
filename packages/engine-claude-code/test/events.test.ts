@@ -270,6 +270,17 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1700000000 }, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([{ type: 'rate-limited', resetsAt: 1700000000 }]);
     expect(m.map({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], usage: { input_tokens: 0, output_tokens: 0 } } as unknown as SDKMessage)).toEqual([{ type: 'result-error', text: 'boom' }]);
   });
+  it('puts what the SDK said about the failure on the error result: its HTTP status and its error type', () => {
+    const m = new SdkEventMapper();
+    m.map({ type: 'assistant', error: 'overloaded', message: { content: [{ type: 'text', text: 'API Error: Overloaded' }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage);
+    expect(m.map({ type: 'result', subtype: 'success', is_error: true, api_error_status: 529, result: 'API Error: Overloaded', usage: { input_tokens: 0, output_tokens: 0 } } as unknown as SDKMessage)).toEqual([
+      { type: 'result-error', text: 'API Error: Overloaded', status: 529, apiError: 'overloaded' },
+    ]);
+    // A helper's own failed call is not the reply's.
+    const other = new SdkEventMapper();
+    other.map({ type: 'assistant', error: 'authentication_failed', message: { content: [] }, parent_tool_use_id: 'toolu_1', uuid: 'u', session_id: 's' } as unknown as SDKMessage);
+    expect(other.map({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], usage: { input_tokens: 0, output_tokens: 0 } } as unknown as SDKMessage)).toEqual([{ type: 'result-error', text: 'boom' }]);
+  });
   it("maps an assistant message Claude Code marks as rate limited, which carries no reset time", () => {
     const m = new SdkEventMapper();
     const limited = (content: object[]) => ({ type: 'assistant', error: 'rate_limit', message: { content }, parent_tool_use_id: null, uuid: 'u', session_id: 's' }) as unknown as SDKMessage;

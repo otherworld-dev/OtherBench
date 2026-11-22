@@ -51,9 +51,10 @@ import { ProjectMemoryService } from './memory/service.js';
 import { MemoryQueue } from './memory/shared.js';
 import { AppNotesService } from './app-notes/service.js';
 import { createPeerApp } from './peer/app.js';
+import { startSyncLogSweep } from './sync-log-sweep.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
-import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns } from './peer/forward.js';
+import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns, settleRemoteRunsOnPeerEvents } from './peer/forward.js';
 import { handleBackground } from './background.js';
 import { closeEngineChatsThatAreGone, followChatSettings } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
@@ -371,8 +372,9 @@ export async function resolveSecretsPassphrase(secretsPath: string, given?: stri
  * Opens (migrating if needed) the real SQLite-backed `Container` the CLI
  * serves from, holding the database lock (db-lock.ts) for its whole life:
  * taken before anything reads the store -- in particular before
- * `reconcileInterruptedTurns` -- and released by `close()`, or straight
- * away if startup fails part-way.
+ * `reconcileInterruptedTurns` -- and released once `close()` has closed the
+ * database (which, with an add-on to stop first, is after `close()` returns),
+ * or straight away if startup fails part-way.
  */
 /** The desktop shell's version when it started this server; otherwise this package's (a checkout run). */
 function appVersion(): string {
@@ -391,31 +393,27 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     await mkdir(dirname(options.dbPath), { recursive: true });
   }
   const lock = acquireDbLock(options.dbPath);
-  let container: Container;
   try {
-    container = await openContainer(options);
+    // The lock goes when the database has closed, never before: another server let in while this one still has it
+    // open would take its unfinished replies for abandoned ones (db-lock.ts).
+    return await openContainer(options, () => lock?.release());
   } catch (err) {
     lock?.release();
     throw err;
   }
-  const closeContainer = container.close;
-  container.close = () => {
-    closeContainer();
-    lock?.release();
-  };
-  return container;
 }
 
-async function openContainer(options: ContainerOptions): Promise<Container> {
+async function openContainer(options: ContainerOptions, onStoreClosed: () => void): Promise<Container> {
   const db = openDatabase(options.dbPath);
   // An update that brings a migration leaves the old database beside the new one (throws, so nothing migrates, if it can't).
+  // A database from a newer build is refused by `runMigrations` (NewerDatabaseError), before anything is written.
   try {
     backupBeforeMigration(db, options.dbPath, SCHEMA_VERSION);
+    runMigrations(db);
   } catch (err) {
     db.close();
     throw err;
   }
-  runMigrations(db);
   // Every chat change, whoever makes it, is announced on the app-wide stream.
   const events = new AppEventBus();
   const store = withStoreEvents(new SqliteStore(db), events);
@@ -696,7 +694,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     events,
     identity,
     createApp: (service) =>
-      createPeerApp(service, { forwardedApi: () => forwarded, ...(options.streamTimings ? { keepaliveMs: options.streamTimings.keepaliveMs } : {}) }) as never,
+      createPeerApp(service, { forwardedApi: () => forwarded, pulled: (nodeId, since) => store.sync?.notePulled(nodeId, since), ...(options.streamTimings ? { keepaliveMs: options.streamTimings.keepaliveMs } : {}) }) as never,
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
@@ -755,6 +753,19 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   // The daily abandoned-attachment sweep, started once the notes service exists.
   let abandonedSweep: AbandonedSweeper | null = null;
+  // The change log and tombstones, tidied a little after the start and daily (sync-log-sweep.ts).
+  const syncLogSweep = startSyncLogSweep({ store });
+  // The database closes once, and whoever holds its lock is told as soon as it has (or has failed to).
+  let storeClosed = false;
+  const closeStore = (): void => {
+    if (storeClosed) return;
+    storeClosed = true;
+    try {
+      store.close();
+    } finally {
+      onStoreClosed();
+    }
+  };
   // What close() set going without waiting, for settled().
   let sandboxClosed: Promise<void> = Promise.resolve();
   let terminalsClosed: Promise<void> = Promise.resolve();
@@ -801,6 +812,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       container.overview?.dispose();
       // And the abandoned-attachment sweep's.
       abandonedSweep?.stop();
+      syncLogSweep.stop();
       // Computer use ends with the server: the driver is told, and nothing starts afterwards.
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
@@ -811,7 +823,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       engine.dispose();
       // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
       sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[otherbench-server] error closing the sandbox:', err));
-      store.close();
+      closeStore();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
       // MCP clients is cleanup, not something anything downstream of
@@ -952,6 +964,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     console.error('[otherbench-server] could not start the peer listener; paired machines cannot reach this one:', err);
   }
   forwarded = forwardedApi(container);
+  // A reply a paired machine was writing for this one ends here even with no window showing its chat.
+  if (container.remoteRuns) settleRemoteRunsOnPeerEvents(container, container.remoteRuns);
   peers.startMonitoring();
   syncer.start();
   // The Overview: checks GitHub and Deck now and every 15 minutes, once paired machines are being watched (their
@@ -1033,13 +1047,24 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const closeBeforeAddons = container.close;
   const settledBeforeAddons = container.settled;
   let addonsStopped: Promise<void> = Promise.resolve();
+  // A step of the close that throws must not leave the database open with its lock held: it closes whatever happened.
+  const closeAll = (): void => {
+    try {
+      closeBeforeAddons();
+    } finally {
+      closeStore();
+    }
+  };
   container.close = () => {
     const stopping = container.addons?.filter((a) => a.status === 'loaded' && a.module?.dispose) ?? [];
     if (stopping.length === 0) {
-      closeBeforeAddons();
+      closeAll();
       return;
     }
-    addonsStopped = disposeAddons(stopping).then(() => closeBeforeAddons());
+    // Nobody is left to catch a throw from here, and settled() never rejects: it is logged.
+    addonsStopped = disposeAddons(stopping)
+      .then(closeAll)
+      .catch((err: unknown) => console.error('[otherbench-server] error closing after the add-ons stopped:', err));
   };
   container.settled = () => addonsStopped.then(() => settledBeforeAddons?.());
 

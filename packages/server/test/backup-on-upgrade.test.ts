@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '@otherbench/store-sqlite/db.js';
-import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
+import { MIGRATIONS, NewerDatabaseError, runMigrations, SCHEMA_VERSION } from '@otherbench/store-sqlite/migrations/index.js';
 import { createContainer } from '../src/container.js';
 
 let dir: string;
@@ -41,5 +41,25 @@ describe('starting on a database from an older build', () => {
     const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
     container.close();
     expect(existsSync(`${dbPath}.before-schema-0`)).toBe(false);
+  });
+});
+
+describe('starting on a database from a newer build', () => {
+  it('refuses to open it, and leaves it as it was', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'otherbench-newer-'));
+    const dbPath = join(dir, 'otherbench.db');
+    const newer = openDatabase(dbPath);
+    runMigrations(newer);
+    newer.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+    newer.close();
+
+    await expect(createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') })).rejects.toBeInstanceOf(NewerDatabaseError);
+
+    const after = openDatabase(dbPath);
+    try {
+      expect((after.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION + 1);
+    } finally {
+      after.close();
+    }
   });
 });

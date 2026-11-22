@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
-import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
+import { runMigrations, MIGRATIONS, NewerDatabaseError, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
 import { MCP_OAUTH_ALREADY_THERE } from '../src/migrations/025-mcp-oauth.js';
 import { USAGE_SUBAGENT_ALREADY_THERE } from '../src/migrations/026-usage-subagent.js';
 import type { DatabaseSync } from 'node:sqlite';
@@ -30,14 +30,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).toEqual(versions.map((_, i) => i + 1));
-    expect(MIGRATIONS.slice(-29).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments', '048-model-first-seen', '049-chat-send-remote', '050-reserved', '051-job-chats', '052-job-app-context']);
+    expect(MIGRATIONS.slice(-34).map((m) => m.name)).toEqual(['024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent', '027-project-parent', '028-usage-purpose', '029-apps', '030-app-nextcloud', '031-media-workflows', '032-app-folders', '033-overview', '034-claude-accounts', '035-schedule-auto', '036-message-finished-at', '037-remote-sessions', '038-schedule-time-limit', '039-push-subscriptions', '040-app-open', '041-app-notes', '042-profile-browser-sites', '043-fresh-chat-handover', '044-chat-sends', '045-schedule-peer-changes', '046-location-path-set-here', '047-schedule-attachments', '048-model-first-seen', '049-chat-send-remote', '050-reserved', '051-job-chats', '052-job-app-context', '053-clock-mark', '054-message-fts-on-text-change', '055-message-streaming-index', '056-reoffer-usage', '057-sync-peer-cursor']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(52);
+      expect(SCHEMA_VERSION).toBe(57);
       const cols = (db.prepare('PRAGMA table_info(chat)').all() as { name: string }[]).map((c) => c.name);
       expect(cols).toEqual(expect.arrayContaining(['claude_account', 'account_auto_switch', 'context_tokens', 'handover_ask_at', 'handover_suggest']));
     } finally {
@@ -830,7 +830,129 @@ describe('runMigrations', () => {
     }
   });
 
+  describe('a database made by a newer build', () => {
+    it('is refused, saying so, and nothing is changed', () => {
+      const db = freshDb();
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+        let thrown: unknown;
+        try {
+          runMigrations(db);
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(NewerDatabaseError);
+        expect((thrown as Error).message).toContain('newer OtherBench');
+        expect((thrown as Error).message).toContain(`schema ${SCHEMA_VERSION + 1}`);
+        expect(userVersion(db)).toBe(SCHEMA_VERSION + 1);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("opens a database at exactly this build's version", () => {
+      const db = freshDb();
+      try {
+        runMigrations(db);
+        expect(() => runMigrations(db)).not.toThrow();
+      } finally {
+        db.close();
+      }
+    });
+
+    it('names the newest copy beside it that this build can open', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'otherbench-newer-'));
+      const path = join(dir, 'otherbench.db');
+      const db = openDatabase(path);
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 2}`);
+        for (const v of [SCHEMA_VERSION - 3, SCHEMA_VERSION, SCHEMA_VERSION + 1]) writeFileSync(`${path}.before-schema-${v}`, '');
+        expect(() => runMigrations(db)).toThrow(`${path}.before-schema-${SCHEMA_VERSION}`);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('says there is no copy when none can be opened', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'otherbench-newer-'));
+      const path = join(dir, 'otherbench.db');
+      const db = openDatabase(path);
+      try {
+        runMigrations(db);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 2}`);
+        writeFileSync(`${path}.before-schema-${SCHEMA_VERSION + 1}`, '');
+        let message = '';
+        try {
+          runMigrations(db);
+        } catch (err) {
+          message = (err as Error).message;
+        }
+        expect(message).toContain('newer OtherBench');
+        expect(message).not.toContain('before-schema');
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('message_fts', () => {
+    const found = (db: DatabaseSync, word: string): number => (db.prepare('SELECT rowid FROM message_fts WHERE message_fts MATCH ?').all(word) as unknown[]).length;
+    /** The index as stored: any write to it (even taking a row out and putting the same text back) changes this. */
+    const indexState = (db: DatabaseSync): string => JSON.stringify(db.prepare('SELECT id, hex(block) AS block FROM message_fts_data ORDER BY id').all());
+
+    it('is rewritten for a message only when its searchable text changes, not on every update (054)', () => {
+      const db = freshDb();
+      try {
+        runMigrations(db);
+        seedMinimalChain(db);
+        db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, search_text, created_at) VALUES ('msg-1', 'chat-1', NULL, 'assistant', '[]', 'streaming', 'alpha', 1000)`);
+        const before = indexState(db);
+
+        // What a turn does to a reply that isn't its text: status, stamp, engine state, a pin.
+        db.exec(`UPDATE message SET status = 'complete', finished_at = 5, hlc = 'x' WHERE id = 'msg-1'`);
+        db.exec(`UPDATE message SET engine_meta = '{}', kept_at = 7 WHERE id = 'msg-1'`);
+        // A write that names the text but leaves it as it was (a checkpoint that added a tool call).
+        db.exec(`UPDATE message SET parts = '[{"type":"tool-call"}]', search_text = 'alpha' WHERE id = 'msg-1'`);
+        expect(indexState(db)).toBe(before);
+        expect(found(db, 'alpha')).toBe(1);
+
+        db.exec(`UPDATE message SET search_text = 'beta' WHERE id = 'msg-1'`);
+        expect(indexState(db)).not.toBe(before);
+        expect(found(db, 'alpha')).toBe(0);
+        expect(found(db, 'beta')).toBe(1);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a database that had the old trigger keeps its index, and searches as before, after 054', () => {
+      const db = freshDb();
+      try {
+        runMigrations(db, MIGRATIONS.filter((m) => m.version <= 53));
+        seedMinimalChain(db);
+        db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, search_text, created_at) VALUES ('msg-1', 'chat-1', NULL, 'user', '[]', 'complete', 'alpha', 1000)`);
+        const old = indexState(db);
+        db.exec(`UPDATE message SET status = 'error' WHERE id = 'msg-1'`);
+        // The old trigger rewrote the index for that.
+        expect(indexState(db)).not.toBe(old);
+
+        runMigrations(db);
+        const before = indexState(db);
+        db.exec(`UPDATE message SET status = 'complete' WHERE id = 'msg-1'`);
+        expect(indexState(db)).toBe(before);
+        expect(found(db, 'alpha')).toBe(1);
+        db.exec(`UPDATE message SET search_text = 'gamma' WHERE id = 'msg-1'`);
+        expect(found(db, 'alpha')).toBe(0);
+        expect(found(db, 'gamma')).toBe(1);
+      } finally {
+        db.close();
+      }
+    });
+
     it('is queryable and matches inserted search_text via MATCH', () => {
       const db = freshDb();
       try {

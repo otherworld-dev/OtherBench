@@ -26,7 +26,7 @@ describe('classifyClaudeCodeFailure', () => {
   });
   it('marks a usage limit only on real evidence, never on an overload or a bare 429', () => {
     const overloaded = classifyClaudeCodeFailure('API Error: 529 overloaded_error', c);
-    expect(overloaded).toMatchObject({ kind: 'rate_limit', message: 'Claude usage limit reached.' });
+    expect(overloaded).toMatchObject({ kind: 'rate_limit', message: 'Claude is overloaded right now. Try again in a moment.' });
     expect(overloaded.detail).toEqual({ text: 'API Error: 529 overloaded_error' });
     expect(classifyClaudeCodeFailure('API Error: 429 Too Many Requests', c).detail).toEqual({ text: 'API Error: 429 Too Many Requests' });
     expect(classifyClaudeCodeFailure('API Error: 429 rate_limit_error', c).detail).not.toHaveProperty('usageLimit');
@@ -58,6 +58,80 @@ describe('classifyClaudeCodeFailure', () => {
   it('detects a missing session on resume', () => {
     expect(isMissingSessionError('No conversation found with session ID: abc')).toBe(true);
     expect(isMissingSessionError('other')).toBe(false);
+  });
+});
+
+describe('classifyClaudeCodeFailure: structure before wording', () => {
+  const DIED = 'Claude Code process exited with code 1';
+
+  it.each([
+    // An MCP server's own trouble on stderr is not Claude Code's login.
+    ['an MCP server failing to authenticate', ['[mcp:github] authentication failed: 401 Unauthorized'], 'unknown'],
+    ['an MCP server naming a login page', ['[mcp:deck] open https://cloud.example/login to sign in'], 'unknown'],
+    ['an MCP server with a bad key of its own', ['[mcp:search] Invalid API key for search.example'], 'unknown'],
+    ['an MCP server reporting a 404 or a 429', ['[mcp:wiki] GET /page 404', '[mcp:wiki] 429 rate limit, backing off'], 'unknown'],
+    ['an MCP server that could not connect', ['[mcp:local] fetch failed: connect ECONNREFUSED 127.0.0.1:9000'], 'unknown'],
+    // Claude Code's own lines still count wherever they arrive.
+    ["Claude Code's own login line", ['Invalid API key · Please run /login'], 'auth'],
+    ["Claude Code's own API error line", ['API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'], 'auth'],
+    ["Claude Code's own limit line", ['Claude AI usage limit reached|1700000000'], 'rate_limit'],
+  ])('with %s on stderr', (_name, stderr, kind) => {
+    expect(classifyClaudeCodeFailure(DIED, { ...c, stderr }).kind).toBe(kind);
+    expect(classifyClaudeCodeFailure(DIED, { backend: 'http://localhost:11434', modelId: 'q', stderr }).kind).toBe(kind);
+  });
+
+  it('keeps the stderr in an unknown failure, so the reason can still be read', () => {
+    expect(classifyClaudeCodeFailure(DIED, { ...c, stderr: ['[mcp:github] authentication failed'] }).message).toBe(`${DIED}
+[mcp:github] authentication failed`);
+  });
+
+  it.each([
+    ['MCP server "github" requires authentication', 'unknown'],
+    ['Tool mcp__web__fetch failed: the request took 401 ms', 'unknown'],
+    ['See https://example.com/login for details', 'unknown'],
+    ['not logged in', 'auth'],
+    ['Invalid API key · Please run /login', 'auth'],
+    ['API Error: 401 Unauthorized', 'auth'],
+    ['API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', 'auth'],
+  ])('reads "%s" as %s', (text, kind) => {
+    expect(classifyClaudeCodeFailure(text, c).kind).toBe(kind);
+  });
+
+  it.each([
+    // [text, what the SDK said, kind, retryable, message]
+    ['API Error: 529 overloaded_error', {}, 'rate_limit', true, /overloaded/i],
+    ['API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', {}, 'rate_limit', true, /overloaded/i],
+    ['Overloaded', { apiError: 'overloaded' }, 'rate_limit', true, /overloaded/i],
+    ['error', { apiStatus: 529 }, 'rate_limit', true, /overloaded/i],
+    ['API Error: 429 rate_limit_error', {}, 'rate_limit', true, /rate limited/i],
+    ['API Error: 429 Too Many Requests', {}, 'rate_limit', true, /rate limited/i],
+    ['Claude AI usage limit reached|1700000000', {}, 'rate_limit', true, /usage limit reached/i],
+    ["You've hit your limit · resets 3pm", {}, 'rate_limit', true, /usage limit reached/i],
+    // The status decides, whatever the words beside it say.
+    ['API Error: 500 authentication service unavailable', {}, 'transient', true, /try again/i],
+    ['API Error: 503 too many requests, overloaded', {}, 'transient', true, /try again/i],
+    ['the model said: not logged in', { apiStatus: 500 }, 'transient', true, /try again/i],
+    ['error', { apiError: 'server_error' }, 'transient', true, /try again/i],
+    ['error', { apiStatus: 401 }, 'auth', false, /logged in/i],
+    ['error', { apiError: 'authentication_failed' }, 'auth', false, /logged in/i],
+    ['API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}}', {}, 'model_not_found', false, /Model not found/],
+    ['error', { apiError: 'model_not_found' }, 'model_not_found', false, /Model not found/],
+  ])('%s %j -> %s', (text, said, kind, retryable, message) => {
+    expect(classifyClaudeCodeFailure(text, { ...c, ...said })).toMatchObject({ kind, retryable, message: expect.stringMatching(message) });
+  });
+
+  it('never calls an overload or a bare 429 a usage limit', () => {
+    for (const text of ['API Error: 529 overloaded_error', 'API Error: 429 rate_limit_error']) {
+      const error = classifyClaudeCodeFailure(text, c);
+      expect(error.message).not.toMatch(/usage limit/i);
+      expect(error.detail).not.toHaveProperty('usageLimit');
+    }
+    // Real evidence of a limit still wins over an overload's wording.
+    expect(classifyClaudeCodeFailure('API Error: 529 overloaded_error', { ...c, rateLimited: true })).toMatchObject({ message: 'Claude usage limit reached.', detail: { usageLimit: true } });
+  });
+
+  it('names the endpoint, not Claude, when an endpoint is overloaded', () => {
+    expect(classifyClaudeCodeFailure('API Error: 529 overloaded_error', { backend: 'http://localhost:11434', modelId: 'q' }).message).toBe('http://localhost:11434 is overloaded right now. Try again in a moment.');
   });
 });
 

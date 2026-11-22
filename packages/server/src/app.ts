@@ -14,6 +14,7 @@ import { appNotesRoutes } from './routes/app-notes.js';
 import { appFoldersRoutes } from './routes/app-folders.js';
 import { appsRoutes } from './routes/apps.js';
 import { desktopRoutes } from './routes/desktop.js';
+import { PeerVersionError } from './peer/version.js';
 import { overviewRoutes } from './routes/overview.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
@@ -297,6 +298,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
       // The Code tab's failures add a machine-readable `code` (and git's stderr) beside the message (code/route-errors.ts).
       return c.json({ error: err.message, ...(err instanceof CodeRouteError ? err.extras() : {}) }, err.status);
     }
+    // A call to a paired machine refused because it runs another version: said as it is, with which machine to update.
+    if (err instanceof PeerVersionError) return c.json(err.body(), err.status);
     console.error('[otherbench-server] unhandled error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
   });

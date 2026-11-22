@@ -127,10 +127,15 @@ async function withinLimit<T>(p: Promise<T>, ms: number, why: string): Promise<T
 }
 
 /** How long one add-on's dispose may take on shutdown before the rest carry on without it. */
-const DISPOSE_MS = 5_000;
+export const ADDON_DISPOSE_MS = 5_000;
+
+/** The longest `disposeAddons` can take for these add-ons: each one with a dispose gets its full limit, one after another. */
+export function addonDisposeBudgetMs(addons: readonly LoadedAddon[], limitMs = ADDON_DISPOSE_MS): number {
+  return addons.filter((a) => a.status === 'loaded' && a.module?.dispose).length * limitMs;
+}
 
 /** Calls each loaded add-on's dispose, each within a time limit; one that throws or hangs doesn't stop the rest. */
-export async function disposeAddons(addons: readonly LoadedAddon[], limitMs = DISPOSE_MS): Promise<void> {
+export async function disposeAddons(addons: readonly LoadedAddon[], limitMs = ADDON_DISPOSE_MS): Promise<void> {
   for (const a of addons) {
     if (a.status !== 'loaded' || !a.module?.dispose) continue;
     const dispose = a.module.dispose.bind(a.module);

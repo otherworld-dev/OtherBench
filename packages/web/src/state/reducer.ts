@@ -164,6 +164,33 @@ export function replayEvents(
 }
 
 /**
+ * True for a part no `TurnEvent` carries, so no replay can rebuild it: it is only ever in the stored message
+ * (the server's `reconstructEvents` in stream/registry.ts leaves the same kinds out of a hello). A handover's
+ * link is written to the reply after its turn; the rest are a user message's own. A new part kind fails the
+ * build here until it is put on one side or the other.
+ */
+function storedOnly(part: Part): boolean {
+  switch (part.type) {
+    case 'context':
+    case 'image':
+    case 'file':
+    case 'handover-request':
+    case 'handover':
+    case 'chat-link':
+      return true;
+    case 'text':
+    case 'reasoning':
+    case 'tool-call':
+    case 'tool-result':
+    case 'notice':
+    case 'context-summary':
+    case 'user-note':
+    case 'subagent':
+      return false;
+  }
+}
+
+/**
  * Rebuilds a message's content from an authoritative "everything since the
  * turn started" event list (an SSE `hello` reply's per-message buffer --
  * see StreamRegistry's class doc in packages/server/src/stream/registry.ts).
@@ -178,6 +205,14 @@ export function replayEvents(
  * duplicated text if it appended the replay on top of its current parts.
  * Resetting first makes replay idempotent -- the result depends only on the
  * event list, never on when or how many times it's applied.
+ *
+ * The one thing kept from the message is what the event list can never
+ * hold (`storedOnly`: a handover link, say): a hello covers a reply that
+ * ended in the last minute as well as those being written, so dropping
+ * those stripped the links on a reconnect. Each
+ * goes back after as many replayed parts as it had streamed parts before
+ * it, which is where it was; they are never replayed themselves, so this
+ * stays idempotent.
  */
 export function applyHelloBuffer(
   message: CanonMessage,
@@ -189,5 +224,23 @@ export function applyHelloBuffer(
   // `status` from the buffer is authoritative (it's StreamRegistry's own
   // bookkeeping, not re-derived from the event list) -- it wins over
   // whatever the last replayed event implied, though in practice they agree.
-  return { message: { ...replayed.message, status }, extras: replayed.extras };
+  return { message: { ...replayed.message, parts: withStoredOnly(replayed.message.parts, message.parts), status }, extras: replayed.extras };
+}
+
+/** `replayed` with the `storedOnly` parts of `before` put back where they were (see `applyHelloBuffer`). */
+function withStoredOnly(replayed: Part[], before: Part[]): Part[] {
+  if (!before.some(storedOnly)) return replayed;
+  const parts: Part[] = [];
+  let streamedBefore = 0;
+  let taken = 0;
+  for (const part of before) {
+    if (!storedOnly(part)) {
+      streamedBefore += 1;
+      continue;
+    }
+    const upTo = Math.min(streamedBefore, replayed.length);
+    parts.push(...replayed.slice(taken, upTo), part);
+    taken = Math.max(taken, upTo);
+  }
+  return [...parts, ...replayed.slice(taken)];
 }

@@ -7,10 +7,8 @@ import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@otherbench/core/domain/export.js';
 import { projectParentOf } from '@otherbench/core/domain/projects.js';
 import { tickOffAt } from '@otherbench/core/domain/overview.js';
-import { extendToTip } from '@otherbench/core/domain/tree.js';
 import type { TurnEvent } from '@otherbench/core/domain/turn.js';
 import type { App, Chat, Project } from '@otherbench/core/ports/store.js';
-import type { Store } from '@otherbench/core/ports/store.js';
 import { CLAUDE_EFFORTS, isClaudeEffort } from '@otherbench/core/types/config.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import type { RecordedUsage } from '@otherbench/core/types/usage.js';
@@ -19,6 +17,7 @@ import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { recordBackgroundUsage } from '../background-usage.js';
+import { chatTip, collectMessageTree } from '../chat-read.js';
 import { continueOnAccount, NOT_HERE } from '../claude-accounts/switcher.js';
 import { HandoverError } from '../handover/service.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
@@ -117,48 +116,9 @@ function inheritedProfileId(container: Container, project: Project, parent: Proj
   return chosen;
 }
 
-/**
- * Walks the chat's whole message tree (every variant of every turn, not
- * just the active branch) via `roots()` + `children()` -- `MessageRepo` has
- * no single "all messages in this chat" query, since the tree shape is the
- * point (see packages/core/src/domain/tree.ts): a flat table scan would
- * have to exist alongside the recursive parent/child queries for no benefit
- * here, so the walk is done at this call site instead of growing the port.
- *
- * Exported for routes/usage.ts, which needs the same "every assistant
- * message in this chat, not just the active branch" walk to find variants
- * whose usage row is missing entirely (task 28's errored-with-no-usage-row
- * honesty requirement -- see buildUsageRollup's doc).
- */
-export function collectMessageTree(store: Store, chatId: string): CanonMessage[] {
-  const result: CanonMessage[] = [];
-  const queue = [...store.messages.roots(chatId)];
-  while (queue.length > 0) {
-    const message = queue.shift();
-    if (!message) continue;
-    result.push(message);
-    queue.push(...store.messages.children(message.id));
-  }
-  return result;
-}
-
-/**
- * The end of a chat's active branch (`extendToTip` from its head), which a new turn continues from: a finished reply,
- * or null for an empty chat. Throws, saying what to do, when the chat ends anywhere a turn can't follow on from.
- * Scheduled runs and chat-to-chat sends both start their turns here.
- */
-export function chatTip(store: Store, chatId: string, headId: string | null): string | null {
-  const messages = collectMessageTree(store, chatId);
-  if (messages.length === 0) return null;
-  if (headId === null) throw new Error('This chat has messages but no current one to continue from. Open it and pick a reply.');
-  const tip = extendToTip(messages, headId).at(-1) ?? messages.find((m) => m.id === headId);
-  if (!tip) throw new Error("This chat's current message is missing. Open it and pick a reply.");
-  if (tip.role !== 'assistant') {
-    throw new Error('This chat ends in a message with no reply kept (an unpicked compare, or a message with no answer). Pick a reply in the chat first.');
-  }
-  if (tip.status === 'streaming') throw new Error('A reply is still being written in this chat.');
-  return tip.id;
-}
+// Reading a chat's messages lives in chat-read.ts, for the services that need it too; the routes and tests that
+// import these from here still can.
+export { chatTip, collectMessageTree };
 
 /** Starting a chat in an app, or moving one into it, opens the app in the Code sidebar. Only a closed app is written. */
 function openApp(container: Pick<Container, 'store'>, app: App): void {

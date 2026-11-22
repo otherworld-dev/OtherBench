@@ -58,6 +58,23 @@ desktop app and lets two machines share chats. Built so far:
   it connects, when the peer announces changes, and every minute while it's
   reachable. Newer stamp wins, chats merge field by field, delete wins over
   a concurrent edit, and divergent continuations become sibling branches.
+  The clock starts from the newest stamp stored (`sync_state.clock_ms`), so a
+  restart never stamps earlier than what is there. A row stamped more than
+  five minutes ahead of this machine's time is not taken and the pull stops
+  there, cursor unmoved, with "clock is ahead" in Settings → Machines; it is
+  taken once the times agree. One more than a day ahead (a wrong date) is
+  passed over instead of waited for, and the clock never starts from a stored
+  time that far ahead. What is written under a reply that is still
+  streaming (a sub-agent's usage, a tool's file) is logged again when the
+  reply stops, so a machine that pulled in between still gets it.
+  The log and tombstones are tidied daily (`server/src/sync-log-sweep.ts`,
+  `pruneLog`): each machine notes the cursor every paired machine asks from
+  (`sync_peer_cursor`), and below the lowest that has stood for a week a row
+  keeps only its first and last log entry. A delete's tombstone goes once
+  every paired machine has pulled it and it is 90 days old. A paired machine
+  that never pulls holds all of this back until it is unpaired; a machine
+  unpaired for more than 90 days and paired again can bring back rows
+  deleted meanwhile.
   Synced: locations and their paths, connections (keys too, unless *keep
   the key on this machine*), models, profiles (their browser site lists
   included), projects and project memory,
@@ -151,6 +168,40 @@ desktop app and lets two machines share chats. Built so far:
   from. Off, the laptop can only see the session and stop it. The setting
   is never synced and isn't on the peer listener, so the laptop can't turn
   it on.
+
+**Same version on every machine:** paired machines do nothing together
+unless both run the same version, which means the same peer protocol
+number and database schema (`server/src/peer/version.ts`). It used to stop
+only sync; it now stops everything: running a chat on the other machine,
+relaying its stream, notes, regenerate, the head, commands, cards and
+questions, the Inspector's grants, MCP servers and audit trail, its
+schedules and folders, chat sends across machines, files handed over, and
+sync. The app version is not compared (a local build and a beta with the
+same two numbers work together), so anything that changes what machines say
+to each other must bump `PEER_PROTOCOL_VERSION` (`core/domain/pairing.ts`).
+It is checked on both sides. The caller refuses before sending
+(`PeerService.call`, and `checkVersion` ahead of a relayed stream) from what
+the other machine last said of itself: the hello of its `/peer/events`
+stream, heard again on every reconnect, and each sync's `/peer/info`; a
+machine that hasn't said, or isn't connected, is asked once. The listener
+refuses a caller whose versions, sent as headers on every call
+(`x-otherbench-protocol`, `x-otherbench-schema`), differ from its own, with
+409 `peer_version_mismatch` and what it runs; a caller that sends none is an
+older build and is refused the same. Either way this machine's UI gets 409
+`peer_version_mismatch` with the sentence Settings → Machines shows ("PC
+runs a different version of OtherBench (...). Update Laptop to sync."), and
+a chat that runs on such a machine shows it above the message box, with Run
+here, and "PC runs a different version" in its header. What a mismatched
+machine can still do, and nothing else: read `GET /peer/info` and hold
+`GET /peer/events` open (so each knows the other's version, that it is
+reachable, and which chats it is replying in or holds computer use for:
+ids, times and the schedule rows, never content), pair and unpair
+(`POST /peer/pair`, `POST /peer/revoke`), and every Stop (`POST
+/api/chats/:id/stop`, `/api/messages/:id/cancel`,
+`/api/chats/:id/computer/stop`, `/api/chats/:id/helpers/:taskId/stop`,
+`/api/chats/:id/sends/stop`, `/api/chats/:id/sends/:sendId/remote-stop`),
+because Stop is always allowed. Tested with two real servers over TLS
+(`server/test/peer/version-gate.test.ts`).
 
 **Notification clicks:** on Windows a notification is a WinRT toast shown
 by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On

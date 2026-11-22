@@ -4,6 +4,7 @@ import type { App } from '@otherbench/core/ports/store.js';
 import { MemoryNote } from '../components/MemoryNote.js';
 import { openInBrowser } from '../desktop/bridge.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
+import { toast } from '../lib/toasts.js';
 import { api } from '../state/api.js';
 import { useAppNotes, useAppNotesStore } from '../state/appNotes.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -74,7 +75,7 @@ export function NotesTab({ app }: { app: App }): JSX.Element {
             {copy.url && (
               <>
                 {' '}
-                <button type="button" onClick={() => void openInBrowser(copy.url!).catch((err: unknown) => console.error('[otherbench-web] failed to open the Collectives copy:', err))} className="underline hover:text-[var(--text)]">
+                <button type="button" onClick={() => void openInBrowser(copy.url!).catch((err: unknown) => { console.error('[otherbench-web] failed to open the Collectives copy:', err); toast({ text: "Couldn't open the Collectives copy.", tone: 'error' }); })} className="underline hover:text-[var(--text)]">
                   Open
                 </button>
               </>

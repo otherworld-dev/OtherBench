@@ -53,6 +53,62 @@ export interface AiSdkChatEngineOptions {
    * mapping without any network access.
    */
   fetchImpl?: typeof fetch;
+  /**
+   * Waits `ms` before `stream()` tries a failed request again, returning early
+   * if `signal` aborts. Defaults to a real timer; tests pass one that returns
+   * at once.
+   */
+  retryWait?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** How many times `stream()` tries a request again after a retryable failure. */
+const MAX_RETRIES = 3;
+/** The wait before the first retry; it doubles each time (1s, 2s, 4s). */
+const RETRY_BASE_MS = 1_000;
+/** The most one `stream()` call waits on retries in total. A provider that asks for longer is not waited for. */
+const MAX_RETRY_WAIT_MS = 30_000;
+
+/**
+ * How long to wait before trying a failed request again, or null when it is
+ * not to be retried: the error isn't a retryable kind (`classifyProviderError`:
+ * only `rate_limit` and `transient` are), the retries are used up, or the wait
+ * would take the total past `MAX_RETRY_WAIT_MS`. A `retry-after` the provider
+ * sent is honoured when it is longer than the usual backoff.
+ */
+function retryWaitMs(err: unknown, retries: number, waited: number): number | null {
+  if (retries >= MAX_RETRIES || !classifyProviderError(err).retryable) return null;
+  const wait = Math.max(RETRY_BASE_MS * 2 ** retries, retryAfterMs(err) ?? 0);
+  return waited + wait <= MAX_RETRY_WAIT_MS ? wait : null;
+}
+
+/** The provider's `retry-after-ms` or `retry-after` (seconds, or an HTTP date) header in ms, when the error carries one. */
+function retryAfterMs(err: unknown): number | null {
+  if (!APICallError.isInstance(err) || !err.responseHeaders) return null;
+  const headers = new Map(Object.entries(err.responseHeaders).map(([name, value]) => [name.toLowerCase(), value]));
+  const ms = Number(headers.get('retry-after-ms'));
+  if (headers.has('retry-after-ms') && Number.isFinite(ms) && ms >= 0) return ms;
+  const after = headers.get('retry-after');
+  if (after === undefined || after.trim() === '') return null;
+  const seconds = Number(after);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : null;
+  const at = Date.parse(after);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+}
+
+function waitFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
 }
 
 /**
@@ -157,6 +213,7 @@ const OLLAMA_TAGS_TIMEOUT_MS = 3_000;
 export class AiSdkChatEngine implements ChatEngine {
   private readonly mock: ChatEngine;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryWait: (ms: number, signal: AbortSignal) => Promise<void>;
 
   constructor(
     private readonly resolver: ProviderResolver,
@@ -164,6 +221,7 @@ export class AiSdkChatEngine implements ChatEngine {
   ) {
     this.mock = options.mock ?? new MockChatEngine();
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.retryWait = options.retryWait ?? waitFor;
   }
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
@@ -220,34 +278,63 @@ export class AiSdkChatEngine implements ChatEngine {
       const safe = (list: ModelMessage[]): ModelMessage[] => (toolsetOn ? toolsetSafeMessages(list, COMPUTER_TOOL) : list);
       const caching = req.profile.connection.kind === 'anthropic';
 
-      const result = streamText({
-        model,
-        messages: safe(caching ? withCachedSystem(messages) : messages),
-        // Anthropic caches nothing unless asked. Top-level caching puts the
-        // breakpoint on the newest block of every request, so each tool step
-        // reads what the step before it wrote, and the next turn reads this
-        // turn's (prompt-caching guide: automatic caching for the growing tail).
-        ...(caching ? { providerOptions: { anthropic: { cacheControl: CACHE_CONTROL } } } : {}),
-        ...(toolsetOn ? { prepareStep: ({ messages: stepMessages }: { messages: ModelMessage[] }) => ({ messages: safe(stepMessages) }) } : {}),
-        tools: Object.keys(tools).length > 0 ? tools : undefined,
-        stopWhen: stepCountIs(MAX_TOOL_STEPS),
-        abortSignal: req.signal,
-        // The AI SDK's own retry-with-backoff is disabled deliberately:
-        // engine.ts has no retry policy of its own, and letting `streamText`
-        // silently retry (with real delays) before an error ever reaches the
-        // caller would both slow every failure down and hide the original
-        // error inside a RetryError wrapper. Retry policy belongs to
-        // whatever calls `stream()` (the future TurnRunner, tasks 16-18),
-        // which can inspect `SerializedError.retryable` and decide.
-        maxRetries: 0,
-        temperature: req.profile.params.temperature,
-        topP: req.profile.params.topP,
-        maxOutputTokens: req.profile.params.maxOutputTokens,
-      });
+      const start = () =>
+        streamText({
+          model,
+          messages: safe(caching ? withCachedSystem(messages) : messages),
+          // Anthropic caches nothing unless asked. Top-level caching puts the
+          // breakpoint on the newest block of every request, so each tool step
+          // reads what the step before it wrote, and the next turn reads this
+          // turn's (prompt-caching guide: automatic caching for the growing tail).
+          ...(caching ? { providerOptions: { anthropic: { cacheControl: CACHE_CONTROL } } } : {}),
+          ...(toolsetOn ? { prepareStep: ({ messages: stepMessages }: { messages: ModelMessage[] }) => ({ messages: safe(stepMessages) }) } : {}),
+          tools: Object.keys(tools).length > 0 ? tools : undefined,
+          stopWhen: stepCountIs(MAX_TOOL_STEPS),
+          abortSignal: req.signal,
+          // The AI SDK's own retry-with-backoff stays off: it retries every
+          // request of the tool loop alike and hides the original error in a
+          // RetryError. The loop below does the one retry that is safe.
+          maxRetries: 0,
+          temperature: req.profile.params.temperature,
+          topP: req.profile.params.topP,
+          maxOutputTokens: req.profile.params.maxOutputTokens,
+        });
 
-      for await (const part of result.fullStream) {
-        const event = mapStreamPart(part);
-        if (event) yield event;
+      // A busy or failed provider (429, 529, 5xx, a dropped connection) is
+      // tried again, but ONLY while this call has yielded nothing: no text or
+      // reasoning has been shown and no tool call has been reported, so no tool
+      // has run (the SDK reports a call before it executes it) and starting the
+      // whole request over repeats nothing. Once anything has been yielded the
+      // error goes to the caller as before: a failure in a later request of the
+      // tool loop can't be retried from here without running the tools again.
+      let waited = 0;
+      for (let retries = 0; ; retries += 1) {
+        let yielded = false;
+        let failure: { cause: unknown } | null = null;
+        try {
+          for await (const part of start().fullStream) {
+            if (part.type === 'error' && !yielded && retryWaitMs(part.error, retries, waited) !== null) {
+              failure = { cause: part.error };
+              break;
+            }
+            const event = mapStreamPart(part);
+            if (event) {
+              yielded = true;
+              yield event;
+            }
+          }
+        } catch (err) {
+          if (yielded || retryWaitMs(err, retries, waited) === null) throw err;
+          failure = { cause: err };
+        }
+        if (failure === null) return;
+        const waitMs = retryWaitMs(failure.cause, retries, waited);
+        // Unreachable (both paths above checked it), but never loop without a wait.
+        if (waitMs === null) throw failure.cause;
+        waited += waitMs;
+        await this.retryWait(waitMs, req.signal);
+        // Stopped while waiting: end quietly, as an abort before the first request does.
+        if (req.signal.aborted) return;
       }
     } catch (err) {
       yield { type: 'error', error: classifyProviderError(err) };

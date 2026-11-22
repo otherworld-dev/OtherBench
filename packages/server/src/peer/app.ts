@@ -6,6 +6,7 @@ import { fingerprintOf } from '@otherbench/core/domain/pairing.js';
 import type { Peer } from '@otherbench/core/types/peer.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { PeerError, type PairRequest, type PeerService } from './service.js';
+import { PeerVersionError, VERSION_MISMATCH_KIND, versionExempt, versionsFromHeaders } from './version.js';
 
 export interface PeerEnv {
   Bindings: { incoming: IncomingMessage };
@@ -37,12 +38,15 @@ export interface PeerAppDeps {
   forwardedApi?: () => { fetch: (req: Request, env: { peerNodeId: string }) => Response | Promise<Response> } | null;
   /** How often an idle `/peer/events` stream sends a keepalive; defaults to STREAM_KEEPALIVE_MS. */
   keepaliveMs?: number;
+  /** Told the cursor a paired machine asks for changes from: it has everything up to there (the store's `notePulled`). */
+  pulled?: (nodeId: string, since: number) => void;
 }
 
 export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hono<PeerEnv> {
   const app = new Hono<PeerEnv>();
 
   app.onError((err, c) => {
+    if (err instanceof PeerVersionError) return c.json(err.body(), err.status);
     if (err instanceof PeerError) return c.json({ error: err.message }, err.status);
     console.error('[otherbench-server] peer listener error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
@@ -65,6 +69,18 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
   };
   app.use('/peer/*', pairedOnly);
   app.use('/api/*', pairedOnly);
+
+  // And only one running this machine's version (peer/version.ts), which it sends with every call: a build that
+  // sends none is older. Refused before anything is read or done, with what this machine runs, so the caller can say
+  // which of the two to update. Finding that out, unpairing and every Stop pass (`versionExempt`).
+  const sameVersion = async (c: Context<PeerEnv>, next: () => Promise<void>): Promise<Response | void> => {
+    if (versionExempt(c.req.method, c.req.path)) return next();
+    const verdict = service.callerMismatch(c.get('peer'), versionsFromHeaders((name) => c.req.header(name)));
+    if (verdict) return c.json({ error: verdict.message, kind: VERSION_MISMATCH_KIND, info: service.info() }, 409);
+    await next();
+  };
+  app.use('/peer/*', sameVersion);
+  app.use('/api/*', sameVersion);
 
   /** Running a chat that runs here, for the paired machine whose UI it's open in (Task 52). */
   app.all('/api/*', async (c) => {
@@ -99,7 +115,11 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     const since = Number(c.req.query('since') ?? 0);
     const limit = Number(c.req.query('limit') ?? 500);
     if (!Number.isInteger(since) || since < 0 || !Number.isInteger(limit) || limit < 1) return c.json({ error: 'Bad since or limit.' }, 400);
-    return c.json(await service.requireSyncer().changesFor(since, limit));
+    const batch = await service.requireSyncer().changesFor(since, limit);
+    // Noted only once the batch is ready to send, and from the authenticated caller's own id: a machine can
+    // move no cursor but its own. It is what the change log is tidied by.
+    deps.pulled?.(c.get('peer').nodeId, since);
+    return c.json(batch);
   });
 
   /** A file's bytes by hash: only files sent in a message ever leave this machine. */

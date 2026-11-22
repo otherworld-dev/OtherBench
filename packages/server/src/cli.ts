@@ -8,10 +8,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import { addonDisposeBudgetMs, type LoadedAddon } from './addons/loader.js';
 import { createApp } from './app.js';
 import { DesktopChannel } from './computer/desktop-channel.js';
 import { DesktopComputerDriver } from './computer/desktop-driver.js';
 import { createContainer, type Container } from './container.js';
+import { NewerDatabaseError } from '@otherbench/store-sqlite/migrations/index.js';
 import { DatabaseLockedError } from './db-lock.js';
 import { adoptLegacyData, DATA_DIR, DB_NAME, LegacyDataError } from './legacy-data.js';
 import { announceLine, exitOnStdinClose } from './desktop.js';
@@ -36,9 +38,20 @@ const DEFAULT_HOST = '127.0.0.1';
 /**
  * How long an announce-mode shutdown waits for the container's background work (the sandbox closing its agents
  * and taking its folders down in the VM) before exiting anyway. Under the desktop shell's 3 s grace
- * (desktop/src-tauri/src/sidecar.rs), after which it kills the server.
+ * (desktop/src-tauri/src/sidecar.rs), after which it kills the server. Add-ons with a dispose are stopped before
+ * anything else closes, so the time they may take is added to it (`shutdownWaitMs`).
  */
 export const SHUTDOWN_WAIT_MS = 2500;
+
+/**
+ * How long an announce-mode shutdown waits before exiting anyway: every add-on's dispose may use its whole limit
+ * before the close proper starts (the database, the Claude Code processes, the sandbox, the terminals), and exiting
+ * before that would skip it. Still bounded, and with no add-on to stop it is `SHUTDOWN_WAIT_MS` as before. With one,
+ * it can be longer than the desktop shell's grace: the shell's kill is then what ends a server whose add-on hangs.
+ */
+export function shutdownWaitMs(addons: readonly LoadedAddon[] = []): number {
+  return addonDisposeBudgetMs(addons) + SHUTDOWN_WAIT_MS;
+}
 
 function defaultDbPath(): string {
   return join(homedir(), DATA_DIR, DB_NAME);
@@ -277,6 +290,57 @@ export function consoleToStderr(target: Console = console, stream: NodeJS.Writab
     const method = toStderr[name] as (...args: unknown[]) => void;
     (target as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => method.apply(toStderr, args);
   }
+  // The methods just replaced lost their timestamp: put back on a console that had one.
+  const clock = stampedConsoles.get(target);
+  if (clock) timestampConsole(target, clock);
+}
+
+/** The consoles `timestampConsole` has been asked to stamp, each with its clock, and the methods it has wrapped. */
+const stampedConsoles = new WeakMap<Console, () => Date>();
+const stampedMethods = new WeakSet<(...args: unknown[]) => void>();
+
+/**
+ * Begins every line the server logs with the time (ISO, UTC), so the desktop app's server.log and a terminal's
+ * scrollback say when something happened. The one place it is done: everything the server logs goes through
+ * `console`. What the desktop shell reads is not touched: the announce line and the OTHERBENCH-RPC channel are
+ * written to stdout itself, never through `console` (desktop.ts, computer/desktop-channel.ts). A message of several
+ * lines (a stack) is stamped once, at its start. Asking again wraps only methods not yet wrapped.
+ */
+export function timestampConsole(target: Console = console, now: () => Date = () => new Date()): void {
+  stampedConsoles.set(target, now);
+  const methods = target as unknown as Record<string, (...args: unknown[]) => void>;
+  for (const name of ['log', 'info', 'debug', 'warn', 'error']) {
+    const method = methods[name]!;
+    if (stampedMethods.has(method)) continue;
+    const stamped = (...args: unknown[]): void => {
+      const at = now().toISOString();
+      // Into the first argument when it is text, so a format string stays one.
+      if (typeof args[0] === 'string') method.call(target, `${at} ${args[0]}`, ...args.slice(1));
+      else method.call(target, at, ...args);
+    };
+    stampedMethods.add(stamped);
+    methods[name] = stamped;
+  }
+}
+
+/**
+ * Says in the log why the server is about to die, or what failed with nobody waiting on it.
+ *
+ * An uncaught exception is logged from `uncaughtExceptionMonitor`, which leaves what Node does next alone: it prints
+ * the error itself and exits with a failure code, as it must (after a throw nobody caught, nothing here can be
+ * trusted to be in a known state). The line logged here is the one with the time and the server's name on it.
+ *
+ * A promise rejection nobody handled is logged and the server carries on. Left to Node it would be raised as an
+ * uncaught exception and end the process, and with it every reply being written, for what is one background step
+ * that failed after the code that started it had moved on: no half-done synchronous work is left behind. The log
+ * line, with its stack, is there so the missing catch gets written.
+ */
+export function installFatalHandlers(
+  proc: { on(event: string, listener: (...args: unknown[]) => void): unknown } = process,
+  log: (...args: unknown[]) => void = (...args) => console.error(...args)
+): void {
+  proc.on('uncaughtExceptionMonitor', (err) => log('[otherbench-server] fatal: uncaught exception, the server is exiting:', err));
+  proc.on('unhandledRejection', (reason) => log('[otherbench-server] unhandled promise rejection (the server carries on):', reason));
 }
 
 export interface ServeDeps {
@@ -494,11 +558,13 @@ export async function runServe(
   if (options.announce) {
     stdout.write(announceLine(boundPort, rpcWord));
     exitOnStdinClose(stdin, () => {
+      // Read before the close: which add-ons have a dispose to wait for.
+      const wait = shutdownWaitMs(container.addons);
       close();
       // Exiting at once would leave the sandbox's folders mounted in the VM (and undeletable on Windows) until WSL stops it.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const waited = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, SHUTDOWN_WAIT_MS);
+        timer = setTimeout(resolve, wait);
       });
       void Promise.race([container.settled?.() ?? Promise.resolve(), waited]).then(() => {
         clearTimeout(timer);
@@ -596,6 +662,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
       err instanceof DesktopRpcWithoutAnnounceError ||
       err instanceof RemoteStartError ||
       err instanceof DatabaseLockedError ||
+      err instanceof NewerDatabaseError ||
       err instanceof LegacyDataError
     ) {
       console.error(`Error: ${err.message}`);
@@ -621,6 +688,11 @@ export function sameScriptPath(a: string, b: string): boolean {
 
 const isMainModule = process.argv[1] !== undefined && sameScriptPath(fileURLToPath(import.meta.url), process.argv[1]);
 if (isMainModule) {
+  // The server's log, before anything can write to it or fail; `otherbench password` talks to a person and stays as it is.
+  if (process.argv[2] === 'serve') {
+    timestampConsole();
+    installFatalHandlers();
+  }
   main(process.argv.slice(2)).catch((err: unknown) => {
     console.error(err);
     process.exitCode = 1;

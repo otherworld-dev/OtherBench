@@ -1,8 +1,10 @@
 import { useEffect, useState, type JSX } from 'react';
 import { CodePanel } from './code/CodePanel.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, DockIcon, GearIcon, MenuIcon, SignOutIcon } from './components/icons.js';
 import { dock, isIndicatorView, isQuickView } from './desktop/bridge.js';
+import { toast } from './lib/toasts.js';
 import { useDocks } from './desktop/useDocks.js';
 import { useChanged } from './lib/useChanged.js';
 import { NARROW_BREAKPOINT, PHONE_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
@@ -122,7 +124,12 @@ function OverviewWindow(): JSX.Element {
           <button
             type="button"
             data-testid="dock-toggle"
-            onClick={() => void dock('overview').catch((err: unknown) => console.error('[otherbench-web] failed to dock the Overview:', err))}
+            onClick={() =>
+              void dock('overview').catch((err: unknown) => {
+                console.error('[otherbench-web] failed to dock the Overview:', err);
+                toast({ text: "Couldn't put the Overview back in the main window.", tone: 'error' });
+              })
+            }
             aria-label="Put the Overview back in the main window"
             title="Put the Overview back in the main window"
             className="btn px-1.5 py-0.5"
@@ -245,6 +252,7 @@ function MainApp(): JSX.Element {
         onClick={isPhone ? (e) => (e.target as Element).closest('[data-row-main]') && setDrawerOpen(false) : undefined}
       >
         {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
+        <ErrorBoundary what="the sidebar">
         <ChatList
           wrapFooter={signedInRemotely}
           footer={
@@ -266,6 +274,7 @@ function MainApp(): JSX.Element {
             </>
           }
         />
+        </ErrorBoundary>
         {!isPhone && <SidebarResizer />}
       </div>
 
@@ -273,7 +282,9 @@ function MainApp(): JSX.Element {
         <div className="flex h-full min-h-0 min-w-0 flex-col">
           {isPhone && <PhoneBar onOpenDrawer={() => setDrawerOpen(true)} />}
           {overviewOpen ? (
-            <OverviewView />
+            <ErrorBoundary what="the Overview">
+              <OverviewView />
+            </ErrorBoundary>
           ) : (
             <>
               <TabBar narrow={isNarrow} />
@@ -290,7 +301,9 @@ function MainApp(): JSX.Element {
           // window, and never squeezing the chat panes below CHAT_AREA_MIN_REM beside the sidebar (CODE_PANEL_CSS_WIDTH).
           <div className="relative h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : CODE_PANEL_CSS_WIDTH }}>
             {!inspectorCollapsed && <PanelResizer width={codePanelWidth} edge="left" label="Resize code panel" />}
-            <CodePanel collapsed={inspectorCollapsed} onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)} />
+            <ErrorBoundary what="the Code panel">
+              <CodePanel collapsed={inspectorCollapsed} onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)} />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -298,13 +311,15 @@ function MainApp(): JSX.Element {
         {!isNarrow && !overviewOpen && mode === 'chat' && (
           <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
             {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
-            <Inspector
-              chat={activeChat}
-              profile={activeProfile}
-              collapsed={inspectorCollapsed || !activeChat}
-              disabled={!activeChat}
-              onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)}
-            />
+            <ErrorBoundary what="the inspector" resetKey={activeChatId}>
+              <Inspector
+                chat={activeChat}
+                profile={activeProfile}
+                collapsed={inspectorCollapsed || !activeChat}
+                disabled={!activeChat}
+                onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)}
+              />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -321,29 +336,48 @@ function MainApp(): JSX.Element {
               className="absolute inset-0 z-10 bg-[#1e2124]/40"
             />
             <div className={`absolute inset-y-0 right-0 z-20 shadow-lg ${mode === 'code' ? 'w-96 max-w-full' : 'w-80'}`}>
-              {mode === 'code' ? (
-                <CodePanel collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
-              ) : (
-                <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
-              )}
+              <ErrorBoundary what={mode === 'code' ? 'the Code panel' : 'the inspector'} resetKey={activeChatId} onClose={() => setNarrowOverlayOpen(false)}>
+                {mode === 'code' ? (
+                  <CodePanel collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+                ) : (
+                  <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
+                )}
+              </ErrorBoundary>
             </div>
           </>
         )}
       </div>
 
-      {usageViewOpen && <UsageView onClose={() => setUsageViewOpen(false)} />}
-      {settingsViewOpen && <SettingsView onClose={() => setSettingsViewOpen(false)} />}
+      {/* Each full-screen view fails by itself, with a Close in place of the one in its own header. */}
+      {usageViewOpen && (
+        <ErrorBoundary what="Usage" variant="overlay" onClose={() => setUsageViewOpen(false)}>
+          <UsageView onClose={() => setUsageViewOpen(false)} />
+        </ErrorBoundary>
+      )}
+      {settingsViewOpen && (
+        <ErrorBoundary what="Settings" variant="overlay" onClose={() => setSettingsViewOpen(false)}>
+          <SettingsView onClose={() => setSettingsViewOpen(false)} />
+        </ErrorBoundary>
+      )}
       {schedulesPage && (
-        <SchedulesView
-          key={schedulesPage.prefill ? `${schedulesPage.prefill.kind}:${schedulesPage.prefill.kind === 'chat' ? schedulesPage.prefill.chatId : schedulesPage.prefill.projectId}` : 'list'}
-          {...(schedulesPage.prefill ? { prefill: schedulesPage.prefill } : {})}
-          onClose={closeSchedules}
-        />
+        <ErrorBoundary what="Scheduled tasks" variant="overlay" onClose={closeSchedules}>
+          <SchedulesView
+            key={schedulesPage.prefill ? `${schedulesPage.prefill.kind}:${schedulesPage.prefill.kind === 'chat' ? schedulesPage.prefill.chatId : schedulesPage.prefill.projectId}` : 'list'}
+            {...(schedulesPage.prefill ? { prefill: schedulesPage.prefill } : {})}
+            onClose={closeSchedules}
+          />
+        </ErrorBoundary>
       )}
       {projectPage && (
-        <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
+        <ErrorBoundary what="this project's page" variant="overlay" onClose={closeProjectPage}>
+          <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
+        </ErrorBoundary>
       )}
-      {appPage && <AppView key={appPage.mode === 'edit' ? appPage.appId : 'new'} page={appPage} onClose={closeAppPage} />}
+      {appPage && (
+        <ErrorBoundary what="this app's page" variant="overlay" onClose={closeAppPage}>
+          <AppView key={appPage.mode === 'edit' ? appPage.appId : 'new'} page={appPage} onClose={closeAppPage} />
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

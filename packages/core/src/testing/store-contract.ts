@@ -788,6 +788,21 @@ export function runStoreContract(
         ]);
       });
 
+      it("chatTree lists a chat's messages whole, oldest first, by time then id", () => {
+        const chatId = seedChat(store, 'chat-a').chat.id;
+        const otherId = seedChat(store, 'chat-b').chat.id;
+        expect(store.messages.chatTree(chatId)).toEqual([]);
+        store.messages.create(makeMessageInput({ id: 'm1', chatId, role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'm3', chatId, parentId: 'm1', role: 'assistant', createdAt: 20, parts: [{ type: 'text', text: 'three' }], keptAt: 25 }));
+        store.messages.create(makeMessageInput({ id: 'm2', chatId, parentId: 'm1', role: 'assistant', createdAt: 20, status: 'streaming' }));
+        store.messages.create(makeMessageInput({ id: 'x1', chatId: otherId, role: 'user', createdAt: 5 }));
+        const tree = store.messages.chatTree(chatId);
+        expect(tree.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
+        // Each as `get` gives it.
+        expect(tree).toEqual(['m1', 'm2', 'm3'].map((id) => store.messages.get(id)));
+        expect(store.messages.chatTree('no-such-chat')).toEqual([]);
+      });
+
       it('a message records the machine that wrote it, defaulting to this one', () => {
         const chatId = seedChat(store, 'chat-a').chat.id;
         const self = store.nodes.self().id;
@@ -891,6 +906,17 @@ export function runStoreContract(
         expect(store.messages.heads('chat-b')).toEqual([{ chatId: 'chat-b', role: 'user', status: 'complete', createdAt: 20 }]);
         store.chats.update('chat-b', { archivedAt: 30 });
         expect(store.messages.heads('chat-b')).toEqual([]);
+      });
+
+      it('takes the reply, not the message it answers, when both were made in the same millisecond', () => {
+        // The head stays on the user's message after a send, and a fast reply can share its time. Ids are random, so
+        // the larger id is as often the question as the reply: the chat's row then showed nothing of the reply.
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        store.messages.create(makeMessageInput({ id: 'z-question', chatId: 'chat-a', role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'a-reply', chatId: 'chat-a', parentId: 'z-question', role: 'assistant', status: 'complete', createdAt: 10 }));
+        store.chats.update('chat-a', { headMessageId: 'z-question' });
+        expect(store.messages.heads('chat-a')).toEqual([{ chatId: 'chat-a', role: 'assistant', status: 'complete', createdAt: 10 }]);
       });
 
       it('says when the reply a chat stopped on asks the user something, and only then', () => {
@@ -1791,6 +1817,24 @@ export function runStoreContract(
 
       it('listByStatus returns [] when nothing is at that status', () => {
         expect(store.messages.listByStatus('streaming')).toEqual([]);
+      });
+
+      it('listStreaming returns the replies still streaming in that chat only, oldest first, and follows their status', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        store.messages.create(makeMessageInput({ id: 'second-a', chatId: chatA.id, status: 'streaming', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'first-a', chatId: chatA.id, status: 'streaming', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'streaming-b', chatId: chatB.id, status: 'streaming', createdAt: 5 }));
+        store.messages.create(makeMessageInput({ id: 'complete-a', chatId: chatA.id, status: 'complete', createdAt: 1 }));
+
+        expect(store.messages.listStreaming(chatA.id).map((m) => m.id)).toEqual(['first-a', 'second-a']);
+        expect(store.messages.listStreaming(chatA.id)[0]).toEqual(store.messages.get('first-a'));
+        expect(store.messages.listStreaming(chatB.id).map((m) => m.id)).toEqual(['streaming-b']);
+        expect(store.messages.listStreaming('no-such-chat')).toEqual([]);
+
+        store.messages.updateStatus('first-a', 'complete');
+        store.messages.updateStatus('complete-a', 'streaming');
+        expect(store.messages.listStreaming(chatA.id).map((m) => m.id)).toEqual(['complete-a', 'second-a']);
       });
 
       it('listWithSubagentStatus returns every message, in any chat and at any status, with a sub-agent card at that status', () => {

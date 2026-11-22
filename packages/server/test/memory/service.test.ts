@@ -478,9 +478,9 @@ describe('startup sweep', () => {
   it("skips a chat whose cursor is already its newest message without reading its messages", () => {
     const { replyId } = exchange('chat', 'Done', 'ok', { at: clock.time - 60 * 60_000 });
     store.chats.update('chat', { memoryCursor: replyId });
-    const roots = vi.spyOn(store.messages, 'roots');
+    const read = vi.spyOn(store.messages, 'chatTree');
     service.sweep();
-    expect(roots).not.toHaveBeenCalledWith('chat');
+    expect(read).not.toHaveBeenCalledWith('chat');
     expect(clock.pending()).toEqual([]);
   });
 });
@@ -714,10 +714,10 @@ describe('final-review fixes', () => {
     addChat('good');
     exchange('bad', 'Broken', 'ok', { at: clock.time - 10 * 60_000 });
     exchange('good', 'Fine', 'ok', { at: clock.time - 10 * 60_000 });
-    const roots = store.messages.roots.bind(store.messages);
-    vi.spyOn(store.messages, 'roots').mockImplementation((chatId: string) => {
+    const chatTree = store.messages.chatTree.bind(store.messages);
+    vi.spyOn(store.messages, 'chatTree').mockImplementation((chatId: string) => {
       if (chatId === 'bad') throw new Error('disk gone');
-      return roots(chatId);
+      return chatTree(chatId);
     });
 
     expect(() => service.sweep()).not.toThrow();

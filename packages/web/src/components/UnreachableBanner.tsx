@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { ApiError, api } from '../state/api.js';
-import { machineName, remoteUnreachable } from '../state/machines.js';
+import { machineName, remoteUnreachable, remoteVersionMismatch } from '../state/machines.js';
 import { useOtherBenchStore } from '../state/store.js';
 
 /**
@@ -9,7 +9,9 @@ import { useOtherBenchStore } from '../state/store.js';
  * spec §5): offers to run it here instead. That moves the chat; its folder
  * is then resolved on this machine, and the folder prompt takes over if it
  * isn't here. Once moved, it says so until dismissed, since nothing else on
- * screen changes.
+ * screen changes. The same for a machine that is reachable but runs another
+ * version of OtherBench: nothing but Stop reaches it until one of the two is
+ * updated, so the server's reason is shown, with the same offer.
  */
 export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null {
   const machines = useOtherBenchStore((s) => s.machines);
@@ -28,7 +30,9 @@ export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null 
       </div>
     );
   }
-  if (!machines || !remoteUnreachable(machines, chat)) return null;
+  const unreachable = !!machines && remoteUnreachable(machines, chat);
+  const versions = unreachable ? null : remoteVersionMismatch(machines, chat);
+  if (!machines || (!unreachable && !versions)) return null;
   const name = machineName(machines, chat.runsOn);
 
   async function runHere(): Promise<void> {
@@ -46,8 +50,8 @@ export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null 
   }
 
   return (
-    <div data-testid="unreachable-banner" role="status" className="mx-4 mb-2 flex flex-wrap items-center gap-2 rounded border border-[var(--warn)] bg-[var(--bg-raised)] p-3 text-sm">
-      <span className="flex-1">This chat runs on {name}, which isn&apos;t reachable. Run it here instead?</span>
+    <div data-testid={versions ? 'version-mismatch-banner' : 'unreachable-banner'} role="status" className="mx-4 mb-2 flex flex-wrap items-center gap-2 rounded border border-[var(--warn)] bg-[var(--bg-raised)] p-3 text-sm">
+      <span className="flex-1">{versions ?? <>This chat runs on {name}, which isn&apos;t reachable. Run it here instead?</>}</span>
       <button
         type="button"
         onClick={() => void runHere()}

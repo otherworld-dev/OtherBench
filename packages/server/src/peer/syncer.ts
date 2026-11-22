@@ -1,3 +1,4 @@
+import { HLC_MAX_AHEAD_MS } from '@otherbench/core/domain/hlc.js';
 import { PEER_PROTOCOL_VERSION } from '@otherbench/core/domain/pairing.js';
 import { connectionSecretRef, isSha256, type ChangeBatch, type ChangeRow } from '@otherbench/core/domain/sync.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
@@ -8,6 +9,7 @@ import { sha256Of, type BlobStore } from '@otherbench/store-sqlite/blob-store.js
 import { LOCATION_NAME_MAX } from '../routes/locations.js';
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
+import { compareVersions, peerVersionsOf, PeerVersionError, type VersionMismatch } from './version.js';
 
 /** Rows per `/peer/changes` batch: well under the client's 64 MiB answer cap for ordinary chats. */
 export const SYNC_BATCH_SIZE = 500;
@@ -27,15 +29,7 @@ function usableBlobSize(size: unknown): size is number {
   return typeof size === 'number' && Number.isInteger(size) && size >= 0 && size <= MAX_BLOB_BYTES;
 }
 
-/** Sync was refused because the two machines run different versions; kept until a pull succeeds. */
-export interface VersionMismatch {
-  peerAppVersion: string | null;
-  peerSchemaVersion: number;
-  peerProtocolVersion: number;
-  /** The peer is ahead, so updating this machine is what fixes it (the desktop app then checks for an update). */
-  thisMachineOlder: boolean;
-  at: number;
-}
+export type { VersionMismatch };
 
 export interface SyncStatus {
   lastSyncedAt: number | null;
@@ -83,7 +77,8 @@ export interface SyncerOptions {
  * serves this machine's to them. A pull reads `/peer/changes` from the
  * peer's cursor until there's nothing more, stores connection keys in this
  * machine's SecretStore, fetches and checks the blobs of new files, and
- * moves the cursor after every batch. It refuses a machine running a
+ * moves the cursor after every batch (but not past changes stamped by a
+ * clock far ahead of this one: those wait). It refuses a machine running a
  * different protocol or schema, saying which.
  *
  * Pulls run when a peer connects, when it announces changes, every minute
@@ -98,6 +93,8 @@ export class Syncer {
   private readonly now: () => number;
   private timers: ReturnType<typeof setInterval>[] = [];
   private announcedSeq = 0;
+  /** The failure last logged for each peer by `pullSoon`, so one that repeats every minute is logged once. */
+  private readonly loggedFailures = new Map<string, string>();
 
   constructor(private readonly options: SyncerOptions) {
     this.now = options.now ?? Date.now;
@@ -151,9 +148,31 @@ export class Syncer {
     this.options.onLocalChanges?.();
   }
 
-  /** `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines). */
+  /**
+   * `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines too). The same failure again
+   * (a version mismatch on every fallback pull, say) isn't logged again until a pull has worked or it fails another way.
+   */
   pullSoon(nodeId: string): void {
-    this.pullFrom(nodeId).catch(() => {});
+    this.pullFrom(nodeId).then(
+      () => {
+        this.loggedFailures.delete(nodeId);
+      },
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (this.loggedFailures.get(nodeId) === message) return;
+        this.loggedFailures.set(nodeId, message);
+        // The pull may have failed because the server is closing: then the store can't be asked for the name either.
+        let name = nodeId;
+        try {
+          name = this.options.peers.peer(nodeId)?.name ?? nodeId;
+        } catch {
+          // The id will do.
+        }
+        // A machine that can't be reached or refuses is said in a line; anything else is a fault here, with its stack.
+        if (err instanceof PeerError) console.error(`[otherbench-server] sync with ${name} failed: ${message}`);
+        else console.error(`[otherbench-server] sync with ${name} failed:`, err);
+      }
+    );
   }
 
   /** Pulls everything `nodeId` has that this machine doesn't. Resolves with the number of rows written. */
@@ -199,38 +218,36 @@ export class Syncer {
     try {
       const info = (await peers.call(nodeId, { method: 'GET', path: '/peer/info' })).body as PeerInfo;
       this.followRename(nodeId, info.name);
-      const self = peers.info();
-      if (info.protocolVersion !== PEER_PROTOCOL_VERSION || info.schemaVersion !== self.schemaVersion) {
-        const peerOlder = info.schemaVersion < self.schemaVersion || info.protocolVersion < PEER_PROTOCOL_VERSION;
-        const older = peerOlder ? info.name : self.name;
-        const versions =
-          info.appVersion && self.appVersion
-            ? `${info.appVersion}; this machine ${self.appVersion}`
-            : `protocol ${info.protocolVersion}, schema ${info.schemaVersion}; this machine ${PEER_PROTOCOL_VERSION}, ${self.schemaVersion}`;
-        const message = `${info.name} runs a different version of OtherBench (${versions}). Update ${older} to sync.`;
-        mismatch = {
-          peerAppVersion: typeof info.appVersion === 'string' ? info.appVersion : null,
-          peerSchemaVersion: info.schemaVersion,
-          peerProtocolVersion: info.protocolVersion,
-          thisMachineOlder: !peerOlder,
-          at: this.now(),
-        };
-        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message });
-        throw new PeerError(message, 409);
+      // What it runs, for every other call to it as well (PeerService.checkVersion).
+      peers.noteVersions(nodeId, info);
+      const verdict = compareVersions(peers.info(), typeof info.name === 'string' ? info.name : (peers.peer(nodeId)?.name ?? 'The other machine'), peerVersionsOf(info), this.now());
+      if (verdict) {
+        mismatch = verdict.mismatch;
+        this.options.store.settings.setValue(mismatchKey(nodeId), { ...mismatch, message: verdict.message });
+        throw new PeerVersionError(nodeId, verdict);
       }
       let written = 0;
+      let waiting: string | null = null;
       for (;;) {
         const peer = peers.peer(nodeId);
         if (!peer) return written;
         const res = await peers.call(nodeId, { method: 'GET', path: `/peer/changes?since=${peer.lastSyncSeq}&limit=${this.options.batchSize ?? SYNC_BATCH_SIZE}` });
         if (res.status !== 200) throw new PeerError(`${peer.name} refused to send its changes (HTTP ${res.status}).`, 502);
         const batch = res.body as ChangeBatch;
-        written += await this.applyBatch(batch.rows);
+        const applied = await this.applyBatch(batch.rows);
+        written += applied.written;
+        if (applied.ahead > 0) {
+          // Rows stamped further ahead than this machine will follow were left out. The cursor stays where it is,
+          // so they are asked for again (with the rest of this batch, which changes nothing a second time) and
+          // taken once this machine's time reaches theirs; moving on would lose them for good.
+          waiting = `${peer.name}'s clock is more than ${HLC_MAX_AHEAD_MS / 60_000} minutes ahead of this machine's, so ${applied.ahead === 1 ? 'one of its changes is' : `${applied.ahead} of its changes are`} waiting. Check the date and time on both machines.`;
+          break;
+        }
         this.options.store.peers.update(nodeId, { lastSyncSeq: batch.nextSeq });
         if (!batch.more) break;
       }
       await this.fetchMissingBlobs(nodeId);
-      this.statuses.set(nodeId, { lastSyncedAt: this.now(), error: null, versionMismatch: null });
+      this.statuses.set(nodeId, waiting === null ? { lastSyncedAt: this.now(), error: null, versionMismatch: null } : { lastSyncedAt: this.status(nodeId).lastSyncedAt, error: waiting, versionMismatch: null });
       this.options.store.settings.setValue(mismatchKey(nodeId), null);
       if (written > 0) this.options.events?.emit({ type: 'sync-applied', nodeId, changed: written });
       return written;
@@ -242,7 +259,7 @@ export class Syncer {
     }
   }
 
-  private async applyBatch(rows: ChangeRow[]): Promise<number> {
+  private async applyBatch(rows: ChangeRow[]): Promise<{ written: number; ahead: number }> {
     const result = this.sync.apply(rows);
     // API keys travel with their connection inside the TLS session, and are
     // stored here under this machine's own SecretStore key.
@@ -253,7 +270,7 @@ export class Syncer {
       // Under the connection's own reference only (the store rewrote the row's to match).
       await this.options.secrets.set(connectionSecretRef(w.id), row.secret);
     }
-    return result.applied;
+    return { written: result.applied, ahead: result.ahead };
   }
 
   /** Every file from another machine whose blob isn't here: fetched and checked against its hash; a mismatch is dropped and tried again next time. */

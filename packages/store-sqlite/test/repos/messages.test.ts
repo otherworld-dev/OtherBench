@@ -7,7 +7,42 @@ function seedChat(db: ReturnType<typeof freshDb>, chatId = 'chat-a'): void {
   seedChatChain(db, { connectionId: `${chatId}::conn`, modelId: `${chatId}::model`, profileId: `${chatId}::profile`, chatId });
 }
 
+/** How SQLite would run each statement `run` prepares on `db`. */
+function plans(db: ReturnType<typeof freshDb>, run: () => void): string[] {
+  const prepare = db.prepare.bind(db);
+  const statements: string[] = [];
+  db.prepare = (sql: string) => {
+    statements.push(sql);
+    return prepare(sql);
+  };
+  try {
+    run();
+  } finally {
+    db.prepare = prepare;
+  }
+  return statements.map((sql) => (prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).map((r) => r.detail).join('; '));
+}
+
 describe('SqliteMessageRepo', () => {
+  it('finds the replies still streaming through the index over them, never by reading every message (055)', () => {
+    const db = freshDb();
+    seedChat(db);
+    const repo = new SqliteMessageRepo(db);
+    repo.create({ id: 'done', chatId: 'chat-a', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    repo.create({ id: 'live', chatId: 'chat-a', parentId: 'done', role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null });
+
+    for (const ask of [() => repo.listStreaming('chat-a'), () => repo.listByStatus('streaming')]) {
+      const [plan] = plans(db, ask);
+      expect(plan).toContain('idx_message_streaming');
+      expect(plan).not.toMatch(/SCAN message(?! USING)/);
+    }
+    expect(repo.listStreaming('chat-a').map((m) => m.id)).toEqual(['live']);
+    expect(repo.listByStatus('streaming').map((m) => m.id)).toEqual(['live']);
+    // Any other status still works, the long way.
+    expect(repo.listByStatus('complete').map((m) => m.id)).toEqual(['done']);
+    db.close();
+  });
+
   it('create defaults createdAt and round-trips parts/producedBy JSON', () => {
     const db = freshDb();
     seedChat(db);

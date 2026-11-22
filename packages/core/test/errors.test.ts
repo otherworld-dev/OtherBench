@@ -164,3 +164,34 @@ describe('classifyProviderError', () => {
     }
   });
 });
+
+describe('classifyProviderError: the status decides before the wording', () => {
+  const OVERLOADED_BODY = '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+
+  it.each([
+    // [status, message, response body, isRetryable, kind, retryable]
+    // A server-side failure is transient whatever words it comes with.
+    [503, 'Too many requests', '', true, 'transient', true],
+    [503, 'Service unavailable: too many requests, try again later', '', false, 'transient', true],
+    [529, 'Overloaded', OVERLOADED_BODY, true, 'transient', true],
+    [500, 'Internal error: request took too long', '', true, 'transient', true],
+    [502, 'Bad gateway', 'upstream blocked by safety system; model does not support this', false, 'transient', true],
+    [504, 'The model gpt-9 does not exist or timed out', '', false, 'transient', true],
+    // A 429 is a rate limit however it is worded.
+    [429, 'Too many tokens per minute: prompt is too long for your tier', '', true, 'rate_limit', true],
+    // "Too many" of something that isn't tokens is not a full context.
+    [400, 'Too many tool calls in one message', '', false, 'unknown', false],
+    [400, 'Too many images: at most 20 are allowed', '', false, 'unknown', false],
+    [undefined, 'Too many requests', '', true, 'transient', true],
+    // The real context-overflow wordings still read as one.
+    [400, "This model's maximum context length is 128000 tokens", '', false, 'context_overflow', false],
+    [400, 'prompt is too long: 210000 tokens > 200000 maximum', '', false, 'context_overflow', false],
+    [400, 'Bad request', '{"error":{"code":"context_length_exceeded"}}', false, 'context_overflow', false],
+    [400, 'Prompt contains too many tokens', '', false, 'context_overflow', false],
+    [400, 'Input is too long for requested model.', '', false, 'context_overflow', false],
+    [400, 'The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).', '', false, 'context_overflow', false],
+  ])('%s "%s" -> %s', (statusCode, message, responseBody, isRetryable, kind, retryable) => {
+    const result = classifyProviderError(apiError({ statusCode, message, responseBody, isRetryable }));
+    expect(result).toMatchObject({ kind, retryable });
+  });
+});

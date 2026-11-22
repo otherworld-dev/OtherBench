@@ -10,6 +10,11 @@ import { attachmentBound } from '@otherbench/core/domain/attachment-binding.js';
 import { bindToolImageParts } from '@otherbench/core/domain/tool-images.js';
 import { BOUND_ATTACHMENT_SQL } from '../src/repos/sync.js';
 import { reconcileInterruptedTurns } from '@otherbench/core/domain/reconcile.js';
+import { encodeHlc } from '@otherbench/core/domain/hlc.js';
+
+/** A stamp newer than any this run makes, from a machine whose clock is a minute ahead (one further ahead than a few minutes is refused). */
+const SOON = Date.now() + 60_000;
+const soon = (counter: number, nodeId: string): string => encodeHlc(SOON, counter, nodeId);
 
 interface Node {
   id: string;
@@ -288,7 +293,7 @@ describe('sync (Task 50)', () => {
 
     // The other way: the older build's change reaches a newer one without touching its call id.
     // (Raw SQL: this store's code writes the column the older schema lacks.)
-    old.prepare("UPDATE usage SET tokens_out = 9, hlc = '9999999999999-0000-old' WHERE id = 'sub'").run();
+    old.prepare(`UPDATE usage SET tokens_out = 9, hlc = '${soon(0, 'old')}' WHERE id = 'sub'`).run();
     pair(o, a).aToB();
     expect(a.store.usage.get('sub')).toMatchObject({ tokensOut: 9, subagentCallId: 'call-7' });
     old.close();
@@ -494,7 +499,7 @@ describe('sync (Task 50)', () => {
     s.both();
     expect(a.store.appNotes.get('app1')).toMatchObject({ body: '## Build\n- y', updatedAt: 2000, mirroredAt: 1000 });
 
-    const bad = { tbl: 'app_notes', id: 'app1', op: 'upsert', hlc: '9999999999999-0000-z', row: { app_id: 'app1', body: 'x'.repeat(12_001), updated_at: 3000, source_chat_id: null } } as ChangeRow;
+    const bad = { tbl: 'app_notes', id: 'app1', op: 'upsert', hlc: soon(0, 'z'), row: { app_id: 'app1', body: 'x'.repeat(12_001), updated_at: 3000, source_chat_id: null } } as ChangeRow;
     b.store.sync.apply([bad]);
     expect(b.store.appNotes.get('app1')!.body).toBe('## Build\n- y');
 
@@ -542,7 +547,7 @@ describe('sync (Task 50)', () => {
     seedProfile(b);
     chat(b, 'c');
     b.store.artifacts.create({ id: 'ok', chatId: 'c', slug: 'ok', kind: 'html', language: null, createdAt: 1 });
-    const hlc = '9999999999999-0000-a';
+    const hlc = soon(0, 'a');
     const artifact = (id: string, over: Record<string, unknown>) => ({ tbl: 'artifact' as const, id, op: 'upsert' as const, hlc, row: { id, chat_id: 'c', slug: id, kind: 'html', language: null, created_at: 1, ...over } });
     const version = (id: string, over: Record<string, unknown>) => ({
       tbl: 'artifact_version' as const, id, op: 'upsert' as const, hlc,
@@ -571,7 +576,7 @@ describe('sync (Task 50)', () => {
     seedProfile(b);
     chat(b, 'c');
     b.store.artifacts.create({ id: 'ok', chatId: 'c', slug: 'ok', kind: 'html', language: null, createdAt: 1 });
-    const hlc = '9999999999999-0000-a';
+    const hlc = soon(0, 'a');
     const good = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] };
     const version = (id: string, over: Record<string, unknown>) => ({
       tbl: 'artifact_version' as const, id, op: 'upsert' as const, hlc,
@@ -601,7 +606,7 @@ describe('sync (Task 50)', () => {
     const raw = '{ "calls": [ { "tool": "mcp__otherbench_0123456789abcdef__s__lookup", "id": "value", "args": { "z": 1, "a": { "y": 2, "b": 3 } } } ] }';
     const result = b.store.sync.apply([
       {
-        tbl: 'artifact_version', id: 'v1', op: 'upsert', hlc: '9999999999999-0000-a',
+        tbl: 'artifact_version', id: 'v1', op: 'upsert', hlc: soon(0, 'a'),
         row: { id: 'v1', artifact_id: 'ok', number: 1, title: 'T', content: '', kind: 'html', language: null, made_by: 'model', message_id: null, parent_version_id: null, created_at: 1, live: raw },
       },
     ]);
@@ -758,7 +763,7 @@ describe('sync (Task 50)', () => {
       if (r.op === 'upsert' && r.tbl === 'connection') r.row['secret_ref'] = 'peer-token:node-other';
     }
     batch.rows.push({
-      tbl: 'attachment', id: 'evil', op: 'upsert', hlc: '9999999999999-0000-a',
+      tbl: 'attachment', id: 'evil', op: 'upsert', hlc: soon(0, 'a'),
       row: { id: 'evil', chat_id: 'c', message_id: 'm', filename: 'x', mime: 'image/png', size: 1, sha256: '../../secrets.json', extracted_text: null },
     });
 
@@ -778,7 +783,7 @@ describe('sync (Task 50)', () => {
     b.store.chats.delete('gone');
     b.store.locations.create({ id: 'nc', name: 'Nextcloud' });
     b.store.locations.setPath({ locationId: 'nc', nodeId: 'b', path: '/b/nextcloud' });
-    const hlc = '9999999999999-0000-a';
+    const hlc = soon(0, 'a');
 
     const result = b.store.sync.apply([
       { tbl: 'connection', id: 'harmless', op: 'upsert', hlc, row: { id: 'c1', name: 'C', kind: 'mock', base_url: 'https://evil.example', secret_ref: null, extra_headers: '{}', availability: 'anywhere' } },
@@ -873,7 +878,7 @@ describe('sync (Task 50)', () => {
 });
 
 describe('images in synced tool results (security: a reference is only as good as its attachment row)', () => {
-  const hlc = '9999999999999-0000-a';
+  const hlc = soon(0, 'a');
   const imageRef = (attachmentId: string) => ({ type: 'image', attachmentId, mimeType: 'image/png' });
   const note = { type: 'text', text: '[image omitted: it is not stored with this chat]' };
   const sha = (c: string) => c.repeat(64);
@@ -956,7 +961,7 @@ describe('images in synced tool results (security: a reference is only as good a
 });
 
 describe('every path a file, its reference or its bytes travels is bound the same way', () => {
-  const hlc = '9999999999999-0000-a';
+  const hlc = soon(0, 'a');
   const sha = 'b'.repeat(64);
   const note = { type: 'text', text: "[attachment omitted: it doesn't belong to this chat]" };
 
@@ -1020,15 +1025,15 @@ describe('every path a file, its reference or its bytes travels is bound the sam
     expect(b.store.sync.apply([upsert('att', { extracted_text: null })]).applied).toBe(0);
     expect(b.store.attachments.get('att')!.extractedText).toBe('text from the file');
     // The same text again (a re-sent row) still applies.
-    expect(b.store.sync.apply([{ ...upsert('att', { extracted_text: 'text from the file', filename: 'renamed.png' }), hlc: '9999999999999-0002-a' }]).applied).toBe(1);
+    expect(b.store.sync.apply([{ ...upsert('att', { extracted_text: 'text from the file', filename: 'renamed.png' }), hlc: soon(2, 'a') }]).applied).toBe(1);
   });
 
   it('apply, delete: a removed file id is never made again, with the old binding or a new one', () => {
     const b = machine();
-    expect(b.store.sync.apply([{ tbl: 'attachment', id: 'att', op: 'delete', hlc: '9999999999999-0000-b' }]).applied).toBe(1);
+    expect(b.store.sync.apply([{ tbl: 'attachment', id: 'att', op: 'delete', hlc: soon(0, 'b') }]).applied).toBe(1);
     expect(b.store.attachments.get('att')).toBeNull();
     for (const over of [{}, { chat_id: 'chat-b', message_id: 'm-b' }]) {
-      expect(b.store.sync.apply([{ ...upsert('att', over), hlc: '9999999999999-0001-c' }]).applied).toBe(0);
+      expect(b.store.sync.apply([{ ...upsert('att', over), hlc: soon(1, 'c') }]).applied).toBe(0);
     }
     expect(b.store.attachments.get('att')).toBeNull();
   });
@@ -1311,7 +1316,7 @@ describe('a reply that stores files while it streams (tool screenshots)', () => 
 });
 
 describe('a synced reference passes only when its file is here and bound (nothing passes on a null, a missing row or a wrong type)', () => {
-  const hlc = '9999999999999-0000-a';
+  const hlc = soon(0, 'a');
   const sha = 'b'.repeat(64);
   const note = { type: 'text', text: '[image omitted: it is not stored with this chat]' };
   const ref = (attachmentId: unknown, mimeType: unknown = 'image/png') => ({ type: 'image', attachmentId, mimeType });
@@ -1421,7 +1426,7 @@ describe('a synced reference passes only when its file is here and bound (nothin
       const b = machine();
       b.store.sync.apply([...three, fileRow('shared', 'chat-a', 'u-first')]);
       expectSettled(b);
-      expect(b.store.sync.apply([{ ...fileRow('shared', 'chat-a', 'u-first', { filename: 'renamed.png' }), hlc: '9999999999999-0001-a' }]).applied).toBe(1);
+      expect(b.store.sync.apply([{ ...fileRow('shared', 'chat-a', 'u-first', { filename: 'renamed.png' }), hlc: soon(1, 'a') }]).applied).toBe(1);
       expectSettled(b);
     });
 
@@ -1455,7 +1460,7 @@ describe('a synced reference passes only when its file is here and bound (nothin
 });
 
 describe('what a synced message and file row may hold (the caps the local path has)', () => {
-  const hlc = '9999999999999-0000-a';
+  const hlc = soon(0, 'a');
   const sha = 'b'.repeat(64);
   const note = (text: string) => ({ type: 'text', text });
 

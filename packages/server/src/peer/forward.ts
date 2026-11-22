@@ -21,6 +21,7 @@ import { listLocationDirs } from './location-dirs.js';
 import { chatSendsPeerRoutes } from '../chat-sends/peer-routes.js';
 import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
+import { PeerVersionError } from './version.js';
 import { attachmentHandoverRoutes, handOverAttachments } from './attachment-handover.js';
 
 /**
@@ -48,12 +49,14 @@ export interface RemoteReply {
 
 /** Which machine is running a reply or holding an approval: ids the UI names that aren't in this store while they run. */
 export class RemoteRuns {
-  private readonly messages = new Map<string, string>();
+  private readonly messages = new Map<string, { nodeId: string; chatId: string }>();
   private readonly approvals = new Map<string, string>();
   private readonly replies = new Map<string, RemoteReply>();
+  /** Replies an open relay is following, by how many: each ends them here itself, with what it saw of them. */
+  private readonly watched = new Map<string, number>();
 
-  noteMessages(nodeId: string, ids: string[]): void {
-    for (const id of ids) this.messages.set(id, nodeId);
+  noteMessages(nodeId: string, chatId: string, ids: string[]): void {
+    for (const id of ids) this.messages.set(id, { nodeId, chatId });
   }
 
   noteReply(id: string, reply: RemoteReply): void {
@@ -65,7 +68,38 @@ export class RemoteRuns {
   }
 
   messageNode(id: string): string | undefined {
-    return this.messages.get(id);
+    return this.messages.get(id)?.nodeId;
+  }
+
+  messageChat(id: string): string | undefined {
+    return this.messages.get(id)?.chatId;
+  }
+
+  /** A relay follows the reply from now until it calls the release: `settleRemoteRuns` leaves it to that relay. */
+  watch(id: string): () => void {
+    this.watched.set(id, (this.watched.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.watched.get(id) ?? 1) - 1;
+      if (left > 0) this.watched.set(id, left);
+      else this.watched.delete(id);
+    };
+  }
+
+  isWatched(id: string): boolean {
+    return this.watched.has(id);
+  }
+
+  /** The replies `nodeId` is taken to be writing that no open relay is following, each with its chat. */
+  unwatched(nodeId: string): { id: string; chatId: string }[] {
+    return [...this.messages].filter(([id, m]) => m.nodeId === nodeId && !this.watched.has(id)).map(([id, m]) => ({ id, chatId: m.chatId }));
+  }
+
+  /** Every machine taken to be writing a reply. */
+  nodes(): string[] {
+    return [...new Set([...this.messages.values()].map((m) => m.nodeId))];
   }
 
   noteApproval(requestId: string, nodeId: string): void {
@@ -421,12 +455,103 @@ export async function fetchInFlight(container: Container, nodeId: string, chatId
   }
 }
 
+/** The ids of the replies `nodeId` says it is still writing in a chat. Throws when it can't be asked. */
+async function stillWriting(container: Container, nodeId: string, chatId: string): Promise<Set<string>> {
+  const res = await container.peers!.call(nodeId, { method: 'GET', path: `/api/chats/${encodeURIComponent(chatId)}/in-flight` });
+  const messages = res.status === 200 ? (res.body as { messages?: unknown } | null)?.messages : null;
+  // Any other answer (the chat is gone there, or no longer runs there): it writes none it will tell us about.
+  if (!Array.isArray(messages)) return new Set();
+  return new Set(messages.flatMap((m) => inFlightMessage(m, chatId) ?? []).filter((m) => m.role === 'assistant' && m.status === 'streaming').map((m) => m.id));
+}
+
+/**
+ * Ends here the replies `nodeId` was writing that have ended there with no relay open to hear it (no window was
+ * showing the chat, or it left first): without this they would count as running here until a restart, holding up
+ * sends and schedules to their chats. Called when that machine says what it is running (`peer-activity`), when it
+ * can't be reached or was removed, and when a relay closes. A reply an open relay follows is left to that relay.
+ *
+ * - The machine is gone (unreachable, or no longer paired): each reply ends as cut off, as the relay ends one
+ *   (keepCutOffReply), with nothing seen of it.
+ * - Its activity no longer lists the reply's chat: it is asked which replies it is still writing there (an
+ *   announcement from just before the reply started can be heard after it), and the others are finished, their rows
+ *   pulled first as the relay does. If it can't be asked, they wait for its next announcement or for it to be gone.
+ */
+export async function settleRemoteRuns(container: Container, runs: RemoteRuns, nodeId: string): Promise<void> {
+  const peers = container.peers;
+  if (!peers || runs.unwatched(nodeId).length === 0) return;
+  const peer = peers.peer(nodeId);
+  const status = peers.status(nodeId).status;
+  if (!peer || status === 'unreachable') {
+    const name = peer?.name ?? 'The other machine';
+    for (const { id, chatId } of runs.unwatched(nodeId)) {
+      keepCutOffReply(container, runs, nodeId, name, id, []);
+      runs.finished(id);
+      container.events?.emit({ type: 'turn-finished', chatId, messageId: id, status: 'error' });
+    }
+    return;
+  }
+  // Not heard from yet (this server has just started): nothing to go on.
+  if (status !== 'reachable') return;
+  const active = new Set(peers.activeChats(nodeId));
+  const chats = new Set(runs.unwatched(nodeId).map((r) => r.chatId).filter((chatId) => !active.has(chatId)));
+  const ended: { id: string; chatId: string }[] = [];
+  for (const chatId of chats) {
+    let writing: Set<string>;
+    try {
+      writing = await stillWriting(container, nodeId, chatId);
+    } catch {
+      continue;
+    }
+    // Read again after the wait: a relay may have opened, or ended one, meanwhile. Taken before the next wait, so
+    // each reply is ended once.
+    for (const r of runs.unwatched(nodeId)) {
+      if (r.chatId !== chatId || writing.has(r.id)) continue;
+      runs.finished(r.id);
+      ended.push(r);
+    }
+  }
+  if (ended.length === 0) return;
+  // The finished replies are here before anything here hears they finished.
+  await peers.syncerOrNull()?.pullFrom(nodeId).catch(() => 0);
+  for (const { id, chatId } of ended) {
+    const stored = container.store.messages.get(id)?.status;
+    container.events?.emit({ type: 'turn-finished', chatId, messageId: id, status: stored === 'error' || stored === 'cancelled' ? stored : 'complete' });
+  }
+}
+
+/** `settleRemoteRuns` without waiting, logging a failure. */
+function settleRemoteRunsSoon(container: Container, runs: RemoteRuns, nodeId: string): void {
+  settleRemoteRuns(container, runs, nodeId).catch((err: unknown) => console.error(`[otherbench-server] could not settle the replies running on paired machine ${nodeId}:`, err));
+}
+
+/**
+ * Keeps `settleRemoteRuns` going for as long as the container lives: on each machine's word of what it is running,
+ * and when one stops being reachable or is removed. Returns the unsubscribe.
+ */
+export function settleRemoteRunsOnPeerEvents(container: Container, runs: RemoteRuns): () => void {
+  return (
+    container.events?.subscribe((e) => {
+      if (e.type === 'peer-activity' || (e.type === 'peer-status' && e.status === 'unreachable')) settleRemoteRunsSoon(container, runs, e.nodeId);
+      // A machine removed while it was writing a reply: nothing will be heard from it again.
+      if (e.type === 'peers-changed') for (const nodeId of runs.nodes()) if (!container.peers?.peer(nodeId)) settleRemoteRunsSoon(container, runs, nodeId);
+    }) ?? (() => {})
+  );
+}
+
 /** Relays `nodeId`'s stream for a chat to this machine's UI (see the module doc). */
 async function relayStream(container: Container, c: Context, nodeId: string, chatId: string, runs: RemoteRuns): Promise<Response> {
   const peers = container.peers!;
   const peer = peers.peer(nodeId);
   const token = await peers.heldToken(nodeId);
   if (!peer || !token) return unreachable(c, nodeId, 'That machine is no longer paired.');
+  // The stream is opened on the client itself, past `PeerService.call`: the same check first.
+  try {
+    await peers.checkVersion(nodeId);
+  } catch (err) {
+    if (err instanceof PeerVersionError) return c.json(err.body(), err.status);
+    if (err instanceof PeerError && err.status === 503) return unreachable(c, nodeId, err.message);
+    throw err;
+  }
   let upstream;
   try {
     upstream = await peers.client.stream({ addresses: peer.addresses, fingerprint: peer.fingerprint }, { method: 'GET', path: `/api/chats/${chatId}/stream`, token, headers: { accept: 'text/event-stream' } });
@@ -436,6 +561,11 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
   if (upstream.response.statusCode !== 200) {
     upstream.response.resume();
     upstream.close();
+    // Its listener refuses a machine on another version with 409 (it has heard of an update this one hasn't yet): asked again, so the reason is said.
+    if (upstream.response.statusCode === 409) {
+      const said = await peers.call(nodeId, { method: 'GET', path: `/api/chats/${encodeURIComponent(chatId)}/in-flight` }).catch((err: unknown) => err);
+      if (said instanceof PeerVersionError) return c.json(said.body(), said.status);
+    }
     return c.json({ error: `${peer.name} refused the stream (HTTP ${upstream.response.statusCode}).` }, 502);
   }
   peers.noteReached(peer, upstream.address);
@@ -444,6 +574,18 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
     const inFlight = new Set<string>();
     /** What each reply has said so far, in case its machine goes away before it's finished. */
     const seen = new Map<string, Part[]>();
+    // The replies this relay has heard running: while it is open they end here through it, not through
+    // settleRemoteRuns, so each ends once and a cut-off one keeps what was seen of it.
+    const watching = new Map<string, () => void>();
+    const watch = (ids: Iterable<string>): void => {
+      for (const id of ids) if (!watching.has(id)) watching.set(id, runs.watch(id));
+    };
+    // This relay is over: whatever it didn't end (the window left first) is settleRemoteRuns's from now on.
+    const unwatch = (): void => {
+      for (const release of watching.values()) release();
+      watching.clear();
+      settleRemoteRunsSoon(container, runs, nodeId);
+    };
     let open = true;
     // Not a byte from the other machine, keepalives included, for this long:
     // the connection died without closing. Ending it here ends the relay as
@@ -457,13 +599,30 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
     void eachRecord(response, async (_raw, event, data) => {
       if (!open) return;
       if (event === 'hello') {
+        // Its hello is the replies it is writing in the chat, and those that ended in the last minute (the
+        // registry's `snapshot`), never the chat's history.
         const hello = data as { inFlight?: { messageId: string; status: string; events?: Record<string, unknown>[] }[]; backgroundApprovals?: { id?: unknown }[] };
+        const ended: { messageId: string; status: string }[] = [];
         for (const b of hello.inFlight ?? []) {
-          if (TERMINAL.has(b.status)) continue;
+          if (TERMINAL.has(b.status)) {
+            // One this machine still takes to be running there ended with no relay open to hear it. Taken now,
+            // before any wait, so it is ended here once (settleRemoteRuns may be about to do the same).
+            if (runs.messageNode(b.messageId) === nodeId && !runs.isWatched(b.messageId)) {
+              runs.finished(b.messageId);
+              ended.push(b);
+            }
+            continue;
+          }
           inFlight.add(b.messageId);
           seen.set(b.messageId, (Array.isArray(b.events) ? b.events : []).reduce(withEvent, []));
         }
-        runs.noteMessages(nodeId, [...inFlight]);
+        runs.noteMessages(nodeId, chatId, [...inFlight]);
+        watch(inFlight);
+        if (ended.length > 0) {
+          // As a reply that ends while the relay is open: its row is here before anything here hears it ended.
+          await container.peers?.syncerOrNull()?.pullFrom(nodeId).catch(() => 0);
+          for (const b of ended) container.events?.emit({ type: 'turn-finished', chatId, messageId: b.messageId, status: b.status as 'complete' });
+        }
         // Cards a background helper raised there before this machine was watching: answered there too.
         for (const request of Array.isArray(hello.backgroundApprovals) ? hello.backgroundApprovals : []) {
           if (isString(request?.id)) runs.noteApproval(request.id, nodeId);
@@ -482,7 +641,8 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
       if (e.messageId && !card && !(e.type === 'status' && e.status && TERMINAL.has(e.status))) {
         // Any reply heard running there, including one this machine never started (one Claude Code
         // started by itself): its Stop goes there.
-        runs.noteMessages(nodeId, [e.messageId]);
+        runs.noteMessages(nodeId, chatId, [e.messageId]);
+        watch([e.messageId]);
       }
       if (e.messageId && e.type !== 'status' && !card) {
         inFlight.add(e.messageId);
@@ -491,13 +651,24 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
       if (e.type === 'status' && e.messageId && e.status && TERMINAL.has(e.status)) {
         inFlight.delete(e.messageId);
         runs.finished(e.messageId);
+        watching.get(e.messageId)?.();
+        watching.delete(e.messageId);
         // The finished reply is here before the UI hears it finished.
         await container.peers?.syncerOrNull()?.pullFrom(nodeId).catch(() => 0);
         container.events?.emit({ type: 'turn-finished', chatId, messageId: e.messageId, status: e.status as 'complete' });
       }
       sink.send(null, data);
     }, heardFrom)
-      .catch(() => {})
+      .catch((err: unknown) => {
+        // The window leaving ends the upstream too: not a failure.
+        if (!open) return;
+        // Whatever it was, the replies end below as cut off and the window is told the other machine stopped
+        // responding. Why goes in the log: a dropped connection in a line, anything else (a fault in the relaying
+        // here) with its stack.
+        const code = (err as { code?: unknown } | null)?.code;
+        const dropped = err instanceof Error && typeof code === 'string';
+        console.error(`[otherbench-server] the relay of chat ${chatId} from ${peer.name} ended on an error:`, dropped ? `${code}: ${err.message}` : err);
+      })
       .finally(() => {
         clearTimeout(idle);
         if (!open) return;
@@ -512,12 +683,14 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
           sink.send(null, { messageId, type: 'error', error: cutOff(peer.name) });
           sink.send(null, { messageId, type: 'status', status: 'error' });
         }
+        unwatch();
         sink.close();
       });
     return () => {
       open = false;
       clearTimeout(idle);
       close();
+      unwatch();
     };
   });
 }
@@ -584,7 +757,7 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
         const replies = opts.noteReplies(chatId, (body ?? {}) as Record<string, unknown>, (await res.clone().json()) as Record<string, unknown>);
         for (const { id, reply } of replies) runs.noteReply(id, reply);
         const ids = replies.map((r) => r.id);
-        runs.noteMessages(nodeId, ids);
+        runs.noteMessages(nodeId, chatId, ids);
         container.events?.emit({ type: 'turn-started', chatId, messageIds: ids });
       }
       return res;
@@ -758,7 +931,8 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     const nodeId = runs.messageNode(messageId) ?? (message ? remoteNode(message.chatId) : null);
     if (!nodeId || nodeId === self()) return next();
     const res = await forward(container, c, nodeId, `/messages/${messageId}/${suffix}`, { syncFirst: suffix === 'retry' });
-    if (suffix === 'retry' && res.status === 202) runs.noteMessages(nodeId, [messageId]);
+    const chatId = message?.chatId ?? runs.messageChat(messageId);
+    if (suffix === 'retry' && res.status === 202 && chatId !== undefined) runs.noteMessages(nodeId, chatId, [messageId]);
     return res;
   };
   app.post('/messages/:id/cancel', messageRoute('cancel'));
@@ -941,7 +1115,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   app.get('/chats/:id/in-flight', (c) => {
     const chat = container.store.chats.get(c.req.param('id'));
     if (!chat) return c.json({ error: 'Chat not found.' }, 404);
-    const replies = container.store.messages.listByStatus('streaming').filter((m) => m.chatId === chat.id);
+    const replies = container.store.messages.listStreaming(chat.id);
     const asked = replies.flatMap((m) => (m.parentId ? [container.store.messages.get(m.parentId)] : [])).filter((m): m is CanonMessage => m !== null && m.chatId === chat.id);
     return c.json({ messages: [...asked, ...replies], headMessageId: chat.headMessageId });
   });

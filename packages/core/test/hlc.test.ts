@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Hlc, compareHlc, encodeHlc, maxHlc, parseHlc } from '../src/domain/hlc.js';
+import { HLC_MAX_AHEAD_MS, Hlc, compareHlc, encodeHlc, hlcTooFarAhead, maxHlc, parseHlc } from '../src/domain/hlc.js';
 
 function clock(start: number): { now: () => number; set: (t: number) => void } {
   let t = start;
@@ -46,5 +46,30 @@ describe('Hlc', () => {
     let last = '';
     for (let i = 0; i < 10_005; i++) last = hlc.tick();
     expect(parseHlc(last).ms).toBe(1001);
+  });
+
+  it('started after a stamp, stays later than it though the wall clock is behind it', () => {
+    const last = encodeHlc(9000, 4, 'pc');
+    const hlc = new Hlc('pc', () => 1000, last);
+    const first = hlc.tick();
+    expect(compareHlc(first, last)).toBeGreaterThan(0);
+    expect(compareHlc(hlc.tick(), first)).toBeGreaterThan(0);
+    // With the wall clock past it, the wall clock is what stamps read.
+    expect(new Hlc('pc', () => 20_000, last).tick()).toBe(encodeHlc(20_000, 0, 'pc'));
+  });
+
+  it('does not follow a remote stamp further ahead of the wall clock than the limit', () => {
+    const wall = 1_000_000;
+    const hlc = new Hlc('laptop', () => wall);
+    const near = encodeHlc(wall + HLC_MAX_AHEAD_MS, 0, 'pc');
+    const far = encodeHlc(wall + HLC_MAX_AHEAD_MS + 1, 0, 'pc');
+    expect(hlcTooFarAhead(near, wall)).toBe(false);
+    expect(hlcTooFarAhead(far, wall)).toBe(true);
+
+    expect(hlc.observe(far)).toBe(false);
+    expect(hlc.tick()).toBe(encodeHlc(wall, 0, 'laptop'));
+
+    expect(hlc.observe(near)).toBe(true);
+    expect(compareHlc(hlc.tick(), near)).toBeGreaterThan(0);
   });
 });

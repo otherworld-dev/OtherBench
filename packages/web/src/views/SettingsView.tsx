@@ -1,4 +1,5 @@
-import { useState, type JSX } from 'react';
+import { useId, useState, type JSX, type KeyboardEvent } from 'react';
+import { Overlay } from '../components/Overlay.js';
 import { isDesktop } from '../desktop/bridge.js';
 import { useAddons } from '../state/addons.js';
 import { useAuthStore } from '../state/auth.js';
@@ -75,19 +76,37 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
     (t) => (t !== 'desktop' || desktop) && (t !== 'notifications' || !desktop) && (t !== 'remote' || signInMode) && (t !== 'nextcloud' || nextcloud) && (t !== 'addons' || addons.length > 0)
   );
 
+  const ids = useId();
+  /** Left and Right step through the tabs (round the ends), Home and End go to the first and last; the tab reached is shown. */
+  function onTabKey(e: KeyboardEvent<HTMLDivElement>): void {
+    const at = tabs.indexOf(tab);
+    const to =
+      e.key === 'ArrowRight' ? (at + 1) % tabs.length : e.key === 'ArrowLeft' ? (at - 1 + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
+    const next = tabs[to];
+    if (next === undefined) return;
+    e.preventDefault();
+    setTab(next);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
+  }
+
   return (
-    <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    <Overlay label="Settings" testId="settings-view" onEscape={onClose}>
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
         {/* The tabs wrap rather than push ✕ off the screen in a narrow window or at a large text size. */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
           <h2 className="label-caps text-base">Settings</h2>
-          <div role="tablist" className="flex flex-wrap gap-1">
+          <div role="tablist" aria-label="Settings sections" onKeyDown={onTabKey} className="flex flex-wrap gap-1">
             {tabs.map((t) => (
               <button
                 key={t}
                 type="button"
                 role="tab"
+                id={`${ids}-tab-${t}`}
+                aria-controls={`${ids}-panel`}
                 aria-selected={tab === t}
+                // One Tab stop for the list: the arrow keys move within it. Focus starts here when Settings opens.
+                tabIndex={tab === t ? 0 : -1}
+                {...(tab === t ? { 'data-autofocus': '' } : {})}
                 onClick={() => setTab(t)}
                 className={`label-caps rounded-sm px-2.5 py-1 ${tab === t ? 'text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
               >
@@ -101,7 +120,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div role="tabpanel" id={`${ids}-panel`} aria-labelledby={`${ids}-tab-${tab}`} className="flex-1 overflow-y-auto p-4">
         {tab === 'connections' && <ConnectionsPanel />}
         {tab === 'claudeAccounts' && <ClaudeAccountsPanel />}
         {tab === 'models' && <ModelsPanel />}
@@ -120,6 +139,6 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'desktop' && <DesktopPanel />}
         {tab === 'notifications' && <BrowserNotificationsPanel />}
       </div>
-    </div>
+    </Overlay>
   );
 }

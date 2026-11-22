@@ -3,6 +3,7 @@ import './lib/legacyStorage.js';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Root } from './Root.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
 import { keepOtherBenchTitle } from './lib/otherBenchTitle.js';
@@ -37,7 +38,10 @@ try {
   if (desktop) configureTransport(desktop);
   root.render(
     <StrictMode>
-      <Root desktop={indicator || desktop !== null} />
+      {/* The last of the boundaries: the panes, messages and full-screen views each have their own (components/ErrorBoundary.tsx). */}
+      <ErrorBoundary what="OtherBench" variant="page">
+        <Root desktop={indicator || desktop !== null} />
+      </ErrorBoundary>
     </StrictMode>
   );
 } catch (err) {

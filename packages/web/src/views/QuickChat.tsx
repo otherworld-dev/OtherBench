@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Part } from '@otherbench/core/types/messages.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
 import { useUpdateActivity } from '../desktop/useUpdateActivity.js';
@@ -9,6 +10,7 @@ import { ApiError, api } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { useChatMessages } from '../state/chatMessages.js';
 import { useChatSync } from '../state/useChatSync.js';
 import { useStopReply } from '../state/useStopReply.js';
 import { useUnsentText } from '../state/unsent.js';
@@ -22,9 +24,9 @@ import { useUnsentText } from '../state/unsent.js';
 export function QuickChat(): JSX.Element {
   const profiles = useOtherBenchStore((s) => s.profiles);
   const setProfiles = useOtherBenchStore((s) => s.setProfiles);
-  const messages = useOtherBenchStore((s) => s.messages);
   const registerMessage = useOtherBenchStore((s) => s.registerMessage);
   const [chat, setChat] = useState<Chat | null>(null);
+  const messages = useChatMessages(chat?.id ?? null);
   const [text, setText] = useState('');
   useUnsentText(text);
   // This window is used on its own while the main one stays hidden: it reports to the updater itself.
@@ -35,7 +37,8 @@ export function QuickChat(): JSX.Element {
 
   useChatSync(chat?.id ?? null);
   // Esc stops a running reply first; with nothing running it hides the window. The key listener reads the latest through an effect event.
-  const replies = useStopReply(chat?.id ?? null);
+  // This window has no toasts: a Stop that failed shows where its other errors do.
+  const replies = useStopReply(chat?.id ?? null, setError);
   const currentReplies = useEffectEvent(() => replies);
 
   useEffect(() => {
@@ -63,7 +66,10 @@ export function QuickChat(): JSX.Element {
         void running.stop();
         return;
       }
-      hideQuick().catch((err: unknown) => console.error('[otherbench-web] failed to hide quick chat:', err));
+      hideQuick().catch((err: unknown) => {
+        console.error('[otherbench-web] failed to hide quick chat:', err);
+        setError("Couldn't hide this window.");
+      });
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -75,12 +81,9 @@ export function QuickChat(): JSX.Element {
 
   const thread = useMemo(
     () =>
-      chat
-        ? Object.values(messages)
-            .filter((m) => m.chatId === chat.id)
-            .sort((a, b) => a.createdAt - b.createdAt || (a.role === 'user' ? -1 : 1))
-        : [],
-    [messages, chat]
+      // A copy: the array is the store's own.
+      [...messages].sort((a, b) => a.createdAt - b.createdAt || (a.role === 'user' ? -1 : 1)),
+    [messages]
   );
   const streaming = thread.some((m) => m.status === 'streaming');
   const profile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null) ?? null;
@@ -132,7 +135,10 @@ export function QuickChat(): JSX.Element {
     const id = chat.id;
     setChat(null);
     setText('');
-    openChatInMain(id).catch((err: unknown) => console.error('[otherbench-web] failed to open the chat in the main window:', err));
+    openChatInMain(id).catch((err: unknown) => {
+      console.error('[otherbench-web] failed to open the chat in the main window:', err);
+      setError("Couldn't open the chat in the main window. It's in the chat list there.");
+    });
   }
 
   return (
@@ -146,7 +152,9 @@ export function QuickChat(): JSX.Element {
       {thread.length > 0 && (
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto" data-testid="quick-thread">
           {thread.map((m) => (
-            <Message key={m.id} message={m} />
+            <ErrorBoundary key={m.id} what="this message" variant="inline" raw={m}>
+              <Message message={m} />
+            </ErrorBoundary>
           ))}
         </div>
       )}

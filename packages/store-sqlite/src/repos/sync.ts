@@ -5,7 +5,7 @@ import { APP_FOLDER_NAME_MAX } from '@otherbench/core/domain/apps.js';
 import { APP_NOTES_MAX_CHARS } from '@otherbench/core/domain/app-notes.js';
 import { compareHlc, maxHlc } from '@otherbench/core/domain/hlc.js';
 import { MAX_WORKFLOW_GRAPH_BYTES, workflowImportProblem } from '@otherbench/core/domain/media-workflows.js';
-import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, laterThrough, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
+import { PULL_SETTLE_MS, SYNC_TABLES, TOMBSTONE_KEEP_MS, connectionSecretRef, isSha256, isSyncTable, laterThrough, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@otherbench/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@otherbench/core/ports/store.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@otherbench/core/domain/attachment-binding.js';
 import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, isToolVideoMime, MAX_TOOL_IMAGE_BYTES, MAX_TOOL_VIDEO_BYTES, type ToolImageRow } from '@otherbench/core/domain/tool-images.js';
@@ -196,6 +196,12 @@ function pendingMentions(partsJson: string): string[] {
   return ids;
 }
 
+/**
+ * How far the change log's numbering jumps at each start (see the constructor). More entries than commits lost to
+ * a power cut could hold; the numbers are 64-bit, so a million a start is never missed.
+ */
+const SEQ_GAP_PER_START = 1_000_000;
+
 export class SqliteSyncRepo implements SyncRepo {
   private readonly columnCache = new Map<string, string[]>();
 
@@ -203,7 +209,15 @@ export class SqliteSyncRepo implements SyncRepo {
     private readonly db: DatabaseSync,
     private readonly selfId: () => string,
     private readonly clock: SyncClock
-  ) {}
+  ) {
+    // The database runs with `synchronous = NORMAL` (db.ts), so a power cut can take the newest commits with it, and
+    // the change log's numbering goes back with them. A peer that had already pulled those entries holds a cursor past
+    // the end of what is left, and would never ask for changes numbered at or below it. So every start leaves a gap
+    // far wider than a lost tail can be: what is logged from here on is past any cursor a peer holds. (The rows that
+    // were lost come back from that peer, which logged them when it took them.)
+    const moved = this.db.prepare("UPDATE sqlite_sequence SET seq = seq + ? WHERE name = 'change_log'").run(SEQ_GAP_PER_START);
+    if (Number(moved.changes) === 0) this.db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('change_log', ?)").run(SEQ_GAP_PER_START);
+  }
 
   latestSeq(): number {
     return (this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM change_log').get() as { seq: number }).seq;
@@ -271,6 +285,98 @@ export class SqliteSyncRepo implements SyncRepo {
     return (this.db.prepare('SELECT hlc FROM tombstone WHERE tbl = ? AND row_id = ?').get(tbl, id) as { hlc: string } | undefined)?.hlc ?? null;
   }
 
+  // --- tidying the log ---------------------------------------------------------
+
+  notePulled(nodeId: string, since: number): void {
+    // Lowered as readily as raised: a machine asking from further back than before has lost what it had pulled,
+    // and nothing it now lacks may be tidied away on the strength of what it said earlier.
+    this.db
+      .prepare(
+        `INSERT INTO sync_peer_cursor (node_id, pulled_seq) VALUES (?1, ?2)
+         ON CONFLICT (node_id) DO UPDATE SET pulled_seq = ?2, candidate_seq = MIN(candidate_seq, ?2), settled_seq = MIN(settled_seq, ?2)
+         WHERE pulled_seq != ?2`
+      )
+      .run(nodeId, since);
+  }
+
+  /**
+   * The log position at or below which nothing is needed by a paired machine's cursor: the lowest position any of
+   * them has stood past for the settling time (0 for one never heard from). With none paired, the end of the log.
+   */
+  private settledHorizon(now: number): number {
+    this.db.prepare('DELETE FROM sync_peer_cursor WHERE node_id NOT IN (SELECT node_id FROM peer)').run();
+    // A cursor counts once it has stood for PULL_SETTLE_MS: each machine's is noted, and taken up that long after.
+    this.db
+      .prepare('UPDATE sync_peer_cursor SET settled_seq = MIN(candidate_seq, pulled_seq), candidate_seq = pulled_seq, candidate_at = ?1 WHERE ?1 - candidate_at >= ?2')
+      .run(now, PULL_SETTLE_MS);
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS peers, MIN(COALESCE(c.settled_seq, 0)) AS settled FROM peer p LEFT JOIN sync_peer_cursor c ON c.node_id = p.node_id')
+      .get() as { peers: number; settled: number | null };
+    return row.peers === 0 ? this.latestSeq() : (row.settled ?? 0);
+  }
+
+  /**
+   * What the log is read for decides what may go.
+   *
+   * A paired machine reads it from its cursor, so entries past the lowest settled cursor are left exactly as they
+   * are: their order is what puts a row behind the row it hangs off, for a machine that has neither yet.
+   *
+   * At or below it, the only reader left is a machine pairing later, which reads from the start (there is no
+   * other first sync). For that a row needs its FIRST entry, which is its place behind the rows it was made
+   * under, and its LAST, which comes after any row it has since come to point at (a chat's head message): such
+   * a reference is turned down when it arrives before its target and taken when the row is offered again. The
+   * entries between say nothing more, a log entry being only a row's id, and go. A deleted row needs only its
+   * delete, with its tombstone, for as long as some machine may not have heard of it.
+   */
+  pruneLog(step: { now: number; limit: number; after: string | null }): { entries: number; tombstones: number; after: string | null } {
+    const done = { entries: 0, tombstones: 0, after: null };
+    const nested = this.db.isTransaction;
+    if (!nested) this.db.exec('BEGIN');
+    try {
+      const horizon = this.settledHorizon(step.now);
+      const [afterTbl, afterId] = step.after === null ? ['', ''] : (JSON.parse(step.after) as [string, string]);
+      const groups =
+        horizon <= 0
+          ? []
+          : (this.db
+              .prepare(
+                `SELECT tbl, row_id, MIN(seq) AS first, MAX(seq) AS last, COUNT(*) AS n FROM change_log
+                  WHERE seq <= ? AND (tbl, row_id) > (?, ?) GROUP BY tbl, row_id ORDER BY tbl, row_id LIMIT ?`
+              )
+              .all(horizon, afterTbl, afterId, step.limit) as { tbl: string; row_id: string; first: number; last: number; n: number }[]);
+      const opAt = this.db.prepare('SELECT op FROM change_log WHERE seq = ?');
+      const newest = this.db.prepare('SELECT MAX(seq) AS seq FROM change_log WHERE tbl = ? AND row_id = ?');
+      const dropBetween = this.db.prepare('DELETE FROM change_log WHERE tbl = ? AND row_id = ? AND seq > ? AND seq < ?');
+      const dropThrough = this.db.prepare('DELETE FROM change_log WHERE tbl = ? AND row_id = ? AND seq <= ?');
+      const dropStone = this.db.prepare('DELETE FROM tombstone WHERE tbl = ? AND row_id = ?');
+      // Older than any stamp given since the keeping time began.
+      const old = `${String(Math.max(0, step.now - TOMBSTONE_KEEP_MS)).padStart(13, '0')}-`;
+      const result = { ...done, after: groups.length === step.limit ? JSON.stringify([groups[groups.length - 1]!.tbl, groups[groups.length - 1]!.row_id]) : null };
+      for (const g of groups) {
+        if ((opAt.get(g.last) as { op: string }).op !== 'delete') {
+          if (g.n > 2) result.entries += Number(dropBetween.run(g.tbl, g.row_id, g.first, g.last).changes);
+          continue;
+        }
+        if (g.n > 1) result.entries += Number(dropBetween.run(g.tbl, g.row_id, g.first - 1, g.last).changes);
+        // The tombstone goes, and the delete's entry with it, only when every paired machine has stood past this
+        // very delete (nothing newer is logged for the row), it is old, and the row is gone. Never a location
+        // path's: a path can be set again, and the newer of the delete and the path is told by the tombstone.
+        if (!isSyncTable(g.tbl) || g.tbl === 'location_path') continue;
+        const stone = this.tombstone(g.tbl, g.row_id);
+        if (stone === null || compareHlc(stone, old) >= 0) continue;
+        if ((newest.get(g.tbl, g.row_id) as { seq: number }).seq !== g.last || this.exists(g.tbl, g.row_id)) continue;
+        dropStone.run(g.tbl, g.row_id);
+        result.entries += Number(dropThrough.run(g.tbl, g.row_id, g.last).changes);
+        result.tombstones++;
+      }
+      if (!nested) this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      if (!nested && this.db.isTransaction) this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // --- reading changes out ----------------------------------------------------
 
   changesSince(since: number, limit: number): ChangeBatch {
@@ -317,11 +423,23 @@ export class SqliteSyncRepo implements SyncRepo {
 
   // --- applying a peer's changes -----------------------------------------------
 
-  apply(rows: ChangeRow[], observe: (hlc: string) => void = (h) => this.observe(h)): SyncApplyResult {
-    const result: SyncApplyResult = { applied: 0, skipped: 0, attachments: [], written: [] };
-    for (const r of rows) {
-      observe(r.hlc);
-      if (r.op === 'upsert' && r.fieldHlc) for (const h of Object.values(r.fieldHlc)) observe(h);
+  apply(offered: ChangeRow[], observe: (hlc: string) => void = (h) => this.observe(h)): SyncApplyResult {
+    const result: SyncApplyResult = { applied: 0, skipped: 0, ahead: 0, attachments: [], written: [] };
+    // A row stamped further ahead than a machine with a sane clock can be is not taken, and its stamp is not
+    // followed: it would beat every later change made here until this machine's time caught up with it, and
+    // following it would leave this clock that far ahead for good. One this machine's time will reach within a
+    // day is counted in `ahead`, so the caller asks again; one further off still is only skipped.
+    const rows: ChangeRow[] = [];
+    for (const r of offered) {
+      const stamps = r.op === 'upsert' && r.fieldHlc ? [r.hlc, ...Object.values(r.fieldHlc)] : [r.hlc];
+      const ahead = stamps.map((h) => this.clock.ahead(h));
+      if (ahead.some((a) => a !== 'ok')) {
+        if (!ahead.includes('never')) result.ahead++;
+        result.skipped++;
+        continue;
+      }
+      for (const h of stamps) observe(h);
+      rows.push(r);
     }
     const order = (t: SyncTable): number => SYNC_TABLES.indexOf(t);
     const upserts = rows

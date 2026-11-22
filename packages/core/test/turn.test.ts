@@ -3092,3 +3092,52 @@ describe('TurnRunner and notes sent mid-reply', () => {
     expect(seen.at(-1)!.parts).toEqual([{ type: 'text', text: expect.stringContaining('"shot.png"') }]);
   });
 });
+
+describe('TurnRunner and a reply that stopped early', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+
+  async function replyEndingWith(finishReason: string): Promise<{ parts: Part[]; status: string; events: TurnEvent[] }> {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([
+      { type: 'text-delta', text: 'Working on it.' },
+      { type: 'finish', usage, finishReason },
+    ]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).not.toBe('streaming'));
+    const message = store.messages.get(id)!;
+    return { parts: message.parts, status: message.status, events };
+  }
+
+  it.each([
+    // The AI SDK's spelling when the last step was tool calls: the step cap stopped the loop.
+    ['tool-calls', /limit of tool steps/],
+    // The model's own length limit, as the AI SDK and as Claude Code spell it.
+    ['length', /length limit/],
+    ['max_tokens', /length limit/],
+  ])('says so under a reply that finished with "%s"', async (finishReason, wording) => {
+    const { parts, status, events } = await replyEndingWith(finishReason);
+
+    expect(status).toBe('complete');
+    expect(parts).toEqual([
+      { type: 'text', text: 'Working on it.' },
+      { type: 'notice', text: expect.stringMatching(wording) },
+    ]);
+    // Sent live too, before the reply's terminal status.
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('notice')).toBeGreaterThan(-1);
+    expect(types.indexOf('notice')).toBeLessThan(types.indexOf('status'));
+    // Plain wording: no dashes standing in for punctuation.
+    expect((parts.at(-1) as { text: string }).text).not.toMatch(/[–—]/);
+  });
+
+  it.each(['stop', 'end_turn', 'tool_use', 'other'])('adds nothing to a reply that finished with "%s"', async (finishReason) => {
+    const { parts, events } = await replyEndingWith(finishReason);
+
+    expect(parts).toEqual([{ type: 'text', text: 'Working on it.' }]);
+    expect(events.some((e) => e.type === 'notice')).toBe(false);
+  });
+});

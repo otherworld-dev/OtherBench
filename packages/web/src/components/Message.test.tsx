@@ -5,6 +5,7 @@ import type { ApprovalRequest } from '@otherbench/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import type { Usage } from '@otherbench/core/types/usage.js';
 import { COMPUTER_SCREEN_ABOUT } from '@otherbench/core/domain/computer-apps.js';
+import { stoppedEarlyNotice } from '@otherbench/core/domain/turn.js';
 import { configureTransport } from '../state/transport.js';
 import { Message, userTextPreview } from './Message.js';
 
@@ -216,6 +217,18 @@ describe('Message', () => {
 
     expect(screen.getByRole('note')).toHaveTextContent(/sent as text to "local-llava"/);
     expect(screen.getByText('Here is what I can tell from the description.')).toBeInTheDocument();
+  });
+
+  it.each(['tool-calls', 'length'])('shows why a reply stopped early ("%s") as a note under what it wrote', (finishReason) => {
+    // The turn runner stores the reason as the reply's last part (core `stoppedEarlyNotice`).
+    const text = stoppedEarlyNotice(finishReason)!;
+    render(<Message message={base({ parts: [{ type: 'text', text: 'I have read the first two files.' }, { type: 'notice', text }] })} />);
+
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent(text);
+    expect(note).toHaveTextContent(/Send a message to carry on\.$/);
+    const reply = screen.getByText('I have read the first two files.');
+    expect(reply.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('renders an attachment chip for an image part on an assistant message', () => {

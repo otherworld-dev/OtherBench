@@ -54,6 +54,27 @@ function sameFolder(a: string, b: string): boolean {
 const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 
 /**
+ * What to say under a reply whose engine finished it early, or null for one
+ * that finished by itself. Without it such a reply is stored `complete` and
+ * looks like a full answer. Two reasons are known:
+ *
+ *   - `tool-calls`: the AI SDK's reason when the LAST step was tool calls, which
+ *     only happens when the engine's step cap stopped the loop before the model
+ *     wrote its answer (sub-agents read it the same way, `subagentResult`).
+ *     Claude Code's own `tool_use` is not this: it has no step cap of ours.
+ *   - `length` / `max_tokens`: the model's output limit, as the AI SDK and as
+ *     Claude Code spell it.
+ *
+ * Kept as a `notice` part: it says what OtherBench did, shows under the reply,
+ * and is never replayed to a model.
+ */
+export function stoppedEarlyNotice(finishReason: string): string | null {
+  if (finishReason === 'tool-calls') return 'This reply stopped at its limit of tool steps before it finished. Send a message to carry on.';
+  if (finishReason === 'length' || finishReason === 'max_tokens') return "This reply was cut off at the model's length limit. Send a message to carry on.";
+  return null;
+}
+
+/**
  * Runs the lifecycle of one user turn: persists the user message, fans it
  * out to one assistant message per profile (a "compare turn" when there is
  * more than one), and streams each variant from the `ChatEngine`
@@ -853,9 +874,17 @@ export class TurnRunner {
             // A start, a tool call or result and the end are kept straight away; text can wait for the next checkpoint.
             checkpoint(out.event.type !== 'text-delta' && out.event.type !== 'reasoning-delta');
             break;
-          case 'finish':
+          case 'finish': {
             usage = out.usage;
+            // A reply the step cap or the length limit ended says so, stored and live like any other notice.
+            const early = stoppedEarlyNotice(out.finishReason);
+            if (early !== null) {
+              parts = [...parts, { type: 'notice', text: early }];
+              checkpoint(true);
+              this.emit({ messageId, type: 'notice', text: early });
+            }
             break;
+          }
           case 'error':
             status = out.error.kind === 'cancelled' ? 'cancelled' : 'error';
             error = out.error;

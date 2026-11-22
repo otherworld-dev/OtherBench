@@ -303,9 +303,9 @@ describe('global memory: startup sweep', () => {
     addChat('done');
     const { replyId } = exchange('done', 'a', 'b', clock.time - MEMORY_QUIET_MS - 10);
     store.chats.update('done', { globalMemoryCursor: replyId });
-    const roots = vi.spyOn(store.messages, 'roots');
+    const read = vi.spyOn(store.messages, 'chatTree');
     makeService().sweep();
-    expect(roots).not.toHaveBeenCalledWith('done');
+    expect(read).not.toHaveBeenCalledWith('done');
   });
 });
 

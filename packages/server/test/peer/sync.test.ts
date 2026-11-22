@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createBlobStore, type BlobStore, type StoredBlob } from '@otherbench/store-sqlite/blob-store.js';
@@ -32,11 +32,11 @@ afterEach(async () => {
   for (const c of cleanup.splice(0).reverse()) await c();
 });
 
-function syncNode(name: string, options: { schemaVersion?: number; appVersion?: string; fallbackMs?: number; changeCheckMs?: number } = {}): SyncNode {
+function syncNode(name: string, options: { schemaVersion?: number; appVersion?: string; fallbackMs?: number; changeCheckMs?: number; now?: () => number } = {}): SyncNode {
   const db = openDatabase(':memory:');
   runMigrations(db);
   db.prepare('UPDATE node_self SET id = ?, name = ?').run(`node-${name}`, name);
-  const store = new SqliteStore(db);
+  const store = new SqliteStore(db, options.now ? { now: options.now } : {});
   const secrets = new FakeSecretStore();
   const dir = mkdtempSync(join(tmpdir(), `otherbench-sync-${name}-`));
   const blobs = createBlobStore(join(dir, 'blobs'));
@@ -48,7 +48,7 @@ function syncNode(name: string, options: { schemaVersion?: number; appVersion?: 
     secrets,
     events: bus,
     identity: new IdentityStore(() => store.nodes.self().id, null),
-    createApp: (s) => createPeerApp(s) as never,
+    createApp: (s) => createPeerApp(s, { pulled: (nodeId, since) => store.sync.notePulled(nodeId, since) }) as never,
     port: 0,
     hosts: ['127.0.0.1'],
     schemaVersion: options.schemaVersion ?? SCHEMA_VERSION,
@@ -274,6 +274,45 @@ describe('syncing two machines over the peer listener', () => {
     expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${'0'.repeat(64)}` })).status).toBe(404);
   });
 
+  it("waits for a machine whose clock is far ahead instead of taking its changes or passing them by", async () => {
+    let laptopTime = Date.now();
+    // The PC's clock runs ten minutes fast.
+    const pc = syncNode('PC', { now: () => Date.now() + 10 * 60_000 });
+    const laptop = syncNode('Laptop', { now: () => laptopTime });
+    seed(pc);
+    await pairNodes(pc, laptop);
+
+    expect(await laptop.syncer.pullFrom('node-PC')).toBe(0);
+
+    expect(laptop.store.chats.get('chat')).toBeNull();
+    // The cursor stays, so the same changes are asked for again.
+    expect(laptop.store.peers.get('node-PC')!.lastSyncSeq).toBe(0);
+    expect(laptop.syncer.status('node-PC')).toMatchObject({ lastSyncedAt: null, error: expect.stringMatching(/PC.*clock.*ahead/) });
+
+    // Once this machine's time has reached them (or the PC's clock is put right and time passes), they are taken.
+    laptopTime = Date.now() + 9 * 60_000;
+    expect(await laptop.syncer.pullFrom('node-PC')).toBeGreaterThan(4);
+    expect(laptop.store.chats.get('chat')).toMatchObject({ title: 'From the PC' });
+    expect(laptop.store.peers.get('node-PC')!.lastSyncSeq).toBe(pc.store.sync.latestSeq());
+    expect(laptop.syncer.status('node-PC')).toMatchObject({ error: null, lastSyncedAt: expect.any(Number) });
+  });
+
+  it('notes how far each paired machine has pulled, which is what lets this machine tidy its change log', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    await pairNodes(pc, laptop);
+    const heard = (): unknown => pc.db.prepare('SELECT node_id, pulled_seq FROM sync_peer_cursor').all();
+
+    await laptop.syncer.pullFrom('node-PC');
+    // Its first request asked from the start.
+    expect(heard()).toEqual([{ node_id: 'node-Laptop', pulled_seq: 0 }]);
+
+    // The next one carries where it got to.
+    await laptop.syncer.pullFrom('node-PC');
+    expect(heard()).toEqual([{ node_id: 'node-Laptop', pulled_seq: pc.store.sync.latestSeq() }]);
+  });
+
   it('refuses to sync with a machine on a different schema, saying which to update', async () => {
     const pc = syncNode('PC', { schemaVersion: SCHEMA_VERSION + 1 });
     const laptop = syncNode('Laptop');
@@ -407,5 +446,37 @@ describe('syncing two machines over the peer listener', () => {
     expect(res.status).toBe(200);
     expect((res.body as { applied: number }).applied).toBeGreaterThan(0);
     expect(pc.store.chats.get('chat')).toMatchObject({ title: 'From the PC' });
+  });
+});
+
+describe('a pull nobody waits for', () => {
+  it('logs why it failed, once for a failure that repeats, and again once it has worked in between', async () => {
+    const a = syncNode('A');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const settled = async (): Promise<void> => {
+        await a.syncer.pullFrom('node-gone').catch(() => 0);
+        await new Promise((r) => setImmediate(r));
+      };
+      const failures = (): unknown[][] => logged.mock.calls.filter((c) => String(c[0]).includes('sync with node-gone failed'));
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toEqual([['[otherbench-server] sync with node-gone failed: No paired machine "node-gone".']]);
+      a.syncer.pullSoon('node-gone');
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toHaveLength(1);
+
+      // It works once, then fails the same way: that is news again.
+      const pull = vi.spyOn(a.syncer, 'pullFrom').mockResolvedValueOnce(0);
+      a.syncer.pullSoon('node-gone');
+      await new Promise((r) => setImmediate(r));
+      pull.mockRestore();
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toHaveLength(2);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

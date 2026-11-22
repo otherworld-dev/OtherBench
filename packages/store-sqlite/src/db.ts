@@ -240,6 +240,13 @@ export function openDatabase(path: string): DatabaseSync {
 
   const db = new sqliteModule.DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
+  // The usual setting with a WAL: the log is flushed to disk at checkpoints rather than on every commit (SQLite's
+  // default, FULL), which was an fsync per message, stamp and checkpoint written. What it trades: after a power cut
+  // or an OS crash the commits since the last checkpoint may be gone. The database is still consistent (it is as it
+  // was a moment earlier) and an OtherBench crash alone loses nothing. Files beside it are not rolled back with it: a
+  // blob can outlive its row (the sweep removes it) and a row deleted in a lost commit comes back. Paired machines
+  // number what they have pulled, so the change log allows for a lost tail (SqliteSyncRepo's constructor).
+  db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA busy_timeout = 5000');
   return db;

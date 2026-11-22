@@ -6,14 +6,16 @@ import type { ReplyNote } from '@otherbench/core/types/notes.js';
 
 const streams = vi.hoisted(() => [] as { url: string; closed: boolean }[]);
 const hellos = vi.hoisted(() => [] as ((hello: unknown) => void)[]);
+const statuses = vi.hoisted(() => [] as ((status: 'idle' | 'connecting' | 'open' | 'reconnecting') => void)[]);
 
 vi.mock('./sse.js', () => ({
   SseClient: class {
     private readonly stream: { url: string; closed: boolean };
-    constructor(opts: { url: string; onHello: (hello: unknown) => void }) {
+    constructor(opts: { url: string; onHello: (hello: unknown) => void; onStatusChange: (status: 'idle' | 'connecting' | 'open' | 'reconnecting') => void }) {
       this.stream = { url: opts.url, closed: false };
       streams.push(this.stream);
       hellos.push(opts.onHello);
+      statuses.push(opts.onStatusChange);
     }
     connect(): void {}
     close(): void {
@@ -48,6 +50,9 @@ describe('useChatSync', () => {
     useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     streams.length = 0;
     hellos.length = 0;
+    statuses.length = 0;
+    vi.mocked(api.chats.messages).mockReset();
+    vi.mocked(api.chats.messages).mockImplementation(async () => ({ messages: [], headMessageId: null, usage: {} }));
   });
   // Unmounting lets go of each chat the hook followed, which the message pool keeps while followed.
   afterEach(cleanup);
@@ -115,5 +120,142 @@ describe('useChatSync', () => {
 
     await waitFor(() => expect(useOtherBenchStore.getState().returnedNotes.map((n) => n.id)).toEqual(['lost']));
     expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+  });
+
+  it("keeps why a chat's messages didn't load, and loads them again when its stream comes back", async () => {
+    const message: CanonMessage = { id: 'm1', chatId: 'c1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    const fetchMessages = vi.mocked(api.chats.messages);
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMessages.mockRejectedValueOnce(new Error('server unreachable'));
+    useOtherBenchStore.setState({ chats: [chat('c1', { headMessageId: 'm1' })] });
+    renderHook(() => useChatSync('c1'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({ c1: 'server unreachable' }));
+    expect(fetchMessages).toHaveBeenCalledTimes(1);
+
+    // Dropping doesn't load; coming back does.
+    act(() => statuses[0]!('reconnecting'));
+    expect(fetchMessages).toHaveBeenCalledTimes(1);
+    fetchMessages.mockResolvedValueOnce({ messages: [message], headMessageId: 'm1', usage: {} });
+    act(() => statuses[0]!('open'));
+    await waitFor(() => expect(useOtherBenchStore.getState().messages.m1).toEqual(message));
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+
+    // A stream that opens with nothing wrong loads nothing more.
+    act(() => statuses[0]!('open'));
+    expect(fetchMessages).toHaveBeenCalledTimes(2);
+    failed.mockRestore();
+  });
+
+  describe("with a hello that holds only the replies being written or just ended, not the chat's history", () => {
+    const user: CanonMessage = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    const writing: CanonMessage = { id: 'a1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts: [{ type: 'text', text: 'So ' }], status: 'streaming', error: null, producedBy: null, createdAt: 2 };
+    const finished: CanonMessage = {
+      ...writing,
+      status: 'complete',
+      parts: [
+        { type: 'text', text: 'So far, so good.' },
+        { type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } },
+        { type: 'tool-result', id: 't1', name: 'read_file', result: 'x', isError: false },
+        { type: 'text', text: 'Done.' },
+        // Only ever in the stored message: no stream event carries it.
+        { type: 'handover', chatId: 'c2', title: 'Carried on' } as never,
+      ],
+    };
+    const old: CanonMessage = { id: 'a0', chatId: 'c1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'An old answer.' }], status: 'complete', error: null, producedBy: null, createdAt: 0 };
+
+    it("a first connect reads the messages once, and a hello that says nothing of a finished reply leaves it as loaded", async () => {
+      const fetchMessages = vi.mocked(api.chats.messages);
+      fetchMessages.mockResolvedValue({ messages: [old, user, writing], headMessageId: 'a1', usage: {} });
+      useOtherBenchStore.setState({ chats: [chat('c1')] });
+      renderHook(() => useChatSync('c1'));
+      await waitFor(() => expect(useOtherBenchStore.getState().messages.a1).toBeDefined());
+
+      act(() => statuses[0]!('connecting'));
+      act(() => statuses[0]!('open'));
+      act(() => hellos[0]!({ inFlight: [{ messageId: 'a1', status: 'streaming', events: [{ messageId: 'a1', type: 'text-delta', text: 'So far' }] }] }));
+      await act(async () => { await Promise.resolve(); });
+
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+      expect(useOtherBenchStore.getState().messages.a0).toEqual(old);
+      expect(useOtherBenchStore.getState().messages.a1).toMatchObject({ status: 'streaming', parts: [{ type: 'text', text: 'So far' }] });
+    });
+
+    it('a reconnect after a reply finished while away shows it finished with all its parts, and no card left waiting on it', async () => {
+      const fetchMessages = vi.mocked(api.chats.messages);
+      fetchMessages.mockResolvedValueOnce({ messages: [user, writing], headMessageId: 'a1', usage: {} });
+      useOtherBenchStore.setState({ chats: [chat('c1')] });
+      renderHook(() => useChatSync('c1'));
+      await waitFor(() => expect(useOtherBenchStore.getState().messages.a1).toBeDefined());
+      act(() => statuses[0]!('open'));
+      act(() => hellos[0]!({ inFlight: [{ messageId: 'a1', status: 'streaming', events: [{ messageId: 'a1', type: 'text-delta', text: 'So far' }] }] }));
+      // It was waiting on a card when the connection went.
+      act(() => useOtherBenchStore.getState().applyTurnEvent({ messageId: 'a1', type: 'approval-request', request: { id: 'r1', chatId: 'c1', toolName: 'read_file' } as never }));
+      expect(useOtherBenchStore.getState().extras.a1?.pendingApprovals).toHaveLength(1);
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+
+      // Away for longer than the server keeps a finished reply's events: its hello no longer mentions the reply.
+      act(() => statuses[0]!('reconnecting'));
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+      fetchMessages.mockResolvedValueOnce({ messages: [user, finished], headMessageId: 'a1', usage: {} });
+      act(() => statuses[0]!('connecting'));
+      act(() => statuses[0]!('open'));
+      act(() => hellos[0]!({ inFlight: [] }));
+
+      await waitFor(() => expect(useOtherBenchStore.getState().messages.a1).toEqual(finished));
+      expect(fetchMessages).toHaveBeenCalledTimes(2);
+      expect(useOtherBenchStore.getState().extras.a1?.pendingApprovals ?? []).toEqual([]);
+
+      // A later hello on the same connection, with nothing dropped in between, reads nothing again.
+      act(() => hellos[0]!({ inFlight: [] }));
+      await act(async () => { await Promise.resolve(); });
+      expect(fetchMessages).toHaveBeenCalledTimes(2);
+    });
+
+    it('a reconnect just after a reply finished shows it finished from the hello itself, before the messages are read again', async () => {
+      const fetchMessages = vi.mocked(api.chats.messages);
+      fetchMessages.mockResolvedValueOnce({ messages: [user, writing], headMessageId: 'a1', usage: {} });
+      useOtherBenchStore.setState({ chats: [chat('c1')] });
+      renderHook(() => useChatSync('c1'));
+      await waitFor(() => expect(useOtherBenchStore.getState().messages.a1).toBeDefined());
+      act(() => statuses[0]!('open'));
+      act(() => hellos[0]!({ inFlight: [{ messageId: 'a1', status: 'streaming', events: [{ messageId: 'a1', type: 'text-delta', text: 'So far' }] }] }));
+
+      act(() => statuses[0]!('reconnecting'));
+      // The read that follows never answers: the hello alone must do.
+      fetchMessages.mockReturnValueOnce(new Promise(() => undefined));
+      act(() => statuses[0]!('open'));
+      act(() =>
+        hellos[0]!({
+          inFlight: [{
+            messageId: 'a1', status: 'complete',
+            events: [
+              { messageId: 'a1', type: 'text-delta', text: 'So far, so good.' },
+              { messageId: 'a1', type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } },
+              { messageId: 'a1', type: 'tool-result', id: 't1', name: 'read_file', result: 'x', isError: false },
+              { messageId: 'a1', type: 'text-delta', text: 'Done.' },
+              { messageId: 'a1', type: 'status', status: 'complete' },
+            ],
+          }],
+        })
+      );
+      expect(useOtherBenchStore.getState().messages.a1).toMatchObject({ status: 'complete', parts: finished.parts.slice(0, 4) });
+    });
+  });
+
+  it('loads a chat again when asked to (Retry in the thread)', async () => {
+    const fetchMessages = vi.mocked(api.chats.messages);
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMessages.mockRejectedValue(new Error('server unreachable'));
+    useOtherBenchStore.setState({ chats: [chat('c1', { headMessageId: 'm1' })] });
+    renderHook(() => useChatSync('c1'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors.c1).toBe('server unreachable'));
+
+    fetchMessages.mockRejectedValue(new Error('still down'));
+    act(() => useOtherBenchStore.getState().retryChatLoad('c1'));
+    // Cleared while it tries, so the thread shows it opening again.
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors.c1).toBe('still down'));
+    expect(fetchMessages).toHaveBeenCalledTimes(2);
+    failed.mockRestore();
   });
 });

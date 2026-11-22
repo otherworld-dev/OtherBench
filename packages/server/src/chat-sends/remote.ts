@@ -22,6 +22,8 @@ const errorOf = (body: unknown): { error: string | null; kind: string | null } =
 const isUnreachable = (err: unknown): boolean => (err as { status?: unknown } | null)?.status === 503;
 /** The machine isn't paired any more (PeerError 404): a call that never will. */
 const isUnpaired = (err: unknown): boolean => (err as { status?: unknown } | null)?.status === 404;
+/** The machine runs another version of OtherBench (PeerVersionError): a call that will pass once one of them is updated. */
+const isVersionMismatch = (err: unknown): err is Error => err instanceof Error && (err as { kind?: unknown }).kind === 'peer_version_mismatch';
 
 /**
  * ChatSendService's paired machines over the peer listener (spec 2026-11-13-chat-sends-across-machines-design). Every
@@ -53,7 +55,7 @@ export function peerChatSendRemote(store: Store, peers: PeerLink): ChatSendRemot
       warnOnce(`${key}:${res.status}`, `[ChatSendService] ${name(nodeId)} didn't take ${what} (${res.status}): ${error ?? 'no reason given'}`);
       return res.status >= 500 ? 'retry' : 'taken';
     } catch (err) {
-      if (isUnreachable(err)) return 'retry';
+      if (isUnreachable(err) || isVersionMismatch(err)) return 'retry';
       if (isUnpaired(err)) return 'taken';
       warnOnce(`${key}:error`, `[ChatSendService] telling ${name(nodeId)} ${what} failed:`, err);
       return 'retry';
@@ -86,6 +88,8 @@ export function peerChatSendRemote(store: Store, peers: PeerLink): ChatSendRemot
         return { refused: error ?? `${machine} refused it (${res.status}).`, final: true };
       } catch (err) {
         if (isUnpaired(err)) return { refused: `${machine} isn't paired with this machine any more.`, final: true };
+        // Said in its own words (which machine to update), and tried again: an update is what ends it.
+        if (isVersionMismatch(err)) return { refused: err.message, final: false };
         if (!isUnreachable(err)) warnOnce(`handover:${h.id}`, `[ChatSendService] handing a send to ${machine} failed:`, err);
         return { refused: unreachableReason(machine), final: false };
       }

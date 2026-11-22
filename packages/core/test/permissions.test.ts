@@ -306,6 +306,64 @@ describe('PermissionBroker', () => {
       expect(adjacentToken.kind).toBe('ask');
     });
 
+    describe('a commandPrefix grant never covers a command that could run a second one', () => {
+      // One grant, held for both the built-in shell (cmd.exe or sh) and Claude
+      // Code's PowerShell tool, since the same matcher serves every shell.
+      const POWERSHELL = () => makeTool({ name: 'PowerShell', risk: 'execute', source: 'agent' });
+      beforeEach(() => {
+        for (const [id, toolName, source] of [
+          ['g1', 'run_command', 'shell'],
+          ['g2', 'PowerShell', 'agent'],
+        ] as const) {
+          store.grants.create({
+            id,
+            chatId: null,
+            profileId: null,
+            toolName,
+            source,
+            scope: 'always',
+            constraint: { commandPrefix: 'git status' },
+            expiresAt: null,
+          });
+        }
+      });
+
+      it.each([
+        // PowerShell evaluates each of these in argument position (checked on
+        // Windows PowerShell 5.1): a grouping, an array, a hash table's value.
+        ['PowerShell grouping', 'git status (calc)'],
+        ['PowerShell array', 'git status @(calc)'],
+        ['PowerShell hash table', 'git status @{a=calc}'],
+        ['PowerShell sub-expression', 'git status $(calc)'],
+        ['PowerShell call operator', 'git status & calc'],
+        ['PowerShell statement end', 'git status; calc'],
+        ['PowerShell line continuation', 'git status `\ncalc'],
+        ['PowerShell script block', 'git status {calc}'],
+        // cmd.exe expands %VAR% before it parses, so a variable holding "&"
+        // (or one character cut from it) becomes a real separator.
+        ['cmd variable', 'git status %X%'],
+        ['cmd variable slice', 'git status %X:~1,1%calc'],
+        ['cmd chain', 'git status & calc'],
+        ['cmd pipe', 'git status | calc'],
+        ['cmd escaped chain', 'git status ^& calc'],
+        ['sh substitution', 'git status `calc`'],
+        ['sh process substitution', 'git status <(calc)'],
+        ['zsh glob qualifier', 'git status *(e:calc:)'],
+        ['a second line', 'git status\ncalc'],
+        ['redirection', 'git status > out.txt'],
+      ])('%s: %s', (_name, command) => {
+        expect(broker.decide(RUN_COMMAND(), { command }, makePolicy(), makeCtx()).kind).toBe('ask');
+        expect(broker.decide(POWERSHELL(), { command }, makePolicy(), makeCtx()).kind).toBe('ask');
+      });
+
+      it('still covers the prefix itself and plain arguments', () => {
+        for (const command of ['git status', 'git status --short -b', 'git status -- "src/a b.ts"', 'git status --porcelain=v2']) {
+          expect(broker.decide(RUN_COMMAND(), { command }, makePolicy(), makeCtx()).kind).toBe('allow');
+          expect(broker.decide(POWERSHELL(), { command }, makePolicy(), makeCtx()).kind).toBe('allow');
+        }
+      });
+    });
+
     it('a pathPrefix grant is not escapable with ".." (matching resolves the path first)', () => {
       // Regression for a demonstrated escape: matching ran against the raw
       // model-supplied argument string, so "/ws/src/../secret.env" matched a
